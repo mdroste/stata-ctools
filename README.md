@@ -1,6 +1,10 @@
 # stata-ctools
 C-accelerated drop-in replacements for Stata programs
 
+## About
+
+ctools provides drop-in replacements for a variety of Stata programs that run substantially faster for large datasets.
+
 | Replaces (Stata command) | Use instead (stata-ctools) | Typical speedup |
 | ------------------------ | -------------------------- | --------------: |
 | `sort`                   | `csort`                    |         **10×** |
@@ -10,4 +14,14 @@ C-accelerated drop-in replacements for Stata programs
 | `binscatter`             | `cbinscatter`              |         **10×** |
 | `reghdfe`                | `creghdfe`                 |         **10×** |
 
-Behind the scenes, ctools has a variety of utility programs that may be useful for the development of future Stata programs.
+## Quick start
+
+You can begin using these programs by installing directly from this Git repository with the Stata command:
+```stata
+net install ctools
+```
+
+Running this command places all of the relevant Stata files (.ado and .sthlp), along with the compiled C plugins for Windows, Mac OSX, and Unix directly in your ADO path. If for whatever reason you would like to compile these plugins from scratch, please refer to the BUILD readme. 
+
+Alternatively, you can install by downloading this repository and movin the contents of the ./build directory somewhere on Stata's adopath.
+
