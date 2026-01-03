@@ -21,7 +21,7 @@ You can begin using these programs by installing directly from this Git reposito
 net install ctools
 ```
 
-Running this command places all of the relevant Stata files (.ado and .sthlp), along with the compiled C plugins for Windows, Mac OSX, and Unix directly in your ADO path. If for whatever reason you would like to compile these plugins from scratch, please refer to the BUILD readme. 
+Running this command places all of the relevant Stata files (.ado and .sthlp), along with precompiled C plugins for Windows, Mac OSX, and Unix directly in your ADO path. Stata will automatically detect your operating system and use the correct precompiled plugin. If for whatever reason you would like to compile these plugins from scratch, please refer to the BUILD readme. 
 
 Alternatively, you can install by downloading this repository and movin the contents of the ./build directory somewhere on Stata's adopath.
 
