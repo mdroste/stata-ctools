@@ -5,7 +5,7 @@ C-accelerated drop-in replacements for Stata programs
 
 ctools provides drop-in replacements for a variety of Stata programs that run substantially faster for large datasets.
 
-| Replaces (Stata command) | Use instead (stata-ctools) | Typical speedup |
+| Stata command            | ctools equivalent          | Typical speedup |
 | ------------------------ | -------------------------- | --------------: |
 | `sort`                   | `csort`                    |         **2-4×**  |
 | `import delimited`       | `cimport delimited`        |         **50×** |
