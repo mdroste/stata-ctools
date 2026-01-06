@@ -7,10 +7,10 @@ ctools provides drop-in replacements for a variety of Stata programs that run su
 
 | Replaces (Stata command) | Use instead (stata-ctools) | Typical speedup |
 | ------------------------ | -------------------------- | --------------: |
-| `sort`                   | `csort`                    |         **2×**  |
-| `import delimited`       | `cimport delimited`        |         **40×** |
-| `export delimited`       | `cexport delimited`        |         **20×** |
-| `merge`                  | `cmerge`                   |         **4×**  |
+| `sort`                   | `csort`                    |         **2-4×**  |
+| `import delimited`       | `cimport delimited`        |         **50×** |
+| `export delimited`       | `cexport delimited`        |         **25×** |
+| `merge`                  | `cmerge`                   |         **2-5×**  |
 | `binscatter`             | `cbinscatter`              |         **10×** |
 | `reghdfe`                | `creghdfe`                 |         **15×** |
 
