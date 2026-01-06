@@ -12,7 +12,7 @@ ctools provides drop-in replacements for a variety of Stata programs that run su
 | `export delimited`       | `cexport delimited`        |         **25×** |
 | `merge`                  | `cmerge`                   |         **2-5×**  |
 | `binscatter`             | `cbinscatter`              |         **10×** |
-| `reghdfe`                | `creghdfe`                 |         **15×** |
+| `reghdfe`                | `creghdfe`                 |         **10×** |
 
 ## Quick start
 
