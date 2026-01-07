@@ -1,0 +1,211 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_creghdfe_verbose.do 
+
+. * Test script for creghdfe debugging - verbose mode
+. * Created: 2026-01-06
+. 
+. clear all
+
+. set more off
+
+. 
+. * Add build directory to adopath so Stata can find ctools commands
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. * Load test data
+. sysuse auto
+(1978 automobile data)
+
+. 
+. * ===========================================================================
+. * Test 1: Single FE (foreign)
+. * ===========================================================================
+. di as text _n "{hline 70}"
+
+----------------------------------------------------------------------
+
+. di as text "TEST 1: Single FE - absorb(foreign)"
+TEST 1: Single FE - absorb(foreign)
+
+. di as text "{hline 70}"
+----------------------------------------------------------------------
+
+. 
+. di as text _n "=== reghdfe ==="
+
+=== reghdfe ===
+
+. reghdfe price mpg, absorb(foreign)
+(MWFE estimator converged in 1 iterations)
+
+HDFE Linear regression                            Number of obs   =         74
+Absorbing 1 HDFE group                            F(   1,     71) =      27.91
+                                                  Prob > F        =     0.0000
+                                                  R-squared       =     0.2838
+                                                  Adj R-squared   =     0.2637
+                                                  Within R-sq.    =     0.2821
+                                                  Root MSE        =  2530.9456
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -294.1955   55.69172    -5.28   0.000    -405.2417   -183.1494
+       _cons |   12430.83    1222.03    10.17   0.000     9994.169    14867.48
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+-----------------------------------------------------+
+
+. 
+. di as text _n "=== creghdfe ==="
+
+=== creghdfe ===
+
+. creghdfe price mpg, absorb(foreign)
+(HDFE estimator converged in 2 iterations)
+
+HDFE Linear regression                          Number of obs     =         74
+Absorbing 1 HDFE group                          F(  1,      71)   =      27.91
+                                                Prob > F          =     0.0000
+                                                R-squared         =     0.2838
+                                                Adj R-squared     =     0.2637
+                                                Within R-sq.      =     0.2821
+                                                Root MSE          =  2530.9456
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -294.1955   55.69172    -5.28   0.000    -405.2417   -183.1494
+       _cons |   12430.83    1222.03    10.17   0.000     9994.169    14867.48
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+-----------------------------------------------------+
+
+. 
+. * ===========================================================================
+. * Test 2: Two FEs (foreign trunk) - will have singletons
+. * ===========================================================================
+. di as text _n "{hline 70}"
+
+----------------------------------------------------------------------
+
+. di as text "TEST 2: Two FEs - absorb(foreign trunk)"
+TEST 2: Two FEs - absorb(foreign trunk)
+
+. di as text "{hline 70}"
+----------------------------------------------------------------------
+
+. 
+. di as text _n "=== reghdfe ==="
+
+=== reghdfe ===
+
+. reghdfe price mpg, absorb(foreign trunk)
+(dropped 5 singleton observations)
+(MWFE estimator converged in 3 iterations)
+
+HDFE Linear regression                            Number of obs   =         69
+Absorbing 2 HDFE groups                           F(   1,     54) =       8.42
+                                                  Prob > F        =     0.0054
+                                                  R-squared       =     0.3233
+                                                  Adj R-squared   =     0.1479
+                                                  Within R-sq.    =     0.1348
+                                                  Root MSE        =  2617.7464
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   76.25112    -2.90   0.005     -374.077   -68.32844
+       _cons |   10767.42   1672.127     6.44   0.000     7415.012    14119.84
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. 
+. di as text _n "=== creghdfe ==="
+
+=== creghdfe ===
+
+. creghdfe price mpg, absorb(foreign trunk)
+(dropped 5 singleton observations)
+(HDFE estimator converged in 3 iterations)
+
+HDFE Linear regression                          Number of obs     =         69
+Absorbing 2 HDFE groups                         F(  1,      54)   =       8.42
+                                                Prob > F          =     0.0054
+                                                R-squared         =     0.3233
+                                                Adj R-squared     =     0.1479
+                                                Within R-sq.      =     0.1348
+                                                Root MSE          =  2617.7464
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   76.25112    -2.90   0.005     -374.077   -68.32844
+       _cons |   10767.42   1672.127     6.44   0.000     7415.012    14119.84
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. 
+. di as text _n "Test complete"
+
+Test complete
+
+. 
+end of do-file

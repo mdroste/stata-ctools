@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pkill:*)",
+      "Bash(ls:*)",
+      "Bash(stata -b -q do:*)",
+      "Bash(stata -b do:*)",
+      "Bash(nm:*)",
+      "Bash(make:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

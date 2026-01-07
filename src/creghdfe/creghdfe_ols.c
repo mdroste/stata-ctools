@@ -1,0 +1,264 @@
+/*
+ * creghdfe_ols.c
+ *
+ * OLS computations: X'X, X'y, Cholesky decomposition, collinearity detection
+ * Highly optimized with OpenMP parallelization
+ * Part of the ctools Stata plugin suite
+ */
+
+#include "creghdfe_ols.h"
+
+/* ========================================================================
+ * Kahan-compensated dot product for numerical stability
+ * ======================================================================== */
+
+ST_double kahan_dot(const ST_double * RESTRICT x,
+                    const ST_double * RESTRICT y,
+                    ST_int N)
+{
+    ST_double sum = 0.0;
+    ST_double c = 0.0;  /* Compensation for lost low-order bits */
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        ST_double prod = x[i] * y[i] - c;
+        ST_double t = sum + prod;
+        c = (t - sum) - prod;
+        sum = t;
+    }
+    return sum;
+}
+
+/* ========================================================================
+ * BLAS-like optimized dot product with 8-way unrolling
+ * ======================================================================== */
+
+ST_double fast_dot(const ST_double * RESTRICT x,
+                   const ST_double * RESTRICT y,
+                   ST_int N)
+{
+    ST_int i;
+    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
+    ST_int N8 = N - (N & 7);
+
+    /* 8-way unrolled main loop */
+    for (i = 0; i < N8; i += 8) {
+        sum0 += x[i+0] * y[i+0];
+        sum1 += x[i+1] * y[i+1];
+        sum2 += x[i+2] * y[i+2];
+        sum3 += x[i+3] * y[i+3];
+        sum4 += x[i+4] * y[i+4];
+        sum5 += x[i+5] * y[i+5];
+        sum6 += x[i+6] * y[i+6];
+        sum7 += x[i+7] * y[i+7];
+    }
+
+    /* Cleanup loop */
+    for (; i < N; i++) {
+        sum0 += x[i] * y[i];
+    }
+
+    /* Tree reduction for better numerical stability */
+    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
+}
+
+/* ========================================================================
+ * Compute X'X (K x K) and X'y (K x 1) - BLAS-like implementation
+ * ======================================================================== */
+
+void compute_xtx_xty(
+    const ST_double *data,  /* N x K matrix in column-major order */
+    ST_int N,
+    ST_int K,               /* K includes y as first column */
+    ST_double *xtx,         /* Output: (K-1) x (K-1) */
+    ST_double *xty          /* Output: (K-1) x 1 */
+)
+{
+    ST_int j, k;
+    ST_int K_x = K - 1;  /* Number of X columns (excluding y) */
+    const ST_double *y = &data[0];  /* Column 0 is y */
+
+    /* Initialize output */
+    memset(xtx, 0, K_x * K_x * sizeof(ST_double));
+    memset(xty, 0, K_x * sizeof(ST_double));
+
+    /* For small N use Kahan summation, for large N use fast dot */
+    int use_kahan = (N > 10000000);
+
+#ifdef _OPENMP
+    /* Parallel computation of X'y and diagonal of X'X */
+    #pragma omp parallel for schedule(static) if(K_x > 2)
+#endif
+    for (j = 0; j < K_x; j++) {
+        const ST_double *xj = &data[(j + 1) * N];
+
+        /* X'y: j-th element */
+        if (use_kahan) {
+            xty[j] = kahan_dot(xj, y, N);
+        } else {
+            xty[j] = fast_dot(xj, y, N);
+        }
+
+        /* Diagonal of X'X */
+        if (use_kahan) {
+            xtx[j * K_x + j] = kahan_dot(xj, xj, N);
+        } else {
+            xtx[j * K_x + j] = fast_dot(xj, xj, N);
+        }
+    }
+
+    /* Off-diagonal elements (symmetric) */
+    for (j = 0; j < K_x; j++) {
+        const ST_double *xj = &data[(j + 1) * N];
+        for (k = j + 1; k < K_x; k++) {
+            const ST_double *xk = &data[(k + 1) * N];
+            ST_double val;
+            if (use_kahan) {
+                val = kahan_dot(xj, xk, N);
+            } else {
+                val = fast_dot(xj, xk, N);
+            }
+            xtx[j * K_x + k] = val;
+            xtx[k * K_x + j] = val;  /* Symmetric */
+        }
+    }
+}
+
+/* ========================================================================
+ * Cholesky decomposition: A = L * L' (in-place, returns L in lower triangle)
+ * ======================================================================== */
+
+ST_int cholesky(ST_double *A, ST_int n)
+{
+    ST_int i, j, k;
+
+    for (j = 0; j < n; j++) {
+        ST_double sum = A[j * n + j];
+        for (k = 0; k < j; k++) {
+            sum -= A[j * n + k] * A[j * n + k];
+        }
+        if (sum <= 0.0) return -1;  /* Not positive definite */
+        A[j * n + j] = sqrt(sum);
+
+        for (i = j + 1; i < n; i++) {
+            sum = A[i * n + j];
+            for (k = 0; k < j; k++) {
+                sum -= A[i * n + k] * A[j * n + k];
+            }
+            A[i * n + j] = sum / A[j * n + j];
+        }
+    }
+
+    /* Zero upper triangle */
+    for (i = 0; i < n; i++) {
+        for (j = i + 1; j < n; j++) {
+            A[i * n + j] = 0.0;
+        }
+    }
+
+    return 0;
+}
+
+/* ========================================================================
+ * Matrix inversion via Cholesky (for positive definite matrices)
+ * Input: L (lower triangular Cholesky factor)
+ * Output: inv (inverse of L*L')
+ * ======================================================================== */
+
+ST_int invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
+{
+    ST_int i, j, k;
+    ST_double *L_inv = (ST_double *)calloc(n * n, sizeof(ST_double));
+
+    if (!L_inv) return -1;
+
+    /* Invert L (lower triangular) */
+    for (i = 0; i < n; i++) {
+        L_inv[i * n + i] = 1.0 / L[i * n + i];
+        for (j = i + 1; j < n; j++) {
+            ST_double sum = 0.0;
+            for (k = i; k < j; k++) {
+                sum -= L[j * n + k] * L_inv[k * n + i];
+            }
+            L_inv[j * n + i] = sum / L[j * n + j];
+        }
+    }
+
+    /* Compute inv = L_inv' * L_inv */
+    for (i = 0; i < n; i++) {
+        for (j = 0; j < n; j++) {
+            inv[i * n + j] = 0.0;
+            for (k = (i > j ? i : j); k < n; k++) {
+                inv[i * n + j] += L_inv[k * n + i] * L_inv[k * n + j];
+            }
+        }
+    }
+
+    free(L_inv);
+    return 0;
+}
+
+/* ========================================================================
+ * Detect collinear variables using Cholesky decomposition
+ * Returns number of collinear variables detected (-1 on error)
+ * Algorithm:
+ *  1. Attempt Cholesky decomposition
+ *  2. Variables with near-zero diagonal are collinear
+ * ======================================================================== */
+
+ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose)
+{
+    ST_int i, j, k, num_collinear;
+    ST_double *L, sum, diag_elem;
+    const ST_double tol = 1e-14;
+
+    (void)verbose;  /* Unused for now */
+
+    L = (ST_double *)malloc(K * K * sizeof(ST_double));
+    if (!L) return -1;
+
+    memcpy(L, xx, K * K * sizeof(ST_double));
+
+    for (i = 0; i < K; i++) {
+        is_collinear[i] = 0;
+    }
+
+    /* Modified Cholesky that detects collinearity */
+    for (k = 0; k < K; k++) {
+        /* Compute L[k,k] */
+        sum = L[k * K + k];
+        for (j = 0; j < k; j++) {
+            sum -= L[k * K + j] * L[k * K + j];
+        }
+
+        /* Check if diagonal is effectively zero (collinear) */
+        if (sum < tol) {
+            is_collinear[k] = 1;
+            L[k * K + k] = 0.0;
+            for (i = k + 1; i < K; i++) {
+                L[i * K + k] = 0.0;
+            }
+            continue;
+        }
+
+        diag_elem = sqrt(sum);
+        L[k * K + k] = diag_elem;
+
+        for (i = k + 1; i < K; i++) {
+            sum = L[i * K + k];
+            for (j = 0; j < k; j++) {
+                sum -= L[i * K + j] * L[k * K + j];
+            }
+            L[i * K + k] = sum / diag_elem;
+        }
+    }
+
+    num_collinear = 0;
+    for (i = 0; i < K; i++) {
+        if (is_collinear[i]) num_collinear++;
+    }
+
+    free(L);
+    return num_collinear;
+}

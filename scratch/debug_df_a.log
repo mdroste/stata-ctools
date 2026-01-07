@@ -1,0 +1,232 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do debug_df_a.do 
+
+. * Debug df_a calculation
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto
+(1978 automobile data)
+
+. 
+. * Test 4: cluster by foreign (which is also an absorbed FE)
+. di _n "=== reghdfe with cluster(foreign) ==="
+
+=== reghdfe with cluster(foreign) ===
+
+. reghdfe price mpg, absorb(foreign trunk) vce(cluster foreign)
+(dropped 5 singleton observations)
+(MWFE estimator converged in 3 iterations)
+
+HDFE Linear regression                            Number of obs   =         69
+Absorbing 2 HDFE groups                           F(   1,      1) =      18.62
+Statistics robust to heteroskedasticity           Prob > F        =     0.1450
+                                                  R-squared       =     0.3233
+                                                  Adj R-squared   =     0.1479
+                                                  Within R-sq.    =     0.1348
+Number of clusters (foreign) =          2         Root MSE        =  2617.7464
+
+                                (Std. err. adjusted for 2 clusters in foreign)
+------------------------------------------------------------------------------
+             |               Robust
+       price | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   51.25895    -4.32   0.145    -872.5094     430.104
+       _cons |   10767.42   1103.925     9.75   0.065    -3259.268    24794.12
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           2           0    *|
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+* = FE nested within cluster; treated as redundant for DoF computation
+
+. di "e(df_a) = " e(df_a)
+e(df_a) = 12
+
+. di "e(df_a_nested) = " e(df_a_nested)
+e(df_a_nested) = 2
+
+. di "e(df_a_initial) = " e(df_a_initial)
+e(df_a_initial) = 15
+
+. di "e(df_a_redundant) = " e(df_a_redundant)
+e(df_a_redundant) = 3
+
+. ereturn list
+
+scalars:
+                  e(N) =  69
+               e(rank) =  1
+               e(df_r) =  1
+               e(df_m) =  1
+                e(tss) =  546866939.0724638
+         e(tss_within) =  427709375.2647821
+                e(rss) =  370040208.2840386
+                e(mss) =  176826730.7884251
+               e(rmse) =  2617.746444884305
+                  e(F) =  18.6226558803698
+                 e(ll) =  -632.4848012739164
+               e(ll_0) =  -637.481514396046
+                 e(r2) =  .323345073827903
+          e(r2_within) =  .1348325996946929
+               e(r2_a) =  .1479160188943963
+        e(r2_a_within) =  .1188109811705205
+         e(sumweights) =  69
+                 e(ic) =  3
+          e(converged) =  1
+    e(report_constant) =  1
+             e(N_full) =  74
+     e(num_singletons) =  5
+    e(drop_singletons) =  1
+        e(df_a_nested) =  2
+     e(df_a_redundant) =  3
+       e(df_a_initial) =  15
+               e(df_a) =  12
+    e(N_hdfe_extended) =  2
+             e(N_hdfe) =  2
+           e(N_clust1) =  2
+      e(N_clustervars) =  1
+            e(N_clust) =  2
+
+macros:
+   e(extended_absvars) : "foreign trunk"
+            e(absvars) : "foreign trunk"
+             e(title2) : "Absorbing 2 HDFE groups"
+          e(dofmethod) : "pairwise clusters continuous"
+                e(vce) : "cluster"
+            e(vcetype) : "Robust"
+              e(title) : "HDFE Linear regression"
+          e(indepvars) : "mpg _cons"
+             e(depvar) : "price"
+       e(marginsnotok) : "Residuals SCore"
+           e(footnote) : "reghdfe_footnote"
+          e(estat_cmd) : "reghdfe_estat"
+            e(predict) : "reghdfe_p"
+              e(model) : "ols"
+            e(cmdline) : "reghdfe price mpg, absorb(foreign trunk) vce(clus.."
+                e(cmd) : "reghdfe"
+           e(clustvar) : "foreign"
+             e(title3) : "Statistics robust to heteroskedasticity"
+          e(clustvar1) : "foreign"
+         e(properties) : "b V"
+
+matrices:
+                  e(b) :  1 x 2
+                  e(V) :  2 x 2
+          e(dof_table) :  2 x 5
+
+functions:
+             e(sample)   
+
+. 
+. di _n "=== creghdfe with cluster(foreign) ==="
+
+=== creghdfe with cluster(foreign) ===
+
+. creghdfe price mpg, absorb(foreign trunk) vce(cluster foreign)
+(dropped 5 singleton observations)
+(HDFE estimator converged in 3 iterations)
+
+HDFE Linear regression                          Number of obs     =         69
+Absorbing 2 HDFE groups                         F(  1,       1)   =      18.62
+                                                Prob > F          =     0.1450
+                                                R-squared         =     0.3233
+                                                Adj R-squared     =     0.1479
+                                                Within R-sq.      =     0.1348
+                                                Root MSE          =  2617.7464
+
+                                (Std. err. adjusted for 2 clusters in foreign)
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   51.25895    -4.32   0.145    -872.5094     430.104
+       _cons |   10767.42   1103.925     9.75   0.065    -3259.268    24794.12
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. ereturn list
+
+scalars:
+                  e(N) =  69
+               e(df_m) =  1
+               e(df_r) =  1
+                 e(r2) =  .3233450738279032
+          e(r2_within) =  .134832599694693
+               e(r2_a) =  .1479160188943965
+               e(rmse) =  2617.746444884305
+                e(rss) =  370040208.2840386
+                e(tss) =  546866939.0724639
+         e(tss_within) =  427709375.2647822
+               e(df_a) =  14
+                  e(F) =  18.6226558803697
+    e(N_hdfe_extended) =  1
+     e(num_singletons) =  5
+            e(N_clust) =  2
+
+macros:
+            e(cmdline) : "creghdfe price mpg, absorb(foreign trunk) vce(clu.."
+                e(cmd) : "creghdfe"
+                e(vce) : "cluster"
+          e(indepvars) : " mpg"
+             e(depvar) : "price"
+             e(absorb) : "foreign trunk"
+           e(clustvar) : "foreign"
+         e(properties) : "b V"
+
+matrices:
+                  e(b) :  1 x 2
+                  e(V) :  2 x 2
+
+functions:
+             e(sample)   
+
+. 
+end of do-file

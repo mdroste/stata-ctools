@@ -1,0 +1,861 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark_creghdfe.do 
+
+. * benchmark_creghdfe.do
+. * Benchmark comparison between reghdfe and creghdfe
+. * Created: 2026-01-06
+. 
+. clear all
+
+. set more off
+
+. 
+. * Add build directory to adopath
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. * ===========================================================================
+. * Program: compare_hdfe
+. *
+. * Runs the same regression with reghdfe and creghdfe, compares all stored
+. * results, and reports PASSED/FAILED based on tolerance threshold.
+. *
+. * Syntax:
+. *   compare_hdfe depvar indepvars, absorb(varlist) [vce(string) tol(real)]
+. *
+. * Options:
+. *   absorb(varlist)  - Fixed effects to absorb (required)
+. *   vce(string)      - VCE type (optional)
+. *   tol(real)        - Tolerance for comparison (default: 1e-7)
+. * ===========================================================================
+. 
+. capture program drop compare_hdfe
+
+. program define compare_hdfe, rclass
+  1.     version 14.0
+  2. 
+.     syntax varlist(min=2 fv), Absorb(varlist) [VCE(string) TOLerance(real 1e-
+> 7)]
+  3. 
+.     local tol = `tolerance'
+  4. 
+.     * Parse depvar and indepvars
+.     gettoken depvar indepvars : varlist
+  5. 
+.     di as text ""
+  6.     di as text "{hline 70}"
+  7.     di as text "BENCHMARK: reghdfe vs creghdfe"
+  8.     di as text "{hline 70}"
+  9.     di as text "Specification: `depvar' `indepvars', absorb(`absorb')" _c
+ 10.     if "`vce'" != "" {
+ 11.         di as text " vce(`vce')"
+ 12.     }
+ 13.     else {
+ 14.         di as text ""
+ 15.     }
+ 16.     di as text "Tolerance: `tol'"
+ 17.     di as text "{hline 70}"
+ 18. 
+.     * =======================================================================
+> ==
+.     * Run reghdfe
+.     * =======================================================================
+> ==
+.     di as text _n "Running reghdfe..."
+ 19.     timer clear 1
+ 20.     timer on 1
+ 21. 
+.     if "`vce'" != "" {
+ 22.         quietly reghdfe `varlist', absorb(`absorb') vce(`vce')
+ 23.     }
+ 24.     else {
+ 25.         quietly reghdfe `varlist', absorb(`absorb')
+ 26.     }
+ 27. 
+.     timer off 1
+ 28.     quietly timer list 1
+ 29.     local time_reghdfe = r(t1)
+ 30. 
+.     * Store reghdfe results
+.     local reghdfe_N = e(N)
+ 31.     local reghdfe_df_m = e(df_m)
+ 32.     local reghdfe_df_r = e(df_r)
+ 33.     local reghdfe_F = e(F)
+ 34.     local reghdfe_r2 = e(r2)
+ 35.     local reghdfe_r2_a = e(r2_a)
+ 36.     local reghdfe_r2_within = e(r2_within)
+ 37.     local reghdfe_rmse = e(rmse)
+ 38.     local reghdfe_rss = e(rss)
+ 39.     local reghdfe_tss = e(tss)
+ 40.     local reghdfe_df_a = e(df_a)
+ 41.     local reghdfe_num_singletons = e(num_singletons)
+ 42. 
+.     tempname reghdfe_b reghdfe_V
+ 43.     matrix `reghdfe_b' = e(b)
+ 44.     matrix `reghdfe_V' = e(V)
+ 45. 
+.     local nvars = colsof(`reghdfe_b')
+ 46. 
+.     di as text "  Time: " as result %9.4f `time_reghdfe' as text " seconds"
+ 47. 
+.     * =======================================================================
+> ==
+.     * Run creghdfe
+.     * =======================================================================
+> ==
+.     di as text _n "Running creghdfe..."
+ 48.     timer clear 2
+ 49.     timer on 2
+ 50. 
+.     if "`vce'" != "" {
+ 51.         quietly creghdfe `varlist', absorb(`absorb') vce(`vce')
+ 52.     }
+ 53.     else {
+ 54.         quietly creghdfe `varlist', absorb(`absorb')
+ 55.     }
+ 56. 
+.     timer off 2
+ 57.     quietly timer list 2
+ 58.     local time_creghdfe = r(t2)
+ 59. 
+.     * Store creghdfe results
+.     local creghdfe_N = e(N)
+ 60.     local creghdfe_df_m = e(df_m)
+ 61.     local creghdfe_df_r = e(df_r)
+ 62.     local creghdfe_F = e(F)
+ 63.     local creghdfe_r2 = e(r2)
+ 64.     local creghdfe_r2_a = e(r2_a)
+ 65.     local creghdfe_r2_within = e(r2_within)
+ 66.     local creghdfe_rmse = e(rmse)
+ 67.     local creghdfe_rss = e(rss)
+ 68.     local creghdfe_tss = e(tss)
+ 69.     local creghdfe_df_a = e(df_a)
+ 70.     local creghdfe_num_singletons = e(num_singletons)
+ 71. 
+.     tempname creghdfe_b creghdfe_V
+ 72.     matrix `creghdfe_b' = e(b)
+ 73.     matrix `creghdfe_V' = e(V)
+ 74. 
+.     di as text "  Time: " as result %9.4f `time_creghdfe' as text " seconds"
+ 75. 
+.     * =======================================================================
+> ==
+.     * Compare results
+.     * =======================================================================
+> ==
+.     di as text _n "{hline 70}"
+ 76.     di as text "COMPARISON RESULTS"
+ 77.     di as text "{hline 70}"
+ 78.     di as text ""
+ 79.     di as text %25s "Statistic" " | " %15s "reghdfe" " | " %15s "creghdfe"
+>  " | " %12s "Diff" " | " "Status"
+ 80.     di as text "{hline 25}-+-{hline 15}-+-{hline 15}-+-{hline 12}-+-{hline
+>  8}"
+ 81. 
+.     local all_passed = 1
+ 82.     local num_comparisons = 0
+ 83.     local num_passed = 0
+ 84. 
+.     * Compare scalar statistics
+.     foreach stat in N df_m df_r F r2 r2_a r2_within rmse rss tss df_a num_sin
+> gletons {
+ 85.         local val_reghdfe = `reghdfe_`stat''
+ 86.         local val_creghdfe = `creghdfe_`stat''
+ 87.         local diff = abs(`val_reghdfe' - `val_creghdfe')
+ 88. 
+.         * Handle relative difference for large values
+.         if abs(`val_reghdfe') > 1 {
+ 89.             local rel_diff = `diff' / abs(`val_reghdfe')
+ 90.             local passed = (`rel_diff' < `tol')
+ 91.         }
+ 92.         else {
+ 93.             local passed = (`diff' < `tol')
+ 94.         }
+ 95. 
+.         local ++num_comparisons
+ 96.         if `passed' {
+ 97.             local ++num_passed
+ 98.             local status_text "PASS"
+ 99.             local status_color "as result"
+100.         }
+101.         else {
+102.             local all_passed = 0
+103.             local status_text "FAIL"
+104.             local status_color "as error"
+105.         }
+106. 
+.         di as text %25s "`stat'" " | " as result %15.6g `val_reghdfe' as text
+>  " | " as result %15.6g `val_creghdfe' as text " | " as result %12.2e `diff' 
+> " | " `status_color' "`status_text'"
+107.     }
+108. 
+.     * Compare coefficients
+.     di as text "{hline 25}-+-{hline 15}-+-{hline 15}-+-{hline 12}-+-{hline 8}
+> "
+109.     di as text %25s "COEFFICIENTS" " | " " " " | " " " " | " " " " | "
+110. 
+.     local coef_names : colnames `reghdfe_b'
+111.     local k = 1
+112.     foreach coef of local coef_names {
+113.         local val_reghdfe = `reghdfe_b'[1, `k']
+114.         local val_creghdfe = `creghdfe_b'[1, `k']
+115.         local diff = abs(`val_reghdfe' - `val_creghdfe')
+116. 
+.         if abs(`val_reghdfe') > 1 {
+117.             local rel_diff = `diff' / abs(`val_reghdfe')
+118.             local passed = (`rel_diff' < `tol')
+119.         }
+120.         else {
+121.             local passed = (`diff' < `tol')
+122.         }
+123. 
+.         local ++num_comparisons
+124.         if `passed' {
+125.             local ++num_passed
+126.             local status_text "PASS"
+127.             local status_color "as result"
+128.         }
+129.         else {
+130.             local all_passed = 0
+131.             local status_text "FAIL"
+132.             local status_color "as error"
+133.         }
+134. 
+.         di as text %25s "b[`coef']" " | " as result %15.6g `val_reghdfe' as t
+> ext " | " as result %15.6g `val_creghdfe' as text " | " as result %12.2e `dif
+> f' " | " `status_color' "`status_text'"
+135.         local ++k
+136.     }
+137. 
+.     * Compare standard errors (diagonal of V)
+.     di as text "{hline 25}-+-{hline 15}-+-{hline 15}-+-{hline 12}-+-{hline 8}
+> "
+138.     di as text %25s "STANDARD ERRORS" " | " " " " | " " " " | " " " " | "
+139. 
+.     local k = 1
+140.     foreach coef of local coef_names {
+141.         local val_reghdfe = sqrt(`reghdfe_V'[`k', `k'])
+142.         local val_creghdfe = sqrt(`creghdfe_V'[`k', `k'])
+143.         local diff = abs(`val_reghdfe' - `val_creghdfe')
+144. 
+.         if abs(`val_reghdfe') > 1 {
+145.             local rel_diff = `diff' / abs(`val_reghdfe')
+146.             local passed = (`rel_diff' < `tol')
+147.         }
+148.         else {
+149.             local passed = (`diff' < `tol')
+150.         }
+151. 
+.         local ++num_comparisons
+152.         if `passed' {
+153.             local ++num_passed
+154.             local status_text "PASS"
+155.             local status_color "as result"
+156.         }
+157.         else {
+158.             local all_passed = 0
+159.             local status_text "FAIL"
+160.             local status_color "as error"
+161.         }
+162. 
+.         di as text %25s "se[`coef']" " | " as result %15.6g `val_reghdfe' as 
+> text " | " as result %15.6g `val_creghdfe' as text " | " as result %12.2e `di
+> ff' " | " `status_color' "`status_text'"
+163.         local ++k
+164.     }
+165. 
+.     * Compare t-statistics
+.     di as text "{hline 25}-+-{hline 15}-+-{hline 15}-+-{hline 12}-+-{hline 8}
+> "
+166.     di as text %25s "T-STATISTICS" " | " " " " | " " " " | " " " " | "
+167. 
+.     local k = 1
+168.     foreach coef of local coef_names {
+169.         local b_reghdfe = `reghdfe_b'[1, `k']
+170.         local se_reghdfe = sqrt(`reghdfe_V'[`k', `k'])
+171.         local val_reghdfe = `b_reghdfe' / `se_reghdfe'
+172. 
+.         local b_creghdfe = `creghdfe_b'[1, `k']
+173.         local se_creghdfe = sqrt(`creghdfe_V'[`k', `k'])
+174.         local val_creghdfe = `b_creghdfe' / `se_creghdfe'
+175. 
+.         local diff = abs(`val_reghdfe' - `val_creghdfe')
+176. 
+.         if abs(`val_reghdfe') > 1 {
+177.             local rel_diff = `diff' / abs(`val_reghdfe')
+178.             local passed = (`rel_diff' < `tol')
+179.         }
+180.         else {
+181.             local passed = (`diff' < `tol')
+182.         }
+183. 
+.         local ++num_comparisons
+184.         if `passed' {
+185.             local ++num_passed
+186.             local status_text "PASS"
+187.             local status_color "as result"
+188.         }
+189.         else {
+190.             local all_passed = 0
+191.             local status_text "FAIL"
+192.             local status_color "as error"
+193.         }
+194. 
+.         di as text %25s "t[`coef']" " | " as result %15.6g `val_reghdfe' as t
+> ext " | " as result %15.6g `val_creghdfe' as text " | " as result %12.2e `dif
+> f' " | " `status_color' "`status_text'"
+195.         local ++k
+196.     }
+197. 
+.     * =======================================================================
+> ==
+.     * Summary
+.     * =======================================================================
+> ==
+.     di as text ""
+198.     di as text "{hline 70}"
+199.     di as text "TIMING COMPARISON"
+200.     di as text "{hline 70}"
+201.     di as text "  reghdfe:  " as result %9.4f `time_reghdfe' as text " sec
+> onds"
+202.     di as text "  creghdfe: " as result %9.4f `time_creghdfe' as text " se
+> conds"
+203.     local time_diff = `time_reghdfe' - `time_creghdfe'
+204.     if `time_diff' > 0 {
+205.         local speedup = `time_reghdfe' / `time_creghdfe'
+206.         di as text "  Difference: " as result %9.4f `time_diff' as text " 
+> seconds (creghdfe is " as result %5.2f `speedup' as text "x faster)"
+207.     }
+208.     else {
+209.         local speedup = `time_creghdfe' / `time_reghdfe'
+210.         di as text "  Difference: " as result %9.4f `time_diff' as text " 
+> seconds (reghdfe is " as result %5.2f `speedup' as text "x faster)"
+211.     }
+212. 
+.     di as text ""
+213.     di as text "{hline 70}"
+214.     di as text "OVERALL RESULT"
+215.     di as text "{hline 70}"
+216.     di as text "  Comparisons: " as result `num_passed' as text "/" as res
+> ult `num_comparisons' as text " passed"
+217. 
+.     if `all_passed' {
+218.         di as text ""
+219.         di as result "  *** PASSED ***"
+220.         di as text ""
+221.     }
+222.     else {
+223.         di as text ""
+224.         di as error "  *** FAILED ***"
+225.         di as text ""
+226.     }
+227. 
+.     * Return results
+.     return scalar passed = `all_passed'
+228.     return scalar num_comparisons = `num_comparisons'
+229.     return scalar num_passed = `num_passed'
+230.     return scalar time_reghdfe = `time_reghdfe'
+231.     return scalar time_creghdfe = `time_creghdfe'
+232.     return scalar speedup = `time_reghdfe' / `time_creghdfe'
+233. 
+. end
+
+. 
+. * ===========================================================================
+. * Run benchmarks
+. * ===========================================================================
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. di as text _n _n
+
+
+
+
+. di as text "╔════════════════════════════════════════════════════════════════
+> ══════════════╗"
+╔══════════════════════════════════════════════════════════════════════════════
+> ╗
+
+. di as text "║                         CREGHDFE BENCHMARK SUITE               
+>               ║"
+║                         CREGHDFE BENCHMARK SUITE                             
+> ║
+
+. di as text "╚════════════════════════════════════════════════════════════════
+> ══════════════╝"
+╚══════════════════════════════════════════════════════════════════════════════
+> ╝
+
+. 
+. * Test 1: Basic regression with single FE
+. compare_hdfe price mpg, absorb(foreign)
+
+----------------------------------------------------------------------
+BENCHMARK: reghdfe vs creghdfe
+----------------------------------------------------------------------
+Specification: price  mpg, absorb(foreign)
+Tolerance: 1.00000000000e-07
+----------------------------------------------------------------------
+
+Running reghdfe...
+  Time:    0.0750 seconds
+
+Running creghdfe...
+  Time:    0.0040 seconds
+
+----------------------------------------------------------------------
+COMPARISON RESULTS
+----------------------------------------------------------------------
+
+                Statistic |         reghdfe |        creghdfe |         Diff | 
+> Status
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+                        N |              74 |              74 |     0.00e+00 | 
+> PASS
+                     df_m |               1 |               1 |     0.00e+00 | 
+> PASS
+                     df_r |              71 |              71 |     0.00e+00 | 
+> PASS
+                        F |         27.9056 |         27.9056 |     1.78e-14 | 
+> PASS
+                       r2 |         .283847 |         .283847 |     3.89e-16 | 
+> PASS
+                     r2_a |         .263674 |         .263674 |     3.89e-16 | 
+> PASS
+                r2_within |         .282144 |         .282144 |     1.11e-16 | 
+> PASS
+                     rmse |         2530.95 |         2530.95 |     0.00e+00 | 
+> PASS
+                      rss |       454803695 |       454803695 |     1.19e-07 | 
+> PASS
+                      tss |       635065396 |       635065396 |     2.38e-07 | 
+> PASS
+                     df_a |               2 |               2 |     0.00e+00 | 
+> PASS
+           num_singletons |               0 |               0 |     0.00e+00 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             COEFFICIENTS |   |   |   | 
+                   b[mpg] |        -294.196 |        -294.196 |     1.14e-13 | 
+> PASS
+                 b[_cons] |         12430.8 |         12430.8 |     1.09e-11 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+          STANDARD ERRORS |   |   |   | 
+                  se[mpg] |         55.6917 |         55.6917 |     2.13e-14 | 
+> PASS
+                se[_cons] |         1222.03 |         1222.03 |     9.09e-13 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             T-STATISTICS |   |   |   | 
+                   t[mpg] |        -5.28257 |        -5.28257 |     4.44e-15 | 
+> PASS
+                 t[_cons] |         10.1723 |         10.1723 |     1.95e-14 | 
+> PASS
+
+----------------------------------------------------------------------
+TIMING COMPARISON
+----------------------------------------------------------------------
+  reghdfe:     0.0750 seconds
+  creghdfe:    0.0040 seconds
+  Difference:    0.0710 seconds (creghdfe is 18.75x faster)
+
+----------------------------------------------------------------------
+OVERALL RESULT
+----------------------------------------------------------------------
+  Comparisons: 18/18 passed
+
+  *** PASSED ***
+
+
+. 
+. * Test 2: Multiple FEs with singletons
+. compare_hdfe price mpg, absorb(foreign trunk)
+
+----------------------------------------------------------------------
+BENCHMARK: reghdfe vs creghdfe
+----------------------------------------------------------------------
+Specification: price  mpg, absorb(foreign trunk)
+Tolerance: 1.00000000000e-07
+----------------------------------------------------------------------
+
+Running reghdfe...
+  Time:    0.0070 seconds
+
+Running creghdfe...
+  Time:    0.0030 seconds
+
+----------------------------------------------------------------------
+COMPARISON RESULTS
+----------------------------------------------------------------------
+
+                Statistic |         reghdfe |        creghdfe |         Diff | 
+> Status
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+                        N |              69 |              69 |     0.00e+00 | 
+> PASS
+                     df_m |               1 |               1 |     0.00e+00 | 
+> PASS
+                     df_r |              54 |              54 |     0.00e+00 | 
+> PASS
+                        F |         8.41567 |         8.41567 |     1.42e-14 | 
+> PASS
+                       r2 |         .323345 |         .323345 |     1.67e-16 | 
+> PASS
+                     r2_a |         .147916 |         .147916 |     2.22e-16 | 
+> PASS
+                r2_within |         .134833 |         .134833 |     8.33e-17 | 
+> PASS
+                     rmse |         2617.75 |         2617.75 |     0.00e+00 | 
+> PASS
+                      rss |       370040208 |       370040208 |     0.00e+00 | 
+> PASS
+                      tss |       546866939 |       546866939 |     1.19e-07 | 
+> PASS
+                     df_a |              14 |              14 |     0.00e+00 | 
+> PASS
+           num_singletons |               5 |               5 |     0.00e+00 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             COEFFICIENTS |   |   |   | 
+                   b[mpg] |        -221.203 |        -221.203 |     3.13e-13 | 
+> PASS
+                 b[_cons] |         10767.4 |         10767.4 |     9.09e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+          STANDARD ERRORS |   |   |   | 
+                  se[mpg] |         76.2511 |         76.2511 |     1.42e-14 | 
+> PASS
+                se[_cons] |         1672.13 |         1672.13 |     1.14e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             T-STATISTICS |   |   |   | 
+                   t[mpg] |        -2.90098 |        -2.90098 |     4.00e-15 | 
+> PASS
+                 t[_cons] |         6.43936 |         6.43936 |     8.88e-16 | 
+> PASS
+
+----------------------------------------------------------------------
+TIMING COMPARISON
+----------------------------------------------------------------------
+  reghdfe:     0.0070 seconds
+  creghdfe:    0.0030 seconds
+  Difference:    0.0040 seconds (creghdfe is  2.33x faster)
+
+----------------------------------------------------------------------
+OVERALL RESULT
+----------------------------------------------------------------------
+  Comparisons: 18/18 passed
+
+  *** PASSED ***
+
+
+. 
+. * Test 3: Multiple FEs with singletons, robust SEs
+. compare_hdfe price mpg, absorb(foreign trunk) vce(robust)
+
+----------------------------------------------------------------------
+BENCHMARK: reghdfe vs creghdfe
+----------------------------------------------------------------------
+Specification: price  mpg, absorb(foreign trunk) vce(robust)
+Tolerance: 1.00000000000e-07
+----------------------------------------------------------------------
+
+Running reghdfe...
+  Time:    0.0070 seconds
+
+Running creghdfe...
+  Time:    0.0030 seconds
+
+----------------------------------------------------------------------
+COMPARISON RESULTS
+----------------------------------------------------------------------
+
+                Statistic |         reghdfe |        creghdfe |         Diff | 
+> Status
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+                        N |              69 |              69 |     0.00e+00 | 
+> PASS
+                     df_m |               1 |               1 |     0.00e+00 | 
+> PASS
+                     df_r |              54 |              54 |     0.00e+00 | 
+> PASS
+                        F |         11.2525 |         11.2525 |     6.00e-13 | 
+> PASS
+                       r2 |         .323345 |         .323345 |     1.67e-16 | 
+> PASS
+                     r2_a |         .147916 |         .147916 |     2.22e-16 | 
+> PASS
+                r2_within |         .134833 |         .134833 |     8.33e-17 | 
+> PASS
+                     rmse |         2617.75 |         2617.75 |     0.00e+00 | 
+> PASS
+                      rss |       370040208 |       370040208 |     0.00e+00 | 
+> PASS
+                      tss |       546866939 |       546866939 |     1.19e-07 | 
+> PASS
+                     df_a |              14 |              14 |     0.00e+00 | 
+> PASS
+           num_singletons |               5 |               5 |     0.00e+00 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             COEFFICIENTS |   |   |   | 
+                   b[mpg] |        -221.203 |        -221.203 |     3.13e-13 | 
+> PASS
+                 b[_cons] |         10767.4 |         10767.4 |     9.09e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+          STANDARD ERRORS |   |   |   | 
+                  se[mpg] |         65.9426 |         65.9426 |     1.85e-12 | 
+> PASS
+                se[_cons] |         1542.37 |         1542.37 |     3.50e-11 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             T-STATISTICS |   |   |   | 
+                   t[mpg] |        -3.35447 |        -3.35447 |     9.02e-14 | 
+> PASS
+                 t[_cons] |         6.98108 |         6.98108 |     1.53e-13 | 
+> PASS
+
+----------------------------------------------------------------------
+TIMING COMPARISON
+----------------------------------------------------------------------
+  reghdfe:     0.0070 seconds
+  creghdfe:    0.0030 seconds
+  Difference:    0.0040 seconds (creghdfe is  2.33x faster)
+
+----------------------------------------------------------------------
+OVERALL RESULT
+----------------------------------------------------------------------
+  Comparisons: 18/18 passed
+
+  *** PASSED ***
+
+
+. 
+. * Test 4: Multiple FEs with singletons, robust SEs
+. compare_hdfe price mpg, absorb(foreign trunk) vce(cluster foreign)
+
+----------------------------------------------------------------------
+BENCHMARK: reghdfe vs creghdfe
+----------------------------------------------------------------------
+Specification: price  mpg, absorb(foreign trunk) vce(cluster foreign)
+Tolerance: 1.00000000000e-07
+----------------------------------------------------------------------
+
+Running reghdfe...
+  Time:    0.0080 seconds
+
+Running creghdfe...
+  Time:    0.0030 seconds
+
+----------------------------------------------------------------------
+COMPARISON RESULTS
+----------------------------------------------------------------------
+
+                Statistic |         reghdfe |        creghdfe |         Diff | 
+> Status
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+                        N |              69 |              69 |     0.00e+00 | 
+> PASS
+                     df_m |               1 |               1 |     0.00e+00 | 
+> PASS
+                     df_r |               1 |               1 |     0.00e+00 | 
+> PASS
+                        F |         18.6227 |         18.6227 |     9.95e-14 | 
+> PASS
+                       r2 |         .323345 |         .323345 |     1.67e-16 | 
+> PASS
+                     r2_a |         .147916 |         .147916 |     2.22e-16 | 
+> PASS
+                r2_within |         .134833 |         .134833 |     8.33e-17 | 
+> PASS
+                     rmse |         2617.75 |         2617.75 |     0.00e+00 | 
+> PASS
+                      rss |       370040208 |       370040208 |     0.00e+00 | 
+> PASS
+                      tss |       546866939 |       546866939 |     1.19e-07 | 
+> PASS
+                     df_a |              12 |              12 |     0.00e+00 | 
+> PASS
+           num_singletons |               5 |               5 |     0.00e+00 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             COEFFICIENTS |   |   |   | 
+                   b[mpg] |        -221.203 |        -221.203 |     3.13e-13 | 
+> PASS
+                 b[_cons] |         10767.4 |         10767.4 |     9.09e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+          STANDARD ERRORS |   |   |   | 
+                  se[mpg] |         51.2589 |         51.2589 |     2.13e-13 | 
+> PASS
+                se[_cons] |         1103.92 |         1103.92 |     5.00e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             T-STATISTICS |   |   |   | 
+                   t[mpg] |         -4.3154 |         -4.3154 |     1.15e-14 | 
+> PASS
+                 t[_cons] |         9.75377 |         9.75377 |     3.55e-14 | 
+> PASS
+
+----------------------------------------------------------------------
+TIMING COMPARISON
+----------------------------------------------------------------------
+  reghdfe:     0.0080 seconds
+  creghdfe:    0.0030 seconds
+  Difference:    0.0050 seconds (creghdfe is  2.67x faster)
+
+----------------------------------------------------------------------
+OVERALL RESULT
+----------------------------------------------------------------------
+  Comparisons: 18/18 passed
+
+  *** PASSED ***
+
+
+. 
+. * Test 5: Cluster by string variable (make)
+. compare_hdfe price mpg, absorb(foreign trunk) vce(cluster make)
+
+----------------------------------------------------------------------
+BENCHMARK: reghdfe vs creghdfe
+----------------------------------------------------------------------
+Specification: price  mpg, absorb(foreign trunk) vce(cluster make)
+Tolerance: 1.00000000000e-07
+----------------------------------------------------------------------
+
+Running reghdfe...
+  Time:    0.0070 seconds
+
+Running creghdfe...
+  Time:    0.0300 seconds
+
+----------------------------------------------------------------------
+COMPARISON RESULTS
+----------------------------------------------------------------------
+
+                Statistic |         reghdfe |        creghdfe |         Diff | 
+> Status
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+                        N |              69 |              69 |     0.00e+00 | 
+> PASS
+                     df_m |               1 |               1 |     0.00e+00 | 
+> PASS
+                     df_r |              54 |              54 |     0.00e+00 | 
+> PASS
+                        F |         11.2525 |         11.2525 |     1.31e-13 | 
+> PASS
+                       r2 |         .323345 |         .323345 |     1.67e-16 | 
+> PASS
+                     r2_a |         .147916 |         .147916 |     2.22e-16 | 
+> PASS
+                r2_within |         .134833 |         .134833 |     8.33e-17 | 
+> PASS
+                     rmse |         2617.75 |         2617.75 |     0.00e+00 | 
+> PASS
+                      rss |       370040208 |       370040208 |     0.00e+00 | 
+> PASS
+                      tss |       546866939 |       546866939 |     1.19e-07 | 
+> PASS
+                     df_a |              14 |              14 |     0.00e+00 | 
+> PASS
+           num_singletons |               5 |               5 |     0.00e+00 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             COEFFICIENTS |   |   |   | 
+                   b[mpg] |        -221.203 |        -221.203 |     3.13e-13 | 
+> PASS
+                 b[_cons] |         10767.4 |         10767.4 |     9.09e-12 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+          STANDARD ERRORS |   |   |   | 
+                  se[mpg] |         65.9426 |         65.9426 |     4.83e-13 | 
+> PASS
+                se[_cons] |         1542.37 |         1542.37 |     1.00e-11 | 
+> PASS
+--------------------------+-----------------+-----------------+--------------+-
+> --------
+             T-STATISTICS |   |   |   | 
+                   t[mpg] |        -3.35447 |        -3.35447 |     2.00e-14 | 
+> PASS
+                 t[_cons] |         6.98108 |         6.98108 |     3.82e-14 | 
+> PASS
+
+----------------------------------------------------------------------
+TIMING COMPARISON
+----------------------------------------------------------------------
+  reghdfe:     0.0070 seconds
+  creghdfe:    0.0300 seconds
+  Difference:   -0.0230 seconds (reghdfe is  4.29x faster)
+
+----------------------------------------------------------------------
+OVERALL RESULT
+----------------------------------------------------------------------
+  Comparisons: 18/18 passed
+
+  *** PASSED ***
+
+
+. 
+. di as text _n "Benchmark suite complete."
+
+Benchmark suite complete.
+
+. 
+end of do-file
