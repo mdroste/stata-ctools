@@ -1,0 +1,167 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_ipm_debug.do 
+
+. * Test IPM implementation with verbose output
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. di as text "{hline 70}"
+----------------------------------------------------------------------
+
+. di as text "Testing IPM with verbose output"
+Testing IPM with verbose output
+
+. di as text "{hline 70}"
+----------------------------------------------------------------------
+
+. 
+. * First show qreg result for reference
+. di _newline
+
+
+
+. di as result "=== Stata's qreg (target) ===" _newline
+=== Stata's qreg (target) ===
+
+
+. qreg price mpg weight, nolog
+
+Median regression                                   Number of obs =         74
+  Raw sum of deviations  71102.5 (about 4934)
+  Min sum of deviations 64104.98                    Pseudo R2     =     0.0984
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -64.08696   121.1579    -0.53   0.598    -305.6689    177.4949
+      weight |   .5782609   .9019106     0.64   0.523    -1.220098     2.37662
+       _cons |       4812    5058.39     0.95   0.345    -5274.142    14898.14
+------------------------------------------------------------------------------
+
+. scalar qreg_obj = e(sum_adev)
+
+. di "Sum of abs deviations: " qreg_obj
+Sum of abs deviations: 64104.978
+
+. 
+. * Run cqreg with verbose
+. di _newline
+
+
+
+. di as result "=== ctools cqreg (IPM with debug) ===" _newline
+=== ctools cqreg (IPM with debug) ===
+
+
+. cqreg price mpg weight, verbose
+
+------------------------------------------------------------
+cqreg: C-Accelerated Quantile Regression
+------------------------------------------------------------
+Quantile:   .5
+Depvar:     price
+Indepvars:   mpg weight
+Obs:        74
+VCE type:   iid
+Bandwidth:  Hall-Sheather
+------------------------------------------------------------
+
+cqreg: N=74, K=3, G=0, quantile=0.500
+IPM iter   0: mu=1.0000e+03 obj=  89118.74
+IPM iter   1: mu=1.0000e+03 obj=  87290.09
+IPM iter   2: mu=1.0000e+03 obj=  87270.41
+IPM iter   3: mu=1.0000e+03 obj=  87270.41
+IPM iter   4: mu=1.0000e+03 obj=  87270.41
+IPM iter  10: mu=3.0000e+02 obj=  67638.85
+IPM iter  20: mu=2.7000e+01 obj=  64200.81
+IPM iter  30: mu=2.4300e+00 obj=  64108.94
+IPM iter  40: mu=7.2900e-01 obj=6699487975980.94
+IPM iter  50: mu=7.2900e-01 obj=6699487975980.94
+IPM iter  60: mu=7.2900e-01 obj=6699487975980.94
+IPM iter  70: mu=7.2900e-01 obj=6699487975980.94
+IPM iter  80: mu=7.2900e-01 obj=6699487975980.94
+IPM iter  90: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 100: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 110: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 120: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 130: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 140: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 150: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 160: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 170: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 180: mu=7.2900e-01 obj=6699487975980.94
+IPM iter 190: mu=7.2900e-01 obj=6699487975980.94
+Solution stats: sum_u=0.00 sum_v=13398975951961.88 sum_u+v=13398975951961.88
+  u: min=0.000000e+00 max=0.00  v: min=8.195873e+10 max=319722255667.96
+  lu: min=1.000000e+00 max=1.000000  lv: min=0.000000e+00 max=0.000000
+  compl: sum(u*lu)=0.000000e+00 sum(v*lv)=0.000000e+00
+cqreg: IPM: iterations=201, converged=0, objective=6699487975980.9355, time=0.0
+> 00s
+cqreg: IPM solver did not converge in 200 iterations
+cqreg: Sparsity: 184251923488.8680, bandwidth: 0.225182
+cqreg: VCE computation failed
+cqreg: Total time: 0.001s (load: 0.001, hdfe: 0.000, ipm: 0.000, vce: 0.000)
+
+    .5 Quantile regression                      Number of obs     =         74
+                                                Min sum of deviations=  6.699e+
+> 12
+                                                Sparsity          =  1.843e+11
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -9.63e+08          .        .       .            .           .
+      weight |   7.12e+07          .        .       .            .           .
+       _cons |  -1.36e+10          .        .       .            .           .
+------------------------------------------------------------------------------
+
+IPM iterations: 201, converged: no
+Total time:         0.001 seconds
+
+. 
+. di as text "{hline 70}"
+----------------------------------------------------------------------
+
+. 
+end of do-file

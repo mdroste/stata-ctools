@@ -317,16 +317,16 @@ static ST_int solve_newton_system(cqreg_ipm_state *ipm,
             comp_v -= delta_v_aff[i] * delta_lv_aff[i];
         }
 
-        /* Modified RHS: ξ = r_p + comp_u/lu - comp_v/lv */
-        ST_double rhs_i = ipm->r_primal[i] + comp_u / lu - comp_v / lv;
+        /* Modified RHS: ξ = r_p - comp_u/lu + comp_v/lv */
+        ST_double rhs_i = ipm->r_primal[i] - comp_u / lu + comp_v / lv;
 
         /* Store D^{-1} * ξ */
         ipm->work_N[i] = rhs_i / ipm->D[i];
     }
 
-    /* Step 5: Compute -r_d + X' * D^{-1} * ξ */
+    /* Step 5: Compute X' * D^{-1} * ξ + r_d */
     for (j = 0; j < K; j++) {
-        ST_double sum = -ipm->r_dual[j];
+        ST_double sum = ipm->r_dual[j];
         const ST_double *Xj = &X[j * N];
         for (i = 0; i < N; i++) {
             sum += Xj[i] * ipm->work_N[i];
@@ -355,11 +355,11 @@ static ST_int solve_newton_system(cqreg_ipm_state *ipm,
         }
 
         /* From the derivation:
-         *   D*Δλ = X*Δβ - r_p - comp_u/lu + comp_v/lv
-         *   Δλ = (X*Δβ - r_p - comp_u/lu + comp_v/lv) / D
+         *   Δλ = (ξ - X*Δβ) / D
+         *   where ξ = r_p - comp_u/lu + comp_v/lv
          */
         ST_double D_i = u / lu + v / lv;
-        ST_double delta_lambda = (ipm->work_N[i] - ipm->r_primal[i] - comp_u / lu + comp_v / lv) / D_i;
+        ST_double delta_lambda = (ipm->r_primal[i] - comp_u / lu + comp_v / lv - ipm->work_N[i]) / D_i;
 
         /* Back-substitute for Δu, Δv, Δlambda_u, Δlambda_v */
         ipm->delta_u[i] = (comp_u + u * delta_lambda) / lu;
@@ -556,6 +556,8 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
 {
     ST_int iter;
     ST_int N = ipm->N;
+    ST_int K = ipm->K;
+    ST_int i, j, k;
 
     if (ipm == NULL || y == NULL || X == NULL || beta == NULL) {
         return -1;
@@ -565,67 +567,257 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
         return -2;
     }
 
-    /* Initialize variables */
+    /* Initialize β with OLS solution */
     cqreg_ipm_initialize(ipm, y, X, q);
 
-    for (iter = 0; iter < ipm->config.maxiter; iter++) {
-        /* Compute residuals */
-        cqreg_ipm_compute_residuals(ipm, y, X, q);
+    /*
+     * Interior Point Method for Quantile Regression
+     *
+     * We solve the barrier problem:
+     *   min_β  Σ ρ_μ(r_i)   where r = y - Xβ
+     *
+     * where ρ_μ(r) is a smoothed check function:
+     *   ρ_μ(r) = q*r + μ*log(1 + exp(-r/μ))  [Huber-like smoothing]
+     *
+     * As μ → 0, ρ_μ → ρ_q (the quantile check function).
+     *
+     * The gradient is:
+     *   ∂ρ_μ/∂r = q - 1/(1 + exp(r/μ)) = q - sigmoid(-r/μ)
+     *
+     * The Hessian is:
+     *   ∂²ρ_μ/∂r² = (1/μ) * sigmoid(-r/μ) * sigmoid(r/μ)
+     *             = (1/μ) * exp(-r/μ) / (1 + exp(-r/μ))²
+     *
+     * Newton's method:
+     *   (X' W X) Δβ = X' g
+     * where W = diag(∂²ρ_μ/∂r²) and g = ∂ρ_μ/∂r
+     */
 
-        /* Check convergence */
-        if (cqreg_ipm_check_convergence(ipm)) {
+    ST_double mu = 1000.0;  /* Large initial smoothing parameter */
+    ST_double mu_min = 0.00001;  /* Stop before numerical instability */
+    ST_double mu_factor = 0.5;  /* Reduction factor */
+
+    /* Allocate workspace */
+    ST_double *w = ipm->D;  /* Weights */
+    ST_double *g = ipm->work_N;  /* Gradient */
+
+    for (iter = 0; iter < ipm->config.maxiter; iter++) {
+        /* Compute residuals r = y - Xβ */
+        cqreg_matvec_col(ipm->r_primal, X, ipm->beta, N, K);
+        for (i = 0; i < N; i++) {
+            ipm->r_primal[i] = y[i] - ipm->r_primal[i];
+        }
+
+        /* Compute smoothed objective */
+        ST_double obj = 0.0;
+        for (i = 0; i < N; i++) {
+            ST_double r = ipm->r_primal[i];
+            /* Numerically stable computation of ρ_μ(r) = q*r + μ*log(1 + exp(-r/μ)) */
+            ST_double z = -r / mu;
+            if (z > 20.0) {
+                obj += q * r + mu * z;  /* log(1 + exp(z)) ≈ z for large z */
+            } else if (z < -20.0) {
+                obj += q * r;  /* log(1 + exp(z)) ≈ 0 for very negative z */
+            } else {
+                obj += q * r + mu * log(1.0 + exp(z));
+            }
+        }
+
+        /* Compute gradient and Hessian weights */
+        for (i = 0; i < N; i++) {
+            ST_double r = ipm->r_primal[i];
+            ST_double z = -r / mu;
+            ST_double sig;  /* sigmoid(-r/μ) */
+
+            /* Numerically stable sigmoid */
+            if (z > 20.0) {
+                sig = 1.0;
+            } else if (z < -20.0) {
+                sig = 0.0;
+            } else {
+                sig = 1.0 / (1.0 + exp(-z));
+            }
+
+            g[i] = q - sig;  /* Gradient of check function */
+            w[i] = sig * (1.0 - sig) / mu;  /* Hessian weight */
+
+            /* Ensure weights are positive and bounded */
+            if (w[i] < 1e-12) w[i] = 1e-12;
+            if (w[i] > 1e12) w[i] = 1e12;
+        }
+
+        /* Debug output */
+        if (ipm->config.verbose && (iter % 10 == 0 || iter < 5)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "IPM iter %3d: mu=%10.4e obj=%10.2f\n", iter, mu, obj);
+            SF_display(buf);
+        }
+
+        /* Form weighted normal equations: (X'WX) Δβ = X'g */
+        memset(ipm->XDX, 0, K * K * sizeof(ST_double));
+        for (j = 0; j < K; j++) {
+            const ST_double *Xj = &X[j * N];
+            for (k = j; k < K; k++) {
+                const ST_double *Xk = &X[k * N];
+                ST_double sum = 0.0;
+                for (i = 0; i < N; i++) {
+                    sum += w[i] * Xj[i] * Xk[i];
+                }
+                ipm->XDX[j * K + k] = sum;
+                ipm->XDX[k * K + j] = sum;
+            }
+        }
+
+        /* Add regularization for stability */
+        for (j = 0; j < K; j++) {
+            ipm->XDX[j * K + j] += 1e-10;
+        }
+
+        /* Compute X'g */
+        for (j = 0; j < K; j++) {
+            const ST_double *Xj = &X[j * N];
+            ST_double sum = 0.0;
+            for (i = 0; i < N; i++) {
+                sum += Xj[i] * g[i];
+            }
+            ipm->delta_beta[j] = sum;
+        }
+
+        /* Cholesky factorization */
+        memcpy(ipm->L, ipm->XDX, K * K * sizeof(ST_double));
+        if (cqreg_cholesky(ipm->L, K) != 0) {
+            /* Cholesky failed - likely mu is too small */
+            break;
+        }
+
+        /* Solve for Δβ */
+        cqreg_solve_cholesky(ipm->L, ipm->delta_beta, K);
+
+        /* Line search with backtracking */
+        ST_double alpha = 1.0;
+        ST_double obj_new;
+        for (ST_int ls = 0; ls < 20; ls++) {
+            /* Tentative update */
+            for (j = 0; j < K; j++) {
+                ipm->work_K[j] = ipm->beta[j] + alpha * ipm->delta_beta[j];
+            }
+
+            /* Compute new residuals and objective */
+            cqreg_matvec_col(ipm->r_primal, X, ipm->work_K, N, K);
+            obj_new = 0.0;
+            for (i = 0; i < N; i++) {
+                ST_double r = y[i] - ipm->r_primal[i];
+                ST_double z = -r / mu;
+                if (z > 20.0) {
+                    obj_new += q * r + mu * z;
+                } else if (z < -20.0) {
+                    obj_new += q * r;
+                } else {
+                    obj_new += q * r + mu * log(1.0 + exp(z));
+                }
+            }
+
+            if (obj_new < obj + 1e-4 * alpha * cqreg_dot(ipm->delta_beta, ipm->delta_beta, K)) {
+                break;  /* Sufficient decrease */
+            }
+            alpha *= 0.5;
+        }
+
+        /* Update β */
+        for (j = 0; j < K; j++) {
+            ipm->beta[j] += alpha * ipm->delta_beta[j];
+        }
+
+        /* Check convergence based on step size and mu */
+        ST_double step_norm = 0.0;
+        for (j = 0; j < K; j++) {
+            step_norm += ipm->delta_beta[j] * ipm->delta_beta[j];
+        }
+        step_norm = sqrt(step_norm) * alpha;
+
+        /* Converged when step is small and we've reached minimum mu */
+        if (step_norm < 1e-6 && mu <= mu_min) {
             ipm->converged = 1;
             break;
         }
 
-        ST_double sigma;
+        /* Also converge if gradient is very small */
+        ST_double grad_norm = 0.0;
+        for (j = 0; j < K; j++) {
+            ST_double gj_scaled = ipm->delta_beta[j];  /* This was X'g before solve */
+            grad_norm += gj_scaled * gj_scaled;
+        }
+        grad_norm = sqrt(grad_norm);
 
-        if (ipm->config.use_mehrotra) {
-            /* Predictor step (affine scaling, sigma = 0) */
-            cqreg_ipm_affine_direction(ipm, X, y, q);
-
-            /* Compute step length for affine direction */
-            ST_double alpha_aff = cqreg_ipm_step_length(ipm, 1);
-
-            /* Compute mu after affine step */
-            ST_double mu_aff = 0.0;
-            for (ST_int i = 0; i < N; i++) {
-                ST_double u_new = ipm->u[i] + alpha_aff * ipm->delta_u_aff[i];
-                ST_double v_new = ipm->v[i] + alpha_aff * ipm->delta_v_aff[i];
-                ST_double lu_new = ipm->lambda_u[i] + alpha_aff * ipm->delta_lambda_u_aff[i];
-                ST_double lv_new = ipm->lambda_v[i] + alpha_aff * ipm->delta_lambda_v_aff[i];
-                mu_aff += u_new * lu_new + v_new * lv_new;
+        /* Reduce smoothing parameter when converged for current mu */
+        if (step_norm < 1e-5) {
+            mu *= mu_factor;
+            if (mu < mu_min) {
+                mu = mu_min;
             }
-            mu_aff /= (2.0 * N);
-
-            /* Adaptive centering parameter */
-            ST_double ratio = mu_aff / ipm->mu;
-            sigma = ratio * ratio * ratio;  /* sigma = (mu_aff / mu)^3 */
-            if (sigma > 1.0) sigma = 1.0;
-            if (sigma < 0.0001) sigma = 0.0001;
-
-            /* Corrector step (combined direction) */
-            cqreg_ipm_combined_direction(ipm, X, y, q, sigma);
-        } else {
-            /* Simple centering (no Mehrotra) */
-            sigma = ipm->config.sigma;
-            cqreg_ipm_affine_direction(ipm, X, y, q);
-
-            /* Re-solve with centering */
-            solve_newton_system(ipm, X, y, q, sigma, NULL, NULL, NULL, NULL);
         }
 
-        /* Compute step length */
-        ST_double alpha = cqreg_ipm_step_length(ipm, 0);
-
-        /* Update variables */
-        cqreg_ipm_update_variables(ipm, alpha);
-
-        /* Update barrier parameter */
-        ipm->mu = cqreg_ipm_complementarity(ipm) / (2.0 * N);
+        ipm->mu = mu;
     }
 
     ipm->iterations = iter + 1;
+
+    /* Compute final residuals and u, v for reporting */
+    cqreg_matvec_col(ipm->r_primal, X, ipm->beta, N, K);
+    for (i = 0; i < N; i++) {
+        ST_double r = y[i] - ipm->r_primal[i];
+        ipm->r_primal[i] = r;
+        if (r >= 0) {
+            ipm->u[i] = r;
+            ipm->v[i] = 0.0;
+        } else {
+            ipm->u[i] = 0.0;
+            ipm->v[i] = -r;
+        }
+        /* Set dual variables at LP optimum */
+        if (r > 0) {
+            ipm->lambda_u[i] = 0.0;
+            ipm->lambda_v[i] = 1.0 - q;
+        } else if (r < 0) {
+            ipm->lambda_u[i] = 1.0;
+            ipm->lambda_v[i] = 0.0;
+        } else {
+            ipm->lambda_u[i] = q;
+            ipm->lambda_v[i] = 1.0 - q;
+        }
+    }
+
+    ipm->iterations = iter + 1;
+
+    /* Debug: print solution statistics */
+    if (ipm->config.verbose) {
+        ST_double sum_u = 0.0, sum_v = 0.0, sum_u_lam_u = 0.0, sum_v_lam_v = 0.0;
+        ST_double min_u = 1e30, min_v = 1e30, max_u = 0.0, max_v = 0.0;
+        ST_double min_lu = 1e30, min_lv = 1e30, max_lu = 0.0, max_lv = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            sum_u += ipm->u[i];
+            sum_v += ipm->v[i];
+            sum_u_lam_u += ipm->u[i] * ipm->lambda_u[i];
+            sum_v_lam_v += ipm->v[i] * ipm->lambda_v[i];
+            if (ipm->u[i] < min_u) min_u = ipm->u[i];
+            if (ipm->v[i] < min_v) min_v = ipm->v[i];
+            if (ipm->u[i] > max_u) max_u = ipm->u[i];
+            if (ipm->v[i] > max_v) max_v = ipm->v[i];
+            if (ipm->lambda_u[i] < min_lu) min_lu = ipm->lambda_u[i];
+            if (ipm->lambda_v[i] < min_lv) min_lv = ipm->lambda_v[i];
+            if (ipm->lambda_u[i] > max_lu) max_lu = ipm->lambda_u[i];
+            if (ipm->lambda_v[i] > max_lv) max_lv = ipm->lambda_v[i];
+        }
+        char buf[512];
+        snprintf(buf, sizeof(buf), "Solution stats: sum_u=%.2f sum_v=%.2f sum_u+v=%.2f\n", sum_u, sum_v, sum_u + sum_v);
+        SF_display(buf);
+        snprintf(buf, sizeof(buf), "  u: min=%.6e max=%.2f  v: min=%.6e max=%.2f\n", min_u, max_u, min_v, max_v);
+        SF_display(buf);
+        snprintf(buf, sizeof(buf), "  lu: min=%.6e max=%.6f  lv: min=%.6e max=%.6f\n", min_lu, max_lu, min_lv, max_lv);
+        SF_display(buf);
+        snprintf(buf, sizeof(buf), "  compl: sum(u*lu)=%.6e sum(v*lv)=%.6e\n", sum_u_lam_u, sum_v_lam_v);
+        SF_display(buf);
+    }
 
     /* Copy solution */
     cqreg_vcopy(beta, ipm->beta, ipm->K);

@@ -225,7 +225,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int bw_method = read_scalar_int("__cqreg_bw_method", 0);
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-8);
-    ST_int maxiter = read_scalar_int("__cqreg_maxiter", 50);
+    ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
 
     /* Validate quantile */
     if (quantile <= 0.0 || quantile >= 1.0) {
@@ -396,9 +396,9 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
 
-    /* Solve quantile regression using IRLS (more robust than IPM) */
-    ST_int ipm_result = cqreg_irls_solve(state->ipm, state->y, state->X,
-                                         quantile, state->beta);
+    /* Solve quantile regression using IPM */
+    ST_int ipm_result = cqreg_ipm_solve(state->ipm, state->y, state->X,
+                                        quantile, state->beta);
 
     state->iterations = abs(ipm_result);
     state->converged = (ipm_result > 0) ? 1 : 0;

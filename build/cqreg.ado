@@ -16,13 +16,13 @@
 *!   bwmethod(method)   - Bandwidth method: hsheather (default), bofinger, chamberlain
 *!   verbose            - Display progress information
 *!   tolerance(#)       - Convergence tolerance (default: 1e-8)
-*!   maxiter(#)         - Maximum IPM iterations (default: 50)
+*!   maxiter(#)         - Maximum IPM iterations (default: 200)
 
 program define cqreg, eclass
     version 14.0
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 50)]
+        VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
