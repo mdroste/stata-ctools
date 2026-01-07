@@ -1,0 +1,264 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_cqreg.do 
+
+. * Test cqreg vs qreg
+. * Simple benchmark on sysuse auto
+. 
+. clear all
+
+. set more off
+
+. 
+. * Add build directory to adopath
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. * Load test data
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. * Display data info
+. di "Number of observations: " _N
+Number of observations: 74
+
+. summarize price mpg weight
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+       price |         74    6165.257    2949.496       3291      15906
+         mpg |         74     21.2973    5.785503         12         41
+      weight |         74    3019.459    777.1936       1760       4840
+
+. 
+. * Run native qreg first
+. di ""
+
+
+. di "============================================"
+============================================
+
+. di "Running native qreg..."
+Running native qreg...
+
+. di "============================================"
+============================================
+
+. qreg price mpg weight
+
+Iteration 1:  WLS sum of weighted deviations =  70138.152
+
+Iteration 1:  Sum of abs. weighted deviations =  70902.418
+Iteration 2:  Sum of abs. weighted deviations =  65029.141
+Iteration 3:  Sum of abs. weighted deviations =  64107.449
+Iteration 4:  Sum of abs. weighted deviations =  64104.978
+
+Median regression                                   Number of obs =         74
+  Raw sum of deviations  71102.5 (about 4934)
+  Min sum of deviations 64104.98                    Pseudo R2     =     0.0984
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -64.08696   121.1579    -0.53   0.598    -305.6689    177.4949
+      weight |   .5782609   .9019106     0.64   0.523    -1.220098     2.37662
+       _cons |       4812    5058.39     0.95   0.345    -5274.142    14898.14
+------------------------------------------------------------------------------
+
+. matrix b_qreg = e(b)
+
+. matrix V_qreg = e(V)
+
+. di "qreg coefficients:"
+qreg coefficients:
+
+. matrix list b_qreg
+
+b_qreg[1,3]
+           mpg      weight       _cons
+y1  -64.086957   .57826087        4812
+
+. di "qreg VCE diagonal:"
+qreg VCE diagonal:
+
+. matrix list V_qreg
+
+symmetric V_qreg[3,3]
+               mpg      weight       _cons
+   mpg   14679.225
+weight   88.202869   .81344281
+ _cons  -578952.82  -4334.6403    25587305
+
+. 
+. * Now try cqreg
+. di ""
+
+
+. di "============================================"
+============================================
+
+. di "Running cqreg..."
+Running cqreg...
+
+. di "============================================"
+============================================
+
+. 
+. cqreg price mpg weight, verbose
+
+------------------------------------------------------------
+cqreg: C-Accelerated Quantile Regression
+------------------------------------------------------------
+Quantile:   .5
+Depvar:     price
+Indepvars:   mpg weight
+Obs:        74
+VCE type:   iid
+Bandwidth:  Hall-Sheather
+------------------------------------------------------------
+
+cqreg: entering C plugin
+cqreg: reading scalars
+cqreg: N=%d, K=%d, G=%d
+cqreg: N=74, K=3, G=0, quantile=0.500
+cqreg: creating state
+cqreg: state created successfully
+cqreg: loading data
+cqreg: data loaded
+cqreg debug: y[0..2] = 4099.00, 4749.00, 3799.00
+cqreg debug: X[0,0..2] = 22.00, 17.00, 22.00
+cqreg: setting up IPM solver
+cqreg: creating IPM state
+cqreg: solving quantile regression (IRLS)
+IRLS: starting
+IRLS init: beta=-49.51,1.747,1946
+IRLS iter 0: obj=7.277e+04
+IRLS iter 0: beta=-64.64,1.337,3305
+IRLS iter 1: beta=-68.3,1.218,3658
+IRLS iter 2: beta=-72.24,0.9842,4254
+IRLS iter 10: obj=6.411e+04
+IRLS iter 20: obj=6.411e+04
+IRLS iter 30: obj=6.411e+04
+IRLS converged at iter 31, obj=6.411e+04
+IRLS final: beta=-65.5408,0.564606,4888.74
+cqreg: IPM solved
+cqreg debug: beta = -65.5408, 0.5646, 4888.7449
+cqreg: IPM: iterations=32, converged=1, objective=64105.6208, time=0.000s
+cqreg: computing VCE
+cqreg: Sparsity: 4926.8521, bandwidth: 0.225182
+VCE_IID: starting
+VCE_IID: XtX_inv[0,0]=0.001174, sparsity=4927, q=0.5
+VCE_IID: scale=6.06847e+06
+VCE_IID: V[0,0]=7127, V[1,1]=0.3949, V[2,2]=1.242e+07
+cqreg: VCE done
+cqreg: storing results
+cqreg: Total time: 0.001s (load: 0.001, hdfe: 0.000, ipm: 0.000, vce: 0.000)
+
+    .5 Quantile regression                      Number of obs     =         74
+                                                Min sum of deviations=      641
+> 06
+                                                Sparsity          =  4926.8521
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -65.54083   84.42188    -0.78   0.440    -233.8733    102.7916
+      weight |   .5646059   .6284446     0.90   0.372     -.688477    1.817689
+       _cons |   4888.745   3524.648     1.39   0.170    -2139.204    11916.69
+------------------------------------------------------------------------------
+
+IPM iterations: 32, converged: yes
+Total time:         0.001 seconds
+
+. 
+. di "cqreg rc = " _rc
+cqreg rc = 0
+
+. 
+. if _rc == 0 {
+.     di ""
+
+.     di "cqreg coefficients:"
+cqreg coefficients:
+.     matrix list e(b)
+
+e(b)[1,3]
+           mpg      weight       _cons
+y1  -65.540829   .56460591   4888.7449
+. 
+.     di ""
+
+.     di "cqreg VCE:"
+cqreg VCE:
+.     matrix list e(V)
+
+symmetric e(V)[3,3]
+               mpg      weight       _cons
+   mpg   7127.0546
+weight   42.824239   .39494259
+ _cons  -281093.06  -2104.5537    12423143
+. 
+.     di ""
+
+.     di "Comparison of coefficients:"
+Comparison of coefficients:
+.     di "Variable     qreg          cqreg         diff"
+Variable     qreg          cqreg         diff
+.     di "------------------------------------------------"
+------------------------------------------------
+.     forval i = 1/3 {
+  2.         local diff = b_qreg[1,`i'] - e(b)[1,`i']
+  3.         di "coef `i':     " %12.4f b_qreg[1,`i'] "  " %12.4f e(b)[1,`i'] "
+>   " %12.6f `diff'
+  4.     }
+coef 1:         -64.0870      -65.5408      1.453873
+coef 2:           0.5783        0.5646      0.013655
+coef 3:        4812.0000     4888.7449    -76.744863
+. }
+
+. else {
+.     di as error "cqreg failed with error code: " _rc
+. }
+
+. 
+. di ""
+
+
+. di "Test complete."
+Test complete.
+
+. 
+end of do-file

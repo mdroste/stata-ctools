@@ -86,8 +86,19 @@ CREGHDFE_SRCS = creghdfe/creghdfe_types.c \
                 creghdfe/creghdfe_main.c \
                 creghdfe/creghdfe_impl.c
 
+# cqreg module (in src/cqreg/)
+CQREG_SRCS = cqreg/cqreg_types.c \
+             cqreg/cqreg_linalg.c \
+             cqreg/cqreg_ipm.c \
+             cqreg/cqreg_irls.c \
+             cqreg/cqreg_sparsity.c \
+             cqreg/cqreg_vce.c \
+             cqreg/cqreg_hdfe.c \
+             cqreg/cqreg_main.c \
+             cqreg/cqreg_impl.c
+
 # All sources
-SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS)
+SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS)
 
 # Headers (for dependency tracking)
 CORE_HEADERS = stplugin.h \
@@ -114,10 +125,19 @@ CREGHDFE_HEADERS = creghdfe/creghdfe_types.h \
                    creghdfe/creghdfe_main.h \
                    creghdfe/creghdfe_impl.h
 
-HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS)
+CQREG_HEADERS = cqreg/cqreg_types.h \
+                cqreg/cqreg_linalg.h \
+                cqreg/cqreg_ipm.h \
+                cqreg/cqreg_sparsity.h \
+                cqreg/cqreg_vce.h \
+                cqreg/cqreg_hdfe.h \
+                cqreg/cqreg_main.h \
+                cqreg/cqreg_impl.h
+
+HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS) $(CQREG_HEADERS)
 
 # Include paths for subdirectories
-INCLUDE_DIRS = -I. -Icsort -Icimport -Icexport -Icmerge -Icreghdfe
+INCLUDE_DIRS = -I. -Icsort -Icimport -Icexport -Icmerge -Icreghdfe -Icqreg
 
 # ------------------------------------------------------------------------------
 # Output Configuration
@@ -269,7 +289,7 @@ help:
 	@echo "║                      ctools Stata Plugin Build System                        ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════════════╝"
 	@echo ""
-	@echo "  High-performance C plugins for Stata: csort, cmerge, cimport, cexport, creghdfe"
+	@echo "  High-performance C plugins for Stata: csort, cmerge, cimport, cexport, creghdfe, cqreg"
 	@echo ""
 	@echo "  Usage:"
 	@echo "    make              Build for current platform ($(DETECTED_OS) $(DETECTED_ARCH))"
@@ -363,7 +383,7 @@ all: $(BUILD_DIR)
 	@echo "╔══════════════════════════════════════════════════════════════════════════════╗"
 	@echo "║                      ctools Multi-Platform Build                             ║"
 	@echo "╠══════════════════════════════════════════════════════════════════════════════╣"
-	@echo "║  Building: csort · cmerge · cimport · cexport · creghdfe                     ║"
+	@echo "║  Building: csort · cmerge · cimport · cexport · creghdfe · cqreg             ║"
 	@echo "╚══════════════════════════════════════════════════════════════════════════════╝"
 	@$(MAKE) --no-print-directory macos-arm
 	@$(MAKE) --no-print-directory macos-intel

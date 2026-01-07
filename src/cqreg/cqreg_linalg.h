@@ -1,0 +1,230 @@
+/*
+ * cqreg_linalg.h
+ *
+ * Linear algebra operations for quantile regression IPM solver.
+ * Includes optimized dot products, Cholesky decomposition, and matrix operations.
+ * Part of the ctools suite.
+ */
+
+#ifndef CQREG_LINALG_H
+#define CQREG_LINALG_H
+
+#include "cqreg_types.h"
+
+/* ============================================================================
+ * Dot Products (with various optimizations)
+ * ============================================================================ */
+
+/*
+ * Fast dot product with 8-way loop unrolling.
+ * Returns: sum_i(x[i] * y[i])
+ */
+ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
+                    const ST_double * CQREG_RESTRICT y,
+                    ST_int N);
+
+/*
+ * Kahan-compensated dot product for numerical stability.
+ * Use for very large N (> 10^7) or when accumulation errors matter.
+ */
+ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
+                          const ST_double * CQREG_RESTRICT y,
+                          ST_int N);
+
+/*
+ * Weighted dot product: sum_i(w[i] * x[i] * y[i])
+ */
+ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
+                             const ST_double * CQREG_RESTRICT y,
+                             const ST_double * CQREG_RESTRICT w,
+                             ST_int N);
+
+/*
+ * Dot product of a vector with itself (squared norm).
+ * Returns: sum_i(x[i]^2)
+ */
+ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N);
+
+/* ============================================================================
+ * Vector Operations
+ * ============================================================================ */
+
+/*
+ * Vector copy: dst = src
+ */
+void cqreg_vcopy(ST_double * CQREG_RESTRICT dst,
+                 const ST_double * CQREG_RESTRICT src,
+                 ST_int N);
+
+/*
+ * Vector scale: x = alpha * x
+ */
+void cqreg_vscale(ST_double * CQREG_RESTRICT x, ST_double alpha, ST_int N);
+
+/*
+ * Vector axpy: y = y + alpha * x
+ */
+void cqreg_vaxpy(ST_double * CQREG_RESTRICT y,
+                 ST_double alpha,
+                 const ST_double * CQREG_RESTRICT x,
+                 ST_int N);
+
+/*
+ * Vector element-wise multiply: z = x .* y
+ */
+void cqreg_vmul(ST_double * CQREG_RESTRICT z,
+                const ST_double * CQREG_RESTRICT x,
+                const ST_double * CQREG_RESTRICT y,
+                ST_int N);
+
+/*
+ * Vector element-wise divide: z = x ./ y
+ */
+void cqreg_vdiv(ST_double * CQREG_RESTRICT z,
+                const ST_double * CQREG_RESTRICT x,
+                const ST_double * CQREG_RESTRICT y,
+                ST_int N);
+
+/*
+ * Set all elements to a scalar: x[i] = val
+ */
+void cqreg_vset(ST_double * CQREG_RESTRICT x, ST_double val, ST_int N);
+
+/*
+ * Sum of vector elements
+ */
+ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N);
+
+/*
+ * Maximum absolute value in vector
+ */
+ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N);
+
+/* ============================================================================
+ * Matrix Operations
+ * ============================================================================ */
+
+/*
+ * Matrix-vector multiply: y = A * x
+ * A is M x N (row-major), x is N, y is M
+ */
+void cqreg_matvec(ST_double * CQREG_RESTRICT y,
+                  const ST_double * CQREG_RESTRICT A,
+                  const ST_double * CQREG_RESTRICT x,
+                  ST_int M, ST_int N);
+
+/*
+ * Matrix-transpose-vector multiply: y = A' * x
+ * A is M x N (row-major), x is M, y is N
+ */
+void cqreg_matvec_t(ST_double * CQREG_RESTRICT y,
+                    const ST_double * CQREG_RESTRICT A,
+                    const ST_double * CQREG_RESTRICT x,
+                    ST_int M, ST_int N);
+
+/*
+ * Column-major matrix-vector multiply: y = A * x
+ * A is M x N (column-major: A[j*M + i] = A[i,j]), x is N, y is M
+ */
+void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
+                      const ST_double * CQREG_RESTRICT A,
+                      const ST_double * CQREG_RESTRICT x,
+                      ST_int M, ST_int N);
+
+/*
+ * Column-major matrix-transpose-vector multiply: y = A' * x
+ * A is M x N (column-major), x is M, y is N
+ */
+void cqreg_matvec_t_col(ST_double * CQREG_RESTRICT y,
+                        const ST_double * CQREG_RESTRICT A,
+                        const ST_double * CQREG_RESTRICT x,
+                        ST_int M, ST_int N);
+
+/*
+ * Compute X' * D * X where D is diagonal.
+ * X is N x K (column-major), D is N, result is K x K (symmetric, stored full).
+ * Parallel implementation with OpenMP.
+ */
+void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
+                const ST_double * CQREG_RESTRICT X,
+                const ST_double * CQREG_RESTRICT D,
+                ST_int N, ST_int K);
+
+/*
+ * Compute X' * v for column-major X.
+ * X is N x K (column-major), v is N, result is K.
+ */
+void cqreg_xtv(ST_double * CQREG_RESTRICT result,
+               const ST_double * CQREG_RESTRICT X,
+               const ST_double * CQREG_RESTRICT v,
+               ST_int N, ST_int K);
+
+/* ============================================================================
+ * Cholesky Decomposition and Solve
+ * ============================================================================ */
+
+/*
+ * Cholesky decomposition: A = L * L'
+ * A is K x K symmetric positive definite (stored full, uses lower triangle).
+ * L is stored in the lower triangle of A (in-place).
+ *
+ * Returns: 0 on success, -1 if matrix is not positive definite (collinear)
+ */
+ST_int cqreg_cholesky(ST_double * CQREG_RESTRICT A, ST_int K);
+
+/*
+ * Solve L * x = b where L is lower triangular.
+ * Solution stored in b (in-place).
+ */
+void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
+                       ST_double * CQREG_RESTRICT b,
+                       ST_int K);
+
+/*
+ * Solve L' * x = b where L is lower triangular (solve with transpose).
+ * Solution stored in b (in-place).
+ */
+void cqreg_solve_lower_t(const ST_double * CQREG_RESTRICT L,
+                         ST_double * CQREG_RESTRICT b,
+                         ST_int K);
+
+/*
+ * Solve A * x = b where A = L * L' has been Cholesky factored.
+ * L is K x K lower triangular, b is K.
+ * Solution stored in b (in-place).
+ */
+void cqreg_solve_cholesky(const ST_double * CQREG_RESTRICT L,
+                          ST_double * CQREG_RESTRICT b,
+                          ST_int K);
+
+/*
+ * Compute inverse of A from its Cholesky factor L.
+ * L is K x K lower triangular.
+ * Result is stored in Ainv (K x K, full symmetric matrix).
+ */
+void cqreg_invert_cholesky(ST_double * CQREG_RESTRICT Ainv,
+                           const ST_double * CQREG_RESTRICT L,
+                           ST_int K);
+
+/* ============================================================================
+ * Utility Functions
+ * ============================================================================ */
+
+/*
+ * Add regularization to diagonal: A[i,i] += lambda
+ * Used when Cholesky fails due to near-singularity.
+ */
+void cqreg_add_regularization(ST_double * CQREG_RESTRICT A, ST_int K, ST_double lambda);
+
+/*
+ * Check if matrix is numerically symmetric.
+ * Returns: 1 if symmetric within tolerance, 0 otherwise.
+ */
+ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_double tol);
+
+/*
+ * Copy lower triangle to upper (make symmetric).
+ */
+void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K);
+
+#endif /* CQREG_LINALG_H */
