@@ -1,0 +1,159 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_resid_debug.do 
+
+. * Debug residual computation
+. clear all
+
+. set more off
+
+. 
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. di "Number of variables before: " c(k)
+Number of variables before: 12
+
+. describe, simple
+make          rep78         weight        displacement
+price         headroom      length        gear_ratio
+mpg           trunk         turn          foreign
+
+. 
+. * Run creghdfe with resid and verbose
+. creghdfe price mpg weight, absorb(foreign trunk) resid verbose
+
+------------------------------------------------------------
+creghdfe: C-Accelerated HDFE Regression
+------------------------------------------------------------
+Depvar:     price
+Indepvars:   mpg weight
+Absorb:     foreign trunk
+Obs:        74
+VCE type:   unadjusted
+------------------------------------------------------------
+
+   C plugin: full_regression N=74, K=3, G=2, threads=3
+(dropped 5 singleton observations)
+   Partialling out and solving OLS...
+   Converged in 3 iterations
+   Storing residuals to var index 6 of 6 (N=69, N_orig=74, in1=1, in2=74)
+   First 3 residuals: -536.652, -1347.64, -1576.21
+   Before store: resid var[1] = 8.98847e+307 (miss=8.98847e+307)
+   After direct store to var 6: val = 8.98847e+307
+   Price[1] before=4099, after store 99999=4099
+   After store: resid var[1] = 8.98847e+307
+   Stored 69 residuals (skipped: 0 ifobs, 5 mask)
+(dropped 5 singleton observations)
+(HDFE estimator converged in 3 iterations)
+
+HDFE Linear regression                          Number of obs     =         69
+Absorbing 2 HDFE groups                         F(  2,      53)   =      14.99
+                                                Prob > F          =     0.0000
+                                                R-squared         =     0.5004
+                                                Adj R-squared     =     0.3591
+                                                Within R-sq.      =     0.3613
+                                                Root MSE          =  2270.3615
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |    25.8982   87.31075     0.30   0.768     -149.225    201.0214
+      weight |   3.786856    .873625     4.33   0.000     2.034586    5.539126
+       _cons |  -5861.531   4101.253    -1.43   0.159     -14087.6     2364.54
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+Total time:     0.000 seconds
+
+. 
+. di _n "Number of variables after: " c(k)
+
+Number of variables after: 13
+
+. describe, simple
+make          rep78         weight        displacement  _reghdfe_r~d
+price         headroom      length        gear_ratio
+mpg           trunk         turn          foreign
+
+. 
+. di _n "After creghdfe:"
+
+After creghdfe:
+
+. capture describe _reghdfe_resid
+
+. summarize _reghdfe_resid
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+_reghdfe_r~d |          0
+
+. list _reghdfe_resid in 1/10
+
+     +----------+
+     | _reghd~d |
+     |----------|
+  1. |        . |
+  2. |        . |
+  3. |        . |
+  4. |        . |
+  5. |        . |
+     |----------|
+  6. |        . |
+  7. |        . |
+  8. |        . |
+  9. |        . |
+ 10. |        . |
+     +----------+
+
+. 
+. di _n "e(resid) = " "`e(resid)'"
+
+e(resid) = _reghdfe_resid
+
+. 
+end of do-file

@@ -1,0 +1,334 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_predict.do 
+
+. * Test predict functionality
+. * Compare reghdfe vs creghdfe predictions
+. 
+. clear all
+
+. set more off
+
+. 
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. * Test 1: Simple case with single FE
+. di _n "=== Test 1: Single FE ===" _n
+
+=== Test 1: Single FE ===
+
+
+. 
+. * Run reghdfe first
+. reghdfe price mpg, absorb(foreign) resid
+(MWFE estimator converged in 1 iterations)
+
+HDFE Linear regression                            Number of obs   =         74
+Absorbing 1 HDFE group                            F(   1,     71) =      27.91
+                                                  Prob > F        =     0.0000
+                                                  R-squared       =     0.2838
+                                                  Adj R-squared   =     0.2637
+                                                  Within R-sq.    =     0.2821
+                                                  Root MSE        =  2530.9456
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -294.1955   55.69172    -5.28   0.000    -405.2417   -183.1494
+       _cons |   12430.83    1222.03    10.17   0.000     9994.169    14867.48
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+-----------------------------------------------------+
+
+. 
+. * Store reghdfe coefficients and prediction
+. local b_mpg_reghdfe = _b[mpg]
+
+. local b_cons_reghdfe = _b[_cons]
+
+. predict yhat_reghdfe1, xb
+
+. 
+. di "reghdfe: b[mpg] = " %12.8f `b_mpg_reghdfe'
+reghdfe: b[mpg] = -2.94196e+02
+
+. di "reghdfe: b[_cons] = " %12.8f `b_cons_reghdfe'
+reghdfe: b[_cons] =  1.24308e+04
+
+. 
+. * Run creghdfe
+. creghdfe price mpg, absorb(foreign)
+(HDFE estimator converged in 2 iterations)
+
+HDFE Linear regression                          Number of obs     =         74
+Absorbing 1 HDFE group                          F(  1,      71)   =      27.91
+                                                Prob > F          =     0.0000
+                                                R-squared         =     0.2838
+                                                Adj R-squared     =     0.2637
+                                                Within R-sq.      =     0.2821
+                                                Root MSE          =  2530.9456
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -294.1955   55.69172    -5.28   0.000    -405.2417   -183.1494
+       _cons |   12430.83    1222.03    10.17   0.000     9994.169    14867.48
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+-----------------------------------------------------+
+
+. 
+. * Store creghdfe coefficients and prediction
+. local b_mpg_creghdfe = _b[mpg]
+
+. local b_cons_creghdfe = _b[_cons]
+
+. predict yhat_creghdfe1, xb
+
+. 
+. di "creghdfe: b[mpg] = " %12.8f `b_mpg_creghdfe'
+creghdfe: b[mpg] = -2.94196e+02
+
+. di "creghdfe: b[_cons] = " %12.8f `b_cons_creghdfe'
+creghdfe: b[_cons] =  1.24308e+04
+
+. 
+. * Compare coefficients
+. di _n "Coefficient differences:"
+
+Coefficient differences:
+
+. di "diff b[mpg] = " %12.8e (`b_mpg_reghdfe' - `b_mpg_creghdfe')
+diff b[mpg] =  1.13687e-13
+
+. di "diff b[_cons] = " %12.8e (`b_cons_reghdfe' - `b_cons_creghdfe')
+diff b[_cons] = -1.09139e-11
+
+. 
+. * Compare xb predictions
+. gen diff_yhat1 = yhat_reghdfe1 - yhat_creghdfe1
+
+. 
+. di _n "Summary of XB prediction differences (Test 1):"
+
+Summary of XB prediction differences (Test 1):
+
+. summarize diff_yhat1
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+  diff_yhat1 |         74   -4.29e-12    6.12e-13  -5.46e-12  -1.82e-12
+
+. 
+. qui summarize diff_yhat1
+
+. local max_diff = max(abs(r(min)), abs(r(max)))
+
+. di "Max abs diff in yhat: " %12.6e `max_diff'
+Max abs diff in yhat:  5.45697e-12
+
+. 
+. 
+. * Test 2: Two FEs
+. di _n "=== Test 2: Two FEs ===" _n
+
+=== Test 2: Two FEs ===
+
+
+. 
+. drop yhat_* diff_*
+
+. 
+. reghdfe price mpg, absorb(foreign trunk) resid
+(dropped 5 singleton observations)
+(MWFE estimator converged in 3 iterations)
+
+HDFE Linear regression                            Number of obs   =         69
+Absorbing 2 HDFE groups                           F(   1,     54) =       8.42
+                                                  Prob > F        =     0.0054
+                                                  R-squared       =     0.3233
+                                                  Adj R-squared   =     0.1479
+                                                  Within R-sq.    =     0.1348
+                                                  Root MSE        =  2617.7464
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   76.25112    -2.90   0.005     -374.077   -68.32844
+       _cons |   10767.42   1672.127     6.44   0.000     7415.012    14119.84
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. local b_mpg_reghdfe2 = _b[mpg]
+
+. local b_cons_reghdfe2 = _b[_cons]
+
+. predict yhat_reghdfe2, xb
+
+. 
+. di "reghdfe: b[mpg] = " %12.8f `b_mpg_reghdfe2'
+reghdfe: b[mpg] = -2.21203e+02
+
+. di "reghdfe: b[_cons] = " %12.8f `b_cons_reghdfe2'
+reghdfe: b[_cons] =  1.07674e+04
+
+. 
+. creghdfe price mpg, absorb(foreign trunk)
+(dropped 5 singleton observations)
+(HDFE estimator converged in 3 iterations)
+
+HDFE Linear regression                          Number of obs     =         69
+Absorbing 2 HDFE groups                         F(  1,      54)   =       8.42
+                                                Prob > F          =     0.0054
+                                                R-squared         =     0.3233
+                                                Adj R-squared     =     0.1479
+                                                Within R-sq.      =     0.1348
+                                                Root MSE          =  2617.7464
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -221.2027   76.25112    -2.90   0.005     -374.077   -68.32844
+       _cons |   10767.42   1672.127     6.44   0.000     7415.012    14119.84
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. local b_mpg_creghdfe2 = _b[mpg]
+
+. local b_cons_creghdfe2 = _b[_cons]
+
+. predict yhat_creghdfe2, xb
+
+. 
+. di "creghdfe: b[mpg] = " %12.8f `b_mpg_creghdfe2'
+creghdfe: b[mpg] = -2.21203e+02
+
+. di "creghdfe: b[_cons] = " %12.8f `b_cons_creghdfe2'
+creghdfe: b[_cons] =  1.07674e+04
+
+. 
+. * Compare coefficients
+. di _n "Coefficient differences:"
+
+Coefficient differences:
+
+. di "diff b[mpg] = " %12.8e (`b_mpg_reghdfe2' - `b_mpg_creghdfe2')
+diff b[mpg] =  3.12639e-13
+
+. di "diff b[_cons] = " %12.8e (`b_cons_reghdfe2' - `b_cons_creghdfe2')
+diff b[_cons] = -9.09495e-12
+
+. 
+. gen diff_yhat2 = yhat_reghdfe2 - yhat_creghdfe2
+
+. 
+. di _n "Summary of XB prediction differences (Test 2):"
+
+Summary of XB prediction differences (Test 2):
+
+. summarize diff_yhat2
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+  diff_yhat2 |         74   -2.49e-12    1.87e-12  -5.46e-12   3.64e-12
+
+. 
+. qui summarize diff_yhat2
+
+. local max_diff2 = max(abs(r(min)), abs(r(max)))
+
+. di "Max abs diff in yhat: " %12.6e `max_diff2'
+Max abs diff in yhat:  5.45697e-12
+
+. 
+. * Show some example predictions
+. di _n "Sample predictions (first 10 obs):"
+
+Sample predictions (first 10 obs):
+
+. list make price mpg yhat_reghdfe2 yhat_creghdfe2 diff_yhat2 in 1/10
+
+     +------------------------------------------------------------------+
+     | make             price   mpg   yhat_re~2   yhat_cr~2   diff_yh~2 |
+     |------------------------------------------------------------------|
+  1. | AMC Concord      4,099    22   5900.9639   5900.9639   -2.73e-12 |
+  2. | AMC Pacer        4,749    17   7006.9776   7006.9776   -3.64e-12 |
+  3. | AMC Spirit       3,799    22   5900.9639   5900.9639   -2.73e-12 |
+  4. | Buick Century    4,816    20   6343.3694   6343.3694   -2.73e-12 |
+  5. | Buick Electra    7,827    15   7449.3831   7449.3831   -4.55e-12 |
+     |------------------------------------------------------------------|
+  6. | Buick LeSabre    5,788    18   6785.7749   6785.7749   -3.64e-12 |
+  7. | Buick Opel       4,453    26    5016.153    5016.153   -9.09e-13 |
+  8. | Buick Regal      5,189    20   6343.3694   6343.3694   -2.73e-12 |
+  9. | Buick Riviera   10,372    16   7228.1804   7228.1804   -3.64e-12 |
+ 10. | Buick Skylark    4,082    19   6564.5722   6564.5722   -2.73e-12 |
+     +------------------------------------------------------------------+
+
+. 
+. di _n "Test complete."
+
+Test complete.
+
+. 
+end of do-file

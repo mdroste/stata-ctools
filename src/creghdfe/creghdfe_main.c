@@ -51,6 +51,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int max_iter_singleton = 100;
     ST_int mobility_groups = 1;
     ST_int df_a = 0;
+    ST_int compute_resid = 0;
+    ST_int resid_var_idx = 0;
 
     /* Data arrays */
     ST_double *data = NULL;  /* N x K matrix (column-major) */
@@ -91,6 +93,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
     compute_dof = 0;
     if (SF_scal_use("__creghdfe_compute_dof", &val) == 0) {
         compute_dof = (ST_int)val;
+    }
+
+    /* Check if we should compute and store residuals */
+    if (SF_scal_use("__creghdfe_compute_resid", &val) == 0) {
+        compute_resid = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_resid_var_idx", &val) == 0) {
+        resid_var_idx = (ST_int)val;
     }
 
     if (G < 1 || G > 10) {
@@ -1052,26 +1062,28 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     df_r -= K_keep;
 
+    /* Compute residuals (needed for robust/cluster VCE and optionally stored) */
+    ST_double *resid = (ST_double *)malloc(N * sizeof(ST_double));
+    if (resid) {
+        for (idx = 0; idx < N; idx++) {
+            ST_double y_hat = 0.0;
+            for (k = 0; k < K_keep; k++) {
+                y_hat += data_keep[(k + 1) * N + idx] * beta_keep[k];
+            }
+            resid[idx] = data_keep[idx] - y_hat;
+        }
+    }
+
     if (vcetype == 0) {
         compute_vce_unadjusted(inv_xx_keep, rss, df_r, K_with_cons, V_keep);
     } else if (vcetype == 1 || vcetype == 2) {
-        ST_double *resid = (ST_double *)malloc(N * sizeof(ST_double));
         if (resid) {
-            for (idx = 0; idx < N; idx++) {
-                ST_double y_hat = 0.0;
-                for (k = 0; k < K_keep; k++) {
-                    y_hat += data_keep[(k + 1) * N + idx] * beta_keep[k];
-                }
-                resid[idx] = data_keep[idx] - y_hat;
-            }
-
             if (vcetype == 1) {
                 compute_vce_robust(data_with_cons, resid, inv_xx_keep, N, K_with_cons, df_a, V_keep);
             } else {
                 ST_int df_m_cluster = K_keep;
                 compute_vce_cluster(data_with_cons, resid, inv_xx_keep, cluster_ids, N, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
             }
-            free(resid);
         }
     }
 
@@ -1083,6 +1095,13 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
         rss = rss * stdev_y * stdev_y;
         tss_within = tss_within * stdev_y * stdev_y;
+
+        /* Destandardize residuals */
+        if (resid) {
+            for (idx = 0; idx < N; idx++) {
+                resid[idx] *= stdev_y;
+            }
+        }
 
         for (k = 0; k < K_keep; k++) {
             ST_int orig_idx = keep_idx[k];
@@ -1105,6 +1124,88 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
         beta_keep[K_keep] = means[0] - xb_mean;
     }
+
+    /* Store residuals back to Stata if requested */
+    if (compute_resid && resid_var_idx > 0 && resid) {
+        ST_int nvars_plugin = SF_nvars();
+        if (verbose >= 1) {
+            sprintf(msg, "{txt}   Storing residuals to var index %d of %d (N=%d, N_orig=%d, in1=%d, in2=%d)\n",
+                    resid_var_idx, nvars_plugin, N, N_orig, in1, in2);
+            SF_display(msg);
+            sprintf(msg, "{txt}   First 3 residuals: %g, %g, %g\n", resid[0], resid[1], resid[2]);
+            SF_display(msg);
+        }
+
+        /* Debug: Try to read the current value of the resid variable for obs 1 */
+        ST_double test_val_before;
+        SF_vdata(resid_var_idx, 1, &test_val_before);
+        if (verbose >= 1) {
+            sprintf(msg, "{txt}   Before store: resid var[1] = %g (miss=%g)\n", test_val_before, SV_missval);
+            SF_display(msg);
+        }
+        /* Debug: Try a direct store to obs 1 and read back */
+        SF_vstore(resid_var_idx, 1, 123.456);
+        ST_double test_val_direct;
+        SF_vdata(resid_var_idx, 1, &test_val_direct);
+        if (verbose >= 1) {
+            sprintf(msg, "{txt}   After direct store to var %d: val = %g\n", resid_var_idx, test_val_direct);
+            SF_display(msg);
+        }
+        /* Try storing to var 1 (price) to see if that works */
+        ST_double price_before;
+        SF_vdata(1, 1, &price_before);
+        SF_vstore(1, 1, 99999.0);
+        ST_double price_after;
+        SF_vdata(1, 1, &price_after);
+        if (verbose >= 1) {
+            sprintf(msg, "{txt}   Price[1] before=%g, after store 99999=%g\n", price_before, price_after);
+            SF_display(msg);
+        }
+        /* Restore original price */
+        SF_vstore(1, 1, price_before);
+
+        idx = 0;
+        i = 0;
+        ST_int stored_count = 0;
+        ST_int skipped_ifobs = 0;
+        ST_int skipped_mask = 0;
+        for (obs = in1; obs <= in2; obs++) {
+            if (!SF_ifobs(obs)) {
+                skipped_ifobs++;
+                continue;
+            }
+            if (mask[i]) {
+                ST_retcode rc = SF_vstore(resid_var_idx, obs, resid[idx]);
+                if (rc != 0) {
+                    if (verbose >= 1 && stored_count < 3) {
+                        sprintf(msg, "{err}   SF_vstore failed with rc=%d for obs=%d, idx=%d, val=%g\n",
+                                rc, obs, idx, resid[idx]);
+                        SF_display(msg);
+                    }
+                } else {
+                    stored_count++;
+                }
+                idx++;
+            } else {
+                skipped_mask++;
+            }
+            i++;
+        }
+
+        /* Debug: Check if the value was stored */
+        ST_double test_val_after;
+        SF_vdata(resid_var_idx, 1, &test_val_after);
+        if (verbose >= 1) {
+            sprintf(msg, "{txt}   After store: resid var[1] = %g\n", test_val_after);
+            SF_display(msg);
+            sprintf(msg, "{txt}   Stored %d residuals (skipped: %d ifobs, %d mask)\n",
+                    stored_count, skipped_ifobs, skipped_mask);
+            SF_display(msg);
+        }
+    }
+
+    /* Free residuals */
+    if (resid) free(resid);
 
     t_vce = get_time_sec();
 

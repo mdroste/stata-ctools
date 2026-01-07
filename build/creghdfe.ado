@@ -18,7 +18,7 @@ program define creghdfe, eclass
     version 14.0
 
     syntax varlist(min=2 fv) [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
-        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize]
+        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name)]
 
     * Mark sample - include absorb and cluster variables
     marksample touse
@@ -152,6 +152,23 @@ program define creghdfe, eclass
         }
     }
 
+    * Handle resid option - determine residual variable name
+    local resid_varname ""
+    local compute_resid = 0
+    if "`resid'" != "" | "`resid2'" != "" {
+        local compute_resid = 1
+        if "`resid2'" != "" {
+            local resid_varname "`resid2'"
+        }
+        else {
+            local resid_varname "_reghdfe_resid"
+        }
+        * Drop existing variable if it exists
+        capture drop `resid_varname'
+        * Create the residual variable (will be filled by C plugin)
+        quietly gen double `resid_varname' = .
+    }
+
     * Set up parameters via Stata scalars (expected by C plugin)
     scalar __creghdfe_K = `nvars'           // depvar + indepvars
     scalar __creghdfe_G = `nfe'             // number of FE groups
@@ -163,6 +180,7 @@ program define creghdfe, eclass
     scalar __creghdfe_vce_type = `vcetype'
     scalar __creghdfe_compute_dof = 1
     scalar __creghdfe_df_a_nested = 0
+    scalar __creghdfe_compute_resid = `compute_resid'
 
     * Display info if verbose
     if "`verbose'" != "" {
@@ -183,10 +201,20 @@ program define creghdfe, eclass
     timer clear 99
     timer on 99
 
-    * Build varlist for plugin: depvar indepvars fe_vars [cluster_var]
+    * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [resid_var]
     local plugin_varlist `varlist' `absorb'
     if `vcetype' == 2 {
         local plugin_varlist `plugin_varlist' `clustervar'
+    }
+    * Add residual variable to the plugin varlist if computing residuals
+    if `compute_resid' {
+        * Position in varlist = K + G + (1 if cluster) + 1
+        local resid_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + 1
+        local plugin_varlist `plugin_varlist' `resid_varname'
+        scalar __creghdfe_resid_var_idx = `resid_var_pos'
+    }
+    else {
+        scalar __creghdfe_resid_var_idx = 0
     }
 
     * Create matrix to store results (plugin will fill __creghdfe_V)
@@ -203,7 +231,8 @@ program define creghdfe, eclass
         capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
         capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
         capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-        capture scalar drop __creghdfe_df_a_nested
+        capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
+        capture scalar drop __creghdfe_resid_var_idx
         capture matrix drop __creghdfe_V
         di as error "Error in regression (rc=`reg_rc')"
         exit `reg_rc'
@@ -333,6 +362,11 @@ program define creghdfe, eclass
     * Get variance matrix
     matrix `V' = __creghdfe_V[1..`K_with_cons', 1..`K_with_cons']
 
+    * Label the residual variable (already filled by C plugin)
+    if "`resid_varname'" != "" {
+        label var `resid_varname' "Residuals"
+    }
+
     * Build column names - use non-collinear indepvars
     * First, identify which vars were kept (non-collinear)
     local num_collinear = __creghdfe_num_collinear
@@ -401,6 +435,10 @@ program define creghdfe, eclass
     ereturn local depvar "`depvar'"
     ereturn local indepvars "`indepvars'"
     ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
+    if "`resid_varname'" != "" {
+        ereturn local resid "`resid_varname'"
+    }
+    ereturn local predict "creghdfe_p"
     ereturn local cmd "creghdfe"
     ereturn local cmdline "creghdfe `0'"
 
@@ -477,7 +515,8 @@ program define creghdfe, eclass
     capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
     capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
     capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-    capture scalar drop __creghdfe_df_a_nested
+    capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
+    capture scalar drop __creghdfe_resid_var_idx
     capture scalar drop __creghdfe_N __creghdfe_num_singletons __creghdfe_K_keep
     capture scalar drop __creghdfe_df_a __creghdfe_mobility_groups
     capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within

@@ -1,0 +1,277 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_predict_all_options.do 
+
+. * Test all predict options match between reghdfe and creghdfe
+. * Options: xb, stdp, residuals, d, xbd, dresiduals
+. 
+. clear all
+
+. set more off
+
+. 
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. di _n "=== Testing All Predict Options ===" _n
+
+=== Testing All Predict Options ===
+
+
+. 
+. * Run reghdfe with resid option (required for most predict options)
+. reghdfe price mpg weight, absorb(foreign trunk) resid
+(dropped 5 singleton observations)
+(MWFE estimator converged in 3 iterations)
+
+HDFE Linear regression                            Number of obs   =         69
+Absorbing 2 HDFE groups                           F(   2,     53) =      14.99
+                                                  Prob > F        =     0.0000
+                                                  R-squared       =     0.5004
+                                                  Adj R-squared   =     0.3591
+                                                  Within R-sq.    =     0.3613
+                                                  Root MSE        =  2270.3615
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |    25.8982   87.31075     0.30   0.768     -149.225    201.0214
+      weight |   3.786856    .873625     4.33   0.000     2.034586    5.539126
+       _cons |  -5861.531   4101.253    -1.43   0.159     -14087.6     2364.54
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. predict yhat_r_xb, xb
+
+. predict yhat_r_stdp, stdp
+
+. predict yhat_r_resid, residuals
+(5 missing values generated)
+
+. predict yhat_r_d, d
+(5 missing values generated)
+
+. predict yhat_r_xbd, xbd
+(5 missing values generated)
+
+. predict yhat_r_dresid, dresiduals
+
+. 
+. di "reghdfe predictions created"
+reghdfe predictions created
+
+. 
+. * Run creghdfe with resid option
+. creghdfe price mpg weight, absorb(foreign trunk) resid
+(dropped 5 singleton observations)
+(HDFE estimator converged in 3 iterations)
+
+HDFE Linear regression                          Number of obs     =         69
+Absorbing 2 HDFE groups                         F(  2,      53)   =      14.99
+                                                Prob > F          =     0.0000
+                                                R-squared         =     0.5004
+                                                Adj R-squared     =     0.3591
+                                                Within R-sq.      =     0.3613
+                                                Root MSE          =  2270.3615
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |    25.8982   87.31075     0.30   0.768     -149.225    201.0214
+      weight |   3.786856    .873625     4.33   0.000     2.034586    5.539126
+       _cons |  -5861.531   4101.253    -1.43   0.159     -14087.6     2364.54
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+     foreign |         2           0           2     |
+       trunk |        13           1          12     |
+-----------------------------------------------------+
+
+. predict yhat_c_xb, xb
+
+. predict yhat_c_stdp, stdp
+
+. predict yhat_c_resid, residuals
+(74 missing values generated)
+
+. predict yhat_c_d, d
+(74 missing values generated)
+
+. predict yhat_c_xbd, xbd
+(74 missing values generated)
+
+. predict yhat_c_dresid, dresiduals
+
+. 
+. di "creghdfe predictions created"
+creghdfe predictions created
+
+. 
+. * Compare each option
+. di _n "{hline 60}"
+
+------------------------------------------------------------
+
+. di "Prediction Option Comparison (reghdfe vs creghdfe)"
+Prediction Option Comparison (reghdfe vs creghdfe)
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. 
+. * XB
+. gen diff_xb = yhat_r_xb - yhat_c_xb
+
+. qui sum diff_xb
+
+. local max_xb = max(abs(r(min)), abs(r(max)))
+
+. di "XB:          Max abs diff = " %12.6e `max_xb' _col(50) cond(`max_xb' < 1e
+> -8, "PASS", "FAIL")
+XB:          Max abs diff =  7.27596e-12         PASS
+
+. 
+. * STDP
+. gen diff_stdp = yhat_r_stdp - yhat_c_stdp
+
+. qui sum diff_stdp
+
+. local max_stdp = max(abs(r(min)), abs(r(max)))
+
+. di "STDP:        Max abs diff = " %12.6e `max_stdp' _col(50) cond(`max_stdp' 
+> < 1e-8, "PASS", "FAIL")
+STDP:        Max abs diff =  9.60654e-12         PASS
+
+. 
+. * Residuals
+. gen diff_resid = yhat_r_resid - yhat_c_resid
+(74 missing values generated)
+
+. qui sum diff_resid
+
+. local max_resid = max(abs(r(min)), abs(r(max)))
+
+. di "Residuals:   Max abs diff = " %12.6e `max_resid' _col(50) cond(`max_resid
+> ' < 1e-8, "PASS", "FAIL")
+Residuals:   Max abs diff =            .         FAIL
+
+. 
+. * D (fixed effects)
+. gen diff_d = yhat_r_d - yhat_c_d
+(74 missing values generated)
+
+. qui sum diff_d
+
+. local max_d = max(abs(r(min)), abs(r(max)))
+
+. di "D:           Max abs diff = " %12.6e `max_d' _col(50) cond(`max_d' < 1e-8
+> , "PASS", "FAIL")
+D:           Max abs diff =            .         FAIL
+
+. 
+. * XBD (xb + d)
+. gen diff_xbd = yhat_r_xbd - yhat_c_xbd
+(74 missing values generated)
+
+. qui sum diff_xbd
+
+. local max_xbd = max(abs(r(min)), abs(r(max)))
+
+. di "XBD:         Max abs diff = " %12.6e `max_xbd' _col(50) cond(`max_xbd' < 
+> 1e-8, "PASS", "FAIL")
+XBD:         Max abs diff =            .         FAIL
+
+. 
+. * DResiduals (d + residuals)
+. gen diff_dresid = yhat_r_dresid - yhat_c_dresid
+
+. qui sum diff_dresid
+
+. local max_dresid = max(abs(r(min)), abs(r(max)))
+
+. di "DResiduals:  Max abs diff = " %12.6e `max_dresid' _col(50) cond(`max_dres
+> id' < 1e-8, "PASS", "FAIL")
+DResiduals:  Max abs diff =  7.27596e-12         PASS
+
+. 
+. di "{hline 60}"
+------------------------------------------------------------
+
+. 
+. * Show summary stats for each prediction type
+. di _n "Summary of predictions:"
+
+Summary of predictions:
+
+. summarize yhat_r_* yhat_c_*
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+   yhat_r_xb |         74    6124.288    2823.563   1528.485   12777.63
+ yhat_r_stdp |         74    604.5894    245.6819   275.9483   1346.002
+yhat_r_resid |         69   -7.73e-13    2004.373  -3353.679   6746.322
+    yhat_r_d |         69    5.05e-13     1982.17  -2556.988   3781.979
+  yhat_r_xbd |         69    6003.551    2006.153    667.283   10706.82
+-------------+---------------------------------------------------------
+yhat_r_dre~d |         74    40.96833    2781.213  -4496.679   5537.909
+   yhat_c_xb |         74    6124.288    2823.563   1528.485   12777.63
+ yhat_c_stdp |         74    604.5894    245.6819   275.9483   1346.002
+yhat_c_resid |          0
+    yhat_c_d |          0
+-------------+---------------------------------------------------------
+  yhat_c_xbd |          0
+yhat_c_dre~d |         74    40.96833    2781.213  -4496.679   5537.909
+
+. 
+. di _n "Test complete."
+
+Test complete.
+
+. 
+end of do-file
