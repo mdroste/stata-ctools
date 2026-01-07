@@ -601,49 +601,49 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
     ST_double *w = ipm->D;  /* Weights */
     ST_double *g = ipm->work_N;  /* Gradient */
 
+    /* Pre-compute constant */
+    ST_double inv_mu = 1.0 / mu;
+
     for (iter = 0; iter < ipm->config.maxiter; iter++) {
         /* Compute residuals r = y - Xβ */
         cqreg_matvec_col(ipm->r_primal, X, ipm->beta, N, K);
-        for (i = 0; i < N; i++) {
-            ipm->r_primal[i] = y[i] - ipm->r_primal[i];
-        }
 
-        /* Compute smoothed objective */
+        /* FUSED LOOP: Compute residuals, objective, gradient, and weights in single pass
+         * This reduces memory bandwidth by only traversing the data once */
         ST_double obj = 0.0;
-        for (i = 0; i < N; i++) {
-            ST_double r = ipm->r_primal[i];
-            /* Numerically stable computation of ρ_μ(r) = q*r + μ*log(1 + exp(-r/μ)) */
-            ST_double z = -r / mu;
-            if (z > 20.0) {
-                obj += q * r + mu * z;  /* log(1 + exp(z)) ≈ z for large z */
-            } else if (z < -20.0) {
-                obj += q * r;  /* log(1 + exp(z)) ≈ 0 for very negative z */
-            } else {
-                obj += q * r + mu * log(1.0 + exp(z));
-            }
-        }
+        inv_mu = 1.0 / mu;
 
-        /* Compute gradient and Hessian weights */
         for (i = 0; i < N; i++) {
-            ST_double r = ipm->r_primal[i];
-            ST_double z = -r / mu;
-            ST_double sig;  /* sigmoid(-r/μ) */
+            /* Compute residual */
+            ST_double r = y[i] - ipm->r_primal[i];
+            ipm->r_primal[i] = r;
 
-            /* Numerically stable sigmoid */
+            /* Compute z = -r/mu using pre-computed inverse */
+            ST_double z = -r * inv_mu;
+
+            /* Numerically stable sigmoid and objective */
+            ST_double sig, log1pexp;
             if (z > 20.0) {
                 sig = 1.0;
+                log1pexp = z;
             } else if (z < -20.0) {
                 sig = 0.0;
+                log1pexp = 0.0;
             } else {
-                sig = 1.0 / (1.0 + exp(-z));
+                ST_double exp_z = exp(z);
+                sig = exp_z / (1.0 + exp_z);  /* sigmoid(z) = exp(z)/(1+exp(z)) */
+                log1pexp = log(1.0 + exp_z);
             }
 
-            g[i] = q - sig;  /* Gradient of check function */
-            w[i] = sig * (1.0 - sig) / mu;  /* Hessian weight */
+            /* Accumulate objective */
+            obj += q * r + mu * log1pexp;
 
-            /* Ensure weights are positive and bounded */
-            if (w[i] < 1e-12) w[i] = 1e-12;
-            if (w[i] > 1e12) w[i] = 1e12;
+            /* Gradient and Hessian weight */
+            g[i] = q - sig;
+            ST_double w_val = sig * (1.0 - sig) * inv_mu;
+
+            /* Clamp weights */
+            w[i] = (w_val < 1e-12) ? 1e-12 : ((w_val > 1e12) ? 1e12 : w_val);
         }
 
         /* Debug output */
@@ -653,34 +653,75 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
             SF_display(buf);
         }
 
-        /* Form weighted normal equations: (X'WX) Δβ = X'g */
+        /* Form weighted normal equations: (X'WX) Δβ = X'g
+         * Using 8x loop unrolling for better CPU pipelining */
         memset(ipm->XDX, 0, K * K * sizeof(ST_double));
+        ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
+
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
-            for (k = j; k < K; k++) {
+
+            /* Diagonal element with 8x unrolling */
+            ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+            ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                d0 += w[i]     * Xj[i]     * Xj[i];
+                d1 += w[i + 1] * Xj[i + 1] * Xj[i + 1];
+                d2 += w[i + 2] * Xj[i + 2] * Xj[i + 2];
+                d3 += w[i + 3] * Xj[i + 3] * Xj[i + 3];
+                d4 += w[i + 4] * Xj[i + 4] * Xj[i + 4];
+                d5 += w[i + 5] * Xj[i + 5] * Xj[i + 5];
+                d6 += w[i + 6] * Xj[i + 6] * Xj[i + 6];
+                d7 += w[i + 7] * Xj[i + 7] * Xj[i + 7];
+            }
+            for (i = N8; i < N; i++) {
+                d0 += w[i] * Xj[i] * Xj[i];
+            }
+            ipm->XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7)) + 1e-10;
+
+            /* Off-diagonal elements with 8x unrolling */
+            for (k = j + 1; k < K; k++) {
                 const ST_double *Xk = &X[k * N];
-                ST_double sum = 0.0;
-                for (i = 0; i < N; i++) {
-                    sum += w[i] * Xj[i] * Xk[i];
+                ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+                ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+                for (i = 0; i < N8; i += 8) {
+                    s0 += w[i]     * Xj[i]     * Xk[i];
+                    s1 += w[i + 1] * Xj[i + 1] * Xk[i + 1];
+                    s2 += w[i + 2] * Xj[i + 2] * Xk[i + 2];
+                    s3 += w[i + 3] * Xj[i + 3] * Xk[i + 3];
+                    s4 += w[i + 4] * Xj[i + 4] * Xk[i + 4];
+                    s5 += w[i + 5] * Xj[i + 5] * Xk[i + 5];
+                    s6 += w[i + 6] * Xj[i + 6] * Xk[i + 6];
+                    s7 += w[i + 7] * Xj[i + 7] * Xk[i + 7];
                 }
-                ipm->XDX[j * K + k] = sum;
-                ipm->XDX[k * K + j] = sum;
+                for (i = N8; i < N; i++) {
+                    s0 += w[i] * Xj[i] * Xk[i];
+                }
+                ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+                ipm->XDX[j * K + k] = total;
+                ipm->XDX[k * K + j] = total;
             }
         }
 
-        /* Add regularization for stability */
-        for (j = 0; j < K; j++) {
-            ipm->XDX[j * K + j] += 1e-10;
-        }
-
-        /* Compute X'g */
+        /* Compute X'g with 8x unrolling */
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
-            ST_double sum = 0.0;
-            for (i = 0; i < N; i++) {
-                sum += Xj[i] * g[i];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                s0 += Xj[i]     * g[i];
+                s1 += Xj[i + 1] * g[i + 1];
+                s2 += Xj[i + 2] * g[i + 2];
+                s3 += Xj[i + 3] * g[i + 3];
+                s4 += Xj[i + 4] * g[i + 4];
+                s5 += Xj[i + 5] * g[i + 5];
+                s6 += Xj[i + 6] * g[i + 6];
+                s7 += Xj[i + 7] * g[i + 7];
             }
-            ipm->delta_beta[j] = sum;
+            for (i = N8; i < N; i++) {
+                s0 += Xj[i] * g[i];
+            }
+            ipm->delta_beta[j] = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
         }
 
         /* Cholesky factorization */
@@ -693,21 +734,27 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
         /* Solve for Δβ */
         cqreg_solve_cholesky(ipm->L, ipm->delta_beta, K);
 
-        /* Line search with backtracking */
+        /* Pre-compute X * delta_beta once (cache for line search)
+         * Use delta_v as temporary storage since we don't use it in smoothed IPM */
+        ST_double *X_delta_beta = ipm->delta_v;
+        cqreg_matvec_col(X_delta_beta, X, ipm->delta_beta, N, K);
+
+        /* Pre-compute delta_beta norm squared for Armijo condition */
+        ST_double delta_norm_sq = 0.0;
+        for (j = 0; j < K; j++) {
+            delta_norm_sq += ipm->delta_beta[j] * ipm->delta_beta[j];
+        }
+
+        /* Line search with backtracking
+         * New residual = old_residual - alpha * X * delta_beta */
         ST_double alpha = 1.0;
         ST_double obj_new;
         for (ST_int ls = 0; ls < 20; ls++) {
-            /* Tentative update */
-            for (j = 0; j < K; j++) {
-                ipm->work_K[j] = ipm->beta[j] + alpha * ipm->delta_beta[j];
-            }
-
-            /* Compute new residuals and objective */
-            cqreg_matvec_col(ipm->r_primal, X, ipm->work_K, N, K);
+            /* Compute new objective using cached X*delta_beta */
             obj_new = 0.0;
             for (i = 0; i < N; i++) {
-                ST_double r = y[i] - ipm->r_primal[i];
-                ST_double z = -r / mu;
+                ST_double r = ipm->r_primal[i] - alpha * X_delta_beta[i];
+                ST_double z = -r * inv_mu;
                 if (z > 20.0) {
                     obj_new += q * r + mu * z;
                 } else if (z < -20.0) {
@@ -717,7 +764,7 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
                 }
             }
 
-            if (obj_new < obj + 1e-4 * alpha * cqreg_dot(ipm->delta_beta, ipm->delta_beta, K)) {
+            if (obj_new < obj + 1e-4 * alpha * delta_norm_sq) {
                 break;  /* Sufficient decrease */
             }
             alpha *= 0.5;
@@ -728,26 +775,15 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
             ipm->beta[j] += alpha * ipm->delta_beta[j];
         }
 
-        /* Check convergence based on step size and mu */
-        ST_double step_norm = 0.0;
-        for (j = 0; j < K; j++) {
-            step_norm += ipm->delta_beta[j] * ipm->delta_beta[j];
-        }
-        step_norm = sqrt(step_norm) * alpha;
+        /* Check convergence based on step size and mu
+         * Use pre-computed delta_norm_sq */
+        ST_double step_norm = sqrt(delta_norm_sq) * alpha;
 
         /* Converged when step is small and we've reached minimum mu */
         if (step_norm < 1e-6 && mu <= mu_min) {
             ipm->converged = 1;
             break;
         }
-
-        /* Also converge if gradient is very small */
-        ST_double grad_norm = 0.0;
-        for (j = 0; j < K; j++) {
-            ST_double gj_scaled = ipm->delta_beta[j];  /* This was X'g before solve */
-            grad_norm += gj_scaled * gj_scaled;
-        }
-        grad_norm = sqrt(grad_norm);
 
         /* Reduce smoothing parameter when converged for current mu */
         if (step_norm < 1e-5) {
@@ -849,4 +885,436 @@ void cqreg_ipm_get_residuals(const cqreg_ipm_state *ipm, ST_double *residuals)
     for (ST_int i = 0; i < N; i++) {
         residuals[i] = ipm->u[i] - ipm->v[i];
     }
+}
+
+/* ============================================================================
+ * Preprocessing Algorithm (Chernozhukov et al. 2020)
+ *
+ * The key insight: QR solution interpolates exactly K data points.
+ * Observations far from the hyperplane don't affect the solution.
+ *
+ * Algorithm:
+ * 1. OLS to get initial beta
+ * 2. Compute residuals, predict signs
+ * 3. Select m = O((n*log(k))^{2/3}) observations with smallest |r|
+ * 4. Solve QR on subsample
+ * 5. Check optimality: X'g = 0 where g_i = q - I(r_i < 0)
+ * 6. Add violated observations (wrong sign prediction), repeat
+ * ============================================================================ */
+
+/* Comparison function for qsort - sort by absolute residual */
+typedef struct {
+    ST_int idx;
+    ST_double abs_resid;
+} resid_pair;
+
+static int compare_resid_pair(const void *a, const void *b)
+{
+    ST_double diff = ((const resid_pair *)a)->abs_resid - ((const resid_pair *)b)->abs_resid;
+    return (diff < 0) ? -1 : ((diff > 0) ? 1 : 0);
+}
+
+/*
+ * Solve QR on a subsample and return beta.
+ * Uses the smoothed IPM on the subsample.
+ */
+static ST_int solve_subsample_qr(
+    const ST_double *y_full, const ST_double *X_full,
+    ST_int N_full, ST_int K,
+    const ST_int *active_set, ST_int m,
+    ST_double q, ST_double *beta,
+    const cqreg_ipm_config *config)
+{
+    ST_int i, j;
+
+    /* Allocate subsample data */
+    ST_double *y_sub = (ST_double *)malloc(m * sizeof(ST_double));
+    ST_double *X_sub = (ST_double *)malloc(m * K * sizeof(ST_double));
+    if (!y_sub || !X_sub) {
+        free(y_sub);
+        free(X_sub);
+        return -1;
+    }
+
+    /* Extract subsample */
+    for (i = 0; i < m; i++) {
+        ST_int obs = active_set[i];
+        y_sub[i] = y_full[obs];
+        for (j = 0; j < K; j++) {
+            X_sub[j * m + i] = X_full[j * N_full + obs];
+        }
+    }
+
+    /* Create IPM state for subsample */
+    cqreg_ipm_state *ipm_sub = cqreg_ipm_create(m, K, config);
+    if (!ipm_sub) {
+        free(y_sub);
+        free(X_sub);
+        return -1;
+    }
+
+    /* Solve on subsample */
+    ST_int result = cqreg_ipm_solve(ipm_sub, y_sub, X_sub, q, beta);
+
+    /* Cleanup */
+    cqreg_ipm_free(ipm_sub);
+    free(y_sub);
+    free(X_sub);
+
+    return result;
+}
+
+/*
+ * Check optimality on full sample.
+ * Returns number of violated observations (0 = optimal).
+ * Also identifies which observations are violated.
+ *
+ * A solution β is optimal iff:
+ *   1. The subgradient g is well-defined:
+ *      g_i = q - I(r_i < 0)
+ *      - For r_i > 0: g_i = q
+ *      - For r_i < 0: g_i = q - 1
+ *      - For r_i = 0: g_i ∈ [q-1, q] (need to solve for optimal g_i)
+ *   2. X'g = 0 (dual feasibility / stationarity)
+ *
+ * This function checks:
+ *   - Observations with sign changes from prediction (clear violations)
+ *   - Observations where X'g ≠ 0 would be resolved by including them
+ */
+static ST_int check_optimality(
+    const ST_double *y, const ST_double *X,
+    ST_int N, ST_int K,
+    const ST_double *beta, ST_double q,
+    const ST_int *in_active_set,  /* Boolean: 1 if in active set */
+    const ST_int *predicted_sign, /* 1 = positive, -1 = negative, 0 = uncertain */
+    ST_int *violations,           /* Output: indices of violated obs */
+    ST_int *n_violations)
+{
+    ST_int i, j;
+    *n_violations = 0;
+
+    /* Allocate space for residuals and subgradient */
+    ST_double *r = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double *g = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double *Xg = (ST_double *)calloc(K, sizeof(ST_double));
+
+    if (!r || !g || !Xg) {
+        free(r);
+        free(g);
+        free(Xg);
+        return -1;
+    }
+
+    /* Compute residuals and subgradient for all observations */
+    for (i = 0; i < N; i++) {
+        ST_double yhat = 0.0;
+        for (j = 0; j < K; j++) {
+            yhat += X[j * N + i] * beta[j];
+        }
+        r[i] = y[i] - yhat;
+
+        /* Subgradient: g_i = q - I(r_i < 0) */
+        ST_double tol = 1e-8 * (fabs(y[i]) + 1.0);
+        if (r[i] > tol) {
+            g[i] = q;  /* Positive residual */
+        } else if (r[i] < -tol) {
+            g[i] = q - 1.0;  /* Negative residual */
+        } else {
+            g[i] = 0.0;  /* At kink - will adjust later */
+        }
+    }
+
+    /* Compute X'g */
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+        for (i = 0; i < N; i++) {
+            Xg[j] += Xj[i] * g[i];
+        }
+    }
+
+    /* Check dual feasibility: X'g should be zero
+     * Compute norm of X'g relative to scale */
+    ST_double Xg_norm = 0.0;
+    ST_double X_scale = 0.0;
+    for (j = 0; j < K; j++) {
+        Xg_norm += Xg[j] * Xg[j];
+        /* Estimate scale from X'X diagonal */
+        ST_double col_norm = 0.0;
+        for (i = 0; i < N; i++) {
+            col_norm += X[j * N + i] * X[j * N + i];
+        }
+        X_scale += col_norm;
+    }
+    Xg_norm = sqrt(Xg_norm);
+    X_scale = sqrt(X_scale / K) * sqrt((double)N);
+
+    /* If dual constraint is violated, find observations to add */
+    ST_double dual_tol = 1e-6 * X_scale;
+
+    if (Xg_norm > dual_tol) {
+        /* Dual constraint violated - find observations whose sign might be wrong
+         * or near-zero observations that should be in active set */
+
+        for (i = 0; i < N; i++) {
+            ST_double tol = 1e-6 * (fabs(y[i]) + 1.0);
+
+            /* Check observations not in active set */
+            if (!in_active_set[i]) {
+                /* Near-zero residual - should be in active set */
+                if (fabs(r[i]) < tol * 100) {  /* Wider tolerance for boundary obs */
+                    violations[(*n_violations)++] = i;
+                }
+                /* Sign changed from prediction */
+                else if (predicted_sign[i] > 0 && r[i] < -tol) {
+                    violations[(*n_violations)++] = i;
+                }
+                else if (predicted_sign[i] < 0 && r[i] > tol) {
+                    violations[(*n_violations)++] = i;
+                }
+            }
+        }
+
+        /* If no violations found but X'g ≠ 0, add obs with smallest |residual| not in active set */
+        if (*n_violations == 0) {
+            /* Find obs with smallest non-zero |residual| not in active set */
+            ST_double min_abs_r = 1e30;
+            ST_int min_idx = -1;
+            for (i = 0; i < N; i++) {
+                if (!in_active_set[i]) {
+                    ST_double abs_r = fabs(r[i]);
+                    if (abs_r < min_abs_r) {
+                        min_abs_r = abs_r;
+                        min_idx = i;
+                    }
+                }
+            }
+            if (min_idx >= 0) {
+                violations[(*n_violations)++] = min_idx;
+            }
+        }
+    }
+
+    free(r);
+    free(g);
+    free(Xg);
+
+    return *n_violations;
+}
+
+/*
+ * Main preprocessing solver.
+ */
+ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
+                               const ST_double *y,
+                               const ST_double *X,
+                               ST_double q,
+                               ST_double *beta)
+{
+    ST_int N = ipm->N;
+    ST_int K = ipm->K;
+    ST_int i, j;
+    ST_int total_iters = 0;
+
+    if (ipm->config.verbose) {
+        SF_display("Preprocessing QR solver (Chernozhukov et al. 2020)\n");
+    }
+
+    /* Step 1: Initial subsample size
+     * For smoothed IPM, we need a larger subsample than exact LP methods.
+     * Use m = max(N^0.7, 10*K) to ensure good coverage.
+     */
+    ST_int m_init = (ST_int)(pow((double)N, 0.7) + 0.5);
+
+    /* Ensure reasonable bounds */
+    if (m_init < 10 * K) m_init = 10 * K;
+    if (m_init > N / 2) m_init = N / 2;  /* Cap at 50% to get speedup */
+    if (m_init > N) m_init = N;
+
+    if (ipm->config.verbose) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "  Initial subsample size: %d (of %d, %.1f%%)\n",
+                 m_init, N, 100.0 * m_init / N);
+        SF_display(buf);
+    }
+
+    /* Step 2: Compute OLS solution for initial residuals */
+    /* Compute X'X */
+    memset(ipm->XDX, 0, K * K * sizeof(ST_double));
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+        for (ST_int k = j; k < K; k++) {
+            const ST_double *Xk = &X[k * N];
+            ST_double sum = 0.0;
+            for (i = 0; i < N; i++) {
+                sum += Xj[i] * Xk[i];
+            }
+            ipm->XDX[j * K + k] = sum;
+            ipm->XDX[k * K + j] = sum;
+        }
+    }
+
+    /* Add regularization */
+    for (j = 0; j < K; j++) {
+        ipm->XDX[j * K + j] += 1e-10;
+    }
+
+    /* Cholesky factorization */
+    memcpy(ipm->L, ipm->XDX, K * K * sizeof(ST_double));
+    if (cqreg_cholesky(ipm->L, K) != 0) {
+        /* Fallback: use zero initial beta */
+        memset(beta, 0, K * sizeof(ST_double));
+    } else {
+        /* Compute X'y */
+        for (j = 0; j < K; j++) {
+            beta[j] = cqreg_dot(&X[j * N], y, N);
+        }
+        /* Solve for OLS beta */
+        cqreg_solve_cholesky(ipm->L, beta, K);
+    }
+
+    /* Step 3: Compute residuals and sort by |r| */
+    resid_pair *resid_order = (resid_pair *)malloc(N * sizeof(resid_pair));
+    ST_int *active_set = (ST_int *)malloc(N * sizeof(ST_int));
+    ST_int *in_active_set = (ST_int *)calloc(N, sizeof(ST_int));  /* Boolean: 1 if in active set */
+    ST_int *predicted_sign = (ST_int *)malloc(N * sizeof(ST_int)); /* 1=pos, -1=neg, 0=uncertain */
+    ST_int *violations = (ST_int *)malloc(N * sizeof(ST_int));
+
+    if (!resid_order || !active_set || !in_active_set || !predicted_sign || !violations) {
+        free(resid_order);
+        free(active_set);
+        free(in_active_set);
+        free(predicted_sign);
+        free(violations);
+        return -1;
+    }
+
+    /* Compute OLS residuals and record their signs */
+    for (i = 0; i < N; i++) {
+        ST_double yhat = 0.0;
+        for (j = 0; j < K; j++) {
+            yhat += X[j * N + i] * beta[j];
+        }
+        ST_double r = y[i] - yhat;
+        resid_order[i].idx = i;
+        resid_order[i].abs_resid = fabs(r);
+
+        /* Record predicted sign from OLS residuals */
+        ST_double tol = 1e-6 * (fabs(y[i]) + 1.0);
+        if (r > tol) {
+            predicted_sign[i] = 1;  /* Positive */
+        } else if (r < -tol) {
+            predicted_sign[i] = -1; /* Negative */
+        } else {
+            predicted_sign[i] = 0;  /* Uncertain - near zero */
+        }
+    }
+
+    /* Sort by absolute residual (ascending) */
+    qsort(resid_order, N, sizeof(resid_pair), compare_resid_pair);
+
+    /* Step 4: Initialize active set with m_init smallest |residual| observations */
+    ST_int m = m_init;
+    for (i = 0; i < m; i++) {
+        active_set[i] = resid_order[i].idx;
+        in_active_set[resid_order[i].idx] = 1;
+    }
+
+    /* Step 5: Iterative refinement loop */
+    ST_int max_outer_iters = 20;
+    for (ST_int outer_iter = 0; outer_iter < max_outer_iters; outer_iter++) {
+
+        if (ipm->config.verbose) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "  Outer iteration %d: active set size = %d\n",
+                     outer_iter + 1, m);
+            SF_display(buf);
+        }
+
+        /* Solve QR on active set */
+        ST_int iters = solve_subsample_qr(y, X, N, K, active_set, m, q, beta, &ipm->config);
+        if (iters < 0) {
+            /* Solver failed - fall back to full solve */
+            if (ipm->config.verbose) {
+                SF_display("  Subsample solve failed, falling back to full solve\n");
+            }
+            free(resid_order);
+            free(active_set);
+            free(in_active_set);
+            free(predicted_sign);
+            free(violations);
+            return cqreg_ipm_solve(ipm, y, X, q, beta);
+        }
+        total_iters += (iters > 0) ? iters : -iters;
+
+        /* Check optimality on full sample */
+        ST_int n_violations = 0;
+        check_optimality(y, X, N, K, beta, q, in_active_set, predicted_sign, violations, &n_violations);
+
+        if (n_violations == 0) {
+            /* Optimal! */
+            if (ipm->config.verbose) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "  Converged in %d outer iterations, %d total IPM iterations\n",
+                         outer_iter + 1, total_iters);
+                SF_display(buf);
+            }
+            break;
+        }
+
+        if (ipm->config.verbose) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "  Found %d violations\n", n_violations);
+            SF_display(buf);
+        }
+
+        /* Add violated observations to active set */
+        for (i = 0; i < n_violations && m < N; i++) {
+            ST_int obs = violations[i];
+            if (!in_active_set[obs]) {
+                active_set[m++] = obs;
+                in_active_set[obs] = 1;
+            }
+        }
+
+        /* If active set is now the full sample, just solve directly */
+        if (m >= N) {
+            if (ipm->config.verbose) {
+                SF_display("  Active set expanded to full sample\n");
+            }
+            free(resid_order);
+            free(active_set);
+            free(in_active_set);
+            free(predicted_sign);
+            free(violations);
+            return cqreg_ipm_solve(ipm, y, X, q, beta);
+        }
+    }
+
+    /* Update IPM state with final results */
+    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
+    for (i = 0; i < N; i++) {
+        ST_double r = y[i] - ipm->r_primal[i];
+        ipm->r_primal[i] = r;
+        if (r >= 0) {
+            ipm->u[i] = r;
+            ipm->v[i] = 0.0;
+        } else {
+            ipm->u[i] = 0.0;
+            ipm->v[i] = -r;
+        }
+    }
+
+    /* Copy solution */
+    cqreg_vcopy(ipm->beta, beta, K);
+    ipm->iterations = total_iters;
+    ipm->converged = 1;
+
+    /* Cleanup */
+    free(resid_order);
+    free(active_set);
+    free(in_active_set);
+    free(predicted_sign);
+    free(violations);
+
+    return total_iters;
 }

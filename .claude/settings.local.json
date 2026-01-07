@@ -9,7 +9,8 @@
       "Bash(make:*)",
       "Bash(grep:*)",
       "Bash(cat:*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "WebFetch(domain:arxiv.org)"
     ]
   }
 }

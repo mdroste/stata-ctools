@@ -1,0 +1,232 @@
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+
+. * Scaling benchmark - sequential to avoid hangs
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "cqreg vs qreg Scaling Benchmark"
+cqreg vs qreg Scaling Benchmark
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. 
+. * N = 1000
+. clear
+
+. set seed 12345
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. quietly {
+
+. timer clear 1
+
+. timer on 1
+
+. quietly qreg y x1 x2
+
+. timer off 1
+
+. quietly timer list 1
+
+. local qreg1 = r(t1)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly cqreg y x1 x2
+
+. timer off 2
+
+. quietly timer list 2
+
+. local cqreg1 = r(t2)
+
+. di "N=1000:   qreg=" %6.3f `qreg1' "s  cqreg=" %6.3f `cqreg1' "s  speedup=" %
+> 5.1f (`qreg1'/`cqreg1') "x"
+N=1000:   qreg= 0.038s  cqreg= 0.005s  speedup=  7.6x
+
+. 
+. * N = 5000
+. clear
+
+. set seed 12345
+
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
+
+. quietly {
+
+. timer clear 1
+
+. timer on 1
+
+. quietly qreg y x1 x2
+
+. timer off 1
+
+. quietly timer list 1
+
+. local qreg2 = r(t1)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly cqreg y x1 x2
+
+. timer off 2
+
+. quietly timer list 2
+
+. local cqreg2 = r(t2)
+
+. di "N=5000:   qreg=" %6.3f `qreg2' "s  cqreg=" %6.3f `cqreg2' "s  speedup=" %
+> 5.1f (`qreg2'/`cqreg2') "x"
+N=5000:   qreg= 0.022s  cqreg= 0.009s  speedup=  2.4x
+
+. 
+. * N = 10000
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. quietly {
+
+. timer clear 1
+
+. timer on 1
+
+. quietly qreg y x1 x2
+
+. timer off 1
+
+. quietly timer list 1
+
+. local qreg3 = r(t1)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly cqreg y x1 x2
+
+. timer off 2
+
+. quietly timer list 2
+
+. local cqreg3 = r(t2)
+
+. di "N=10000:  qreg=" %6.3f `qreg3' "s  cqreg=" %6.3f `cqreg3' "s  speedup=" %
+> 5.1f (`qreg3'/`cqreg3') "x"
+N=10000:  qreg= 0.040s  cqreg= 0.017s  speedup=  2.4x
+
+. 
+. * N = 25000
+. clear
+
+. set seed 12345
+
+. set obs 25000
+Number of observations (_N) was 0, now 25,000.
+
+. quietly {
+
+. timer clear 1
+
+. timer on 1
+
+. quietly qreg y x1 x2
+
+. timer off 1
+
+. quietly timer list 1
+
+. local qreg4 = r(t1)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly cqreg y x1 x2
+
+. timer off 2
+
+. quietly timer list 2
+
+. local cqreg4 = r(t2)
+
+. di "N=25000:  qreg=" %6.3f `qreg4' "s  cqreg=" %6.3f `cqreg4' "s  speedup=" %
+> 5.1f (`qreg4'/`cqreg4') "x"
+N=25000:  qreg= 0.087s  cqreg= 0.037s  speedup=  2.4x
+
+. 
+. * N = 50000
+. clear
+
+. set seed 12345
+
+. set obs 50000
+Number of observations (_N) was 0, now 50,000.
+
+. quietly {
+
+. timer clear 1
+
+. timer on 1
+
+. quietly qreg y x1 x2
+
+. timer off 1
+
+. quietly timer list 1
+
+. local qreg5 = r(t1)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly cqreg y x1 x2
+
+. timer off 2
+
+. quietly timer list 2
+
+. local cqreg5 = r(t2)
+
+. di "N=50000:  qreg=" %6.3f `qreg5' "s  cqreg=" %6.3f `cqreg5' "s  speedup=" %
+> 5.1f (`qreg5'/`cqreg5') "x"
+N=50000:  qreg= 0.208s  cqreg= 0.089s  speedup=  2.3x
+
+. 
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "Benchmark completed!"
+Benchmark completed!
+
+. 
+end of do-file

@@ -95,7 +95,7 @@ Median regression                                   Number of obs =         74
   6. }
 
 . di "Max coefficient diff: " `max_diff'
-Max coefficient diff: .00003527
+Max coefficient diff: .00003393
 
 . if `max_diff' < 1e-4 {
 .     di "PASS: Coefficients match"
@@ -150,7 +150,7 @@ Benchmark N=10,000
 . quietly timer list 1
 
 . di "qreg time:  " %6.3f r(t1) " seconds"
-qreg time:   0.047 seconds
+qreg time:   0.041 seconds
 
 . 
 . * cqreg
@@ -165,7 +165,7 @@ qreg time:   0.047 seconds
 . quietly timer list 2
 
 . di "cqreg time: " %6.3f r(t2) " seconds"
-cqreg time:  0.021 seconds
+cqreg time:  0.016 seconds
 
 . 
 . di "Speedup: " %6.2f (r(t1)/r(t2)) "x"

@@ -396,9 +396,13 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
 
-    /* Solve quantile regression using IPM */
+    /* Solve quantile regression using smoothed IPM
+     * Note: Preprocessing disabled - smoothed IPM gives approximate solutions
+     * which don't work well with LP-based preprocessing methods.
+     * For large N, consider implementing Frisch-Newton exact LP solver.
+     */
     ST_int ipm_result = cqreg_ipm_solve(state->ipm, state->y, state->X,
-                                        quantile, state->beta);
+                                         quantile, state->beta);
 
     state->iterations = abs(ipm_result);
     state->converged = (ipm_result > 0) ? 1 : 0;

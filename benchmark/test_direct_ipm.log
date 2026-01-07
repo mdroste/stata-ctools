@@ -1,0 +1,77 @@
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+
+. * Test direct IPM performance
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "Direct IPM Performance Test"
+Direct IPM Performance Test
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. 
+. * Test at multiple sizes
+. foreach N in 1000 5000 10000 25000 50000 {
+  2.     clear
+  3.     set seed 12345
+  4.     set obs `N'
+  5.     quietly {
+  6.         gen x1 = rnormal()
+  7.         gen x2 = rnormal()
+  8.         gen x3 = rnormal()
+  9.         gen y = 1 + 2*x1 - x2 + 0.5*x3 + rnormal()*2
+ 10.     }
+ 11. 
+.     * qreg (baseline)
+.     timer clear 1
+ 12.     timer on 1
+ 13.     quietly qreg y x1 x2 x3
+ 14.     timer off 1
+ 15.     quietly timer list 1
+ 16.     local qreg_time = r(t1)
+ 17.     matrix b_qreg = e(b)
+ 18. 
+.     * cqreg
+.     timer clear 2
+ 19.     timer on 2
+ 20.     quietly cqreg y x1 x2 x3
+ 21.     timer off 2
+ 22.     quietly timer list 2
+ 23.     local cqreg_time = r(t2)
+ 24.     matrix b_cqreg = e(b)
+ 25. 
+.     * Check correctness
+.     local max_diff = 0
+ 26.     forval i = 1/4 {
+ 27.         local diff = abs(b_cqreg[1,`i'] - b_qreg[1,`i'])
+ 28.         if `diff' > `max_diff' {
+ 29.             local max_diff = `diff'
+ 30.         }
+ 31.     }
+ 32. 
+.     local speedup = `qreg_time' / `cqreg_time'
+ 33.     local correct = "FAIL"
+ 34.     if `max_diff' < 0.01 {
+ 35.         local correct = "PASS"
+ 36.     }
+ 37. 
+.     di "N=" %6.0fc `N' "  qreg=" %6.3f `qreg_time' "s  cqreg=" %6.3f `cqreg_t
+> ime' "s  speedup=" %5.1f `speedup' "x  diff=" %8.5f `max_diff' "  " "`correct
+> '"
