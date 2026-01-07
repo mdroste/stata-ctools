@@ -57,7 +57,7 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 . *****************************************************************************
 > ***
 . 
-. local N = 50000000   // 50 million observations
+. local N = 500000   // 50 million observations
 
 . local testfile "benchmark_test_data.csv"
 
@@ -81,13 +81,13 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 > =
 
 . di as txt "Date: `c(current_date)' `c(current_time)'"
-Date:  6 Jan 2026 16:15:36
+Date:  7 Jan 2026 00:27:08
 
 . di as txt "Stata: `c(stata_version)' `c(processors)'-core"
 Stata: 18.5 12-core
 
 . di as txt "Observations: " %12.0fc `N'
-Observations:   50,000,000
+Observations:      500,000
 
 . di as txt "Variables: 10 (mixed types: double, int, string)"
 Variables: 10 (mixed types: double, int, string)
@@ -121,7 +121,7 @@ Phase 1: Generating test CSV file
 . set seed 54321
 
 . set obs `N'
-Number of observations (_N) was 0, now 50,000,000.
+Number of observations (_N) was 0, now 500,000.
 
 . 
 . * Create variables of varying types
@@ -155,7 +155,7 @@ Number of observations (_N) was 0, now 50,000,000.
 . compress
   variable var_str1 was str10 now str8
   variable var_str2 was str20 now str11
-  (550,000,000 bytes saved)
+  (5,500,000 bytes saved)
 
 . 
 . di as txt "Data generated in memory. Exporting to CSV..."
@@ -167,3 +167,363 @@ Data generated in memory. Exporting to CSV...
 
 . timer on 99
 
+. *quietly export delimited using "`testfile'", replace
+. timer off 99
+
+. quietly timer list 99
+
+. local export_time = r(t99)
+
+. 
+. * Get file size
+. local fsize = 0
+
+. tempname fh
+
+. file open `fh' using "`testfile'", read binary
+
+. file seek `fh' eof
+
+. local fsize = r(loc)
+
+. file close `fh'
+
+. local fsize_mb = `fsize' / 1048576
+
+. 
+. di as txt "CSV file created: `testfile'"
+CSV file created: benchmark_test_data.csv
+
+. di as txt "  File size: " %12.1f `fsize_mb' " MB"
+  File size:       3810.8 MB
+
+. di as txt "  Export time: " %8.2f `export_time' " sec"
+  Export time:     0.00 sec
+
+. 
+. * Save copy of data for verification
+. tempfile original_data
+
+. quietly save `original_data'
+
+. 
+. 
+. *****************************************************************************
+> ***
+. * Benchmark 1: Stata's import delimited
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 80}"
+
+-------------------------------------------------------------------------------
+> -
+
+. di as txt "Benchmark 1: Stata's import delimited"
+Benchmark 1: Stata's import delimited
+
+. di as txt "{hline 80}"
+-------------------------------------------------------------------------------
+> -
+
+. 
+. clear
+
+. 
+. di as txt "Running import delimited..."
+Running import delimited...
+
+. scalar tic = now()
+
+. import delimited using "`testfile'", clear
+(encoding automatically selected: ISO-8859-1)
+(10 vars, 36,338,011 obs)
+
+. scalar toc = now()
+
+. local t_import = (toc-tic)/1000
+
+. 
+. local mbps_import = `fsize_mb' / `t_import'
+
+. 
+. di as txt "  Time:  " %10.2f `t_import' " sec"
+  Time:       80.21 sec
+
+. di as txt "  Speed: " %10.1f `mbps_import' " MB/s"
+  Speed:       47.5 MB/s
+
+. 
+. * Store imported data for comparison
+. tempfile stata_imported
+
+. quietly save `stata_imported'
+
+. 
+. * Store variable info
+. describe, short
+
+Contains data from /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St29992.00
+> 0002
+ Observations:    36,338,011                  
+    Variables:            10                  7 Jan 2026 00:28
+Sorted by: 
+
+. local stata_nobs = r(N)
+
+. local stata_nvars = r(k)
+
+. 
+. * Store checksums for verification
+. local stata_checksums ""
+
+. foreach var of varlist * {
+  2.     capture confirm numeric variable `var'
+  3.     if !_rc {
+  4.         quietly sum `var'
+  5.         local stata_checksums "`stata_checksums' `var'=`r(sum)'"
+  6.     }
+  7. }
+
+. 
+. *****************************************************************************
+> ***
+. * Benchmark 2: cimport delimited
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 80}"
+
+-------------------------------------------------------------------------------
+> -
+
+. di as txt "Benchmark 2: cimport delimited"
+Benchmark 2: cimport delimited
+
+. di as txt "{hline 80}"
+-------------------------------------------------------------------------------
+> -
+
+. 
+. clear
+
+. timer clear 2
+
+. 
+. di as txt "Running cimport delimited..."
+Running cimport delimited...
+
+. 
+. scalar tic = now()
+
+. quietly cimport delimited using "`testfile'", clear
+
+. 
+. scalar toc = now()
+
+. local t_cimport = (toc-tic)/1000
+
+. 
+. quietly timer list 2
+
+. local t_cimport = r(t2)
+
+. local mbps_cimport = `fsize_mb' / `t_cimport'
+
+. 
+. di as txt "  Time:  " %10.2f `t_cimport' " sec"
+  Time:           . sec
+
+. di as txt "  Speed: " %10.1f `mbps_cimport' " MB/s"
+  Speed:          . MB/s
+
+. 
+. * Store cimport data for comparison
+. tempfile cimport_data
+
+. quietly save `cimport_data'
+
+. 
+. * Store variable info
+. describe, short
+
+Contains data from /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St29992.00
+> 0003
+ Observations:    36,338,011                  
+    Variables:            10                  7 Jan 2026 00:28
+Sorted by: 
+
+. local cimport_nobs = r(N)
+
+. local cimport_nvars = r(k)
+
+. 
+. * Store checksums for verification
+. local cimport_checksums ""
+
+. foreach var of varlist * {
+  2.     capture confirm numeric variable `var'
+  3.     if !_rc {
+  4.         quietly sum `var'
+  5.         local cimport_checksums "`cimport_checksums' `var'=`r(sum)'"
+  6.     }
+  7. }
+
+. 
+. *****************************************************************************
+> ***
+. * Verification: Compare imported datasets
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 80}"
+
+-------------------------------------------------------------------------------
+> -
+
+. di as txt "Verification: Comparing imported datasets"
+Verification: Comparing imported datasets
+
+. di as txt "{hline 80}"
+-------------------------------------------------------------------------------
+> -
+
+. 
+. di as txt _n "Basic comparison:"
+
+Basic comparison:
+
+. di as txt "  Observations: import=" %12.0fc `stata_nobs' "  cimport=" %12.0fc
+>  `cimport_nobs' cond(`stata_nobs'==`cimport_nobs', "  [MATCH]", "  [DIFFER]")
+  Observations: import=  36,338,011  cimport=  36,338,011  [MATCH]
+
+. di as txt "  Variables:    import=" %12.0fc `stata_nvars' "  cimport=" %12.0f
+> c `cimport_nvars' cond(`stata_nvars'==`cimport_nvars', "  [MATCH]", "  [DIFFE
+> R]")
+  Variables:    import=          10  cimport=          10  [MATCH]
+
+. 
+. * Full data comparison using cf
+. di as txt _n "Full data comparison:"
+
+Full data comparison:
+
+. use `stata_imported', clear
+
+. capture cf _all using `cimport_data'
+
+. if _rc == 0 {
+.     di as txt "  Result: {result:PASS} - Datasets are identical"
+  Result: PASS - Datasets are identical
+.     local verification = "PASS"
+. }
+
+. else {
+.     di as txt "  Result: {error:DIFFER} - Datasets have differences"
+.     local verification = "DIFFER"
+. 
+.     * Show which variables differ
+.     di as txt _n "  Checking individual variables:"
+.     foreach var of varlist * {
+  2.         capture cf `var' using `cimport_data'
+  3.         if _rc == 0 {
+  4.             di as txt "    `var': [MATCH]"
+  5.         }
+  6.         else {
+  7.             di as txt "    `var': [DIFFER]"
+  8.         }
+  9.     }
+. }
+
+. 
+. *****************************************************************************
+> ***
+. * Summary
+. *****************************************************************************
+> ***
+. 
+. di as txt _n _n
+
+
+
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. di as txt "                           SPEED BENCHMARK SUMMARY"
+                           SPEED BENCHMARK SUMMARY
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. di as txt _n
+
+
+
+. 
+. local speedup = `t_import' / `t_cimport'
+
+. 
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. di as txt %25s "Metric" " | " %15s "import" " | " %15s "cimport"
+                   Metric |          import |         cimport
+
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. di as txt %25s "Time (seconds)" " | " as result %13.2f `t_import' as txt " | 
+> " as result %13.2f `t_cimport'
+           Time (seconds) |         80.21 |             .
+
+. di as txt %25s "Speed (MB/s)" " | " as result %13.1f `mbps_import' as txt " |
+>  " as result %13.1f `mbps_cimport'
+             Speed (MB/s) |          47.5 |             .
+
+. di as txt %25s "Rows imported" " | " as result %13.0fc `stata_nobs' as txt " 
+> | " as result %13.0fc `cimport_nobs'
+            Rows imported |    36,338,011 |    36,338,011
+
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. di as txt _n
+
+
+
+. 
+. if `t_cimport' < `t_import' {
+.     di as txt "cimport is " as result %5.2f `speedup' as txt "x faster than i
+> mport delimited"
+. }
+
+. else {
+.     local slowdown = `t_cimport' / `t_import'
+.     di as txt "cimport is " as result %5.2f `slowdown' as txt "x slower than 
+> import delimited"
+cimport is     .x slower than import delimited
+. }
+
+. 
+. di as txt _n "Data verification: `verification'"
+
+Data verification: PASS
+
+. 
+. di as txt _n "===============================================================
+> ================="
+
+===============================================================================
+> =
+
+. di as txt "Test file: `testfile' (" %0.1f `fsize_mb' " MB)"
+Test file: benchmark_test_data.csv (invalid %format
+r(120);
+
+end of do-file
+r(120);

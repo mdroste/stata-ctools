@@ -1,0 +1,110 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/check_diff.do 
+
+. clear all
+
+. adopath ++ "./build"
+  [1]              "./build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. local f1 "/tmp/stata_export.csv"
+
+. local f2 "/tmp/cexport_export.csv"
+
+. 
+. export delimited using "`f1'", replace
+(file /tmp/stata_export.csv not found)
+file /tmp/stata_export.csv saved
+
+. cexport delimited using "`f2'", replace
+
+file /tmp/cexport_export.csv saved
+(          74 observations written)
+
+. 
+. * Show first few lines of each
+. di _n "Stata export:"
+
+Stata export:
+
+. shell head -3 "`f1'"
+
+make,price,mpg,rep78,headroom,trunk,weight,length,turn,displacement,gear_ratio,
+> foreign
+AMC Concord,4099,22,3,2.5,11,2930,186,40,121,3.5799999,Domestic
+AMC Pacer,4749,17,3,3,11,3350,173,40,258,2.53,Domestic
+
+. 
+. di _n "cexport:"
+
+cexport:
+
+. shell head -3 "`f2'"
+
+make,price,mpg,rep78,headroom,trunk,weight,length,turn,displacement,gear_ratio,
+> foreign
+AMC Concord,4099,22,3,2.5,11,2930,186,40,121,3.57999992370605,0
+AMC Pacer,4749,17,3,3,11,3350,173,40,258,2.52999997138977,0
+
+. 
+. * Check foreign column specifically
+. di _n "Foreign column comparison:"
+
+Foreign column comparison:
+
+. shell cut -d',' -f12 "`f1'" | head -5
+
+foreign
+Domestic
+Domestic
+Domestic
+Domestic
+
+. di "---"
+---
+
+. shell cut -d',' -f12 "`f2'" | head -5
+
+foreign
+0
+0
+0
+0
+
+. 
+end of do-file

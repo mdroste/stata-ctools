@@ -1,0 +1,81 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/test_cexport_debug6.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. qui ds
+
+. local varlist `r(varlist)'
+
+. di "varlist: `varlist'"
+varlist: make price mpg rep78 headroom trunk weight length turn displacement ge
+> ar_ratio foreign
+
+. 
+. * Try setting global with quotes
+. capture global _cexport_varnames "`varlist'"
+
+. di "With quotes: " _rc
+With quotes: 198
+
+. 
+. capture global _cexport_varnames `varlist'
+
+. di "Without quotes: " _rc
+Without quotes: 198
+
+. 
+. * Try individual variables
+. foreach v of local varlist {
+  2.     capture global _test_var `v'
+  3.     if _rc != 0 {
+  4.         di "Problem with variable: `v' (rc=" _rc ")"
+  5.     }
+  6. }
+Problem with variable: make (rc=198)
+Problem with variable: price (rc=198)
+Problem with variable: mpg (rc=198)
+Problem with variable: rep78 (rc=198)
+Problem with variable: headroom (rc=198)
+Problem with variable: trunk (rc=198)
+Problem with variable: weight (rc=198)
+Problem with variable: length (rc=198)
+Problem with variable: turn (rc=198)
+Problem with variable: displacement (rc=198)
+Problem with variable: gear_ratio (rc=198)
+Problem with variable: foreign (rc=198)
+
+. 
+end of do-file

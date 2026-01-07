@@ -229,7 +229,7 @@ program define cimport, rclass
 
         * Call plugin in writedta mode
         capture noisily plugin call ctools_plugin, ///
-            "cimport writedta" `"`using'"' `"`delimiters'"' `opt_noheader' `opt_verbose' "output=`dtapath'"
+            "cimport writedta `using' `delimiters' `opt_noheader' `opt_verbose' output=`dtapath'"
 
         local write_rc = _rc
         if `write_rc' {
@@ -298,7 +298,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport scan" `"`using'"' `"`delimiters'"' `opt_noheader' `opt_verbose'
+        "cimport scan `using' `delimiters' `opt_noheader' `opt_verbose'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -420,7 +420,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport load" `"`using'"' `"`delimiters'"' `opt_noheader' `opt_verbose'
+        "cimport load `using' `delimiters' `opt_noheader' `opt_verbose'"
 
     local load_rc = _rc
     if `load_rc' {

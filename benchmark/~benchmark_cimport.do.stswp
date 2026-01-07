@@ -61,6 +61,7 @@ compress
 di as txt "Data generated in memory. Exporting to CSV..."
 
 * Export to CSV using Stata's export delimited
+timer clear 99
 scalar tic = now()
 *quietly export delimited using "`testfile'", replace
 scalar toc = now()

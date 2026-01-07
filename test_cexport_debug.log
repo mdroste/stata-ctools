@@ -25,9 +25,11 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_creghdfe.do 
+. do /tmp/test_cexport_debug.do 
 
 . clear all
+
+. set more off
 
 . adopath ++ "./build"
   [1]              "./build"
@@ -42,24 +44,65 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 . sysuse auto, clear
 (1978 automobile data)
 
-. di "Testing creghdfe on sysuse auto..."
-Testing creghdfe on sysuse auto...
+. di "Loaded auto: " _N " obs, " c(k) " vars"
+Loaded auto: 74 obs, 12 vars
 
-. creghdfe price mpg, absorb(foreign) verbose
+. 
+. * Test if plugin loads
+. capture program list ctools_plugin
+
+. if _rc != 0 {
+.     di "Plugin not loaded, attempting to load..."
+Plugin not loaded, attempting to load...
+.     capture program ctools_plugin, plugin using("./build/ctools_mac_arm.plugi
+> n")
+.     di "Load result: " _rc
+Load result: 0
+. }
+
+. else {
+.     di "Plugin already loaded"
+. }
+
+. 
+. * Try minimal export
+. local testfile "/tmp/test_export_debug.csv"
+
+. di "Testing cexport to: `testfile'"
+Testing cexport to: /tmp/test_export_debug.csv
+
+. 
+. capture noisily cexport delimited using "`testfile'", replace verbose
 
 ------------------------------------------------------------
-creghdfe: C-Accelerated HDFE Regression
+cexport delimited: High-Performance CSV Export
 ------------------------------------------------------------
-Depvar:     price
-Indepvars:   mpg
-Absorb:     foreign
+File:       /tmp/test_export_debug.csv
+Variables:  12
 Obs:        74
-VCE type:   unadjusted
+Delimiter:  ,
+Header:     yes
+Quoting:    as needed
 ------------------------------------------------------------
 
-unrecognized command
-Error in regression (rc=199)
-r(199);
+invalid syntax
 
+. di "cexport return code: " _rc
+cexport return code: 198
+
+. 
+. * Check if file was created
+. capture confirm file "`testfile'"
+
+. if _rc == 0 {
+.     di "File was created successfully"
+.     shell head -3 "`testfile'"
+. }
+
+. else {
+.     di "File was NOT created"
+File was NOT created
+. }
+
+. 
 end of do-file
-r(199);

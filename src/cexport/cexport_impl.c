@@ -463,7 +463,7 @@ static int load_varnames(void)
 
     /* Try to get variable names from macro */
     char varnames_buf[32768];
-    if (SF_macro_use("_cexport_varnames", varnames_buf, sizeof(varnames_buf)) == 0 &&
+    if (SF_macro_use("CEXPORT_VARNAMES", varnames_buf, sizeof(varnames_buf)) == 0 &&
         strlen(varnames_buf) > 0) {
         /* Parse space-separated names */
         char *p = varnames_buf;

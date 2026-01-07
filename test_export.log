@@ -1,0 +1,330 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do scratch/test_export.do 
+
+. *****************************************************************************
+> ***
+. * test_export.do
+. * Quick test to verify cexport works correctly on sysuse auto data
+. *****************************************************************************
+> ***
+. 
+. clear all
+
+. set more off
+
+. 
+. * Add ctools build directory to adopath
+. adopath ++ "./build"
+  [1]              "./build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. 
+. di as txt _n
+
+
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. di as txt "                    CEXPORT vs EXPORT DELIMITED TEST"
+                    CEXPORT vs EXPORT DELIMITED TEST
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. 
+. * Load test data
+. sysuse auto, clear
+(1978 automobile data)
+
+. di as txt "Loaded auto dataset: " _N " observations, " c(k) " variables"
+Loaded auto dataset: 74 observations, 12 variables
+
+. 
+. * Define test files
+. local testfile_stata "scratch/test_export_stata.csv"
+
+. local testfile_cexport "scratch/test_export_ctools.csv"
+
+. 
+. *****************************************************************************
+> ***
+. * Test 1: Stata's export delimited
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 60}"
+
+------------------------------------------------------------
+
+. di as txt "Test 1: Stata's export delimited"
+Test 1: Stata's export delimited
+
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. 
+. timer clear 1
+
+. timer on 1
+
+. export delimited using "`testfile_stata'", replace
+(file scratch/test_export_stata.csv not found)
+file scratch/test_export_stata.csv saved
+
+. timer off 1
+
+. quietly timer list 1
+
+. local t_stata = r(t1)
+
+. 
+. di as txt "  Time: " %8.4f `t_stata' " sec"
+  Time:   0.0050 sec
+
+. di as txt "  File: `testfile_stata'"
+  File: scratch/test_export_stata.csv
+
+. 
+. *****************************************************************************
+> ***
+. * Test 2: cexport delimited
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 60}"
+
+------------------------------------------------------------
+
+. di as txt "Test 2: cexport delimited"
+Test 2: cexport delimited
+
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. 
+. timer clear 2
+
+. timer on 2
+
+. capture noisily cexport delimited using "`testfile_cexport'", replace
+
+file scratch/test_export_ctools.csv saved
+(          74 observations written)
+
+. local cexport_rc = _rc
+
+. timer off 2
+
+. quietly timer list 2
+
+. local t_cexport = r(t2)
+
+. 
+. if `cexport_rc' != 0 {
+.     di as error "cexport failed with error code `cexport_rc'"
+. }
+
+. else {
+.     di as txt "  Time: " %8.4f `t_cexport' " sec"
+  Time:        . sec
+.     di as txt "  File: `testfile_cexport'"
+  File: scratch/test_export_ctools.csv
+. }
+
+. 
+. *****************************************************************************
+> ***
+. * Verification: Compare exported files
+. *****************************************************************************
+> ***
+. 
+. di as txt _n "{hline 60}"
+
+------------------------------------------------------------
+
+. di as txt "Verification: Comparing exported CSV files"
+Verification: Comparing exported CSV files
+
+. di as txt "{hline 60}"
+------------------------------------------------------------
+
+. 
+. * Check if cexport file exists
+. capture confirm file "`testfile_cexport'"
+
+. if _rc != 0 {
+.     di as error "cexport output file does not exist"
+.     exit
+. }
+
+. 
+. * Import both files and compare
+. di as txt _n "Importing Stata export..."
+
+Importing Stata export...
+
+. import delimited using "`testfile_stata'", clear
+(encoding automatically selected: ISO-8859-1)
+(12 vars, 74 obs)
+
+. tempfile stata_data
+
+. quietly save `stata_data'
+
+. local stata_nobs = _N
+
+. local stata_nvars = c(k)
+
+. 
+. di as txt "Importing cexport output..."
+Importing cexport output...
+
+. import delimited using "`testfile_cexport'", clear
+(encoding automatically selected: ISO-8859-1)
+(12 vars, 74 obs)
+
+. tempfile cexport_data
+
+. quietly save `cexport_data'
+
+. local cexport_nobs = _N
+
+. local cexport_nvars = c(k)
+
+. 
+. di as txt _n "Comparison:"
+
+Comparison:
+
+. di as txt "  Observations: stata=" `stata_nobs' "  cexport=" `cexport_nobs' /
+> //
+>     cond(`stata_nobs'==`cexport_nobs', "  [MATCH]", "  [DIFFER]")
+  Observations: stata=74  cexport=74  [MATCH]
+
+. di as txt "  Variables:    stata=" `stata_nvars' "  cexport=" `cexport_nvars'
+>  ///
+>     cond(`stata_nvars'==`cexport_nvars', "  [MATCH]", "  [DIFFER]")
+  Variables:    stata=12  cexport=12  [MATCH]
+
+. 
+. * Full data comparison
+. use `stata_data', clear
+
+. capture cf _all using `cexport_data'
+
+. if _rc == 0 {
+.     di as txt _n "  Data verification: {result:PASS} - Files are identical"
+
+  Data verification: PASS - Files are identical
+.     local verification "PASS"
+. }
+
+. else {
+.     di as txt _n "  Data verification: {error:DIFFER} - Files have difference
+> s"
+.     local verification "DIFFER"
+. 
+.     * Show which variables differ
+.     di as txt _n "  Checking individual variables:"
+.     foreach var of varlist * {
+  2.         capture cf `var' using `cexport_data'
+  3.         if _rc == 0 {
+  4.             di as txt "    `var': [MATCH]"
+  5.         }
+  6.         else {
+  7.             di as txt "    `var': [DIFFER]"
+  8.         }
+  9.     }
+. }
+
+. 
+. *****************************************************************************
+> ***
+. * Summary
+. *****************************************************************************
+> ***
+. 
+. di as txt _n
+
+
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. di as txt "                              SUMMARY"
+                              SUMMARY
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. di as txt "  export delimited time: " %8.4f `t_stata' " sec"
+  export delimited time:   0.0050 sec
+
+. if `cexport_rc' == 0 {
+.     di as txt "  cexport time:          " %8.4f `t_cexport' " sec"
+  cexport time:                 . sec
+.     di as txt "  Verification:          `verification'"
+  Verification:          PASS
+. }
+
+. else {
+.     di as txt "  cexport:               FAILED (rc=`cexport_rc')"
+. }
+
+. di as txt "==================================================================
+> =============="
+===============================================================================
+> =
+
+. 
+. * Clean up test files
+. capture erase "`testfile_stata'"
+
+. capture erase "`testfile_cexport'"
+
+. di as txt _n "Test files cleaned up."
+
+Test files cleaned up.
+
+. 
+end of do-file

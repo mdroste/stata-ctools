@@ -15,6 +15,7 @@
 *!   quote               - Quote all string fields
 *!   noquoteif           - Don't automatically quote strings containing delimiters
 *!   replace             - Overwrite existing file
+*!   nolabel             - Export numeric values instead of value labels
 *!   datafmt             - Use display formats for numeric variables (not yet implemented)
 *!   verbose             - Display progress information
 
@@ -32,7 +33,7 @@ program define cexport, rclass
 
     * Parse the rest with export delimited-style syntax
     syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-        NOQUOTEif REPLACE DATAfmt Verbose TIMEit]
+        NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit]
 
     * Mark sample
     marksample touse, novarlist
@@ -71,6 +72,33 @@ program define cexport, rclass
     if "`varlist'" == "" {
         qui ds
         local varlist `r(varlist)'
+    }
+
+    * Handle value labels: decode labeled variables unless nolabel specified
+    local export_varlist ""
+    local decoded_vars ""
+    local original_names ""
+    if "`nolabel'" == "" {
+        * Default: export value labels
+        foreach var of local varlist {
+            * Check if variable has a value label attached
+            local vallbl : value label `var'
+            if "`vallbl'" != "" {
+                * Has value label - decode to temporary string variable
+                tempvar decoded_`var'
+                qui decode `var', gen(`decoded_`var'')
+                local export_varlist `export_varlist' `decoded_`var''
+                local decoded_vars `decoded_vars' `decoded_`var''
+                local original_names `original_names' `var'
+            }
+            else {
+                local export_varlist `export_varlist' `var'
+            }
+        }
+    }
+    else {
+        * nolabel specified: export raw numeric values
+        local export_varlist `varlist'
     }
 
     * Count variables and observations
@@ -156,6 +184,7 @@ program define cexport, rclass
         di as text "Delimiter:  " as result "`delim_display'"
         di as text "Header:     " as result cond("`novarnames'" == "", "yes", "no")
         di as text "Quoting:    " as result cond("`quote'" != "", "all strings", cond("`noquoteif'" != "", "none", "as needed"))
+        di as text "Labels:     " as result cond("`nolabel'" == "", "export value labels", "export numeric values")
         di as text "{hline 60}"
         di ""
     }
@@ -167,7 +196,7 @@ program define cexport, rclass
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
 
     * Pass variable names to the plugin via global macro
-    global _cexport_varnames `varlist'
+    global CEXPORT_VARNAMES `varlist'
 
     * Record start time
     timer clear 99
@@ -175,13 +204,14 @@ program define cexport, rclass
 
     * Call the C plugin
     * Plugin expects: filename delimiter [options]
-    capture noisily plugin call ctools_plugin `varlist' `if' `in', ///
+    * Use export_varlist (may contain decoded temp vars for value labels)
+    capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
         "cexport `using' `delimiter' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose'"
 
     local export_rc = _rc
 
     * Clean up global macro
-    macro drop _cexport_varnames
+    macro drop CEXPORT_VARNAMES
 
     if `export_rc' {
         di as error "Error exporting data (rc=`export_rc')"
