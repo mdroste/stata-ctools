@@ -142,9 +142,6 @@ ST_int cqreg_irls_solve(cqreg_ipm_state *ipm,
             }
         }
 
-        if (iter == 0 || iter % 10 == 0) {
-        }
-
         /* Check convergence (use more relaxed tolerance for IRLS) */
         ST_double rel_change = fabs(prev_obj - obj) / (1.0 + fabs(obj));
         if (rel_change < 1e-6) {  /* More relaxed than IPM tolerance */

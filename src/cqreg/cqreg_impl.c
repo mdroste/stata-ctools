@@ -51,10 +51,6 @@ ST_retcode cqreg_main(const char *args)
     if (strcmp(subcmd, "full_regression") == 0) {
         return cqreg_full_regression(rest);
     }
-    else if (strcmp(subcmd, "ipm_only") == 0) {
-        /* For testing: run IPM solver without full VCE computation */
-        return cqreg_full_regression(rest);  /* Same for now */
-    }
     else {
         ctools_error("cqreg", "Unknown subcommand: %s", subcmd);
         return 198;
