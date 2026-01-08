@@ -150,15 +150,7 @@ program define cqreg, eclass
         exit 2001
     }
 
-    * Compute raw sum of deviations (null model) and sample quantile for pseudo R2
-    * The raw sum of deviations is sum of |y_i - q_v| weighted by quantile
-    quietly _pctile `depvar' if `touse', percentile(`=`quantile'*100')
-    local q_v = r(r1)
-
-    tempvar raw_dev
-    quietly gen double `raw_dev' = cond(`depvar' >= `q_v', `quantile' * (`depvar' - `q_v'), (1-`quantile') * (`q_v' - `depvar')) if `touse'
-    quietly summarize `raw_dev' if `touse', meanonly
-    local sum_rdev = r(sum)
+    * Note: q_v and sum_rdev are now computed in the C plugin for better performance
 
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
@@ -287,6 +279,8 @@ program define cqreg, eclass
     local N_final = __cqreg_N
     local K_keep = __cqreg_K_keep
     local sum_adev = __cqreg_sum_adev
+    local sum_rdev = __cqreg_sum_rdev
+    local q_v = __cqreg_q_v
     local sparsity = __cqreg_sparsity
     local bandwidth = __cqreg_bandwidth
     local iterations = __cqreg_iterations
@@ -432,7 +426,7 @@ program define cqreg, eclass
     capture scalar drop __cqreg_quantile __cqreg_K __cqreg_G
     capture scalar drop __cqreg_vce_type __cqreg_bw_method __cqreg_density_method __cqreg_verbose
     capture scalar drop __cqreg_tolerance __cqreg_maxiter __cqreg_nopreprocess
-    capture scalar drop __cqreg_N __cqreg_K_keep __cqreg_sum_adev
+    capture scalar drop __cqreg_N __cqreg_K_keep __cqreg_sum_adev __cqreg_sum_rdev __cqreg_q_v
     capture scalar drop __cqreg_sparsity __cqreg_bandwidth
     capture scalar drop __cqreg_iterations __cqreg_converged __cqreg_cons
     capture scalar drop __cqreg_df_a __cqreg_N_clust

@@ -200,7 +200,8 @@ typedef struct {
     ST_double *fitted;        /* Fitted values X*beta (N) */
     ST_double *obs_density;   /* Per-observation density estimates f_i(0) (N) */
     ST_double sum_adev;       /* Sum of absolute deviations (objective value) */
-    ST_double sum_rdev;       /* Sum of raw deviations */
+    ST_double sum_rdev;       /* Sum of raw deviations (null model) */
+    ST_double q_v;            /* Sample quantile of y (for pseudo R2) */
     ST_double sparsity;       /* Estimated sparsity */
     ST_double bandwidth;      /* Bandwidth used for sparsity estimation */
 

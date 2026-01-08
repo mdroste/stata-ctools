@@ -269,7 +269,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     }
 
     /* Compute r = c - X * y_d = -Y - X * y_d */
-    cqreg_matvec_col(r, X, y_d, N, K);  /* r = X * y_d */
+    blas_dgemv(0, N, K, 1.0, X, N, y_d, 0.0, r);  /* r = X * y_d */
     for (i = 0; i < N; i++) {
         r[i] = -Y[i] - r[i];  /* r = -Y - X*y_d */
     }
@@ -372,10 +372,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             Xq[i] = q[i] * r[i];  /* Reuse Xq as temp for q.*r */
         }
 
-        /* Compute Xqr = X' * (q .* r) using BLAS */
-        for (j = 0; j < K; j++) {
-            Xqr[j] = blas_ddot(N, &X[j * N], Xq);
-        }
+        /* Compute Xqr = X' * (q .* r) using single BLAS dgemv transpose */
+        blas_dgemv(1, N, K, 1.0, X, N, Xq, 0.0, Xqr);
 
         /* Solve (X'QX) * dy = Xqr via Cholesky */
         if (cqreg_cholesky(XqX, K) != 0) {
@@ -388,8 +386,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         t_phase = ctools_timer_seconds();
 #endif
 
-        /* Compute tmp = X * dy */
-        cqreg_matvec_col(tmp, X, dy, N, K);
+        /* Compute tmp = X * dy using BLAS for vectorization */
+        blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
 
         /* Compute dx = q .* (X*dy - r), ds = -dx */
         for (i = 0; i < N; i++) {
@@ -460,10 +458,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             }
             ST_double *xi = fz;
 
-            /* Recompute Xqr = X' * (q .* r) using BLAS */
-            for (j = 0; j < K; j++) {
-                Xqr[j] = blas_ddot(N, &X[j * N], Xq);
-            }
+            /* Recompute Xqr = X' * (q .* r) using single BLAS dgemv transpose */
+            blas_dgemv(1, N, K, 1.0, X, N, Xq, 0.0, Xqr);
 
             /* Restore XqX from saved copy (avoids recomputing X'DX) */
             memcpy(XqX, XqX_copy, K * K * sizeof(ST_double));
@@ -474,8 +470,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             memcpy(dy, Xqr, K * sizeof(ST_double));
             cqreg_solve_cholesky(XqX, dy, K);
 
-            /* Recompute tmp = X * dy */
-            cqreg_matvec_col(tmp, X, dy, N, K);
+            /* Recompute tmp = X * dy using BLAS */
+            blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
 
             /* Recompute corrected directions */
             for (i = 0; i < N; i++) {
@@ -483,19 +479,6 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 ds[i] = -dx[i];
                 dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i];
                 dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i];
-            }
-
-            /* Debug: check corrector formulas for w=0 case */
-            if (iter == 0) {
-                for (i = 0; i < N; i++) {
-                    if (w[i] < IPM_SMALL && dw[i] < 0) {
-                        IPM_LOG("  w=0 but dw<0 at i=%d: mu=%.4e, ds=%.4f, s=%.4f, dsdw=%.4e\n",
-                                i, mu, ds[i], s[i], dsdw[i]);
-                        IPM_LOG("    formula: dw = (%.4e - 0*%.4f)/%.4f - 0 - %.4e = %.4e\n",
-                                mu, ds[i], s[i], dsdw[i], dw[i]);
-                        break;  /* Just show first one */
-                    }
-                }
             }
 
             /* Recompute step lengths (fused loop) */
@@ -588,7 +571,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     ipm->converged = (gap < IPM_TOL) ? 1 : 0;
 
     /* Compute final residuals */
-    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
+    blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = Y[i] - ipm->r_primal[i];  /* r = Y - X*beta */
         if (ipm->r_primal[i] >= 0) {
@@ -720,7 +703,7 @@ ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
         for (i = 0; i < N; i++) {
             r[i] = -Y[i];
         }
-        cqreg_matvec_col(tmp, X, y_d, N, K);
+        blas_dgemv(0, N, K, 1.0, X, N, y_d, 0.0, tmp);
         for (i = 0; i < N; i++) {
             r[i] = r[i] - tmp[i] + z[i] - w[i];
             r[i] = q[i] * r[i];
@@ -744,33 +727,17 @@ ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
         cqreg_solve_cholesky(XqX, dy, K);
 
         /* dx = q .* (X * dy - r) */
-        cqreg_matvec_col(tmp, X, dy, N, K);
+        blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
         for (i = 0; i < N; i++) {
             dx[i] = q[i] * (tmp[i] - r[i] / q[i]);
-        }
-        /* ds = -dx */
-        for (i = 0; i < N; i++) {
             ds[i] = -dx[i];
-        }
-        /* dz = -z + (z/x_p) .* dx */
-        for (i = 0; i < N; i++) {
             dz[i] = -z[i] + (z[i] / x_p[i]) * dx[i];
-        }
-        /* dw = -w + (w/s) .* ds */
-        for (i = 0; i < N; i++) {
             dw[i] = -w[i] + (w[i] / s[i]) * ds[i];
         }
 
-        /* Step length computation */
-        compute_bound(fx, x_p, dx, N);
-        compute_bound(fs, s, ds, N);
-        compute_bound(fz, z, dz, N);
-        compute_bound(fw, w, dw, N);
-
-        ST_double fp = IPM_BETA * fmin(array_min(fx, N), array_min(fs, N));
-        ST_double fd = IPM_BETA * fmin(array_min(fz, N), array_min(fw, N));
-        if (fp > 1.0) fp = 1.0;
-        if (fd > 1.0) fd = 1.0;
+        /* Step length computation (fused single-pass) */
+        ST_double fp, fd;
+        compute_step_lengths_fused(&fp, &fd, x_p, s, z, w, dx, ds, dz, dw, N);
 
         /* Centering parameter */
         ST_double mu = gap / (2.0 * N);
@@ -801,45 +768,29 @@ ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
         }
 
         /* Update directions */
-        cqreg_matvec_col(tmp, X, dy, N, K);
+        blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
         for (i = 0; i < N; i++) {
             dx[i] = q[i] * (tmp[i] - r[i] / q[i] - dx[i] + (mu - dz[i] * dx[i]) / z[i] - (mu - dw[i] * ds[i]) / w[i]);
-        }
-        for (i = 0; i < N; i++) {
             ds[i] = -dx[i];
-        }
-        for (i = 0; i < N; i++) {
             dz[i] = (mu - z[i] * x_p[i] - dz[i] * dx[i]) / x_p[i] - z[i];
             dw[i] = (mu - w[i] * s[i] - dw[i] * ds[i]) / s[i] - w[i];
         }
 
-        /* Recompute step lengths */
-        compute_bound(fx, x_p, dx, N);
-        compute_bound(fs, s, ds, N);
-        compute_bound(fz, z, dz, N);
-        compute_bound(fw, w, dw, N);
+        /* Recompute step lengths (fused single-pass) */
+        compute_step_lengths_fused(&fp, &fd, x_p, s, z, w, dx, ds, dz, dw, N);
 
-        fp = IPM_BETA * fmin(array_min(fx, N), array_min(fs, N));
-        fd = IPM_BETA * fmin(array_min(fz, N), array_min(fw, N));
-        if (fp > 1.0) fp = 1.0;
-        if (fd > 1.0) fd = 1.0;
-
-        /* Update variables */
-        for (i = 0; i < N; i++) {
-            x_p[i] += fp * dx[i];
-            s[i] += fp * ds[i];
-        }
+        /* Update dual coefficients */
         for (j = 0; j < K; j++) {
             y_d[j] += fd * dy[j];
         }
-        for (i = 0; i < N; i++) {
-            z[i] += fd * dz[i];
-            w[i] += fd * dw[i];
-        }
 
-        /* Recompute gap */
+        /* Fused update and gap computation */
         gap = 0.0;
         for (i = 0; i < N; i++) {
+            x_p[i] += fp * dx[i];
+            s[i] += fp * ds[i];
+            z[i] += fd * dz[i];
+            w[i] += fd * dw[i];
             gap += z[i] * x_p[i] + s[i] * w[i];
         }
     }
@@ -854,7 +805,7 @@ ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
     ipm->converged = (gap < IPM_TOL) ? 1 : 0;
 
     /* Compute final residuals */
-    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
+    blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = Y[i] - ipm->r_primal[i];
         if (ipm->r_primal[i] >= 0) {

@@ -357,6 +357,8 @@ static void store_results(cqreg_state *state)
     store_scalar("__cqreg_N", (ST_double)state->N);
     store_scalar("__cqreg_K_keep", (ST_double)(K - 1));  /* Exclude constant for reporting */
     store_scalar("__cqreg_sum_adev", state->sum_adev);
+    store_scalar("__cqreg_sum_rdev", state->sum_rdev);
+    store_scalar("__cqreg_q_v", state->q_v);
     store_scalar("__cqreg_sparsity", state->sparsity);
     store_scalar("__cqreg_bandwidth", state->bandwidth);
     store_scalar("__cqreg_iterations", (ST_double)state->iterations);
@@ -522,10 +524,14 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
     main_debug_log("Data loaded successfully\n");
+
+    /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
+    state->q_v = cqreg_compute_quantile(state->y, N, quantile);
+    state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
+    main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
+
     state->time_load = ctools_timer_seconds() - time_start;
     double time_after_load = ctools_timer_seconds();
-
-
 
     /* Load cluster variable if needed */
     if (vce_type == CQREG_VCE_CLUSTER) {

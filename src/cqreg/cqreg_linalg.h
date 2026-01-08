@@ -227,4 +227,22 @@ ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_doubl
  */
 void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K);
 
+/* ============================================================================
+ * Quantile and Statistics Functions
+ * ============================================================================ */
+
+/*
+ * Compute sample quantile by sorting and selecting (O(N log N)).
+ * Creates a copy of y internally - does not modify input.
+ * tau: quantile (0 < tau < 1), e.g., 0.5 for median
+ * Returns: the tau-th sample quantile
+ */
+ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau);
+
+/*
+ * Compute raw sum of deviations (check function sum against a fixed value).
+ * Returns: tau * sum(y[i] - q | y[i] > q) + (1-tau) * sum(q - y[i] | y[i] <= q)
+ */
+ST_double cqreg_sum_raw_deviations(const ST_double *y, ST_int N, ST_double q, ST_double tau);
+
 #endif /* CQREG_LINALG_H */

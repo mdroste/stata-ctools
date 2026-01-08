@@ -69,9 +69,14 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=3.132s
+FN Timing (N=5000000, K=2, iters=19): total=1.868s
+  init=0.020s  scaling=0.044
+> s  X'DX=0.029s  chol=0.084s
+  direction=0.143s  steplength=0.492s  corrector=
+> 0.959s  update=0.096s
+cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.904s
 cqreg: Sparsity: 12.4508, bandwidth: 0.005682 (method: residual)
-cqreg: Total time: 3.615s (load: 0.042, hdfe: 0.000, ipm: 3.132, vce: 0.442)
+cqreg: Total time: 2.364s (load: 0.039, hdfe: 0.000, ipm: 1.904, vce: 0.421)
 
 Median regression                                  Number of obs =  5,000,000
   Raw sum of deviations 1.1e+07  (about -.001789 )
@@ -85,7 +90,7 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 19, converged: yes
-Total time:     3.622 seconds
+Total time:     2.370 seconds
 
 . 
 . display ""
@@ -109,9 +114,24 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=3.135s
+FN Timing (N=5000000, K=2, iters=19): total=1.885s
+  init=0.023s  scaling=0.043
+> s  X'DX=0.030s  chol=0.083s
+  direction=0.159s  steplength=0.490s  corrector=
+> 0.965s  update=0.092s
+cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.920s
+FN Timing (N=5000000, K=2, iters=55): total=5.356s
+  init=0.027s  scaling=0.136
+> s  X'DX=0.161s  chol=0.242s
+  direction=0.432s  steplength=1.368s  corrector=
+> 2.719s  update=0.271s
+FN Timing (N=5000000, K=2, iters=55): total=5.453s
+  init=0.027s  scaling=0.136
+> s  X'DX=0.161s  chol=0.242s
+  direction=0.439s  steplength=1.396s  corrector=
+> 2.776s  update=0.276s
 cqreg: Sparsity: 12.4451, bandwidth: 0.005682 (method: fitted)
-cqreg: Total time: 8.135s (load: 0.042, hdfe: 0.000, ipm: 3.135, vce: 4.958)
+cqreg: Total time: 4.810s (load: 0.040, hdfe: 0.000, ipm: 1.920, vce: 2.850)
 
 Median regression                                  Number of obs =  5,000,000
   Raw sum of deviations 1.1e+07  (about -.001789 )
@@ -125,7 +145,7 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 19, converged: yes
-Total time:     8.151 seconds
+Total time:     4.829 seconds
 
 . 
 end of do-file

@@ -497,3 +497,63 @@ void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K)
         }
     }
 }
+
+/* ============================================================================
+ * Quantile and Statistics Functions
+ * ============================================================================ */
+
+/* Comparison function for qsort */
+static int compare_double(const void *a, const void *b)
+{
+    ST_double da = *(const ST_double *)a;
+    ST_double db = *(const ST_double *)b;
+    if (da < db) return -1;
+    if (da > db) return 1;
+    return 0;
+}
+
+ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau)
+{
+    /* Make a copy of y for sorting */
+    ST_double *y_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+    if (y_sorted == NULL) {
+        return 0.0;  /* Error: return 0 */
+    }
+
+    memcpy(y_sorted, y, N * sizeof(ST_double));
+
+    /* Sort using qsort (O(N log N)) */
+    qsort(y_sorted, N, sizeof(ST_double), compare_double);
+
+    /* Compute quantile index using Stata's method: ceil(N*tau) */
+    /* For tau=0.5, N=100: index = ceil(50) = 50, which is y[49] (0-indexed) */
+    ST_int k = (ST_int)ceil(N * tau);
+    if (k < 1) k = 1;
+    if (k > N) k = N;
+
+    ST_double q = y_sorted[k - 1];  /* Convert to 0-indexed */
+
+    free(y_sorted);
+    return q;
+}
+
+ST_double cqreg_sum_raw_deviations(const ST_double *y, ST_int N, ST_double q, ST_double tau)
+{
+    ST_double sum = 0.0;
+    ST_int i;
+
+    /* Check function: rho_tau(u) = u * (tau - I(u < 0))
+     * = tau * u if u >= 0
+     * = (tau - 1) * u if u < 0
+     */
+    for (i = 0; i < N; i++) {
+        ST_double u = y[i] - q;
+        if (u >= 0.0) {
+            sum += tau * u;
+        } else {
+            sum += (tau - 1.0) * u;
+        }
+    }
+
+    return sum;
+}
