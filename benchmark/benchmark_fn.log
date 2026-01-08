@@ -94,19 +94,19 @@ FN Solver Benchmark - Accuracy and Performance
 Number of observations (_N) was 0, now 1,000.
 
 N=1000
-  qreg:  0.0340s  cqreg:  0.0050s  Speedup:  6.80x  MaxDiff:  0.014400
+  qreg:  0.0350s  cqreg:  0.1620s  Speedup:  0.22x  MaxDiff:  0.000000
 Number of observations (_N) was 0, now 5,000.
 
 N=5000
-  qreg:  0.0250s  cqreg:  0.0040s  Speedup:  6.25x  MaxDiff:  0.003142
+  qreg:  0.0240s  cqreg:  0.0060s  Speedup:  4.00x  MaxDiff:  0.000000
 Number of observations (_N) was 0, now 10,000.
 
 N=10000
-  qreg:  0.0390s  cqreg:  0.0060s  Speedup:  6.50x  MaxDiff:  0.001525
+  qreg:  0.0350s  cqreg:  0.0090s  Speedup:  3.89x  MaxDiff:  0.000000
 Number of observations (_N) was 0, now 50,000.
 
 N=50000
-  qreg:  0.1850s  cqreg:  0.0220s  Speedup:  8.41x  MaxDiff:  0.001923
+  qreg:  0.1880s  cqreg:  0.0510s  Speedup:  3.69x  MaxDiff:  0.000000
 
 . 
 . di _newline "{hline 60}"

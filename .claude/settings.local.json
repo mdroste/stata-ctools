@@ -10,7 +10,8 @@
       "Bash(grep:*)",
       "Bash(cat:*)",
       "Bash(xargs cat:*)",
-      "WebFetch(domain:arxiv.org)"
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }
