@@ -1,0 +1,467 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do ../benchmark/benchmark_cqreg.do 
+
+. * Benchmark cqreg vs qreg - Standard Error Comparison
+. * Goal: Match standard errors to machine precision (diff < 1E-5)
+. 
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "QREG price mpg"
+QREG price mpg
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. qreg price mpg
+
+Iteration 1:  WLS sum of weighted deviations =  70552.192
+
+Iteration 1:  Sum of abs. weighted deviations =    75229.5
+Iteration 2:  Sum of abs. weighted deviations =   64766.75
+Iteration 3:  Sum of abs. weighted deviations =  64760.833
+
+Median regression                                   Number of obs =         74
+  Raw sum of deviations  71102.5 (about 4934)
+  Min sum of deviations 64760.83                    Pseudo R2     =     0.0892
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -135.6667   67.26576    -2.02   0.047    -269.7585   -1.574816
+       _cons |   8088.667   1483.808     5.45   0.000     5130.749    11046.58
+------------------------------------------------------------------------------
+
+. 
+. matrix qreg_b = e(b)
+
+. matrix qreg_V = e(V)
+
+. local qreg_N = e(N)
+
+. local qreg_df_r = e(df_r)
+
+. local qreg_q = e(q)
+
+. local qreg_q_v = e(q_v)
+
+. local qreg_f = e(f)
+
+. local qreg_convcode = e(convcode)
+
+. local qreg_sum_adev = e(sum_adev)
+
+. local qreg_sum_rdev = e(sum_rdev)
+
+. local qreg_r2_p = e(r2_p)
+
+. 
+. di _newline(2) "{hline 78}"
+
+
+------------------------------------------------------------------------------
+
+. di "CQREG price mpg"
+CQREG price mpg
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. cqreg price mpg
+
+Median regression                                  Number of obs =         74
+  Raw sum of deviations 71102.5  (about 5006.5   )
+  Min sum of deviations 64760.8                    Pseudo R2     =     0.0892
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -135.6667   68.06861    -1.99   0.050     -271.359    .0256362
+       _cons |   8088.667   1501.518     5.39   0.000     5095.445    11081.89
+------------------------------------------------------------------------------
+
+. 
+. matrix cqreg_b = e(b)
+
+. matrix cqreg_V = e(V)
+
+. local cqreg_N = e(N)
+
+. local cqreg_df_r = e(df_r)
+
+. local cqreg_q = e(q)
+
+. local cqreg_q_v = e(q_v)
+
+. local cqreg_sum_adev = e(sum_adev)
+
+. local cqreg_sum_rdev = e(sum_rdev)
+
+. local cqreg_r2_p = e(r2_p)
+
+. 
+. di _newline(2) "{hline 78}"
+
+
+------------------------------------------------------------------------------
+
+. di "COEFFICIENT COMPARISON"
+COEFFICIENT COMPARISON
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "              qreg            cqreg           diff"
+              qreg            cqreg           diff
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "mpg:   " %14.8f qreg_b[1,1] "  " %14.8f cqreg_b[1,1] "  " %14.8f qreg_b[1
+> ,1]-cqreg_b[1,1]
+mpg:    -135.66666667   -135.66666667      0.00000000
+
+. di "_cons: " %14.8f qreg_b[1,2] "  " %14.8f cqreg_b[1,2] "  " %14.8f qreg_b[1
+> ,2]-cqreg_b[1,2]
+_cons:  8088.66666667   8088.66666667     -0.00000000
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "STANDARD ERROR COMPARISON"
+STANDARD ERROR COMPARISON
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "              qreg            cqreg           diff"
+              qreg            cqreg           diff
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "mpg:   " %14.8f sqrt(qreg_V[1,1]) "  " %14.8f sqrt(cqreg_V[1,1]) "  " %14
+> .8f sqrt(qreg_V[1,1])-sqrt(cqreg_V[1,1])
+mpg:      67.26576464     68.06861440     -0.80284976
+
+. di "_cons: " %14.8f sqrt(qreg_V[2,2]) "  " %14.8f sqrt(cqreg_V[2,2]) "  " %14
+> .8f sqrt(qreg_V[2,2])-sqrt(cqreg_V[2,2])
+_cons:  1483.80805190   1501.51802589    -17.70997399
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "VARIANCE-COVARIANCE MATRIX COMPARISON"
+VARIANCE-COVARIANCE MATRIX COMPARISON
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "qreg V[1,1]:   " %14.6f qreg_V[1,1] "  cqreg V[1,1]:   " %14.6f cqreg_V[1
+> ,1] "  diff: " %14.6f qreg_V[1,1]-cqreg_V[1,1]
+qreg V[1,1]:      4524.683092  cqreg V[1,1]:      4633.336266  diff:    -108.65
+> 3174
+
+. di "qreg V[1,2]:   " %14.6f qreg_V[1,2] "  cqreg V[1,2]:   " %14.6f cqreg_V[1
+> ,2] "  diff: " %14.6f qreg_V[1,2]-cqreg_V[1,2]
+qreg V[1,2]:    -96363.520989  cqreg V[1,2]:    -98677.539940  diff:    2314.01
+> 8951
+
+. di "qreg V[2,2]:   " %14.6f qreg_V[2,2] "  cqreg V[2,2]:   " %14.6f cqreg_V[2
+> ,2] "  diff: " %14.6f qreg_V[2,2]-cqreg_V[2,2]
+qreg V[2,2]:   2201686.334887  cqreg V[2,2]:   2254556.382085  diff:  -52870.04
+> 7197
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "SCALAR COMPARISON"
+SCALAR COMPARISON
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "              qreg            cqreg           diff"
+              qreg            cqreg           diff
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "N:        " %12.0f `qreg_N' "  " %12.0f `cqreg_N' "  " %12.0f `qreg_N'-`c
+> qreg_N'
+N:                  74            74             0
+
+. di "df_r:     " %12.0f `qreg_df_r' "  " %12.0f `cqreg_df_r' "  " %12.0f `qreg
+> _df_r'-`cqreg_df_r'
+df_r:               72            72             0
+
+. di "q:        " %12.6f `qreg_q' "  " %12.6f `cqreg_q' "  " %12.6f `qreg_q'-`c
+> qreg_q'
+q:            0.500000      0.500000      0.000000
+
+. di "q_v:      " %12.6f `qreg_q_v' "  " %12.6f `cqreg_q_v' "  " %12.6f `qreg_q
+> _v'-`cqreg_q_v'
+q_v:       4934.000000   5006.500000    -72.500000
+
+. di "sum_adev: " %12.6f `qreg_sum_adev' "  " %12.6f `cqreg_sum_adev' "  " %12.
+> 6f `qreg_sum_adev'-`cqreg_sum_adev'
+sum_adev: 64760.833333  64760.833333      0.000000
+
+. di "sum_rdev: " %12.6f `qreg_sum_rdev' "  " %12.6f `cqreg_sum_rdev' "  " %12.
+> 6f `qreg_sum_rdev'-`cqreg_sum_rdev'
+sum_rdev: 71102.500000  71102.500000      0.000000
+
+. di "r2_p:     " %12.8f `qreg_r2_p' "  " %12.8f `cqreg_r2_p' "  " %12.8f `qreg
+> _r2_p'-`cqreg_r2_p'
+r2_p:       0.08919049    0.08919049    0.00000000
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "VCE DETAILS FROM QREG"
+VCE DETAILS FROM QREG
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "f (density at median):  " %12.8f `qreg_f'
+f (density at median):             .
+
+. di "Sparsity (1/f):         " %12.8f 1/`qreg_f'
+Sparsity (1/f):                    .
+
+. 
+. * Get residuals and estimate sparsity manually
+. predict double resid_qreg, resid
+
+. summ resid_qreg, detail
+
+                          Residuals
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -2084.333      -2084.333
+ 5%        -1556      -1636.667
+10%        -1275      -1586.667       Obs                  74
+25%         -778          -1556       Sum of wgt.          74
+
+50%     1.82e-12                      Mean           965.9234
+                        Largest       Std. dev.      2673.188
+75%     1773.333       7133.333
+90%         5038       7276.667       Variance        7145936
+95%     7133.333       8310.667       Skewness       1.614233
+99%     10666.33       10666.33       Kurtosis       5.055555
+
+. 
+. * Compute sparsity using Stata's method
+. * qreg uses kdens option, let's check the residual distribution
+. _pctile resid_qreg, percentile(25 50 75)
+
+. local q25 = r(r1)
+
+. local q50 = r(r2)
+
+. local q75 = r(r3)
+
+. di "Residual quartiles: Q25=" %12.4f `q25' " Q50=" %12.4f `q50' " Q75=" %12.4
+> f `q75'
+Residual quartiles: Q25=   -778.0000 Q50=      0.0000 Q75=   1773.3333
+
+. 
+. * Show what VCE cqreg should match
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "MANUAL VCE CALCULATION (should match qreg)"
+MANUAL VCE CALCULATION (should match qreg)
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. 
+. * Number of obs
+. local N = 74
+
+. local K = 2  // number of regressors including constant
+
+. local q = 0.5
+
+. 
+. * Hall-Sheather bandwidth (with alpha=0.05)
+. * h = n^{-1/3} * z_{1-α/2}^{2/3} * (1.5 * φ(z_q)^2 / (2*z_{1-α/2}^2 + 1))^{1/
+> 3}
+. local z_alpha = invnormal(0.975)
+
+. local z_q = invnormal(`q')
+
+. local phi_zq = normalden(`z_q')
+
+. di "z_alpha = " %12.8f `z_alpha'
+z_alpha =   1.95996398
+
+. di "z_q = " %12.8f `z_q'
+z_q =   0.00000000
+
+. di "phi(z_q) = " %12.8f `phi_zq'
+phi(z_q) =   0.39894228
+
+. 
+. local h_raw = (`z_alpha'^(2/3)) * ((1.5 * `phi_zq'^2) / (2*`z_alpha'^2 + 1))^
+> (1/3) * `N'^(-1/3)
+
+. di "h_raw (no scaling) = " %12.8f `h_raw'
+h_raw (no scaling) =   0.11259093
+
+. 
+. * Get residual quantiles for sparsity estimation
+. local q_lo = `q' - `h_raw'
+
+. local q_hi = `q' + `h_raw'
+
+. if `q_lo' < 0 local q_lo = 0
+
+. if `q_hi' > 1 local q_hi = 1
+
+. di "q_lo = " %12.8f `q_lo' " q_hi = " %12.8f `q_hi'
+q_lo =   0.38740907 q_hi =   0.61259093
+
+. 
+. _pctile resid_qreg, percentile(`=`q_lo'*100' `=`q_hi'*100')
+
+. local x_lo = r(r1)
+
+. local x_hi = r(r2)
+
+. di "x_lo = " %12.4f `x_lo' " x_hi = " %12.4f `x_hi'
+x_lo =    -215.0000 x_hi =     246.3333
+
+. 
+. local sparsity_manual = (`x_hi' - `x_lo') / (`q_hi' - `q_lo')
+
+. di "Manual sparsity (no 2x scale): " %12.4f `sparsity_manual'
+Manual sparsity (no 2x scale):    2048.7145
+
+. di "Manual sparsity (with 2x scale): " %12.4f `sparsity_manual' * 2
+Manual sparsity (with 2x scale):    4097.4291
+
+. 
+. * Implied sparsity from qreg VCE
+. * V = sparsity^2 * q*(1-q) * (X'X)^{-1}
+. * So sparsity = sqrt(V[1,1] / (q*(1-q) * (X'X)^{-1}[1,1]))
+. * Need to compute (X'X)^{-1}
+. matrix accum XtX = mpg, noconstant
+(obs=74)
+
+. matrix XtX_inv = invsym(XtX)
+
+. di "X'X = " %12.4f XtX[1,1]
+X'X =   36008.0000
+
+. di "(X'X)^{-1} = " %12.8f XtX_inv[1,1]
+(X'X)^{-1} =   0.00002777
+
+. 
+. * V[1,1] = sparsity^2 * q*(1-q) * (X'X)^{-1}[1,1]
+. * Need to compute (X'X)^{-1} with constant term
+. gen byte _one = 1
+
+. matrix accum XtX_full = mpg _one, noconstant
+(obs=74)
+
+. matrix XtX_inv_full = invsym(XtX_full)
+
+. matrix list XtX_full
+
+symmetric XtX_full[2,2]
+        mpg   _one
+ mpg  36008
+_one   1576     74
+
+. matrix list XtX_inv_full
+
+symmetric XtX_inv_full[2,2]
+             mpg        _one
+ mpg   .00040926
+_one  -.00871604   .19914167
+
+. 
+. local scale = `q' * (1-`q')
+
+. di "q*(1-q) = " %12.8f `scale'
+q*(1-q) =   0.25000000
+
+. 
+. * Implied sparsity from V[1,1]
+. local implied_sparsity_mpg = sqrt(qreg_V[1,1] / (`scale' * XtX_inv_full[1,1])
+> )
+
+. local implied_sparsity_cons = sqrt(qreg_V[2,2] / (`scale' * XtX_inv_full[2,2]
+> ))
+
+. di "Implied sparsity from V[1,1] (mpg): " %12.4f `implied_sparsity_mpg'
+Implied sparsity from V[1,1] (mpg):    6650.0766
+
+. di "Implied sparsity from V[2,2] (_cons): " %12.4f `implied_sparsity_cons'
+Implied sparsity from V[2,2] (_cons):    6650.0766
+
+. 
+. drop _one
+
+. 
+. drop resid_qreg
+
+. 
+end of do-file

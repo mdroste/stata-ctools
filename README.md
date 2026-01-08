@@ -5,14 +5,15 @@ C-accelerated drop-in replacements for Stata programs
 
 ctools provides drop-in replacements for a variety of Stata programs that run substantially faster for large datasets.
 
-| Stata command            | ctools equivalent          | Typical speedup |
-| ------------------------ | -------------------------- | --------------: |
-| `sort`                   | `csort`                    |         **2-4×**  |
-| `import delimited`       | `cimport delimited`        |         **50×** |
-| `export delimited`       | `cexport delimited`        |         **25×** |
-| `merge`                  | `cmerge`                   |         **2-5×**  |
-| `binscatter`             | `cbinscatter`              |         **10×** |
-| `reghdfe`                | `creghdfe`                 |         **10×** |
+| Stata command         | ctools equivalent      Typical speedup   |
+| --------------------- | -------------------- | ----------------: |
+| `sort`                | `csort`              |     **2-4×**      |
+| `import delimited`    | `cimport delimited`  |     **50×**       |
+| `export delimited`    | `cexport delimited`  |     **25×**       |
+| `merge`               | `cmerge`             |     **2-5×**      |
+| `binscatter`          | `cbinscatter`        |     **10×**       |
+| `reghdfe`             | `creghdfe`           |     **10×**       |
+| `qreg`                | `cqreg`              |     **10×**       |
 
 ## Quick start
 
@@ -21,7 +22,10 @@ You can begin using these programs by installing directly from this Git reposito
 net install ctools
 ```
 
-Running this command places all of the relevant Stata files (.ado and .sthlp), along with precompiled C plugins for Windows, Mac OSX, and Unix directly in your ADO path. Stata will automatically detect your operating system and use the correct precompiled plugin. If for whatever reason you would like to compile these plugins from scratch, please refer to the BUILD readme. 
+Running this command places all of the relevant Stata files (.ado and .sthlp), along with precompiled C plugins for Windows, Mac OSX, and Unix directly in your ADO path. Stata will automatically detect your operating system and use the correct precompiled plugin. 
 
-Alternatively, you can install by downloading this repository and movin the contents of the ./build directory somewhere on Stata's adopath.
+If for whatever reason you would like to compile these plugins from scratch, please refer to the BUILD readme. 
+
+Alternatively, you can install by downloading this repository and moving the contents of the ./build directory somewhere on Stata's adopath.
+
 

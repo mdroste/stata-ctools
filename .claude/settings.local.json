@@ -11,7 +11,10 @@
       "Bash(cat:*)",
       "Bash(xargs cat:*)",
       "WebFetch(domain:arxiv.org)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch",
+      "WebFetch(domain:rdrr.io)"
     ]
   }
 }

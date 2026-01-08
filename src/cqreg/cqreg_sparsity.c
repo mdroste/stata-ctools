@@ -179,7 +179,11 @@ ST_double cqreg_bandwidth_hsheather(ST_int N, ST_double q, ST_double alpha)
 
     ST_double h = pow(z_alpha, 2.0/3.0) * pow(numer / denom, 1.0/3.0) * pow((ST_double)N, -1.0/3.0);
 
-    /* Stata's qreg uses approximately 2x this bandwidth for IID VCE */
+    /*
+     * Scale the bandwidth for use with Epanechnikov kernel in density estimation.
+     * The original Hall-Sheather bandwidth is designed for Gaussian kernel;
+     * for Epanechnikov, a scaling factor is needed.
+     */
     h *= 2.0;
 
     return h;
