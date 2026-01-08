@@ -110,42 +110,28 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     IPM_LOG("=== IPM Solver Start ===\n");
     IPM_LOG("N=%d, K=%d, tau=%.4f\n", N, K, tau);
 
-    /* Allocate working arrays */
-    /* Primal variables: x_p (N), s (N) with x_p + s = 1, x_p,s >= 0 */
-    ST_double *x_p = (ST_double *)malloc(N * sizeof(ST_double));  /* primal x */
-    ST_double *s = (ST_double *)malloc(N * sizeof(ST_double));
-    /* Dual coefficient: y_d (K) - this is what we solve for */
-    ST_double *y_d = (ST_double *)malloc(K * sizeof(ST_double));  /* dual y = -beta */
-    /* Dual slack variables: z (N), w (N), z,w >= 0 */
-    ST_double *z = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *w = (ST_double *)malloc(N * sizeof(ST_double));
-    /* Step directions */
-    ST_double *dx = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *ds = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *dy = (ST_double *)malloc(K * sizeof(ST_double));
-    ST_double *dz = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *dw = (ST_double *)malloc(N * sizeof(ST_double));
-    /* Bound arrays for step length */
-    ST_double *fx = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *fs = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *fz = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *fw = (ST_double *)malloc(N * sizeof(ST_double));
-    /* Working arrays */
-    ST_double *q = (ST_double *)malloc(N * sizeof(ST_double));     /* Diagonal scaling */
-    ST_double *r = (ST_double *)malloc(N * sizeof(ST_double));     /* Residual */
-    ST_double *tmp = (ST_double *)malloc(N * sizeof(ST_double));   /* Temp array */
-    ST_double *Xq = (ST_double *)malloc(N * K * sizeof(ST_double)); /* Q*X (scaled X) */
-    ST_double *XqX = (ST_double *)malloc(K * K * sizeof(ST_double)); /* X'QX */
-    ST_double *Xqr = (ST_double *)malloc(K * sizeof(ST_double));   /* X'(q.*r) */
-
-    if (!x_p || !s || !y_d || !z || !w || !dx || !ds || !dy || !dz || !dw ||
-        !fx || !fs || !fz || !fw || !q || !r || !tmp || !Xq || !XqX || !Xqr) {
-        free(x_p); free(s); free(y_d); free(z); free(w);
-        free(dx); free(ds); free(dy); free(dz); free(dw);
-        free(fx); free(fs); free(fz); free(fw);
-        free(q); free(r); free(tmp); free(Xq); free(XqX); free(Xqr);
-        return -1;
-    }
+    /* Use pre-allocated working arrays from IPM state (avoids malloc in hot loop) */
+    ST_double *x_p = ipm->fn_xp;      /* Primal x (N) */
+    ST_double *s = ipm->fn_s;         /* Primal s (N) */
+    ST_double *y_d = ipm->fn_yd;      /* Dual y = -beta (K) */
+    ST_double *z = ipm->fn_z;         /* Dual slack z (N) */
+    ST_double *w = ipm->fn_w;         /* Dual slack w (N) */
+    ST_double *dx = ipm->fn_dx;       /* Direction for x (N) */
+    ST_double *ds = ipm->fn_ds;       /* Direction for s (N) */
+    ST_double *dy = ipm->fn_dy;       /* Direction for y (K) */
+    ST_double *dz = ipm->fn_dz;       /* Direction for z (N) */
+    ST_double *dw = ipm->fn_dw;       /* Direction for w (N) */
+    ST_double *fx = ipm->fn_fx;       /* Bound for x (N) */
+    ST_double *fs = ipm->fn_fs;       /* Bound for s (N) */
+    ST_double *fz = ipm->fn_fz;       /* Bound for z (N) */
+    ST_double *fw = ipm->fn_fw;       /* Bound for w (N) */
+    ST_double *q = ipm->fn_q;         /* Diagonal scaling (N) */
+    ST_double *r = ipm->fn_r;         /* Residual (N) */
+    ST_double *tmp = ipm->fn_tmp;     /* Temp array (N) */
+    ST_double *sinv = ipm->fn_sinv;   /* 1/s for corrector (N) */
+    ST_double *Xq = ipm->fn_Xq;       /* Scaled X (N*K) */
+    ST_double *XqX = ipm->XDX;        /* Reuse existing XDX (K*K) */
+    ST_double *Xqr = ipm->rhs;        /* Reuse existing rhs (K) */
 
     /* ========================================================================
      * INITIALIZATION (following Julia code exactly)
@@ -360,15 +346,14 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 
             ST_double mu = pow(gfpfd / g0, 3.0) * g0 / (2.0 * N);
 
-            /* Compute corrector terms: dxdz, dsdw, xi, xinv, sinv */
-            /* Reuse arrays fx, fs, fz, fw for these - but NOT tmp (needed for matvec) */
+            /* Compute corrector terms: dxdz, dsdw, xi, xinv
+             * Reuse arrays fx, fs, fz, fw for these - but NOT tmp (needed for matvec)
+             * sinv uses pre-allocated ipm->fn_sinv */
             ST_double *dxdz = fx;
             ST_double *dsdw = fs;
             ST_double *xi = fz;
             ST_double *xinv = fw;
-            /* sinv needs its own storage since we use tmp for matvec result */
-            ST_double *sinv = (ST_double *)malloc(N * sizeof(ST_double));
-            if (!sinv) break;
+            /* sinv already points to pre-allocated ipm->fn_sinv */
 
             for (i = 0; i < N; i++) {
                 dxdz[i] = dx[i] * dz[i];
@@ -465,8 +450,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 IPM_LOG("min fw=%.6e at i=%d (w=%.6e, dw=%.6e)\n",
                         min_fw, min_fw_idx, w[min_fw_idx], dw[min_fw_idx]);
             }
-
-            free(sinv);  /* Free the temporary sinv array */
+            /* sinv is pre-allocated, no free needed */
         }
 
         /* ====================================================================
@@ -549,14 +533,272 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     }
     memcpy(ipm->beta, beta, K * sizeof(ST_double));
 
-    /* Cleanup */
-    free(x_p); free(s); free(y_d); free(z); free(w);
-    free(dx); free(ds); free(dy); free(dz); free(dw);
-    free(fx); free(fs); free(fz); free(fw);
-    free(q); free(r); free(tmp); free(Xq); free(XqX); free(Xqr);
-
+    /* No cleanup needed - all arrays are pre-allocated in IPM state */
     return iter;
 }
+
+
+/* ============================================================================
+ * Warm-Start IPM Solver
+ *
+ * Same algorithm as cqreg_fn_solve, but uses initial_beta as the starting
+ * point instead of computing OLS. This is much faster for auxiliary solves
+ * in Siddiqui method where τ±h is close to τ.
+ * ============================================================================ */
+
+ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
+                                 const ST_double *Y,
+                                 const ST_double *X,
+                                 ST_double tau,
+                                 const ST_double *initial_beta,
+                                 ST_double *beta)
+{
+    ST_int N = ipm->N;
+    ST_int K = ipm->K;
+    ST_int i, j, iter;
+
+    /* Use pre-allocated working arrays from IPM state (avoids malloc in hot loop) */
+    ST_double *x_p = ipm->fn_xp;
+    ST_double *s = ipm->fn_s;
+    ST_double *y_d = ipm->fn_yd;
+    ST_double *z = ipm->fn_z;
+    ST_double *w = ipm->fn_w;
+    ST_double *dx = ipm->fn_dx;
+    ST_double *ds = ipm->fn_ds;
+    ST_double *dy = ipm->fn_dy;
+    ST_double *dz = ipm->fn_dz;
+    ST_double *dw = ipm->fn_dw;
+    ST_double *fx = ipm->fn_fx;
+    ST_double *fs = ipm->fn_fs;
+    ST_double *fz = ipm->fn_fz;
+    ST_double *fw = ipm->fn_fw;
+    ST_double *q = ipm->fn_q;
+    ST_double *r = ipm->fn_r;
+    ST_double *tmp = ipm->fn_tmp;
+    ST_double *Xq = ipm->fn_Xq;
+    ST_double *XqX = ipm->XDX;
+    ST_double *Xqr = ipm->rhs;
+    (void)Xq;  /* Suppress unused warning - not used in warmstart */
+
+    /* WARM-START INITIALIZATION:
+     * Instead of computing OLS, use provided initial_beta directly.
+     * This is the key difference from cqreg_fn_solve.
+     */
+
+    /* x_p = (1 - tau), s = tau */
+    for (i = 0; i < N; i++) {
+        x_p[i] = 1.0 - tau;
+        s[i] = tau;
+    }
+
+    /* y_d = -initial_beta (dual variable is negative of coefficients) */
+    for (j = 0; j < K; j++) {
+        y_d[j] = -initial_beta[j];
+    }
+
+    /* Compute r = c - X * y_d = -Y - X * y_d */
+    cqreg_matvec_col(r, X, y_d, N, K);
+    for (i = 0; i < N; i++) {
+        r[i] = -Y[i] - r[i];
+    }
+
+    /* Initialize z and w from r
+     * For warm-start, we need larger perturbation because residuals
+     * may be very small (close to optimal), causing numerical issues.
+     * Use 1e-4 instead of 1e-14 for stability.
+     */
+    const ST_double WARMSTART_PERTURB = 1e-4;
+    for (i = 0; i < N; i++) {
+        ST_double ri = r[i];
+        z[i] = (ri > 0) ? ri : 0.0;
+        w[i] = (ri < 0) ? -ri : 0.0;
+        /* Always add perturbation for warm-start stability */
+        z[i] += WARMSTART_PERTURB;
+        w[i] += WARMSTART_PERTURB;
+    }
+
+    /* Compute initial duality gap */
+    ST_double gap = 0.0;
+    for (i = 0; i < N; i++) {
+        gap += z[i] * x_p[i] + s[i] * w[i];
+    }
+
+    /* MAIN INTERIOR POINT LOOP (identical to cqreg_fn_solve) */
+    for (iter = 0; iter < IPM_MAX_ITER; iter++) {
+        /* Check convergence - but ensure at least 1 iteration for warm-start
+         * since the quantile τ is different from the main solve */
+        if (iter > 0 && (gap < IPM_TOL || !isfinite(gap))) {
+            break;
+        }
+
+        /* Compute scaling: q = 1/(z/x_p + w/s) */
+        for (i = 0; i < N; i++) {
+            q[i] = 1.0 / (z[i] / x_p[i] + w[i] / s[i]);
+        }
+
+        /* Compute XqX = X' * diag(q) * X using optimized blas_xtdx */
+        blas_xtdx(XqX, X, N, K, q);
+
+        /* Add regularization */
+        for (j = 0; j < K; j++) {
+            XqX[j * K + j] += IPM_SMALL;
+        }
+
+        /* RHS computation */
+        for (i = 0; i < N; i++) {
+            r[i] = -Y[i];
+        }
+        cqreg_matvec_col(tmp, X, y_d, N, K);
+        for (i = 0; i < N; i++) {
+            r[i] = r[i] - tmp[i] + z[i] - w[i];
+            r[i] = q[i] * r[i];
+        }
+
+        /* Xqr = X' * r */
+        for (j = 0; j < K; j++) {
+            const ST_double *Xj = &X[j * N];
+            ST_double sum = 0.0;
+            for (i = 0; i < N; i++) {
+                sum += Xj[i] * r[i];
+            }
+            Xqr[j] = sum;
+        }
+
+        /* Solve for predictor direction */
+        if (cqreg_cholesky(XqX, K) != 0) {
+            break;
+        }
+        memcpy(dy, Xqr, K * sizeof(ST_double));
+        cqreg_solve_cholesky(XqX, dy, K);
+
+        /* dx = q .* (X * dy - r) */
+        cqreg_matvec_col(tmp, X, dy, N, K);
+        for (i = 0; i < N; i++) {
+            dx[i] = q[i] * (tmp[i] - r[i] / q[i]);
+        }
+        /* ds = -dx */
+        for (i = 0; i < N; i++) {
+            ds[i] = -dx[i];
+        }
+        /* dz = -z + (z/x_p) .* dx */
+        for (i = 0; i < N; i++) {
+            dz[i] = -z[i] + (z[i] / x_p[i]) * dx[i];
+        }
+        /* dw = -w + (w/s) .* ds */
+        for (i = 0; i < N; i++) {
+            dw[i] = -w[i] + (w[i] / s[i]) * ds[i];
+        }
+
+        /* Step length computation */
+        compute_bound(fx, x_p, dx, N);
+        compute_bound(fs, s, ds, N);
+        compute_bound(fz, z, dz, N);
+        compute_bound(fw, w, dw, N);
+
+        ST_double fp = IPM_BETA * fmin(array_min(fx, N), array_min(fs, N));
+        ST_double fd = IPM_BETA * fmin(array_min(fz, N), array_min(fw, N));
+        if (fp > 1.0) fp = 1.0;
+        if (fd > 1.0) fd = 1.0;
+
+        /* Centering parameter */
+        ST_double mu = gap / (2.0 * N);
+
+        /* Mehrotra corrector */
+        ST_double g = 0.0;
+        for (i = 0; i < N; i++) {
+            g += (z[i] + fd * dz[i]) * (x_p[i] + fp * dx[i]);
+            g += (w[i] + fd * dw[i]) * (s[i] + fp * ds[i]);
+        }
+        mu = (g / (2.0 * N)) * (g / gap) * (g / gap);
+
+        /* Corrector step */
+        for (i = 0; i < N; i++) {
+            r[i] = q[i] * ((mu - dz[i] * dx[i]) / z[i] - (mu - dw[i] * ds[i]) / w[i]);
+        }
+        for (j = 0; j < K; j++) {
+            const ST_double *Xj = &X[j * N];
+            ST_double sum = 0.0;
+            for (i = 0; i < N; i++) {
+                sum += Xj[i] * r[i];
+            }
+            Xqr[j] = sum;
+        }
+        cqreg_solve_cholesky(XqX, Xqr, K);
+        for (j = 0; j < K; j++) {
+            dy[j] += Xqr[j];
+        }
+
+        /* Update directions */
+        cqreg_matvec_col(tmp, X, dy, N, K);
+        for (i = 0; i < N; i++) {
+            dx[i] = q[i] * (tmp[i] - r[i] / q[i] - dx[i] + (mu - dz[i] * dx[i]) / z[i] - (mu - dw[i] * ds[i]) / w[i]);
+        }
+        for (i = 0; i < N; i++) {
+            ds[i] = -dx[i];
+        }
+        for (i = 0; i < N; i++) {
+            dz[i] = (mu - z[i] * x_p[i] - dz[i] * dx[i]) / x_p[i] - z[i];
+            dw[i] = (mu - w[i] * s[i] - dw[i] * ds[i]) / s[i] - w[i];
+        }
+
+        /* Recompute step lengths */
+        compute_bound(fx, x_p, dx, N);
+        compute_bound(fs, s, ds, N);
+        compute_bound(fz, z, dz, N);
+        compute_bound(fw, w, dw, N);
+
+        fp = IPM_BETA * fmin(array_min(fx, N), array_min(fs, N));
+        fd = IPM_BETA * fmin(array_min(fz, N), array_min(fw, N));
+        if (fp > 1.0) fp = 1.0;
+        if (fd > 1.0) fd = 1.0;
+
+        /* Update variables */
+        for (i = 0; i < N; i++) {
+            x_p[i] += fp * dx[i];
+            s[i] += fp * ds[i];
+        }
+        for (j = 0; j < K; j++) {
+            y_d[j] += fd * dy[j];
+        }
+        for (i = 0; i < N; i++) {
+            z[i] += fd * dz[i];
+            w[i] += fd * dw[i];
+        }
+
+        /* Recompute gap */
+        gap = 0.0;
+        for (i = 0; i < N; i++) {
+            gap += z[i] * x_p[i] + s[i] * w[i];
+        }
+    }
+
+    /* FINALIZE: beta = -y_d */
+    for (j = 0; j < K; j++) {
+        beta[j] = -y_d[j];
+    }
+
+    /* Store results */
+    ipm->iterations = iter;
+    ipm->converged = (gap < IPM_TOL) ? 1 : 0;
+
+    /* Compute final residuals */
+    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
+    for (i = 0; i < N; i++) {
+        ipm->r_primal[i] = Y[i] - ipm->r_primal[i];
+        if (ipm->r_primal[i] >= 0) {
+            ipm->u[i] = ipm->r_primal[i];
+            ipm->v[i] = 0.0;
+        } else {
+            ipm->u[i] = 0.0;
+            ipm->v[i] = -ipm->r_primal[i];
+        }
+    }
+    memcpy(ipm->beta, beta, K * sizeof(ST_double));
+
+    /* No cleanup needed - all arrays are pre-allocated in IPM state */
+    return iter;
+}
+
 
 /* ============================================================================
  * Legacy functions - keep for compatibility

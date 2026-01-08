@@ -68,6 +68,31 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                        ST_double *beta);
 
 /*
+ * Solve quantile regression with warm-start initialization.
+ *
+ * Same as cqreg_fn_solve but uses initial_beta as starting point instead
+ * of computing OLS. This is much faster when the initial estimate is close
+ * to the true solution (e.g., for auxiliary solves at τ±h in Siddiqui method).
+ *
+ * Parameters:
+ *   ipm          - Pre-allocated IPM state
+ *   y            - Dependent variable (N)
+ *   X            - Design matrix (N x K, column-major)
+ *   q            - Quantile (0 < q < 1)
+ *   initial_beta - Initial coefficient estimate for warm-start (K)
+ *   beta         - Output: coefficient estimates (K)
+ *
+ * Returns:
+ *   Number of iterations on success (positive), negative on failure.
+ */
+ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
+                                 const ST_double *y,
+                                 const ST_double *X,
+                                 ST_double q,
+                                 const ST_double *initial_beta,
+                                 ST_double *beta);
+
+/*
  * Solve QR with preprocessing (Chernozhukov et al. algorithm).
  *
  * Uses initial subsample of size m = (N * (log K + 1))^{2/3}

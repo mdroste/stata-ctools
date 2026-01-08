@@ -122,6 +122,27 @@ typedef struct {
     ST_double **thread_buf;   /* num_threads x N scratch buffers */
     ST_int num_threads;
 
+    /* Frisch-Newton solver workspace (pre-allocated to avoid malloc in hot loop) */
+    ST_double *fn_xp;         /* Primal x (N) */
+    ST_double *fn_s;          /* Primal s (N) */
+    ST_double *fn_yd;         /* Dual y = -beta (K) */
+    ST_double *fn_z;          /* Dual slack z (N) */
+    ST_double *fn_w;          /* Dual slack w (N) */
+    ST_double *fn_dx;         /* Direction for x (N) */
+    ST_double *fn_ds;         /* Direction for s (N) */
+    ST_double *fn_dy;         /* Direction for y (K) */
+    ST_double *fn_dz;         /* Direction for z (N) */
+    ST_double *fn_dw;         /* Direction for w (N) */
+    ST_double *fn_fx;         /* Bound for x (N) */
+    ST_double *fn_fs;         /* Bound for s (N) */
+    ST_double *fn_fz;         /* Bound for z (N) */
+    ST_double *fn_fw;         /* Bound for w (N) */
+    ST_double *fn_q;          /* Diagonal scaling (N) */
+    ST_double *fn_r;          /* Residual (N) */
+    ST_double *fn_tmp;        /* Temp array (N) */
+    ST_double *fn_sinv;       /* 1/s for corrector (N) */
+    ST_double *fn_Xq;         /* Scaled X, Q*X (N*K) */
+
     /* Barrier and convergence tracking */
     ST_double mu;             /* Current barrier parameter */
     ST_double primal_obj;     /* Primal objective value */

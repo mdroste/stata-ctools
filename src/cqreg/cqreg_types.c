@@ -151,6 +151,32 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
         if (ipm->thread_buf[t] == NULL) goto cleanup;
     }
 
+    /* Allocate Frisch-Newton solver workspace */
+    ipm->fn_xp = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_s = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_yd = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_z = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_w = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dx = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_ds = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dy = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dz = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dw = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fx = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fs = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fz = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fw = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_q = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_r = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_tmp = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_sinv = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_Xq = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
+        !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
+        !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||
+        !ipm->fn_q || !ipm->fn_r || !ipm->fn_tmp || !ipm->fn_sinv || !ipm->fn_Xq)
+        goto cleanup;
+
     /* Initialize convergence tracking */
     ipm->mu = ipm->config.mu_init;
     ipm->converged = 0;
@@ -217,6 +243,27 @@ void cqreg_ipm_free(cqreg_ipm_state *ipm)
         }
         free(ipm->thread_buf);
     }
+
+    /* Free Frisch-Newton solver workspace */
+    cqreg_aligned_free(ipm->fn_xp);
+    cqreg_aligned_free(ipm->fn_s);
+    cqreg_aligned_free(ipm->fn_yd);
+    cqreg_aligned_free(ipm->fn_z);
+    cqreg_aligned_free(ipm->fn_w);
+    cqreg_aligned_free(ipm->fn_dx);
+    cqreg_aligned_free(ipm->fn_ds);
+    cqreg_aligned_free(ipm->fn_dy);
+    cqreg_aligned_free(ipm->fn_dz);
+    cqreg_aligned_free(ipm->fn_dw);
+    cqreg_aligned_free(ipm->fn_fx);
+    cqreg_aligned_free(ipm->fn_fs);
+    cqreg_aligned_free(ipm->fn_fz);
+    cqreg_aligned_free(ipm->fn_fw);
+    cqreg_aligned_free(ipm->fn_q);
+    cqreg_aligned_free(ipm->fn_r);
+    cqreg_aligned_free(ipm->fn_tmp);
+    cqreg_aligned_free(ipm->fn_sinv);
+    cqreg_aligned_free(ipm->fn_Xq);
 
     free(ipm);
 }
