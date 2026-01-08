@@ -32,7 +32,7 @@
 #define IPM_TOL         1e-12     /* Convergence tolerance for gap */
 
 /* Timing instrumentation for performance analysis */
-#define FN_TIMING 1
+#define FN_TIMING 0
 
 #if FN_TIMING
 #include "../ctools_timer.h"
@@ -363,14 +363,18 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             XqX[j * K + j] += IPM_SMALL;
         }
 
+        /* Save XqX before Cholesky destroys it (for reuse in corrector) */
+        ST_double *XqX_copy = ipm->XDXcopy;  /* Use pre-allocated copy */
+        memcpy(XqX_copy, XqX, K * K * sizeof(ST_double));
+
         /* Compute qr = q .* r for the RHS */
         for (i = 0; i < N; i++) {
             Xq[i] = q[i] * r[i];  /* Reuse Xq as temp for q.*r */
         }
 
-        /* Compute Xqr = X' * (q .* r) */
+        /* Compute Xqr = X' * (q .* r) using BLAS */
         for (j = 0; j < K; j++) {
-            Xqr[j] = cqreg_dot(&X[j * N], Xq, N);
+            Xqr[j] = blas_ddot(N, &X[j * N], Xq);
         }
 
         /* Solve (X'QX) * dy = Xqr via Cholesky */
@@ -456,16 +460,13 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             }
             ST_double *xi = fz;
 
-            /* Recompute Xqr = X' * (q .* r) */
+            /* Recompute Xqr = X' * (q .* r) using BLAS */
             for (j = 0; j < K; j++) {
-                Xqr[j] = cqreg_dot(&X[j * N], Xq, N);
+                Xqr[j] = blas_ddot(N, &X[j * N], Xq);
             }
 
-            /* Rebuild XqX = X' * diag(q) * X (was modified by Cholesky) */
-            blas_xtdx(XqX, X, N, K, q);
-            for (j = 0; j < K; j++) {
-                XqX[j * K + j] += IPM_SMALL;
-            }
+            /* Restore XqX from saved copy (avoids recomputing X'DX) */
+            memcpy(XqX, XqX_copy, K * K * sizeof(ST_double));
 
             if (cqreg_cholesky(XqX, K) != 0) {
                 break;

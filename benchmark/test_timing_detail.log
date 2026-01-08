@@ -55,11 +55,11 @@ Number of observations (_N) was 0, now 5,000,000.
 === CQREG TIMING BREAKDOWN ===
 
 . cqreg y x, denmethod(residual)
-FN Timing (N=5000000, K=2, iters=19): total=2.007s
-  init=0.026s  scaling=0.045
-> s  X'DX=0.031s  chol=0.048s
-  direction=0.189s  steplength=0.530s  corrector=
-> 1.038s  update=0.100s
+FN Timing (N=5000000, K=2, iters=19): total=1.932s
+  init=0.027s  scaling=0.047
+> s  X'DX=0.031s  chol=0.040s
+  direction=0.180s  steplength=0.520s  corrector=
+> 0.986s  update=0.101s
 
 Median regression                                  Number of obs =  5,000,000
   Raw sum of deviations 1.1e+07  (about -.001789 )
