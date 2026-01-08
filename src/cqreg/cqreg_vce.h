@@ -94,7 +94,8 @@ ST_int cqreg_vce_robust(ST_double *V,
 
 /*
  * Compute cluster-robust variance.
- * V = D * M_cluster * D with small-sample adjustment.
+ * V = sparsity^2 * (X'X)^{-1} * M_cluster * (X'X)^{-1}
+ * with small-sample adjustment.
  *
  * Parameters:
  *   V           - Output: variance-covariance matrix (K x K)
@@ -104,7 +105,7 @@ ST_int cqreg_vce_robust(ST_double *V,
  *   num_clusters- Number of unique clusters
  *   N, K        - Dimensions
  *   q           - Quantile
- *   bandwidth   - Kernel bandwidth
+ *   sparsity    - Estimated sparsity (1/f(0))
  *
  * Returns:
  *   0 on success, -1 on failure
@@ -116,7 +117,7 @@ ST_int cqreg_vce_cluster(ST_double *V,
                          ST_int num_clusters,
                          ST_int N, ST_int K,
                          ST_double q,
-                         ST_double bandwidth);
+                         ST_double sparsity);
 
 /* ============================================================================
  * Helper Functions

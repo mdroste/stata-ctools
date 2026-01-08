@@ -15,7 +15,7 @@
 #include <stdarg.h>
 
 /* Debug logging */
-#define VCE_DEBUG 1
+#define VCE_DEBUG 0
 
 #if VCE_DEBUG
 static FILE *vce_debug_file = NULL;
@@ -307,21 +307,22 @@ ST_int cqreg_vce_robust(ST_double *V,
                         ST_double sparsity)
 {
     /*
-     * Powell (1991) sandwich estimator for quantile regression:
+     * Robust sandwich VCE for quantile regression.
      *
-     *   V = J^{-1} * I * J^{-1}
+     * Formula: V = (X'DX)^{-1} * Omega * (X'DX)^{-1}
      *
      * where:
-     *   J = (1/n) * sum_i f_i(0) * X_i * X_i'  (density-weighted Hessian)
-     *   I = tau*(1-tau) * (1/n) * X' * X        (score variance)
+     *   D = diag(f_i) with f_i = density estimate at residual i
+     *   Omega = sum_i psi_i^2 * X_i * X_i'
+     *   psi_i = tau - I(r_i < 0)  (influence function)
      *
-     * The conditional density f_i(0) is estimated via kernel smoothing:
-     *   f_i(0) = K(r_i / h) / h
+     * We use the simplified approach with a constant density estimate:
+     *   D = (1/sparsity) * I_n
      *
-     * where h is the bandwidth in RESIDUAL units (not probability units).
+     * This gives: V = sparsity^2 * (X'X)^{-1} * Omega * (X'X)^{-1}
      *
-     * The bandwidth is converted from probability to residual scale:
-     *   h_residual = bandwidth_prob * sparsity
+     * Note: This may differ from Stata's qreg vce(robust) which uses
+     * a different "fitted" density estimation method.
      */
 
     vce_debug_open();
@@ -329,185 +330,103 @@ ST_int cqreg_vce_robust(ST_double *V,
                   N, K, q, bandwidth, sparsity);
 
     ST_int i, j, k;
-    ST_double *J = NULL;        /* Density-weighted X'X */
-    ST_double *J_inv = NULL;    /* Inverse of J */
-    ST_double *XtX = NULL;      /* Regular X'X */
-    ST_double *I_mat = NULL;    /* Score variance = tau*(1-tau) * X'X */
+    ST_double *XtX_inv = NULL;  /* (X'X)^{-1} */
+    ST_double *Omega = NULL;    /* Score variance matrix */
     ST_int rc = 0;
 
-    /* Convert bandwidth from probability to residual scale */
-    ST_double h_residual = bandwidth * sparsity;
-    vce_debug_log("  h_residual = %.4f\n", h_residual);
-
-    /* Ensure reasonable bandwidth */
-    if (h_residual < 1e-10) {
-        h_residual = 1.0;  /* Fallback to prevent division by zero */
-    }
-
     /* Allocate matrices */
-    J = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    J_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    XtX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    I_mat = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    Omega = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
 
-    if (J == NULL || J_inv == NULL || XtX == NULL || I_mat == NULL) {
+    if (XtX_inv == NULL || Omega == NULL) {
+        vce_debug_log("  ERROR: allocation failed\n");
+        rc = -1;
+        goto cleanup;
+    }
+
+    /* Compute (X'X)^{-1} */
+    if (cqreg_compute_xtx_inv(XtX_inv, X, N, K) != 0) {
+        vce_debug_log("  ERROR: cqreg_compute_xtx_inv failed\n");
         rc = -1;
         goto cleanup;
     }
 
     /*
-     * Step 1: Compute J = (1/n) * sum_i f_i * X_i * X_i'
-     * where f_i = K(r_i / h) / h
+     * Compute Omega = sum_i psi_i^2 * X_i * X_i'
+     * where psi_i = tau - I(r_i < 0)
+     *
+     * For r_i >= 0: psi_i = tau, psi_i^2 = tau^2
+     * For r_i < 0:  psi_i = tau - 1, psi_i^2 = (1-tau)^2
      */
-    memset(J, 0, K * K * sizeof(ST_double));
+    memset(Omega, 0, K * K * sizeof(ST_double));
 
-    ST_double h_inv = 1.0 / h_residual;
-    ST_double n_inv = 1.0 / (ST_double)N;
+    ST_double psi_pos_sq = q * q;           /* tau^2 */
+    ST_double psi_neg_sq = (1.0 - q) * (1.0 - q);  /* (1-tau)^2 */
 
-    #ifdef _OPENMP
-    #pragma omp parallel
-    {
-        ST_double *J_local = (ST_double *)calloc(K * K, sizeof(ST_double));
-
-        #pragma omp for schedule(static)
-        for (i = 0; i < N; i++) {
-            ST_double u = residuals[i] * h_inv;
-            ST_double kernel_val = cqreg_kernel_epanechnikov(u);
-            ST_double f_i = kernel_val * h_inv;  /* Density estimate at residual i */
-
-            if (f_i > 0) {
-                for (j = 0; j < K; j++) {
-                    ST_double Xij = X[j * N + i];
-                    for (k = j; k < K; k++) {
-                        ST_double Xik = X[k * N + i];
-                        ST_double contrib = f_i * Xij * Xik;
-                        J_local[j * K + k] += contrib;
-                        if (k != j) {
-                            J_local[k * K + j] += contrib;
-                        }
-                    }
-                }
-            }
-        }
-
-        #pragma omp critical
-        {
-            for (j = 0; j < K * K; j++) {
-                J[j] += J_local[j];
-            }
-        }
-
-        free(J_local);
-    }
-    #else
     for (i = 0; i < N; i++) {
-        ST_double u = residuals[i] * h_inv;
-        ST_double kernel_val = cqreg_kernel_epanechnikov(u);
-        ST_double f_i = kernel_val * h_inv;  /* Density estimate */
+        ST_double psi_sq = (residuals[i] >= 0) ? psi_pos_sq : psi_neg_sq;
 
-        if (f_i > 0) {
-            for (j = 0; j < K; j++) {
-                ST_double Xij = X[j * N + i];
-                for (k = j; k < K; k++) {
-                    ST_double Xik = X[k * N + i];
-                    ST_double contrib = f_i * Xij * Xik;
-                    J[j * K + k] += contrib;
-                    if (k != j) {
-                        J[k * K + j] += contrib;
-                    }
+        for (j = 0; j < K; j++) {
+            ST_double Xij = X[j * N + i];
+            for (k = j; k < K; k++) {
+                ST_double Xik = X[k * N + i];
+                ST_double contrib = psi_sq * Xij * Xik;
+                Omega[j * K + k] += contrib;
+                if (k != j) {
+                    Omega[k * K + j] += contrib;
                 }
             }
         }
     }
-    #endif
 
-    /* Scale J by 1/n */
-    for (j = 0; j < K * K; j++) {
-        J[j] *= n_inv;
-    }
-
-    vce_debug_log("  J matrix (density-weighted Hessian):\n");
-    for (j = 0; j < K; j++) {
-        vce_debug_log("    ");
-        for (k = 0; k < K; k++) {
-            vce_debug_log("%.6e ", J[j * K + k]);
-        }
-        vce_debug_log("\n");
-    }
+    vce_debug_log("  Omega[0,0] = %.6e\n", Omega[0]);
 
     /*
-     * Step 2: Invert J using Cholesky
+     * Compute V = sparsity^2 * (X'X)^{-1} * Omega * (X'X)^{-1}
      */
-    ST_double *L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    if (L == NULL) {
-        vce_debug_log("  ERROR: L allocation failed\n");
+    ST_double scale = sparsity * sparsity;
+    vce_debug_log("  sparsity^2 = %.6e\n", scale);
+
+    /* First compute temp = Omega * (X'X)^{-1} */
+    ST_double *temp = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (temp == NULL) {
+        vce_debug_log("  ERROR: temp allocation failed\n");
         rc = -1;
         goto cleanup;
     }
 
-    memcpy(L, J, K * K * sizeof(ST_double));
-    if (cqreg_cholesky(L, K) != 0) {
-        vce_debug_log("  Cholesky failed, trying with regularization...\n");
-        /* Try with regularization */
-        memcpy(L, J, K * K * sizeof(ST_double));
-        cqreg_add_regularization(L, K, 1e-10);
-        if (cqreg_cholesky(L, K) != 0) {
-            vce_debug_log("  ERROR: Cholesky still failed after regularization\n");
-            cqreg_aligned_free(L);
-            rc = -1;
-            goto cleanup;
-        }
-    }
-    vce_debug_log("  Cholesky succeeded\n");
-    cqreg_invert_cholesky(J_inv, L, K);
-    cqreg_aligned_free(L);
-
-    /*
-     * Step 3: Compute X'X
-     */
-    memset(XtX, 0, K * K * sizeof(ST_double));
-    for (j = 0; j < K; j++) {
-        const ST_double *Xj = &X[j * N];
-        /* Diagonal */
-        XtX[j * K + j] = cqreg_dot_self(Xj, N);
-        /* Off-diagonal */
-        for (k = j + 1; k < K; k++) {
-            const ST_double *Xk = &X[k * N];
-            ST_double dot = cqreg_dot(Xj, Xk, N);
-            XtX[j * K + k] = dot;
-            XtX[k * K + j] = dot;
+    memset(temp, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K; k++) {
+                sum += Omega[i * K + k] * XtX_inv[k * K + j];
+            }
+            temp[i * K + j] = sum;
         }
     }
 
-    /*
-     * Step 4: Compute I = tau*(1-tau) * (1/n) * X'X
-     */
-    ST_double tau_scale = q * (1.0 - q) * n_inv;
-    for (j = 0; j < K * K; j++) {
-        I_mat[j] = tau_scale * XtX[j];
+    /* Now compute V = scale * (X'X)^{-1} * temp */
+    memset(V, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K; k++) {
+                sum += XtX_inv[i * K + k] * temp[k * K + j];
+            }
+            V[i * K + j] = scale * sum;
+        }
     }
 
-    /*
-     * Step 5: Compute V = J^{-1} * I * J^{-1}
-     */
-    vce_debug_log("  Computing sandwich product V = J^{-1} I J^{-1}\n");
-    cqreg_sandwich_product(V, J_inv, I_mat, K);
-    vce_debug_log("  V matrix:\n");
-    for (j = 0; j < K; j++) {
-        vce_debug_log("    ");
-        for (k = 0; k < K; k++) {
-            vce_debug_log("%.6e ", V[j * K + k]);
-        }
-        vce_debug_log("\n");
-    }
+    cqreg_aligned_free(temp);
+
+    vce_debug_log("  V[0,0] = %.6e, SE[0] = %.4f\n", V[0], sqrt(V[0]));
 
 cleanup:
     vce_debug_log("cqreg_vce_robust: EXIT rc=%d\n", rc);
     vce_debug_close();
-    cqreg_aligned_free(J);
-    cqreg_aligned_free(J_inv);
-    cqreg_aligned_free(XtX);
-    cqreg_aligned_free(I_mat);
+    cqreg_aligned_free(XtX_inv);
+    cqreg_aligned_free(Omega);
 
     return rc;
 }
@@ -523,8 +442,20 @@ ST_int cqreg_vce_cluster(ST_double *V,
                          ST_int num_clusters,
                          ST_int N, ST_int K,
                          ST_double q,
-                         ST_double bandwidth)
+                         ST_double sparsity)
 {
+    /*
+     * Cluster-robust VCE for quantile regression.
+     *
+     * Formula: V = sparsity^2 * (X'X)^{-1} * M * (X'X)^{-1}
+     *
+     * where M = sum_g (sum_i in g: psi_i * X_i)(sum_i in g: psi_i * X_i)'
+     * and psi_i = tau - I(r_i < 0) is the influence function score.
+     *
+     * The sparsity^2 factor converts from the score-space variance
+     * to the coefficient-space variance.
+     */
+
     ST_int i, j, k, g;
     ST_double *XtX_inv = NULL;
     ST_double *M = NULL;
@@ -617,8 +548,14 @@ ST_int cqreg_vce_cluster(ST_double *V,
         M[j] *= adj;
     }
 
-    /* Sandwich product */
+    /* Sandwich product: temp = (X'X)^{-1} * M * (X'X)^{-1} */
     cqreg_sandwich_product(V, XtX_inv, M, K);
+
+    /* Scale by sparsity^2 to convert to coefficient variance */
+    ST_double sparsity_sq = sparsity * sparsity;
+    for (j = 0; j < K * K; j++) {
+        V[j] *= sparsity_sq;
+    }
 
 cleanup:
     cqreg_aligned_free(XtX_inv);
@@ -662,7 +599,7 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
             rc = cqreg_vce_cluster(state->V, X, state->residuals,
                                   state->cluster_ids, state->num_clusters,
                                   state->N, state->K,
-                                  state->quantile, state->bandwidth);
+                                  state->quantile, state->sparsity);
             break;
 
         default:

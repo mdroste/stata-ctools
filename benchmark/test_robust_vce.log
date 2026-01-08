@@ -130,10 +130,10 @@ cqreg IID VCE:
 cqreg Robust VCE:
 
 . display "  SE[mpg]    = " %12.6f `se_mpg_cqreg_robust'
-  SE[mpg]    =   580.097954
+  SE[mpg]    =    85.176144
 
 . display "  SE[weight] = " %12.6f `se_wt_cqreg_robust'
-  SE[weight] =     4.842240
+  SE[weight] =     0.630229
 
 . 
 . * Compare cqreg robust to qreg robust
@@ -142,10 +142,10 @@ cqreg Robust VCE:
 Ratio cqreg/qreg (robust VCE):
 
 . display "  mpg:    " %12.6f (`se_mpg_cqreg_robust'/`se_mpg_robust')
-  mpg:        8.387147
+  mpg:        1.231490
 
 . display "  weight: " %12.6f (`se_wt_cqreg_robust'/`se_wt_robust')
-  weight:     6.676300
+  weight:     0.868936
 
 . 
 . * Also check what the variance matrix looks like

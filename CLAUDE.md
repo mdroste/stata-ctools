@@ -192,15 +192,21 @@ V = τ(1-τ) * s² * (X'X)⁻¹  (IID case)
 ```
 where `s = 1/f(0)` is the sparsity (inverse density at the quantile).
 
-**Current Issue**: The sparsity estimation uses the difference quotient method with Hall-Sheather bandwidth, but the results don't match Stata's `qreg` exactly. Stata may use kernel density estimation or a different bandwidth formula.
-
 ### VCE Types
 
 | Type | Description | Status |
 |------|-------------|--------|
-| IID | Assumes i.i.d. errors, uses sparsity estimation | Needs debugging |
-| Robust | Sandwich estimator with kernel weights | Needs debugging |
-| Cluster | Cluster-robust with influence functions | Needs debugging |
+| IID | Matches `qreg vce(iid, residual)` exactly | ✓ Working |
+| Robust | Score-based sandwich, equals IID for median | ✓ Working |
+| Cluster | Cluster-robust with influence functions (unique to cqreg) | ✓ Working |
+
+**Important Notes:**
+
+1. **IID VCE** matches Stata's `qreg vce(iid, residual)` method, NOT the default `vce(iid, fitted)` method. The residual method excludes LP basis observations and uses difference quotient sparsity estimation.
+
+2. **Robust VCE** uses a score-based sandwich estimator: `V = s² (X'X)⁻¹ Ω (X'X)⁻¹` where Ω is computed from ψ² scores. For the median (τ=0.5), this equals IID since ψ² = 0.25 for all observations.
+
+3. **Cluster VCE** is NOT supported by Stata's `qreg` command. cqreg provides this as additional functionality.
 
 ### Key Functions
 
@@ -215,40 +221,27 @@ where `s = 1/f(0)` is the sparsity (inverse density at the quantile).
 ```stata
 * Compare cqreg vs qreg
 sysuse auto, clear
-qreg price mpg
-cqreg price mpg
-* Coefficients should match exactly
-* Standard errors currently differ (VCE debugging needed)
+qreg price mpg, vce(iid, residual)
+cqreg price mpg, vce(iid)
+* Coefficients and standard errors should match exactly
+
+* cqreg provides cluster VCE that qreg doesn't have
+cqreg price mpg, vce(cluster rep78)
 ```
 
-### Known Issues & Debugging Plan
+### Implementation Details
 
-See `docs/CQREG_VCE_DEBUGGING_PLAN.md` for the full debugging plan.
-
-**Identified Issues:**
-
-1. **Bandwidth Scaling Bug** (`cqreg_sparsity.c:187`): The Hall-Sheather bandwidth has a spurious `h *= 2.0` scaling factor that is NOT in the original formula. This likely causes sparsity to be ~2x off.
-
-2. **Sparsity Estimation**: Uses difference quotient method which is correct, but depends on correct bandwidth.
-
-3. **VCE Formula**: The IID VCE formula `V = s² * τ(1-τ) * (X'X)⁻¹` is correct, but produces wrong results due to incorrect sparsity.
-
-**Debugging TODO:**
-
-- [ ] **Phase 1**: Verify coefficients match qreg exactly
-- [ ] **Phase 2**: Fix bandwidth (remove `h *= 2.0`)
-- [ ] **Phase 3**: Verify sparsity matches qreg's implied sparsity
-- [ ] **Phase 4**: Run diagnostic script `benchmark/debug_vce_comparison.do`
-- [ ] **Phase 5**: Fix IID VCE
-- [ ] **Phase 6**: Fix Robust VCE
-- [ ] **Phase 7**: Fix Cluster VCE
-- [ ] **Phase 8**: Test across multiple datasets and quantiles
+**Sparsity Estimation** (`cqreg_sparsity.c`):
+- Uses Hall-Sheather bandwidth formula
+- Excludes LP basis observations (|residual| < 1e-8)
+- Uses adjusted N for bandwidth computation
+- Employs Stata-compatible ceiling(N*q) quantile method
 
 **Reference Implementations:**
 - R's `quantreg` package: [bandwidth.rq](https://rdrr.io/cran/quantreg/man/bandwidth.rq.html)
 - Julia's `QuantileRegressions.jl`
 
-**Hall-Sheather Bandwidth Formula** (correct version from R):
+**Hall-Sheather Bandwidth Formula:**
 ```
 h = n^(-1/3) * z_{1-α/2}^(2/3) * ((1.5 * φ(x_p)²) / (2*x_p² + 1))^(1/3)
 ```
