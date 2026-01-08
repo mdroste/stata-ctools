@@ -228,6 +228,42 @@ ST_int blas_solve_weighted_ls(const ST_double *X, ST_int N, ST_int K,
 
 
 /* ============================================================================
+ * Vectorized Element-wise Operations (SIMD-optimized)
+ * Uses vDSP on macOS for maximum performance.
+ * ============================================================================ */
+
+/*
+ * Element-wise divide: C = A / B
+ */
+void blas_vdiv(ST_int N, const ST_double *A, const ST_double *B, ST_double *C);
+
+/*
+ * Element-wise add: C = A + B
+ */
+void blas_vadd(ST_int N, const ST_double *A, const ST_double *B, ST_double *C);
+
+/*
+ * Element-wise subtract: C = A - B
+ */
+void blas_vsub(ST_int N, const ST_double *A, const ST_double *B, ST_double *C);
+
+/*
+ * Element-wise multiply: C = A * B
+ */
+void blas_vmul(ST_int N, const ST_double *A, const ST_double *B, ST_double *C);
+
+/*
+ * Scalar add: C = A + scalar
+ */
+void blas_vsadd(ST_int N, const ST_double *A, ST_double scalar, ST_double *C);
+
+/*
+ * Scalar multiply: C = A * scalar
+ */
+void blas_vsmul(ST_int N, const ST_double *A, ST_double scalar, ST_double *C);
+
+
+/* ============================================================================
  * Utility
  * ============================================================================ */
 
