@@ -254,8 +254,16 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     /* Solve quantile regression at q_hi */
     ST_int rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
 
+    main_debug_log("Siddiqui: q_lo=%.4f, q_hi=%.4f, rc_lo=%d, rc_hi=%d\n",
+                   q_lo, q_hi, rc_lo, rc_hi);
+    main_debug_log("Siddiqui: beta_lo[0]=%.4f, beta_lo[1]=%.4f\n",
+                   beta_lo[0], K > 1 ? beta_lo[1] : 0.0);
+    main_debug_log("Siddiqui: beta_hi[0]=%.4f, beta_hi[1]=%.4f\n",
+                   beta_hi[0], K > 1 ? beta_hi[1] : 0.0);
+
     /* Check convergence */
     if (rc_lo <= 0 || rc_hi <= 0) {
+        main_debug_log("Siddiqui: FAILED - auxiliary solves did not converge\n");
         cqreg_ipm_free(ipm_lo);
         cqreg_ipm_free(ipm_hi);
         free(beta_lo);
@@ -293,8 +301,14 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     /* Siddiqui sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h) */
     ST_double sparsity = (Qhat_hi - Qhat_lo) / (2.0 * h);
 
+    main_debug_log("Siddiqui: Qhat_lo=%.4f, Qhat_hi=%.4f, h=%.6f\n",
+                   Qhat_lo, Qhat_hi, h);
+    main_debug_log("Siddiqui: sparsity = (%.4f - %.4f) / (2*%.6f) = %.4f\n",
+                   Qhat_hi, Qhat_lo, h, sparsity);
+
     /* Ensure positive sparsity */
     if (sparsity < 1e-10) {
+        main_debug_log("Siddiqui: sparsity too small, clamping to 1e-10\n");
         sparsity = 1e-10;
     }
 
@@ -305,6 +319,7 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     free(beta_hi);
     free(x_bar);
 
+    main_debug_log("Siddiqui: returning sparsity=%.4f\n", sparsity);
     return sparsity;
 }
 

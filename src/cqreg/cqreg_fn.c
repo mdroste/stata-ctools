@@ -19,6 +19,7 @@
 
 #include "cqreg_fn.h"
 #include "cqreg_linalg.h"
+#include "cqreg_blas.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -270,47 +271,31 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             r[i] = z[i] - w[i];
         }
 
-        /* Form scaled design matrix Xq = diag(q) * X */
-        for (j = 0; j < K; j++) {
-            for (i = 0; i < N; i++) {
-                Xq[j * N + i] = q[i] * X[j * N + i];
-            }
-        }
-
-        /* Compute XqX = Xq' * X = X' * diag(q) * X */
-        memset(XqX, 0, K * K * sizeof(ST_double));
-        for (j = 0; j < K; j++) {
-            const ST_double *Xqj = &Xq[j * N];
-            for (ST_int k = j; k < K; k++) {
-                const ST_double *Xk = &X[k * N];
-                ST_double sum = 0.0;
-                for (i = 0; i < N; i++) {
-                    sum += Xqj[i] * Xk[i];
-                }
-                XqX[j * K + k] = sum;
-                XqX[k * K + j] = sum;
-            }
-        }
+        /* Compute XqX = X' * diag(q) * X using optimized BLAS */
+        blas_xtdx(XqX, X, N, K, q);
 
         /* Add regularization */
         for (j = 0; j < K; j++) {
             XqX[j * K + j] += IPM_SMALL;
         }
 
-        /* Compute Xqr = Xq' * r = X' * (q .* r) */
-        for (j = 0; j < K; j++) {
-            Xqr[j] = cqreg_dot(&Xq[j * N], r, N);
+        /* Compute qr = q .* r for the RHS */
+        for (i = 0; i < N; i++) {
+            Xq[i] = q[i] * r[i];  /* Reuse Xq as temp for q.*r */
         }
 
-        /* Solve (X'QX) * dy = Xqr via Cholesky */
-        if (cqreg_cholesky(XqX, K) != 0) {
+        /* Compute Xqr = X' * (q .* r) */
+        blas_xtv(Xqr, X, N, K, Xq);
+
+        /* Solve (X'QX) * dy = Xqr via Cholesky using LAPACK */
+        if (lapack_dpotrf(K, XqX, K) != 0) {
             break;  /* Numerical issues */
         }
-        memcpy(dy, Xqr, K * sizeof(ST_double));
-        cqreg_solve_cholesky(XqX, dy, K);
+        blas_dcopy(K, Xqr, dy);
+        lapack_dpotrs(K, 1, XqX, K, dy, K);
 
-        /* Compute tmp = X * dy */
-        cqreg_matvec_col(tmp, X, dy, N, K);
+        /* Compute tmp = X * dy using BLAS */
+        blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
 
         /* Compute dx = q .* (X*dy - r), ds = -dx */
         for (i = 0; i < N; i++) {
@@ -396,37 +381,28 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 r[i] = z[i] - w[i] + dxdz[i] - dsdw[i] - xi[i];
             }
 
-            /* Recompute Xqr = Xq' * r */
-            for (j = 0; j < K; j++) {
-                Xqr[j] = cqreg_dot(&Xq[j * N], r, N);
+            /* Compute qr = q .* r for the RHS */
+            for (i = 0; i < N; i++) {
+                Xq[i] = q[i] * r[i];  /* Reuse Xq as temp for q.*r */
             }
 
-            /* Rebuild XqX (was modified by Cholesky) */
-            memset(XqX, 0, K * K * sizeof(ST_double));
-            for (j = 0; j < K; j++) {
-                const ST_double *Xqj = &Xq[j * N];
-                for (ST_int k = j; k < K; k++) {
-                    const ST_double *Xk = &X[k * N];
-                    ST_double sum = 0.0;
-                    for (i = 0; i < N; i++) {
-                        sum += Xqj[i] * Xk[i];
-                    }
-                    XqX[j * K + k] = sum;
-                    XqX[k * K + j] = sum;
-                }
-            }
+            /* Recompute Xqr = X' * (q .* r) */
+            blas_xtv(Xqr, X, N, K, Xq);
+
+            /* Rebuild XqX = X' * diag(q) * X using BLAS (was modified by Cholesky) */
+            blas_xtdx(XqX, X, N, K, q);
             for (j = 0; j < K; j++) {
                 XqX[j * K + j] += IPM_SMALL;
             }
 
-            if (cqreg_cholesky(XqX, K) != 0) {
+            if (lapack_dpotrf(K, XqX, K) != 0) {
                 break;
             }
-            memcpy(dy, Xqr, K * sizeof(ST_double));
-            cqreg_solve_cholesky(XqX, dy, K);
+            blas_dcopy(K, Xqr, dy);
+            lapack_dpotrs(K, 1, XqX, K, dy, K);
 
-            /* Recompute tmp = X * dy */
-            cqreg_matvec_col(tmp, X, dy, N, K);
+            /* Recompute tmp = X * dy using BLAS */
+            blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
 
             /* Recompute corrected directions */
             for (i = 0; i < N; i++) {
@@ -555,8 +531,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     ipm->iterations = iter;
     ipm->converged = (gap < IPM_TOL) ? 1 : 0;
 
-    /* Compute final residuals */
-    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
+    /* Compute final residuals using BLAS */
+    blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = Y[i] - ipm->r_primal[i];  /* r = Y - X*beta */
         if (ipm->r_primal[i] >= 0) {

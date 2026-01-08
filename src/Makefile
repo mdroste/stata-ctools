@@ -89,6 +89,7 @@ CREGHDFE_SRCS = creghdfe/creghdfe_types.c \
 # cqreg module (in src/cqreg/)
 CQREG_SRCS = cqreg/cqreg_types.c \
              cqreg/cqreg_linalg.c \
+             cqreg/cqreg_blas.c \
              cqreg/cqreg_ipm.c \
              cqreg/cqreg_fn.c \
              cqreg/cqreg_irls.c \
@@ -128,6 +129,7 @@ CREGHDFE_HEADERS = creghdfe/creghdfe_types.h \
 
 CQREG_HEADERS = cqreg/cqreg_types.h \
                 cqreg/cqreg_linalg.h \
+                cqreg/cqreg_blas.h \
                 cqreg/cqreg_ipm.h \
                 cqreg/cqreg_sparsity.h \
                 cqreg/cqreg_vce.h \
@@ -166,19 +168,20 @@ MAC_BASE_FLAGS = -O3 -Wall -Wextra -fPIC -DSYSTEM=APPLEMAC -DSD_FASTMODE \
                  -ffast-math -funroll-loops -ftree-vectorize -flto \
                  -fno-strict-aliasing $(INCLUDE_DIRS)
 
-# macOS Apple Silicon (arm64) with OpenMP
+# macOS Apple Silicon (arm64) with OpenMP and Accelerate
 ifeq ($(LIBOMP_EXISTS),yes)
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1 \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include
-    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -L$(LIBOMP_PREFIX)/lib -lomp
+    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -L$(LIBOMP_PREFIX)/lib -lomp \
+                      -framework Accelerate
     MAC_ARM_HAS_OMP = yes
 else
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1
-    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto
+    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -framework Accelerate
     MAC_ARM_HAS_OMP = no
 endif
 
@@ -187,20 +190,21 @@ LIBOMP_INTEL_EXISTS := $(shell test -f /usr/local/opt/libomp/lib/libomp.dylib &&
                                file /usr/local/opt/libomp/lib/libomp.dylib 2>/dev/null | grep -q x86_64 && \
                                echo yes || echo no)
 
-# macOS Intel (x86_64)
+# macOS Intel (x86_64) with Accelerate
 ifeq ($(LIBOMP_INTEL_EXISTS),yes)
     LIBOMP_INTEL = /usr/local/opt/libomp
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
                      -march=x86-64 -mtune=haswell \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
-    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -L$(LIBOMP_INTEL)/lib -lomp
+    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -L$(LIBOMP_INTEL)/lib -lomp \
+                      -framework Accelerate
     MAC_X86_HAS_OMP = yes
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
                      -march=x86-64 -mtune=haswell
-    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto
+    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -framework Accelerate
     MAC_X86_HAS_OMP = no
 endif
 
@@ -253,12 +257,27 @@ LINUX_HAS_OMP := $(shell which gcc >/dev/null 2>&1 && \
                          gcc -fopenmp -E - < /dev/null >/dev/null 2>&1 && \
                          echo yes || echo no)
 
+# Check for OpenBLAS on Linux
+LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
+                              (test -f /usr/include/cblas.h && test -f /usr/lib/libopenblas.so && echo yes) || \
+                              echo no)
+
 ifeq ($(LINUX_HAS_OMP),yes)
-    CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp
-    LDFLAGS_LINUX = -flto -fopenmp
+    ifeq ($(LINUX_HAS_OPENBLAS),yes)
+        CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp -DHAVE_OPENBLAS
+        LDFLAGS_LINUX = -flto -fopenmp -lopenblas
+    else
+        CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp
+        LDFLAGS_LINUX = -flto -fopenmp
+    endif
 else
-    CFLAGS_LINUX = $(LINUX_BASE_FLAGS)
-    LDFLAGS_LINUX = -flto
+    ifeq ($(LINUX_HAS_OPENBLAS),yes)
+        CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -DHAVE_OPENBLAS
+        LDFLAGS_LINUX = -flto -lopenblas
+    else
+        CFLAGS_LINUX = $(LINUX_BASE_FLAGS)
+        LDFLAGS_LINUX = -flto
+    endif
 endif
 
 # ==============================================================================
