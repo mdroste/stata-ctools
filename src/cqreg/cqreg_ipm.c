@@ -42,6 +42,7 @@ void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
                           const ST_double *X,
                           ST_double q)
 {
+    (void)q;  /* Unused - reserved for future use */
     ST_int N = ipm->N;
     ST_int K = ipm->K;
     ST_int i, j;
@@ -244,6 +245,8 @@ static ST_int solve_newton_system(cqreg_ipm_state *ipm,
                                    const ST_double *delta_lu_aff,
                                    const ST_double *delta_lv_aff)
 {
+    (void)y;  /* Unused - residuals computed from current state */
+    (void)q;  /* Unused - quantile stored in ipm state */
     ST_int N = ipm->N;
     ST_int K = ipm->K;
     ST_int i, j, k;

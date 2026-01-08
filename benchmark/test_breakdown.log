@@ -25,7 +25,7 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do test_verbose.do 
+. do test_breakdown.do 
 
 . clear all
 
@@ -51,8 +51,25 @@ Number of observations (_N) was 0, now 5,000,000.
 . gen y = 2*x + rnormal()*5
 
 . 
-. display "=== RESIDUAL METHOD (1 solve) ==="
-=== RESIDUAL METHOD (1 solve) ===
+. display "============================================================"
+============================================================
+
+. display "CQREG Runtime Breakdown: N=5,000,000, K=2"
+CQREG Runtime Breakdown: N=5,000,000, K=2
+
+. display "============================================================"
+============================================================
+
+. 
+. display ""
+
+
+. display "=== Method 1: residual (1 IPM solve) ==="
+=== Method 1: residual (1 IPM solve) ===
+
+. timer clear
+
+. timer on 1
 
 . cqreg y x, denmethod(residual) verbose
 
@@ -69,17 +86,20 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-FN Timing (N=5000000, K=2, iters=19): total=1.868s
-  init=0.020s  scaling=0.044
-> s  X'DX=0.029s  chol=0.084s
-  direction=0.143s  steplength=0.492s  corrector=
-> 0.959s  update=0.096s
-cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.904s
+FN Timing (N=5000000, K=2, iters=19): total=1.048s
+  init=0.024s  scaling=0.043
+> s  X'DX=0.027s  chol=0.082s
+  direction=0.142s  steplength=0.071s  corrector=
+> 0.553s  update=0.106s
+  Corrector breakdown:
+    loop1=0.152s  loop2=0.065s  
+> gemv1=0.062s  gemv2=0.013s  loop3=0.188s  step=0.073s
+cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.084s
 cqreg: Sparsity: 12.4508, bandwidth: 0.005682 (method: residual)
-cqreg: Total time: 2.364s (load: 0.039, hdfe: 0.000, ipm: 1.904, vce: 0.421)
+cqreg: Total time: 1.646s (load: 0.449, hdfe: 0.000, ipm: 1.084, vce: 0.114)
 
 Median regression                                  Number of obs =  5,000,000
-  Raw sum of deviations 1.1e+07  (about -.001789 )
+  Raw sum of deviations 1.1e+07  (about -.0017922)
   Min sum of deviations 1.0e+07                    Pseudo R2     =     0.0718
 
 ------------------------------------------------------------------------------
@@ -90,14 +110,23 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 19, converged: yes
-Total time:     2.370 seconds
+Total time:     1.654 seconds
+
+. timer off 1
+
+. timer list 1
+   1:      1.88 /        1 =       1.8770
 
 . 
 . display ""
 
 
-. display "=== FITTED METHOD (3 solves) ==="
-=== FITTED METHOD (3 solves) ===
+. display "=== Method 2: fitted (3 IPM solves) ==="
+=== Method 2: fitted (3 IPM solves) ===
+
+. timer clear
+
+. timer on 2
 
 . cqreg y x, denmethod(fitted) verbose
 
@@ -114,27 +143,36 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-FN Timing (N=5000000, K=2, iters=19): total=1.885s
-  init=0.023s  scaling=0.043
-> s  X'DX=0.030s  chol=0.083s
-  direction=0.159s  steplength=0.490s  corrector=
-> 0.965s  update=0.092s
-cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.920s
-FN Timing (N=5000000, K=2, iters=55): total=5.356s
-  init=0.027s  scaling=0.136
-> s  X'DX=0.161s  chol=0.242s
-  direction=0.432s  steplength=1.368s  corrector=
-> 2.719s  update=0.271s
-FN Timing (N=5000000, K=2, iters=55): total=5.453s
-  init=0.027s  scaling=0.136
-> s  X'DX=0.161s  chol=0.242s
-  direction=0.439s  steplength=1.396s  corrector=
-> 2.776s  update=0.276s
+FN Timing (N=5000000, K=2, iters=19): total=1.028s
+  init=0.023s  scaling=0.042
+> s  X'DX=0.025s  chol=0.082s
+  direction=0.158s  steplength=0.068s  corrector=
+> 0.525s  update=0.106s
+  Corrector breakdown:
+    loop1=0.151s  loop2=0.063s  
+> gemv1=0.062s  gemv2=0.013s  loop3=0.167s  step=0.068s
+cqreg: IPM: iterations=19, converged=1, objective=9970517.0659, time=1.065s
+FN Timing (N=5000000, K=2, iters=55): total=5.352s
+  init=0.029s  scaling=0.137
+> s  X'DX=0.163s  chol=0.244s
+  direction=0.455s  steplength=1.287s  corrector=
+> 2.725s  update=0.311s
+  Corrector breakdown:
+    loop1=0.449s  loop2=0.200s  
+> gemv1=0.193s  gemv2=0.051s  loop3=0.537s  step=1.296s
+FN Timing (N=5000000, K=2, iters=55): total=5.441s
+  init=0.029s  scaling=0.137
+> s  X'DX=0.163s  chol=0.244s
+  direction=0.455s  steplength=1.314s  corrector=
+> 2.782s  update=0.317s
+  Corrector breakdown:
+    loop1=0.456s  loop2=0.203s  
+> gemv1=0.196s  gemv2=0.052s  loop3=0.547s  step=1.328s
 cqreg: Sparsity: 12.4451, bandwidth: 0.005682 (method: fitted)
-cqreg: Total time: 4.810s (load: 0.040, hdfe: 0.000, ipm: 1.920, vce: 2.850)
+cqreg: Total time: 4.366s (load: 0.465, hdfe: 0.000, ipm: 1.065, vce: 2.836)
 
 Median regression                                  Number of obs =  5,000,000
-  Raw sum of deviations 1.1e+07  (about -.001789 )
+  Raw sum of deviations 1.1e+07  (about -.0017922)
   Min sum of deviations 1.0e+07                    Pseudo R2     =     0.0718
 
 ------------------------------------------------------------------------------
@@ -145,7 +183,12 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 19, converged: yes
-Total time:     4.829 seconds
+Total time:     4.384 seconds
+
+. timer off 2
+
+. timer list 2
+   2:      4.42 /        1 =       4.4220
 
 . 
 end of do-file

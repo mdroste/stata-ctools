@@ -111,8 +111,8 @@ ST_double cqreg_qnorm(ST_double p)
 
     ST_double q, r;
 
-    if (p <= 0.0) return -INFINITY;
-    if (p >= 1.0) return INFINITY;
+    if (p <= 0.0) return -1e308;  /* Approximate -INFINITY (avoids -ffast-math issues) */
+    if (p >= 1.0) return 1e308;   /* Approximate INFINITY */
 
     if (p < p_low) {
         /* Rational approximation for lower region */
@@ -251,9 +251,110 @@ static int compare_double(const void *a, const void *b)
     return 0;
 }
 
+/* ============================================================================
+ * Parallel Merge Sort for double arrays
+ * Uses OpenMP tasks for parallel divide-and-conquer
+ * ============================================================================ */
+
+#ifdef _OPENMP
+#include <omp.h>
+
+/* Threshold below which we use sequential sort */
+#define PARALLEL_SORT_THRESHOLD 100000
+
+/* Merge two sorted subarrays: data[lo..mid] and data[mid+1..hi] */
+static void merge_subarrays(ST_double *data, ST_double *temp,
+                            ST_int lo, ST_int mid, ST_int hi)
+{
+    ST_int i = lo, j = mid + 1, k = lo;
+
+    /* Copy to temp */
+    for (ST_int t = lo; t <= hi; t++) {
+        temp[t] = data[t];
+    }
+
+    /* Merge back */
+    while (i <= mid && j <= hi) {
+        if (temp[i] <= temp[j]) {
+            data[k++] = temp[i++];
+        } else {
+            data[k++] = temp[j++];
+        }
+    }
+
+    /* Copy remaining elements */
+    while (i <= mid) {
+        data[k++] = temp[i++];
+    }
+    while (j <= hi) {
+        data[k++] = temp[j++];
+    }
+}
+
+/* Recursive parallel merge sort */
+static void parallel_merge_sort_recursive(ST_double *data, ST_double *temp,
+                                          ST_int lo, ST_int hi, int depth)
+{
+    if (lo >= hi) return;
+
+    ST_int n = hi - lo + 1;
+
+    /* Use qsort for small arrays or deep recursion */
+    if (n < PARALLEL_SORT_THRESHOLD || depth > 4) {
+        qsort(&data[lo], n, sizeof(ST_double), compare_double);
+        return;
+    }
+
+    ST_int mid = lo + (hi - lo) / 2;
+
+    /* Parallel recursive calls */
+    #pragma omp task shared(data, temp) if(depth < 3)
+    parallel_merge_sort_recursive(data, temp, lo, mid, depth + 1);
+
+    #pragma omp task shared(data, temp) if(depth < 3)
+    parallel_merge_sort_recursive(data, temp, mid + 1, hi, depth + 1);
+
+    #pragma omp taskwait
+
+    /* Merge the sorted halves */
+    merge_subarrays(data, temp, lo, mid, hi);
+}
+
+static void parallel_merge_sort(ST_double *data, ST_int N)
+{
+    if (N <= 1) return;
+
+    /* Allocate temporary buffer */
+    ST_double *temp = (ST_double *)malloc(N * sizeof(ST_double));
+    if (temp == NULL) {
+        /* Fallback to qsort if allocation fails */
+        qsort(data, N, sizeof(ST_double), compare_double);
+        return;
+    }
+
+    #pragma omp parallel
+    {
+        #pragma omp single
+        {
+            parallel_merge_sort_recursive(data, temp, 0, N - 1, 0);
+        }
+    }
+
+    free(temp);
+}
+#endif /* _OPENMP */
+
 void cqreg_sort_ascending(ST_double *data, ST_int N)
 {
+#ifdef _OPENMP
+    if (N > PARALLEL_SORT_THRESHOLD) {
+        parallel_merge_sort(data, N);
+    } else {
+        qsort(data, N, sizeof(ST_double), compare_double);
+    }
+#else
     qsort(data, N, sizeof(ST_double), compare_double);
+#endif
 }
 
 /* ============================================================================
@@ -518,14 +619,11 @@ ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
      * create discontinuities in the empirical quantile function.
      */
 
-    /* Count and copy non-basis residuals */
-    ST_int n_basis = 0;
+    /* Copy non-basis residuals (basis obs have |residual| < threshold) */
     ST_int N_adj = 0;
 
     for (ST_int i = 0; i < N; i++) {
-        if (fabs(residuals[i]) < CQREG_BASIS_THRESHOLD) {
-            n_basis++;
-        } else {
+        if (fabs(residuals[i]) >= CQREG_BASIS_THRESHOLD) {
             sp->sorted_resid[N_adj++] = residuals[i];
         }
     }

@@ -442,7 +442,7 @@ void cqreg_invert_cholesky(ST_double * CQREG_RESTRICT Ainv,
                            const ST_double * CQREG_RESTRICT L,
                            ST_int K)
 {
-    ST_int i, j;
+    ST_int j;
 
     /* Compute A^{-1} by solving A * Ainv[:,j] = e_j for each column */
     memset(Ainv, 0, K * K * sizeof(ST_double));

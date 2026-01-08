@@ -391,6 +391,7 @@ ST_int cqreg_hdfe_partial_out_column(cqreg_state *state,
                                      ST_int N,
                                      ST_int thread_id)
 {
+    (void)N;  /* Unused - HDFE state knows N internally */
     HDFE_State *hdfe = (HDFE_State *)state->hdfe_state;
     if (hdfe == NULL || !hdfe->factors_initialized) {
         return -1;

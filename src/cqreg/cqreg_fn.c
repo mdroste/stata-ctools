@@ -32,7 +32,7 @@
 #define IPM_TOL         1e-12     /* Convergence tolerance for gap */
 
 /* Timing instrumentation for performance analysis */
-#define FN_TIMING 0
+#define FN_TIMING 1
 
 #if FN_TIMING
 #include "../ctools_timer.h"
@@ -45,6 +45,13 @@ static double fn_time_steplength = 0.0;
 static double fn_time_corrector = 0.0;
 static double fn_time_update = 0.0;
 static int fn_iter_count = 0;
+/* Detailed corrector timing */
+static double fn_corr_loop1 = 0.0;
+static double fn_corr_loop2 = 0.0;
+static double fn_corr_gemv1 = 0.0;
+static double fn_corr_gemv2 = 0.0;
+static double fn_corr_loop3 = 0.0;
+static double fn_corr_step = 0.0;
 
 static void fn_timing_reset(void) {
     fn_time_init = 0.0;
@@ -56,19 +63,23 @@ static void fn_timing_reset(void) {
     fn_time_corrector = 0.0;
     fn_time_update = 0.0;
     fn_iter_count = 0;
+    fn_corr_loop1 = fn_corr_loop2 = fn_corr_gemv1 = fn_corr_gemv2 = fn_corr_loop3 = fn_corr_step = 0.0;
 }
 
 static void fn_timing_report(ST_int N, ST_int K) {
     double total = fn_time_init + fn_time_scaling + fn_time_xtdx + fn_time_cholesky +
                    fn_time_direction + fn_time_steplength + fn_time_corrector + fn_time_update;
-    char buf[512];
+    char buf[1024];
     snprintf(buf, sizeof(buf),
         "FN Timing (N=%d, K=%d, iters=%d): total=%.3fs\n"
         "  init=%.3fs  scaling=%.3fs  X'DX=%.3fs  chol=%.3fs\n"
-        "  direction=%.3fs  steplength=%.3fs  corrector=%.3fs  update=%.3fs\n",
+        "  direction=%.3fs  steplength=%.3fs  corrector=%.3fs  update=%.3fs\n"
+        "  Corrector breakdown:\n"
+        "    loop1=%.3fs  loop2=%.3fs  gemv1=%.3fs  gemv2=%.3fs  loop3=%.3fs  step=%.3fs\n",
         N, K, fn_iter_count, total,
         fn_time_init, fn_time_scaling, fn_time_xtdx, fn_time_cholesky,
-        fn_time_direction, fn_time_steplength, fn_time_corrector, fn_time_update);
+        fn_time_direction, fn_time_steplength, fn_time_corrector, fn_time_update,
+        fn_corr_loop1, fn_corr_loop2, fn_corr_gemv1, fn_corr_gemv2, fn_corr_loop3, fn_corr_step);
     SF_display(buf);
 }
 #else
@@ -96,50 +107,52 @@ static void ipm_debug_close(void) {
 #endif
 
 /* ============================================================================
- * Helper: compute bound for step length
- * For negative dx[i], compute -x[i]/dx[i] (the point where x becomes zero)
- * ============================================================================ */
-static void compute_bound(ST_double *bound, const ST_double *x,
-                          const ST_double *dx, ST_int n)
-{
-    for (ST_int i = 0; i < n; i++) {
-        if (dx[i] < 0.0) {
-            bound[i] = -x[i] / dx[i];
-        } else {
-            bound[i] = 1e20;  /* Large number = no constraint */
-        }
-    }
-}
-
-/* ============================================================================
- * Helper: find minimum of array
- * ============================================================================ */
-static ST_double array_min(const ST_double *arr, ST_int n)
-{
-    ST_double min_val = arr[0];
-    for (ST_int i = 1; i < n; i++) {
-        if (arr[i] < min_val) min_val = arr[i];
-    }
-    return min_val;
-}
-
-/* ============================================================================
  * Helper: compute primal and dual step lengths in a single fused loop
- * This is 8x faster than separate compute_bound + array_min calls
+ * This is 8x faster than separate compute_bound + array_min calls.
+ * Optimization: ds = -dx always, so we compute ds bound from dx directly,
+ * eliminating one array read per element.
  * ============================================================================ */
 static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
-                                       const ST_double *x_p, const ST_double *s,
-                                       const ST_double *z, const ST_double *w,
-                                       const ST_double *dx, const ST_double *ds,
-                                       const ST_double *dz, const ST_double *dw,
+                                       const ST_double *CQREG_RESTRICT x_p,
+                                       const ST_double *CQREG_RESTRICT s,
+                                       const ST_double *CQREG_RESTRICT z,
+                                       const ST_double *CQREG_RESTRICT w,
+                                       const ST_double *CQREG_RESTRICT dx,
+                                       const ST_double *CQREG_RESTRICT ds,
+                                       const ST_double *CQREG_RESTRICT dz,
+                                       const ST_double *CQREG_RESTRICT dw,
                                        ST_int N)
 {
+    (void)ds;  /* ds = -dx, so we don't need to read it */
     ST_double fp_min = 1e20, fd_min = 1e20;
 
+#ifdef _OPENMP
+    #pragma omp parallel reduction(min:fp_min, fd_min)
+    {
+        #pragma omp for schedule(static)
+        for (ST_int i = 0; i < N; i++) {
+            ST_double dx_i = dx[i];
+
+            /* Primal bounds: ds = -dx, so bs constraint is (dx > 0 ? s/dx : 1e20) */
+            ST_double bx = (dx_i < 0.0) ? -x_p[i] / dx_i : 1e20;
+            ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;
+            ST_double bp = (bx < bs) ? bx : bs;
+            if (bp < fp_min) fp_min = bp;
+
+            /* Dual bounds */
+            ST_double bz = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
+            ST_double bw = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
+            ST_double bd = (bz < bw) ? bz : bw;
+            if (bd < fd_min) fd_min = bd;
+        }
+    }
+#else
     for (ST_int i = 0; i < N; i++) {
-        /* Primal bounds */
-        ST_double bx = (dx[i] < 0.0) ? -x_p[i] / dx[i] : 1e20;
-        ST_double bs = (ds[i] < 0.0) ? -s[i] / ds[i] : 1e20;
+        ST_double dx_i = dx[i];
+
+        /* Primal bounds: ds = -dx, so bs constraint is (dx > 0 ? s/dx : 1e20) */
+        ST_double bx = (dx_i < 0.0) ? -x_p[i] / dx_i : 1e20;
+        ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;  /* ds < 0 when dx > 0 */
         ST_double bp = (bx < bs) ? bx : bs;
         if (bp < fp_min) fp_min = bp;
 
@@ -149,6 +162,7 @@ static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
         ST_double bd = (bz < bw) ? bz : bw;
         if (bd < fd_min) fd_min = bd;
     }
+#endif
 
     /* Apply damping and cap at 1 */
     *fp_out = (IPM_BETA * fp_min > 1.0) ? 1.0 : IPM_BETA * fp_min;
@@ -428,6 +442,9 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
          * ==================================================================== */
 
         if (fp < 1.0 || fd < 1.0) {
+#if FN_TIMING
+            double t_corr = ctools_timer_seconds();
+#endif
             /* Fused loop: compute g0, gfpfd, dxdz, dsdw, xinv, sinv in one pass */
             ST_double g0 = 0.0, gfpfd = 0.0;
             ST_double *dxdz = fx;
@@ -448,6 +465,10 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             }
 
             ST_double mu = pow(gfpfd / g0, 3.0) * g0 / (2.0 * N);
+#if FN_TIMING
+            fn_corr_loop1 += ctools_timer_seconds() - t_corr;
+            t_corr = ctools_timer_seconds();
+#endif
 
             /* Fused loop: compute xi, r, and qr in one pass */
             for (i = 0; i < N; i++) {
@@ -457,6 +478,10 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 fz[i] = xi_i;  /* Store xi for later use */
             }
             ST_double *xi = fz;
+#if FN_TIMING
+            fn_corr_loop2 += ctools_timer_seconds() - t_corr;
+            t_corr = ctools_timer_seconds();
+#endif
 
             /* Recompute Xqr = X' * (q .* r) using single BLAS dgemv transpose */
             blas_dgemv(1, N, K, 1.0, X, N, Xq, 0.0, Xqr);
@@ -469,9 +494,17 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             }
             memcpy(dy, Xqr, K * sizeof(ST_double));
             cqreg_solve_cholesky(XqX, dy, K);
+#if FN_TIMING
+            fn_corr_gemv1 += ctools_timer_seconds() - t_corr;
+            t_corr = ctools_timer_seconds();
+#endif
 
             /* Recompute tmp = X * dy using BLAS */
             blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
+#if FN_TIMING
+            fn_corr_gemv2 += ctools_timer_seconds() - t_corr;
+            t_corr = ctools_timer_seconds();
+#endif
 
             /* Recompute corrected directions */
             for (i = 0; i < N; i++) {
@@ -480,9 +513,16 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i];
                 dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i];
             }
+#if FN_TIMING
+            fn_corr_loop3 += ctools_timer_seconds() - t_corr;
+            t_corr = ctools_timer_seconds();
+#endif
 
             /* Recompute step lengths (fused loop) */
             compute_step_lengths_fused(&fp, &fd, x_p, s, z, w, dx, ds, dz, dw, N);
+#if FN_TIMING
+            fn_corr_step += ctools_timer_seconds() - t_corr;
+#endif
 
             if (iter < 5 || iter % 50 == 0) {
                 IPM_LOG("Corrector: fp=%.6f, fd=%.6f, mu=%.6e\n", fp, fd, mu);
@@ -497,6 +537,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                     if (fz[i] < min_fz) { min_fz = fz[i]; min_fz_idx = i; }
                     if (fw[i] < min_fw) { min_fw = fw[i]; min_fw_idx = i; }
                 }
+                (void)min_fz_idx; (void)min_fw_idx;  /* Used in IPM_LOG when enabled */
                 IPM_LOG("min fz=%.6e at i=%d (z=%.6e, dz=%.6e)\n",
                         min_fz, min_fz_idx, z[min_fz_idx], dz[min_fz_idx]);
                 IPM_LOG("min fw=%.6e at i=%d (w=%.6e, dw=%.6e)\n",
@@ -633,7 +674,8 @@ ST_int cqreg_fn_solve_warmstart(cqreg_ipm_state *ipm,
     ST_double *Xq = ipm->fn_Xq;
     ST_double *XqX = ipm->XDX;
     ST_double *Xqr = ipm->rhs;
-    (void)Xq;  /* Suppress unused warning - not used in warmstart */
+    /* Suppress unused warnings - not used in warmstart variant */
+    (void)Xq; (void)fx; (void)fs; (void)fz; (void)fw;
 
     /* WARM-START INITIALIZATION:
      * Instead of computing OLS, use provided initial_beta directly.
@@ -872,6 +914,7 @@ void fn_form_reduced_system(const ST_double *X, const ST_double *g,
 ST_double fn_ratio_test(const ST_double *r, const ST_double *delta_r,
                          ST_int N, ST_double q)
 {
+    (void)q;  /* Unused - reserved for future use */
     ST_double alpha = 1.0;
     for (ST_int i = 0; i < N; i++) {
         if (r[i] > 0 && delta_r[i] < -1e-14) {

@@ -60,7 +60,7 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
                              const ST_double *X,
                              ST_int N, ST_int K)
 {
-    ST_int j, k, i;
+    ST_int j, k;
     ST_double *XtX = NULL;
     ST_double *L = NULL;
     ST_int rc = 0;
@@ -142,7 +142,7 @@ void cqreg_sandwich_product(ST_double *V,
                             const ST_double *B,
                             ST_int K)
 {
-    ST_int i, j, k, l;
+    ST_int i, j, k;
     ST_double *AB = NULL;
 
     /* Allocate temporary for A * B */
@@ -243,6 +243,7 @@ ST_int cqreg_vce_iid(ST_double *V,
                      ST_double q,
                      ST_double sparsity)
 {
+    (void)residuals;  /* Unused - IID VCE uses only sparsity estimate */
     ST_int i, j;
     ST_double *XtX_inv = NULL;
 
@@ -306,6 +307,7 @@ ST_int cqreg_vce_robust(ST_double *V,
                         ST_double bandwidth,
                         ST_double sparsity)
 {
+    (void)bandwidth;  /* Unused - uses constant sparsity estimate */
     /*
      * Robust sandwich VCE for quantile regression.
      *

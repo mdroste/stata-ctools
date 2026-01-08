@@ -98,7 +98,63 @@ static void store_scalar(const char *name, ST_double val)
 }
 
 /* ============================================================================
- * Helper: Load data from Stata
+ * Helper: Load a single variable with 8x unrolling (thread-safe)
+ * ============================================================================ */
+
+static ST_int load_variable_unrolled(ST_double *dest, ST_int var_idx,
+                                      ST_int N, ST_int in1)
+{
+    ST_int i;
+    ST_int N8 = N - (N % 8);
+    ST_double v0, v1, v2, v3, v4, v5, v6, v7;
+
+    /* Main unrolled loop - 8 at a time for better pipelining */
+    for (i = 0; i < N8; i += 8) {
+        ST_int obs = in1 + i;
+        SF_vdata(var_idx, obs,     &v0);
+        SF_vdata(var_idx, obs + 1, &v1);
+        SF_vdata(var_idx, obs + 2, &v2);
+        SF_vdata(var_idx, obs + 3, &v3);
+        SF_vdata(var_idx, obs + 4, &v4);
+        SF_vdata(var_idx, obs + 5, &v5);
+        SF_vdata(var_idx, obs + 6, &v6);
+        SF_vdata(var_idx, obs + 7, &v7);
+
+        dest[i]     = v0;
+        dest[i + 1] = v1;
+        dest[i + 2] = v2;
+        dest[i + 3] = v3;
+        dest[i + 4] = v4;
+        dest[i + 5] = v5;
+        dest[i + 6] = v6;
+        dest[i + 7] = v7;
+    }
+
+    /* Handle remainder */
+    for (; i < N; i++) {
+        if (SF_vdata(var_idx, in1 + i, &dest[i]) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/* Thread argument structure for parallel loading */
+typedef struct {
+    ST_double *dest;
+    ST_int var_idx;
+    ST_int N;
+    ST_int in1;
+    ST_int success;
+} cqreg_load_args;
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+/* ============================================================================
+ * Helper: Load data from Stata with parallel loading and 8x unrolling
  * ============================================================================ */
 
 static ST_int load_data(cqreg_state *state,
@@ -108,32 +164,91 @@ static ST_int load_data(cqreg_state *state,
                         ST_int in1, ST_int in2)
 {
     ST_int N = in2 - in1 + 1;
-    ST_int i, k, obs;
+    ST_int k;
+    ST_int success = 0;
 
-    /* Load dependent variable */
-    for (i = 0; i < N; i++) {
-        obs = in1 + i;
-        if (SF_vdata(depvar_idx, obs, &state->y[i]) != 0) {
-            ctools_error("cqreg", "Failed to read y at obs %d", obs);
-            return -1;
-        }
-    }
+#ifdef _OPENMP
+    /* Parallel loading: y and each X column loaded concurrently */
+    #pragma omp parallel
+    {
+        #pragma omp sections
+        {
+            /* Section 1: Load dependent variable y */
+            #pragma omp section
+            {
+                if (load_variable_unrolled(state->y, depvar_idx, N, in1) != 0) {
+                    #pragma omp atomic write
+                    success = -1;
+                }
+            }
 
-    /* Load independent variables (column-major) */
-    for (k = 0; k < K_x; k++) {
-        ST_double *col = &state->X[k * N];
-        for (i = 0; i < N; i++) {
-            obs = in1 + i;
-            if (SF_vdata(indepvar_idx[k], obs, &col[i]) != 0) {
-                ctools_error("cqreg", "Failed to read X[%d] at obs %d", k, obs);
-                return -1;
+            /* Section 2: Load first independent variable (if exists) */
+            #pragma omp section
+            {
+                if (K_x > 0) {
+                    if (load_variable_unrolled(&state->X[0], indepvar_idx[0], N, in1) != 0) {
+                        #pragma omp atomic write
+                        success = -1;
+                    }
+                }
+            }
+
+            /* Section 3: Load second independent variable (if exists) */
+            #pragma omp section
+            {
+                if (K_x > 1) {
+                    if (load_variable_unrolled(&state->X[N], indepvar_idx[1], N, in1) != 0) {
+                        #pragma omp atomic write
+                        success = -1;
+                    }
+                }
             }
         }
     }
 
-    /* Add constant as last column */
+    /* Load remaining variables sequentially (rare case: K > 2) */
+    for (k = 2; k < K_x && success == 0; k++) {
+        ST_double *col = &state->X[k * N];
+        if (load_variable_unrolled(col, indepvar_idx[k], N, in1) != 0) {
+            success = -1;
+        }
+    }
+#else
+    /* Sequential fallback with 8x unrolling */
+    if (load_variable_unrolled(state->y, depvar_idx, N, in1) != 0) {
+        ctools_error("cqreg", "Failed to read y");
+        return -1;
+    }
+
+    for (k = 0; k < K_x; k++) {
+        ST_double *col = &state->X[k * N];
+        if (load_variable_unrolled(col, indepvar_idx[k], N, in1) != 0) {
+            ctools_error("cqreg", "Failed to read X[%d]", k);
+            return -1;
+        }
+    }
+#endif
+
+    if (success != 0) {
+        ctools_error("cqreg", "Failed to load data");
+        return -1;
+    }
+
+    /* Add constant as last column (vectorized fill) */
     ST_double *const_col = &state->X[K_x * N];
-    for (i = 0; i < N; i++) {
+    ST_int i;
+    ST_int N8 = N - (N % 8);
+    for (i = 0; i < N8; i += 8) {
+        const_col[i]     = 1.0;
+        const_col[i + 1] = 1.0;
+        const_col[i + 2] = 1.0;
+        const_col[i + 3] = 1.0;
+        const_col[i + 4] = 1.0;
+        const_col[i + 5] = 1.0;
+        const_col[i + 6] = 1.0;
+        const_col[i + 7] = 1.0;
+    }
+    for (; i < N; i++) {
         const_col[i] = 1.0;
     }
 
@@ -398,6 +513,7 @@ static void store_results(cqreg_state *state)
 
 ST_retcode cqreg_full_regression(const char *args)
 {
+    (void)args;  /* Unused - arguments parsed via Stata scalars */
     main_debug_open();
     main_debug_log("cqreg_full_regression: ENTRY\n");
 
@@ -423,7 +539,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-8);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
-    ST_int nopreprocess = read_scalar_int("__cqreg_nopreprocess", 0);
+    (void)read_scalar_int("__cqreg_nopreprocess", 0);  /* Reserved for future use */
 
     /* Validate quantile */
     if (quantile <= 0.0 || quantile >= 1.0) {
@@ -441,8 +557,8 @@ ST_retcode cqreg_full_regression(const char *args)
         return 2000;
     }
 
-    /* Number of variables passed to plugin */
-    ST_int nvars = SF_nvars();
+    /* Number of variables passed to plugin (for validation if needed) */
+    (void)SF_nvars();
 
     /* Parse variable indices:
      *   vars 1 to K_total: depvar, indepvars
@@ -531,7 +647,6 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
     state->time_load = ctools_timer_seconds() - time_start;
-    double time_after_load = ctools_timer_seconds();
 
     /* Load cluster variable if needed */
     if (vce_type == CQREG_VCE_CLUSTER) {

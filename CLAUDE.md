@@ -4,14 +4,13 @@
 
 - **Stata CLI**: Available via the bash alias `stata`. Use directly.
   - Example: `stata -b do myscript.do`
-- **Source Directory**: `./src/` - C source files and Makefile
+- **Source Directory**: `./src/` - C source files
 - **Build Directory**: `./build/` - Compiled plugins (`.plugin`) and Stata files (`.ado`, `.sthlp`)
 - **Benchmark Directory**: `./benchmark/` - Stata `.do` files for speed/correctness benchmarks
 
 ## Building the Plugin
 
 ```bash
-cd src
 make              # Build for current platform
 make all          # Build all platform plugins
 make native       # Build optimized for current architecture
