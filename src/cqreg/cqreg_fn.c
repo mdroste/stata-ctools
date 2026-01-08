@@ -271,7 +271,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             r[i] = z[i] - w[i];
         }
 
-        /* Compute XqX = X' * diag(q) * X using optimized BLAS */
+        /* Compute XqX = X' * diag(q) * X using optimized direct computation */
         blas_xtdx(XqX, X, N, K, q);
 
         /* Add regularization */
@@ -285,17 +285,19 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         }
 
         /* Compute Xqr = X' * (q .* r) */
-        blas_xtv(Xqr, X, N, K, Xq);
+        for (j = 0; j < K; j++) {
+            Xqr[j] = cqreg_dot(&X[j * N], Xq, N);
+        }
 
-        /* Solve (X'QX) * dy = Xqr via Cholesky using LAPACK */
-        if (lapack_dpotrf(K, XqX, K) != 0) {
+        /* Solve (X'QX) * dy = Xqr via Cholesky */
+        if (cqreg_cholesky(XqX, K) != 0) {
             break;  /* Numerical issues */
         }
-        blas_dcopy(K, Xqr, dy);
-        lapack_dpotrs(K, 1, XqX, K, dy, K);
+        memcpy(dy, Xqr, K * sizeof(ST_double));
+        cqreg_solve_cholesky(XqX, dy, K);
 
-        /* Compute tmp = X * dy using BLAS */
-        blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
+        /* Compute tmp = X * dy */
+        cqreg_matvec_col(tmp, X, dy, N, K);
 
         /* Compute dx = q .* (X*dy - r), ds = -dx */
         for (i = 0; i < N; i++) {
@@ -387,22 +389,24 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             }
 
             /* Recompute Xqr = X' * (q .* r) */
-            blas_xtv(Xqr, X, N, K, Xq);
+            for (j = 0; j < K; j++) {
+                Xqr[j] = cqreg_dot(&X[j * N], Xq, N);
+            }
 
-            /* Rebuild XqX = X' * diag(q) * X using BLAS (was modified by Cholesky) */
+            /* Rebuild XqX = X' * diag(q) * X (was modified by Cholesky) */
             blas_xtdx(XqX, X, N, K, q);
             for (j = 0; j < K; j++) {
                 XqX[j * K + j] += IPM_SMALL;
             }
 
-            if (lapack_dpotrf(K, XqX, K) != 0) {
+            if (cqreg_cholesky(XqX, K) != 0) {
                 break;
             }
-            blas_dcopy(K, Xqr, dy);
-            lapack_dpotrs(K, 1, XqX, K, dy, K);
+            memcpy(dy, Xqr, K * sizeof(ST_double));
+            cqreg_solve_cholesky(XqX, dy, K);
 
-            /* Recompute tmp = X * dy using BLAS */
-            blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
+            /* Recompute tmp = X * dy */
+            cqreg_matvec_col(tmp, X, dy, N, K);
 
             /* Recompute corrected directions */
             for (i = 0; i < N; i++) {
@@ -531,8 +535,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     ipm->iterations = iter;
     ipm->converged = (gap < IPM_TOL) ? 1 : 0;
 
-    /* Compute final residuals using BLAS */
-    blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
+    /* Compute final residuals */
+    cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = Y[i] - ipm->r_primal[i];  /* r = Y - X*beta */
         if (ipm->r_primal[i] >= 0) {

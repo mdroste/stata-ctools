@@ -507,77 +507,78 @@ void blas_xtdx(ST_double *XDX,
                const ST_double *D)
 {
     /*
-     * Compute X' * diag(D) * X = X' * (D .* X)
+     * Compute X' * diag(D) * X
      *
-     * Strategy: Form W = D .* X (scaled X), then compute X' * W
-     * This is O(N*K) for scaling + O(N*K^2) for matrix multiply
+     * For small K (typical in regression), direct computation is faster
+     * than BLAS dgemm because it avoids:
+     * 1. Allocating N*K temporary array (can be 32MB+ for large N)
+     * 2. Memory bandwidth for scaling and copying
+     *
+     * Direct computation: O(N * K * (K+1) / 2) with no extra memory
+     * BLAS approach: O(N*K) scaling + O(N*K^2) dgemm + 32MB allocation
      */
 
-#if USE_BLAS && (defined(HAVE_ACCELERATE) || defined(HAVE_OPENBLAS))
-    /*
-     * For large N, use BLAS dgemm: XDX = X' * W
-     * where W[:,j] = D .* X[:,j]
-     */
-    ST_int j, i;
+    ST_int j, k, i;
 
-    /* Allocate scaled matrix W */
-    ST_double *W = (ST_double *)malloc(N * K * sizeof(ST_double));
-    if (!W) {
-        /* Fallback to direct computation */
-        goto fallback;
-    }
-
-    /* Form W = diag(D) * X, i.e., W[:,j] = D .* X[:,j] */
+    /* Use direct computation - exploits symmetry, no temp allocation */
+    /* OpenMP parallelization over K columns */
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(K > 2)
+    #pragma omp parallel for schedule(dynamic) if(K > 4)
     #endif
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
-        ST_double *Wj = &W[j * N];
-        for (i = 0; i < N; i++) {
-            Wj[i] = D[i] * Xj[i];
+
+        /* Diagonal element: XDX[j,j] = sum_i D[i] * X[i,j]^2 */
+        ST_double diag = 0.0;
+
+        /* 8-way unrolled loop for diagonal */
+        ST_int N8 = N - (N % 8);
+        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+
+        for (i = 0; i < N8; i += 8) {
+            d0 += D[i]     * Xj[i]     * Xj[i];
+            d1 += D[i + 1] * Xj[i + 1] * Xj[i + 1];
+            d2 += D[i + 2] * Xj[i + 2] * Xj[i + 2];
+            d3 += D[i + 3] * Xj[i + 3] * Xj[i + 3];
+            d4 += D[i + 4] * Xj[i + 4] * Xj[i + 4];
+            d5 += D[i + 5] * Xj[i + 5] * Xj[i + 5];
+            d6 += D[i + 6] * Xj[i + 6] * Xj[i + 6];
+            d7 += D[i + 7] * Xj[i + 7] * Xj[i + 7];
         }
-    }
+        diag = (d0 + d4) + (d1 + d5) + (d2 + d6) + (d3 + d7);
 
-    /* XDX = X' * W using BLAS dgemm */
-    /* X is N x K (col-major), W is N x K, XDX is K x K */
-    /* XDX = 1.0 * X' * W + 0.0 * XDX */
-    blas_dgemm(1, 0, K, K, N, 1.0, X, N, W, N, 0.0, XDX, K);
+        for (; i < N; i++) {
+            diag += D[i] * Xj[i] * Xj[i];
+        }
+        XDX[j + j * K] = diag;
 
-    free(W);
-    return;
+        /* Off-diagonal elements (upper triangle, then symmetrize) */
+        for (k = j + 1; k < K; k++) {
+            const ST_double *Xk = &X[k * N];
+            ST_double sum = 0.0;
 
-fallback:
-#endif
-    {
-        /* Pure C implementation with OpenMP parallelization */
-        ST_int j, k, i;
+            /* 8-way unrolled loop for off-diagonal */
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
 
-        memset(XDX, 0, K * K * sizeof(ST_double));
-
-        #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic) if(K > 2)
-        #endif
-        for (j = 0; j < K; j++) {
-            const ST_double *Xj = &X[j * N];
-
-            /* Diagonal element */
-            ST_double diag = 0.0;
-            for (i = 0; i < N; i++) {
-                diag += D[i] * Xj[i] * Xj[i];
+            for (i = 0; i < N8; i += 8) {
+                s0 += D[i]     * Xj[i]     * Xk[i];
+                s1 += D[i + 1] * Xj[i + 1] * Xk[i + 1];
+                s2 += D[i + 2] * Xj[i + 2] * Xk[i + 2];
+                s3 += D[i + 3] * Xj[i + 3] * Xk[i + 3];
+                s4 += D[i + 4] * Xj[i + 4] * Xk[i + 4];
+                s5 += D[i + 5] * Xj[i + 5] * Xk[i + 5];
+                s6 += D[i + 6] * Xj[i + 6] * Xk[i + 6];
+                s7 += D[i + 7] * Xj[i + 7] * Xk[i + 7];
             }
-            XDX[j + j * K] = diag;
+            sum = (s0 + s4) + (s1 + s5) + (s2 + s6) + (s3 + s7);
 
-            /* Off-diagonal (upper triangle, then symmetrize) */
-            for (k = j + 1; k < K; k++) {
-                const ST_double *Xk = &X[k * N];
-                ST_double sum = 0.0;
-                for (i = 0; i < N; i++) {
-                    sum += D[i] * Xj[i] * Xk[i];
-                }
-                XDX[j + k * K] = sum;
-                XDX[k + j * K] = sum;
+            for (; i < N; i++) {
+                sum += D[i] * Xj[i] * Xk[i];
             }
+            XDX[j + k * K] = sum;
+            XDX[k + j * K] = sum;  /* Symmetric */
         }
     }
 }
