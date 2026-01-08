@@ -1,0 +1,201 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do final_comparison.do 
+
+. * Final comparison of qreg vs cqreg
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. set seed 12345
+
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
+
+. gen x1 = rnormal()
+
+. gen x2 = rnormal()
+
+. gen y = 1 + 2*x1 - x2 + rnormal()*2
+
+. 
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "QREG"
+QREG
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. qreg y x1 x2
+
+Iteration 1:  WLS sum of weighted deviations =  3997.6753
+
+Iteration 1:  Sum of abs. weighted deviations =  3997.6771
+Iteration 2:  Sum of abs. weighted deviations =  3997.5315
+Iteration 3:  Sum of abs. weighted deviations =  3997.5003
+Iteration 4:  Sum of abs. weighted deviations =  3997.4482
+Iteration 5:  Sum of abs. weighted deviations =  3997.4392
+Iteration 6:  Sum of abs. weighted deviations =  3997.4378
+Iteration 7:  Sum of abs. weighted deviations =  3997.4376
+Iteration 8:  Sum of abs. weighted deviations =  3997.4376
+
+Median regression                                   Number of obs =      5,000
+  Raw sum of deviations  5909.04 (about 1.0410419)
+  Min sum of deviations 3997.438                    Pseudo R2     =     0.3235
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+          x1 |   1.962093   .0360973    54.36   0.000     1.891326    2.032859
+          x2 |  -.9820483   .0356287   -27.56   0.000    -1.051896   -.9122005
+       _cons |   1.005182   .0357523    28.12   0.000     .9350921    1.075272
+------------------------------------------------------------------------------
+
+. 
+. di _newline(2) "{hline 78}"
+
+
+------------------------------------------------------------------------------
+
+. di "CQREG"
+CQREG
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. cqreg y x1 x2
+
+Median regression                                  Number of obs =      5,000
+  Raw sum of deviations 5909.04  (about 1.041958 )
+  Min sum of deviations 3997.45                    Pseudo R2     =     0.3235
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+          x1 |   1.963616   .0359669    54.60   0.000     1.893105    2.034127
+          x2 |  -.9849055   .0354999   -27.74   0.000    -1.054501   -.9153101
+       _cons |   1.008324   .0356231    28.31   0.000      .938487    1.078161
+------------------------------------------------------------------------------
+
+. 
+. di _newline(2) "{hline 78}"
+
+
+------------------------------------------------------------------------------
+
+. di "COMPARISON OF KEY e() VALUES"
+COMPARISON OF KEY e() VALUES
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. quietly qreg y x1 x2
+
+. local qreg_r2 = e(r2_p)
+
+. local qreg_adev = e(sum_adev)
+
+. local qreg_rdev = e(sum_rdev)
+
+. local qreg_N = e(N)
+
+. local qreg_sparsity = e(sparsity)
+
+. matrix qreg_b = e(b)
+
+. 
+. quietly cqreg y x1 x2
+
+. local cqreg_r2 = e(r2_p)
+
+. local cqreg_adev = e(sum_adev)
+
+. local cqreg_rdev = e(sum_rdev)
+
+. local cqreg_N = e(N)
+
+. local cqreg_sparsity = e(sparsity)
+
+. matrix cqreg_b = e(b)
+
+. 
+. di as text "                        qreg          cqreg         diff"
+                        qreg          cqreg         diff
+
+. di as text "{hline 60}"
+------------------------------------------------------------
+
+. di as text "N                " as result %12.0f `qreg_N' "  " %12.0f `cqreg_N
+> ' "  " %12.0f `qreg_N'-`cqreg_N'
+N                        5000          5000             0
+
+. di as text "Pseudo R2        " as result %12.6f `qreg_r2' "  " %12.6f `cqreg_
+> r2' "  " %12.6f `qreg_r2'-`cqreg_r2'
+Pseudo R2            0.323505      0.323503      0.000002
+
+. di as text "Sum adev         " as result %12.4f `qreg_adev' "  " %12.4f `cqre
+> g_adev' "  " %12.4f `qreg_adev'-`cqreg_adev'
+Sum adev            3997.4376     3997.4479       -0.0103
+
+. di as text "Sum rdev         " as result %12.4f `qreg_rdev' "  " %12.4f `cqre
+> g_rdev' "  " %12.4f `qreg_rdev'-`cqreg_rdev'
+Sum rdev            5909.0396     5909.0396       -0.0000
+
+. di as text "Sparsity         " as result %12.6f `qreg_sparsity' "  " %12.6f `
+> cqreg_sparsity' "  " %12.6f `qreg_sparsity'-`cqreg_sparsity'
+Sparsity             5.054714      5.036451      0.018263
+
+. di as text "{hline 60}"
+------------------------------------------------------------
+
+. di as text "Coefficient diffs:"
+Coefficient diffs:
+
+. di as text "  x1:   " as result %12.6f qreg_b[1,1]-cqreg_b[1,1]
+  x1:      -0.001523
+
+. di as text "  x2:   " as result %12.6f qreg_b[1,2]-cqreg_b[1,2]
+  x2:       0.002857
+
+. di as text "  cons: " as result %12.6f qreg_b[1,3]-cqreg_b[1,3]
+  cons:    -0.003142
+
+. 
+end of do-file

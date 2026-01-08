@@ -21,6 +21,47 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>  /* For va_list - must come before fn_debug_log */
+
+/* Debug logging to file - persists even if Stata crashes */
+#define FN_DEBUG 0
+
+#if FN_DEBUG
+static FILE *fn_debug_file = NULL;
+
+static void fn_debug_open(void) {
+    if (fn_debug_file == NULL) {
+        fn_debug_file = fopen("/tmp/cqreg_fn_debug.log", "a");
+        if (fn_debug_file) {
+            fprintf(fn_debug_file, "\n=== FN Solver Session Started ===\n");
+            fflush(fn_debug_file);
+        }
+    }
+}
+
+static void fn_debug_close(void) {
+    if (fn_debug_file) {
+        fprintf(fn_debug_file, "=== FN Solver Session Ended ===\n\n");
+        fflush(fn_debug_file);
+        fclose(fn_debug_file);
+        fn_debug_file = NULL;
+    }
+}
+
+static void fn_debug_log(const char *fmt, ...) {
+    if (fn_debug_file) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(fn_debug_file, fmt, args);
+        va_end(args);
+        fflush(fn_debug_file);  /* Force write immediately */
+    }
+}
+#else
+#define fn_debug_open()
+#define fn_debug_close()
+#define fn_debug_log(...)
+#endif
 
 /* ============================================================================
  * Identify Active Set
@@ -190,33 +231,56 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                        ST_double q,
                        ST_double *beta)
 {
+    fn_debug_open();
+    fn_debug_log("cqreg_fn_solve: ENTRY\n");
+
+    if (ipm == NULL || y == NULL || X == NULL || beta == NULL) {
+        fn_debug_log("ERROR: NULL pointer - ipm=%p y=%p X=%p beta=%p\n",
+                     (void*)ipm, (void*)y, (void*)X, (void*)beta);
+        fn_debug_close();
+        return -1;
+    }
+
     ST_int N = ipm->N;
     ST_int K = ipm->K;
     ST_int i, j, iter;
 
-    if (ipm == NULL || y == NULL || X == NULL || beta == NULL) {
-        return -1;
-    }
+    fn_debug_log("N=%d, K=%d, q=%.4f\n", N, K, q);
+    fn_debug_log("ipm->r_primal=%p, ipm->XDX=%p, ipm->L=%p\n",
+                 (void*)ipm->r_primal, (void*)ipm->XDX, (void*)ipm->L);
+    fn_debug_log("ipm->beta=%p, ipm->delta_beta=%p\n",
+                 (void*)ipm->beta, (void*)ipm->delta_beta);
 
     if (q <= 0.0 || q >= 1.0) {
+        fn_debug_log("ERROR: Invalid quantile q=%.4f\n", q);
+        fn_debug_close();
         return -2;
     }
 
     /* Allocate working arrays */
+    fn_debug_log("Allocating working arrays...\n");
     ST_int *active_idx = (ST_int *)malloc(N * sizeof(ST_int));
+    fn_debug_log("  active_idx=%p (size %zu)\n", (void*)active_idx, N * sizeof(ST_int));
     ST_double *g = (ST_double *)malloc(N * sizeof(ST_double));
+    fn_debug_log("  g=%p (size %zu)\n", (void*)g, N * sizeof(ST_double));
     ST_double *delta_r = (ST_double *)malloc(N * sizeof(ST_double));
+    fn_debug_log("  delta_r=%p (size %zu)\n", (void*)delta_r, N * sizeof(ST_double));
     ST_double *Xg = (ST_double *)malloc(K * sizeof(ST_double));
+    fn_debug_log("  Xg=%p (size %zu)\n", (void*)Xg, K * sizeof(ST_double));
 
     if (!active_idx || !g || !delta_r || !Xg) {
+        fn_debug_log("ERROR: malloc failed\n");
         free(active_idx);
         free(g);
         free(delta_r);
         free(Xg);
+        fn_debug_close();
         return -3;
     }
+    fn_debug_log("All allocations successful\n");
 
     /* Step 1: Initialize beta via OLS */
+    fn_debug_log("Step 1: Computing X'X for OLS init...\n");
     /* Compute X'X */
     memset(ipm->XDX, 0, K * K * sizeof(ST_double));
     for (j = 0; j < K; j++) {
@@ -231,6 +295,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             ipm->XDX[k * K + j] = sum;
         }
     }
+    fn_debug_log("X'X computed, diagonal[0]=%.4f\n", ipm->XDX[0]);
 
     /* Add regularization */
     for (j = 0; j < K; j++) {
@@ -238,24 +303,31 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     }
 
     /* Cholesky and solve for OLS */
+    fn_debug_log("Computing Cholesky factorization...\n");
     memcpy(ipm->L, ipm->XDX, K * K * sizeof(ST_double));
     if (cqreg_cholesky(ipm->L, K) != 0) {
+        fn_debug_log("Cholesky failed, using zero beta\n");
         memset(beta, 0, K * sizeof(ST_double));
     } else {
+        fn_debug_log("Cholesky succeeded, solving for OLS beta...\n");
         for (j = 0; j < K; j++) {
             beta[j] = cqreg_dot(&X[j * N], y, N);
         }
         cqreg_solve_cholesky(ipm->L, beta, K);
+        fn_debug_log("OLS beta[0]=%.4f, beta[K-1]=%.4f\n", beta[0], beta[K-1]);
     }
 
     /* Copy to ipm state */
     memcpy(ipm->beta, beta, K * sizeof(ST_double));
 
     /* Step 2: Compute initial residuals */
+    fn_debug_log("Step 2: Computing initial residuals...\n");
     cqreg_matvec_col(ipm->r_primal, X, beta, N, K);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = y[i] - ipm->r_primal[i];
     }
+    fn_debug_log("Initial residuals computed, r[0]=%.4f, r[N-1]=%.4f\n",
+                 ipm->r_primal[0], ipm->r_primal[N-1]);
 
     /* Main Frisch-Newton loop
      *
@@ -266,11 +338,14 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
      * We use Newton direction: delta_beta = (X'X)^{-1} X'g
      * This moves beta to reduce ||X'g|| toward zero.
      */
+    fn_debug_log("Starting main FN loop (max %d iters)...\n", FN_MAX_OUTER_ITER);
     ST_int total_iter = 0;
     ST_double last_norm_Xg = 1e30;
     ST_int stall_count = 0;
 
     for (ST_int outer = 0; outer < FN_MAX_OUTER_ITER; outer++) {
+
+        fn_debug_log("ITER %d: Computing subgradient...\n", outer);
 
         /* Compute subgradient g_i based on residual sign */
         for (i = 0; i < N; i++) {
@@ -283,6 +358,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
                 g[i] = q - 0.5;
             }
         }
+        fn_debug_log("ITER %d: Subgradient done, computing X'g...\n", outer);
 
         /* Compute X'g - this should be zero at optimum */
         ST_double norm_Xg = 0.0;
@@ -294,8 +370,10 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             norm_Xg += Xg[j] * Xg[j];
         }
         norm_Xg = sqrt(norm_Xg);
+        fn_debug_log("ITER %d: ||Xg||=%.4e\n", outer, norm_Xg);
 
         if (norm_Xg < FN_DUAL_TOL * sqrt((ST_double)N)) {
+            fn_debug_log("ITER %d: CONVERGED (norm < tol)\n", outer);
             if (ipm->config.verbose) {
                 char buf[128];
                 snprintf(buf, sizeof(buf), "FN converged in %d iterations, ||Xg||=%.2e\n",
@@ -310,6 +388,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             stall_count++;
             /* Allow more stall iterations to try different step sizes */
             if (stall_count >= 10) {
+                fn_debug_log("ITER %d: STALLED (count=%d)\n", outer, stall_count);
                 if (ipm->config.verbose) {
                     char buf[128];
                     snprintf(buf, sizeof(buf), "FN converged after %d iters, ||Xg||=%.2e\n",
@@ -339,6 +418,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
          *
          * We use the full X'X (already computed during init), solve for delta_beta.
          */
+        fn_debug_log("ITER %d: Computing Newton direction...\n", outer);
 
         /* X'g is already in Xg, copy to delta_beta for solving */
         memcpy(ipm->delta_beta, Xg, K * sizeof(ST_double));
@@ -347,23 +427,28 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
          * Note: ipm->L should have Cholesky of X'X from initialization
          */
         cqreg_solve_cholesky(ipm->L, ipm->delta_beta, K);
+        fn_debug_log("ITER %d: Cholesky solve done, delta_beta[0]=%.4e\n", outer, ipm->delta_beta[0]);
 
         /* Compute delta_r = -X * delta_beta (change in residuals) */
+        fn_debug_log("ITER %d: Computing delta_r = -X * delta_beta...\n", outer);
         cqreg_matvec_col(delta_r, X, ipm->delta_beta, N, K);
         for (i = 0; i < N; i++) {
             delta_r[i] = -delta_r[i];
         }
+        fn_debug_log("ITER %d: delta_r computed, delta_r[0]=%.4e\n", outer, delta_r[0]);
 
         /* Check for NaN in delta_beta (numerical instability) */
         ST_int has_nan = 0;
         for (j = 0; j < K; j++) {
             if (!isfinite(ipm->delta_beta[j])) {
                 has_nan = 1;
+                fn_debug_log("ITER %d: NaN detected in delta_beta[%d]!\n", outer, j);
                 break;
             }
         }
         if (has_nan) {
             /* Numerical instability - stop iterating */
+            fn_debug_log("ITER %d: Stopping due to NaN\n", outer);
             break;
         }
 
@@ -371,6 +456,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         ST_double alpha = 0.5;
 
         /* Update beta and residuals */
+        fn_debug_log("ITER %d: Updating beta with alpha=%.4f...\n", outer, alpha);
         for (j = 0; j < K; j++) {
             beta[j] += alpha * ipm->delta_beta[j];
         }
@@ -379,9 +465,12 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         }
 
         memcpy(ipm->beta, beta, K * sizeof(ST_double));
+        fn_debug_log("ITER %d: Update done, beta[0]=%.4f\n", outer, beta[0]);
     }
+    fn_debug_log("Main loop exited after %d iterations\n", total_iter);
 
     /* Set final u, v from residuals */
+    fn_debug_log("Setting final u, v from residuals...\n");
     for (i = 0; i < N; i++) {
         ST_double r = ipm->r_primal[i];
         if (r >= 0) {
@@ -396,6 +485,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     ipm->iterations = total_iter;
     ipm->converged = 1;
 
+    fn_debug_log("Final u, v set. iterations=%d\n", total_iter);
+
     if (ipm->config.verbose) {
         char buf[128];
         snprintf(buf, sizeof(buf), "FN finished: %d iters, cleaning up...\n", total_iter);
@@ -403,15 +494,22 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     }
 
     /* Cleanup */
+    fn_debug_log("Freeing allocated memory...\n");
     free(active_idx);
+    fn_debug_log("  freed active_idx\n");
     free(g);
+    fn_debug_log("  freed g\n");
     free(delta_r);
+    fn_debug_log("  freed delta_r\n");
     free(Xg);
+    fn_debug_log("  freed Xg\n");
 
     if (ipm->config.verbose) {
         SF_display("FN cleanup done\n");
     }
 
+    fn_debug_log("cqreg_fn_solve: EXIT (returning %d)\n", total_iter);
+    fn_debug_close();
     return total_iter;
 }
 

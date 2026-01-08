@@ -1,0 +1,195 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do compare_ereturn.do 
+
+. * Compare e() contents between qreg and cqreg
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. set seed 12345
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x1 = rnormal()
+
+. gen x2 = rnormal()
+
+. gen y = 1 + 2*x1 - x2 + rnormal()*2
+
+. 
+. di "{hline 60}"
+------------------------------------------------------------
+
+. di "QREG OUTPUT"
+QREG OUTPUT
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. qreg y x1 x2
+
+Iteration 1:  WLS sum of weighted deviations =  782.40471
+
+Iteration 1:  Sum of abs. weighted deviations =   782.3155
+Iteration 2:  Sum of abs. weighted deviations =   781.8981
+Iteration 3:  Sum of abs. weighted deviations =  781.69834
+Iteration 4:  Sum of abs. weighted deviations =  781.50551
+
+Median regression                                   Number of obs =      1,000
+  Raw sum of deviations 1216.466 (about 1.1843956)
+  Min sum of deviations 781.5055                    Pseudo R2     =     0.3576
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+          x1 |   1.995117   .0799636    24.95   0.000       1.8382    2.152033
+          x2 |  -1.095791   .0813416   -13.47   0.000    -1.255412   -.9361711
+       _cons |   1.082248   .0816949    13.25   0.000     .9219345    1.242562
+------------------------------------------------------------------------------
+
+. 
+. di _newline "e() scalars:"
+
+e() scalars:
+
+. ereturn list
+
+scalars:
+               e(rank) =  3
+           e(sparsity) =  5.158209484291329
+             e(bwidth) =  .0971559026205178
+               e(df_m) =  2
+               e(df_r) =  997
+                e(f_r) =  .1938657208563112
+                  e(N) =  1000
+              e(sum_w) =  1000
+                e(q_v) =  1.184395551681519
+                  e(q) =  .5
+           e(sum_rdev) =  1216.465514959942
+           e(sum_adev) =  781.5055075851835
+           e(convcode) =  0
+               e(r2_p) =  .3575604914612657
+
+macros:
+                e(cmd) : "qreg"
+            e(cmdline) : "qreg y x1 x2"
+            e(predict) : "qreg_p"
+         e(properties) : "b V"
+       e(marginsnotok) : "stdp stddp residuals"
+                e(vce) : "iid"
+          e(denmethod) : "fitted"
+           e(bwmethod) : "hsheather"
+             e(depvar) : "y"
+
+matrices:
+                  e(b) :  1 x 3
+                  e(V) :  3 x 3
+
+functions:
+             e(sample)   
+
+. 
+. di _newline "{hline 60}"
+
+------------------------------------------------------------
+
+. di "CQREG OUTPUT"
+CQREG OUTPUT
+
+. di "{hline 60}"
+------------------------------------------------------------
+
+. cqreg y x1 x2
+
+Median regression                                  Number of obs =      1,000
+  Raw sum of deviations 1216.47  (about 1.191975 )
+  Min sum of deviations 781.531                    Pseudo R2     =     0.3575
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+          x1 |   2.000693   .0770049    25.98   0.000     1.849583    2.151803
+          x2 |  -1.086567   .0783319   -13.87   0.000    -1.240282    -.932853
+       _cons |   1.067848   .0786721    13.57   0.000     .9134665     1.22223
+------------------------------------------------------------------------------
+
+. 
+. di _newline "e() scalars:"
+
+e() scalars:
+
+. ereturn list
+
+scalars:
+               e(rank) =  3
+           e(sparsity) =  4.967350534930711
+             e(bwidth) =  .0945389176845053
+               e(df_m) =  2
+               e(df_r) =  997
+                e(f_r) =  .2013145625556198
+                  e(N) =  1000
+              e(sum_w) =  1000
+                e(q_v) =  1.191975235939026
+                  e(q) =  .5
+           e(sum_rdev) =  1216.465514959942
+           e(sum_adev) =  781.5314168933246
+           e(convcode) =  0
+               e(r2_p) =  .3575391926181646
+
+macros:
+             e(depvar) : "y"
+           e(bwmethod) : "hsheather"
+          e(denmethod) : "fitted"
+                e(vce) : "iid"
+       e(marginsnotok) : "stdp stddp residuals"
+         e(properties) : "b V"
+            e(predict) : "qreg_p"
+            e(cmdline) : "cqreg y x1 x2"
+                e(cmd) : "cqreg"
+
+matrices:
+                  e(b) :  1 x 3
+                  e(V) :  3 x 3
+
+functions:
+             e(sample)   
+
+. 
+end of do-file

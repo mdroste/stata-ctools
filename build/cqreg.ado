@@ -1,10 +1,10 @@
-*! version 1.0.0 07Jan2026
+*! version 1.1.0 07Jan2026
 *! cqreg: C-accelerated quantile regression
 *! Part of the ctools suite
 *!
 *! Description:
 *!   High-performance replacement for qreg using a C plugin
-*!   with Interior Point Method solver and optional HDFE support.
+*!   with Frisch-Newton solver and optional HDFE support.
 *!
 *! Syntax:
 *!   cqreg depvar indepvars [if] [in], [options]
@@ -16,11 +16,13 @@
 *!   bwmethod(method)   - Bandwidth method: hsheather (default), bofinger, chamberlain
 *!   verbose            - Display progress information
 *!   tolerance(#)       - Convergence tolerance (default: 1e-8)
-*!   maxiter(#)         - Maximum IPM iterations (default: 200)
-*!   nopreprocess       - Skip preprocessing (debug option)
+*!   maxiter(#)         - Maximum iterations (default: 200)
 
 program define cqreg, eclass
     version 14.0
+
+    * Capture full command line before parsing
+    local cmdline "cqreg `0'"
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
         VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
@@ -122,6 +124,16 @@ program define cqreg, eclass
         di as error "cqreg: not enough observations"
         exit 2001
     }
+
+    * Compute raw sum of deviations (null model) and sample quantile for pseudo R2
+    * The raw sum of deviations is sum of |y_i - q_v| weighted by quantile
+    quietly _pctile `depvar' if `touse', percentile(`=`quantile'*100')
+    local q_v = r(r1)
+
+    tempvar raw_dev
+    quietly gen double `raw_dev' = cond(`depvar' >= `q_v', `quantile' * (`depvar' - `q_v'), (1-`quantile') * (`q_v' - `depvar')) if `touse'
+    quietly summarize `raw_dev' if `touse', meanonly
+    local sum_rdev = r(sum)
 
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
@@ -303,14 +315,34 @@ program define cqreg, eclass
     * Post results
     ereturn post `b' `V', esample(`touse') depname(`depvar') obs(`N_final')
 
-    * Store scalar results
-    ereturn scalar N = `N_final'
-    ereturn scalar q = `quantile'
-    ereturn scalar sum_adev = `sum_adev'
+    * Compute pseudo R-squared
+    local r2_p = 1 - `sum_adev' / `sum_rdev'
+
+    * Compute density at quantile (f_r = 1/sparsity)
+    local f_r = 1 / `sparsity'
+
+    * df_r for quantile regression
+    local df_r = `N_final' - `K_keep' - 1
+    if `nfe' > 0 {
+        local df_r = `df_r' - `df_a'
+    }
+    if `df_r' < 1 local df_r = 1
+
+    * Store scalar results (matching qreg)
+    ereturn scalar rank = `K_with_cons'
     ereturn scalar sparsity = `sparsity'
     ereturn scalar bwidth = `bandwidth'
-    ereturn scalar iterations = `iterations'
-    ereturn scalar converged = `converged'
+    ereturn scalar df_m = `K_keep'
+    ereturn scalar df_r = `df_r'
+    ereturn scalar f_r = `f_r'
+    ereturn scalar N = `N_final'
+    ereturn scalar sum_w = `N_final'
+    ereturn scalar q_v = `q_v'
+    ereturn scalar q = `quantile'
+    ereturn scalar sum_rdev = `sum_rdev'
+    ereturn scalar sum_adev = `sum_adev'
+    ereturn scalar convcode = cond(`converged', 0, 1)
+    ereturn scalar r2_p = `r2_p'
 
     if `nfe' > 0 {
         ereturn scalar df_a = `df_a'
@@ -320,41 +352,43 @@ program define cqreg, eclass
         ereturn scalar N_clust = `num_clusters'
     }
 
-    * Compute pseudo R-squared (deviation approach)
-    * R1 = 1 - sum_adev / sum_adev_null where null model is intercept only
-    * For simplicity, store sum_adev as primary measure
-
-    * df_r for quantile regression
-    local df_r = `N_final' - `K_keep' - 1
-    if `nfe' > 0 {
-        local df_r = `df_r' - `df_a'
-    }
-    if `df_r' < 1 local df_r = 1
-    ereturn scalar df_r = `df_r'
-    ereturn scalar df_m = `K_keep'
-
-    * Store macro results
+    * Store macro results (matching qreg)
+    ereturn local cmd "cqreg"
+    ereturn local cmdline "`cmdline'"
+    ereturn local predict "qreg_p"
+    ereturn local properties "b V"
+    ereturn local marginsnotok "stdp stddp residuals"
     ereturn local vce = cond(`vcetype'==0, "iid", cond(`vcetype'==1, "robust", "cluster"))
+    ereturn local denmethod "fitted"
     ereturn local bwmethod = cond(`bwmethod_num'==0, "hsheather", cond(`bwmethod_num'==1, "bofinger", "chamberlain"))
+    ereturn local depvar "`depvar'"
     if `nfe' > 0 {
         ereturn local absorb "`absorb'"
     }
     if `vcetype' == 2 {
         ereturn local clustvar "`clustervar_orig'"
     }
-    ereturn local predict "cqreg_p"
-    ereturn local cmd "cqreg"
-    ereturn local title "Quantile regression"
-    ereturn local depvar "`depvar'"
 
-    * Display results
+    * Display results (matching qreg format exactly)
     di as text ""
-    di as text "{col 5}`quantile' Quantile regression" _col(49) "Number of obs" _col(67) "= " as result %10.0fc `N_final'
-    if `nfe' > 0 {
-        di as text "{col 5}Absorbing " as result `nfe' as text " HDFE group(s)" _col(49) "DF absorbed" _col(67) "= " as result %10.0fc `df_a'
+
+    * Title line - match qreg exactly
+    if `quantile' == 0.5 {
+        di as text "Median regression" _col(52) "Number of obs =" _col(68) as result %10.0fc `N_final'
     }
-    di as text _col(49) "Min sum of deviations" _col(67) "= " as result %10.4g `sum_adev'
-    di as text _col(49) "Sparsity" _col(67) "= " as result %10.4f `sparsity'
+    else {
+        di as text "`quantile' Quantile regression" _col(52) "Number of obs =" _col(68) as result %10.0fc `N_final'
+    }
+
+    * Raw sum of deviations line - match qreg format
+    di as text "  Raw sum of deviations " as result %-8.6g `sum_rdev' as text " (about " as result %-9.7g `q_v' as text ")"
+
+    * Min sum of deviations line
+    di as text "  Min sum of deviations " as result %-8.6g `sum_adev' _col(52) as text "Pseudo R2     =" _col(68) as result %10.4f `r2_p'
+
+    if `nfe' > 0 {
+        di as text "  Absorbing " as result `nfe' as text " HDFE group(s)" _col(52) "DF absorbed   =" _col(68) as result %10.0fc `df_a'
+    }
     di as text ""
 
     * Display coefficient table
@@ -363,8 +397,8 @@ program define cqreg, eclass
     * Show timing if verbose or timeit
     if "`verbose'" != "" | "`timeit'" != "" {
         di as text ""
-        di as text "IPM iterations: " as result `iterations' as text ", converged: " as result cond(`converged', "yes", "no")
-        di as text "Total time:     " as result %9.3f `elapsed' as text " seconds"
+        di as text "Iterations: " as result `iterations' as text ", converged: " as result cond(`converged', "yes", "no")
+        di as text "Total time: " as result %9.3f `elapsed' as text " seconds"
     }
 
     * Clean up scalars

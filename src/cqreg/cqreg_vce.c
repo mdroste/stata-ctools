@@ -12,6 +12,41 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
+
+/* Debug logging */
+#define VCE_DEBUG 0
+
+#if VCE_DEBUG
+static FILE *vce_debug_file = NULL;
+
+static void vce_debug_open(void) {
+    if (vce_debug_file == NULL) {
+        vce_debug_file = fopen("/tmp/cqreg_vce_debug.log", "a");
+    }
+}
+
+static void vce_debug_log(const char *fmt, ...) {
+    if (vce_debug_file) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(vce_debug_file, fmt, args);
+        va_end(args);
+        fflush(vce_debug_file);
+    }
+}
+
+static void vce_debug_close(void) {
+    if (vce_debug_file) {
+        fclose(vce_debug_file);
+        vce_debug_file = NULL;
+    }
+}
+#else
+#define vce_debug_open()
+#define vce_debug_log(...)
+#define vce_debug_close()
+#endif
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -30,21 +65,31 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
     ST_double *L = NULL;
     ST_int rc = 0;
 
+    vce_debug_log("cqreg_compute_xtx_inv: N=%d K=%d\n", N, K);
+
     /* Allocate temporary storage */
     XtX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
     L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
 
+    vce_debug_log("  XtX=%p, L=%p\n", (void*)XtX, (void*)L);
+
     if (XtX == NULL || L == NULL) {
+        vce_debug_log("  ERROR: allocation failed\n");
         rc = -1;
         goto cleanup;
     }
 
+    vce_debug_log("  Computing X'X...\n");
     /* Compute X'X */
     memset(XtX, 0, K * K * sizeof(ST_double));
 
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic) if(K > 2)
-    #endif
+    /* NOTE: OpenMP is INTENTIONALLY DISABLED here.
+     * When enabled, it causes heap corruption during cqreg_aligned_free()
+     * later in this function. This appears to be an interaction between
+     * OpenMP and the Stata plugin's memory allocation (posix_memalign).
+     * Since K is typically small (3-20), parallelization provides minimal
+     * benefit anyway. Keep this serial for stability.
+     */
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
 
@@ -59,25 +104,35 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
             XtX[k * K + j] = dot;
         }
     }
+    vce_debug_log("  X'X computed, diagonal[0]=%.4f\n", XtX[0]);
 
     /* Cholesky decomposition */
+    vce_debug_log("  Cholesky decomposition...\n");
     memcpy(L, XtX, K * K * sizeof(ST_double));
     if (cqreg_cholesky(L, K) != 0) {
+        vce_debug_log("  Cholesky failed, trying with regularization...\n");
         /* Try with regularization */
         memcpy(L, XtX, K * K * sizeof(ST_double));
         cqreg_add_regularization(L, K, 1e-10);
         if (cqreg_cholesky(L, K) != 0) {
+            vce_debug_log("  ERROR: Cholesky still failed\n");
             rc = -1;
             goto cleanup;
         }
     }
+    vce_debug_log("  Cholesky done, L[0]=%.4f\n", L[0]);
 
     /* Compute inverse using Cholesky factor */
+    vce_debug_log("  Inverting via Cholesky...\n");
     cqreg_invert_cholesky(XtX_inv, L, K);
+    vce_debug_log("  Inverse computed, XtX_inv[0]=%.6e\n", XtX_inv[0]);
 
 cleanup:
+    vce_debug_log("  Cleanup: freeing XtX=%p...\n", (void*)XtX);
     cqreg_aligned_free(XtX);
+    vce_debug_log("  XtX freed. Now freeing L=%p...\n", (void*)L);
     cqreg_aligned_free(L);
+    vce_debug_log("  L freed. cqreg_compute_xtx_inv: returning %d\n", rc);
 
     return rc;
 }
@@ -191,18 +246,28 @@ ST_int cqreg_vce_iid(ST_double *V,
     ST_int i, j;
     ST_double *XtX_inv = NULL;
 
+    vce_debug_open();
+    vce_debug_log("cqreg_vce_iid: ENTRY N=%d K=%d q=%.4f sparsity=%.4f\n", N, K, q, sparsity);
+    vce_debug_log("  V=%p, X=%p\n", (void*)V, (void*)X);
 
     /* Allocate (X'X)^{-1} */
     XtX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    vce_debug_log("  XtX_inv=%p\n", (void*)XtX_inv);
     if (XtX_inv == NULL) {
+        vce_debug_log("  ERROR: XtX_inv alloc failed\n");
+        vce_debug_close();
         return -1;
     }
 
+    vce_debug_log("  Calling cqreg_compute_xtx_inv...\n");
     /* Compute (X'X)^{-1} */
     if (cqreg_compute_xtx_inv(XtX_inv, X, N, K) != 0) {
+        vce_debug_log("  ERROR: cqreg_compute_xtx_inv failed\n");
         cqreg_aligned_free(XtX_inv);
+        vce_debug_close();
         return -1;
     }
+    vce_debug_log("  cqreg_compute_xtx_inv returned successfully\n");
 
     /* V = sparsity^2 * q*(1-q) * (X'X)^{-1}
      * Note: The asymptotic variance formula is:
@@ -212,15 +277,20 @@ ST_int cqreg_vce_iid(ST_double *V,
      * WITHOUT the (1/n) factor that some sources incorrectly include.
      */
     ST_double scale = sparsity * sparsity * q * (1.0 - q);
+    vce_debug_log("  scale=%.6e, computing V...\n", scale);
 
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             V[i * K + j] = scale * XtX_inv[i * K + j];
         }
     }
+    vce_debug_log("  V computed, V[0]=%.6e\n", V[0]);
 
+    vce_debug_log("  Freeing XtX_inv...\n");
     cqreg_aligned_free(XtX_inv);
 
+    vce_debug_log("cqreg_vce_iid: EXIT\n");
+    vce_debug_close();
     return 0;
 }
 

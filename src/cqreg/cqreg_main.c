@@ -20,6 +20,47 @@
 #include <string.h>
 #include <math.h>
 #include <stdio.h>
+#include <stdarg.h>
+
+/* Debug logging to file */
+#define MAIN_DEBUG 0
+
+#if MAIN_DEBUG
+static FILE *main_debug_file = NULL;
+
+static void main_debug_open(void) {
+    if (main_debug_file == NULL) {
+        main_debug_file = fopen("/tmp/cqreg_main_debug.log", "a");
+        if (main_debug_file) {
+            fprintf(main_debug_file, "\n=== cqreg_main Session Started ===\n");
+            fflush(main_debug_file);
+        }
+    }
+}
+
+static void main_debug_close(void) {
+    if (main_debug_file) {
+        fprintf(main_debug_file, "=== cqreg_main Session Ended ===\n\n");
+        fflush(main_debug_file);
+        fclose(main_debug_file);
+        main_debug_file = NULL;
+    }
+}
+
+static void main_debug_log(const char *fmt, ...) {
+    if (main_debug_file) {
+        va_list args;
+        va_start(args, fmt);
+        vfprintf(main_debug_file, fmt, args);
+        va_end(args);
+        fflush(main_debug_file);
+    }
+}
+#else
+#define main_debug_open()
+#define main_debug_close()
+#define main_debug_log(...)
+#endif
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -206,6 +247,9 @@ static void store_results(cqreg_state *state)
 
 ST_retcode cqreg_full_regression(const char *args)
 {
+    main_debug_open();
+    main_debug_log("cqreg_full_regression: ENTRY\n");
+
     cqreg_state *state = NULL;
     cqreg_ipm_config ipm_config;
     ST_retcode rc = 0;
@@ -294,10 +338,13 @@ ST_retcode cqreg_full_regression(const char *args)
         ctools_msg("cqreg", "N=%d, K=%d, G=%d, quantile=%.3f", N, K, G, quantile);
     }
 
+    main_debug_log("Step 1 done: N=%d, K=%d, G=%d, q=%.3f\n", N, K, G, quantile);
+
     /* ========================================================================
      * Step 2: Create state and load data
      * ======================================================================== */
 
+    main_debug_log("Step 2: Creating state...\n");
     state = cqreg_state_create(N, K);
     if (state == NULL) {
         free(indepvar_idx);
@@ -311,14 +358,19 @@ ST_retcode cqreg_full_regression(const char *args)
     state->vce_type = (cqreg_vce_type)vce_type;
     state->bw_method = (cqreg_bw_method)bw_method;
 
+    main_debug_log("State created. Loading data...\n");
+
     /* Load data */
     if (load_data(state, depvar_idx, indepvar_idx, K_x, in1, in2) != 0) {
+        main_debug_log("ERROR: load_data failed\n");
         cqreg_state_free(state);
         free(indepvar_idx);
         free(fe_var_idx);
+        main_debug_close();
         return 198;
     }
 
+    main_debug_log("Data loaded successfully\n");
     state->time_load = ctools_timer_seconds() - time_start;
     double time_after_load = ctools_timer_seconds();
 
@@ -386,31 +438,41 @@ ST_retcode cqreg_full_regression(const char *args)
     ipm_config.use_mehrotra = 1;
 
 
+    main_debug_log("Step 4: Creating IPM state...\n");
+
     /* Create IPM state */
     state->ipm = cqreg_ipm_create(N, K, &ipm_config);
     if (state->ipm == NULL) {
+        main_debug_log("ERROR: cqreg_ipm_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
         free(indepvar_idx);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create IPM solver");
+        main_debug_close();
         return 920;
     }
 
+    main_debug_log("IPM state created. Calling cqreg_fn_solve...\n");
 
     /* Solve quantile regression using Frisch-Newton solver */
     ST_int ipm_result;
     ipm_result = cqreg_fn_solve(state->ipm, state->y, state->X, quantile, state->beta);
 
+    main_debug_log("cqreg_fn_solve returned %d\n", ipm_result);
+
     state->iterations = abs(ipm_result);
     state->converged = (ipm_result > 0) ? 1 : 0;
 
+    main_debug_log("Getting objective value...\n");
     /* Get objective value */
     state->sum_adev = cqreg_ipm_get_objective(state->ipm, quantile);
 
+    main_debug_log("Getting residuals...\n");
     /* Get residuals */
     cqreg_ipm_get_residuals(state->ipm, state->residuals);
 
+    main_debug_log("IPM phase complete. sum_adev=%.4f\n", state->sum_adev);
     state->time_ipm = ctools_timer_seconds() - ipm_start;
 
 
@@ -429,32 +491,41 @@ ST_retcode cqreg_full_regression(const char *args)
      * Step 5: Estimate sparsity and compute VCE
      * ======================================================================== */
 
+    main_debug_log("Step 5: Sparsity and VCE estimation...\n");
     double vce_start = ctools_timer_seconds();
 
+    main_debug_log("Creating sparsity state...\n");
     /* Create sparsity state */
     state->sparsity_state = cqreg_sparsity_create(N, quantile, state->bw_method);
     if (state->sparsity_state == NULL) {
+        main_debug_log("ERROR: cqreg_sparsity_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
         free(indepvar_idx);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create sparsity estimator");
+        main_debug_close();
         return 920;
     }
 
+    main_debug_log("Estimating sparsity...\n");
     /* Estimate sparsity */
     state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);
     state->bandwidth = state->sparsity_state->bandwidth;
+    main_debug_log("Sparsity=%.4f, bandwidth=%.6f\n", state->sparsity, state->bandwidth);
 
     if (verbose) {
         ctools_msg("cqreg", "Sparsity: %.4f, bandwidth: %.6f", state->sparsity, state->bandwidth);
     }
 
+    main_debug_log("Computing VCE...\n");
     /* Compute VCE */
     if (cqreg_compute_vce(state, state->X) != 0) {
+        main_debug_log("WARNING: VCE computation failed\n");
         ctools_error("cqreg", "VCE computation failed");
         /* Continue with zero VCE */
     }
+    main_debug_log("VCE computed\n");
 
     state->time_vce = ctools_timer_seconds() - vce_start;
 
@@ -463,7 +534,9 @@ ST_retcode cqreg_full_regression(const char *args)
      * Step 6: Store results to Stata
      * ======================================================================== */
 
+    main_debug_log("Step 6: Storing results to Stata...\n");
     store_results(state);
+    main_debug_log("Results stored\n");
 
     state->time_total = ctools_timer_seconds() - time_start;
 
@@ -477,10 +550,17 @@ ST_retcode cqreg_full_regression(const char *args)
      * Cleanup
      * ======================================================================== */
 
+    main_debug_log("Cleanup: freeing state...\n");
     cqreg_hdfe_cleanup(state);
+    main_debug_log("HDFE cleaned up\n");
     cqreg_state_free(state);
+    main_debug_log("State freed\n");
     free(indepvar_idx);
+    main_debug_log("indepvar_idx freed\n");
     free(fe_var_idx);
+    main_debug_log("fe_var_idx freed\n");
 
+    main_debug_log("cqreg_full_regression: EXIT (rc=%d)\n", rc);
+    main_debug_close();
     return rc;
 }
