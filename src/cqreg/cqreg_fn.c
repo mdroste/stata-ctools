@@ -29,7 +29,16 @@
 #define IPM_BETA        0.99995   /* Step size damping factor */
 #define IPM_SMALL       1e-14     /* Small number for numerical stability */
 #define IPM_MAX_ITER    500       /* Maximum iterations */
-#define IPM_TOL         1e-12     /* Convergence tolerance for gap */
+#define IPM_TOL_DEFAULT 1e-12     /* Default convergence tolerance for gap */
+
+/* SIMD support for ARM NEON and x86 SSE/AVX */
+#if defined(__ARM_NEON) || defined(__ARM_NEON__)
+#include <arm_neon.h>
+#define CQREG_USE_NEON 1
+#elif defined(__SSE2__)
+#include <emmintrin.h>
+#define CQREG_USE_SSE2 1
+#endif
 
 /* Timing instrumentation for performance analysis */
 #define FN_TIMING 1
@@ -105,6 +114,259 @@ static void ipm_debug_close(void) {
 #define ipm_debug_close()
 #define IPM_LOG(...)
 #endif
+
+/* ============================================================================
+ * SIMD-optimized corrector loop helpers
+ * These optimize the hottest loops in the corrector step (loop1, loop3)
+ * ============================================================================ */
+
+#if CQREG_USE_NEON
+/*
+ * NEON-optimized loop1: compute g0, gfpfd, and corrector intermediates
+ * Processes 2 doubles per iteration using NEON float64x2 vectors
+ */
+static void corrector_loop1_neon(
+    ST_double *g0_out, ST_double *gfpfd_out,
+    ST_double *CQREG_RESTRICT dxdz,
+    ST_double *CQREG_RESTRICT dsdw,
+    ST_double *CQREG_RESTRICT xinv,
+    ST_double *CQREG_RESTRICT sinv,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    const ST_double *CQREG_RESTRICT dz,
+    const ST_double *CQREG_RESTRICT dx,
+    const ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT ds,
+    ST_double fp, ST_double fd, ST_int N)
+{
+    float64x2_t g0_vec = vdupq_n_f64(0.0);
+    float64x2_t gfpfd_vec = vdupq_n_f64(0.0);
+    float64x2_t fp_vec = vdupq_n_f64(fp);
+    float64x2_t fd_vec = vdupq_n_f64(fd);
+    float64x2_t one_vec = vdupq_n_f64(1.0);
+
+    ST_int N2 = N - (N % 2);
+    ST_int i;
+
+    for (i = 0; i < N2; i += 2) {
+        /* Load vectors */
+        float64x2_t z_v = vld1q_f64(&z[i]);
+        float64x2_t xp_v = vld1q_f64(&x_p[i]);
+        float64x2_t w_v = vld1q_f64(&w[i]);
+        float64x2_t s_v = vld1q_f64(&s[i]);
+        float64x2_t dz_v = vld1q_f64(&dz[i]);
+        float64x2_t dx_v = vld1q_f64(&dx[i]);
+        float64x2_t dw_v = vld1q_f64(&dw[i]);
+        float64x2_t ds_v = vld1q_f64(&ds[i]);
+
+        /* g0 += z[i] * x_p[i] + w[i] * s[i] */
+        g0_vec = vfmaq_f64(g0_vec, z_v, xp_v);
+        g0_vec = vfmaq_f64(g0_vec, w_v, s_v);
+
+        /* gfpfd terms */
+        float64x2_t z_fd_dz = vfmaq_f64(z_v, fd_vec, dz_v);  /* z + fd*dz */
+        float64x2_t xp_fp_dx = vfmaq_f64(xp_v, fp_vec, dx_v); /* xp + fp*dx */
+        float64x2_t w_fd_dw = vfmaq_f64(w_v, fd_vec, dw_v);   /* w + fd*dw */
+        float64x2_t s_fp_ds = vfmaq_f64(s_v, fp_vec, ds_v);   /* s + fp*ds */
+
+        gfpfd_vec = vfmaq_f64(gfpfd_vec, z_fd_dz, xp_fp_dx);
+        gfpfd_vec = vfmaq_f64(gfpfd_vec, w_fd_dw, s_fp_ds);
+
+        /* Corrector intermediates */
+        vst1q_f64(&dxdz[i], vmulq_f64(dx_v, dz_v));
+        vst1q_f64(&dsdw[i], vmulq_f64(ds_v, dw_v));
+        vst1q_f64(&xinv[i], vdivq_f64(one_vec, xp_v));
+        vst1q_f64(&sinv[i], vdivq_f64(one_vec, s_v));
+    }
+
+    /* Horizontal sum */
+    ST_double g0 = vgetq_lane_f64(g0_vec, 0) + vgetq_lane_f64(g0_vec, 1);
+    ST_double gfpfd = vgetq_lane_f64(gfpfd_vec, 0) + vgetq_lane_f64(gfpfd_vec, 1);
+
+    /* Handle remainder */
+    for (; i < N; i++) {
+        g0 += z[i] * x_p[i] + w[i] * s[i];
+        gfpfd += (z[i] + fd * dz[i]) * (x_p[i] + fp * dx[i])
+               + (w[i] + fd * dw[i]) * (s[i] + fp * ds[i]);
+        dxdz[i] = dx[i] * dz[i];
+        dsdw[i] = ds[i] * dw[i];
+        xinv[i] = 1.0 / x_p[i];
+        sinv[i] = 1.0 / s[i];
+    }
+
+    *g0_out = g0;
+    *gfpfd_out = gfpfd;
+}
+
+/*
+ * NEON-optimized loop3: recompute corrected directions
+ * This is the most expensive loop in the corrector step
+ */
+static void corrector_loop3_neon(
+    ST_double *CQREG_RESTRICT dx,
+    ST_double *CQREG_RESTRICT ds,
+    ST_double *CQREG_RESTRICT dz,
+    ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT q,
+    const ST_double *CQREG_RESTRICT tmp,
+    const ST_double *CQREG_RESTRICT xi,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT dxdz,
+    const ST_double *CQREG_RESTRICT dsdw,
+    const ST_double *CQREG_RESTRICT xinv,
+    const ST_double *CQREG_RESTRICT sinv,
+    ST_double mu, ST_int N)
+{
+    float64x2_t mu_vec = vdupq_n_f64(mu);
+    ST_int N2 = N - (N % 2);
+    ST_int i;
+
+    for (i = 0; i < N2; i += 2) {
+        /* Load vectors */
+        float64x2_t q_v = vld1q_f64(&q[i]);
+        float64x2_t tmp_v = vld1q_f64(&tmp[i]);
+        float64x2_t xi_v = vld1q_f64(&xi[i]);
+        float64x2_t z_v = vld1q_f64(&z[i]);
+        float64x2_t w_v = vld1q_f64(&w[i]);
+        float64x2_t dxdz_v = vld1q_f64(&dxdz[i]);
+        float64x2_t dsdw_v = vld1q_f64(&dsdw[i]);
+        float64x2_t xinv_v = vld1q_f64(&xinv[i]);
+        float64x2_t sinv_v = vld1q_f64(&sinv[i]);
+
+        /* dx[i] = q[i] * (tmp[i] + xi[i] - (z[i] - w[i]) - dxdz[i] + dsdw[i]) */
+        float64x2_t z_minus_w = vsubq_f64(z_v, w_v);
+        float64x2_t inner = vsubq_f64(vaddq_f64(tmp_v, xi_v), z_minus_w);
+        inner = vsubq_f64(inner, dxdz_v);
+        inner = vaddq_f64(inner, dsdw_v);
+        float64x2_t dx_v = vmulq_f64(q_v, inner);
+
+        /* ds[i] = -dx[i] */
+        float64x2_t ds_v = vnegq_f64(dx_v);
+
+        /* dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i] */
+        float64x2_t z_dx = vmulq_f64(z_v, dx_v);
+        float64x2_t mu_minus_zdx = vsubq_f64(mu_vec, z_dx);
+        float64x2_t dz_v = vfmsq_f64(vsubq_f64(vmulq_f64(mu_minus_zdx, xinv_v), z_v), vdupq_n_f64(1.0), dxdz_v);
+
+        /* dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i] */
+        float64x2_t w_ds = vmulq_f64(w_v, ds_v);
+        float64x2_t mu_minus_wds = vsubq_f64(mu_vec, w_ds);
+        float64x2_t dw_v = vfmsq_f64(vsubq_f64(vmulq_f64(mu_minus_wds, sinv_v), w_v), vdupq_n_f64(1.0), dsdw_v);
+
+        /* Store results */
+        vst1q_f64(&dx[i], dx_v);
+        vst1q_f64(&ds[i], ds_v);
+        vst1q_f64(&dz[i], dz_v);
+        vst1q_f64(&dw[i], dw_v);
+    }
+
+    /* Handle remainder */
+    for (; i < N; i++) {
+        dx[i] = q[i] * (tmp[i] + xi[i] - (z[i] - w[i]) - dxdz[i] + dsdw[i]);
+        ds[i] = -dx[i];
+        dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i];
+        dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i];
+    }
+}
+#endif /* CQREG_USE_NEON */
+
+/* Scalar fallback versions (also used when N is small) */
+static void corrector_loop1_scalar(
+    ST_double *g0_out, ST_double *gfpfd_out,
+    ST_double *CQREG_RESTRICT dxdz,
+    ST_double *CQREG_RESTRICT dsdw,
+    ST_double *CQREG_RESTRICT xinv,
+    ST_double *CQREG_RESTRICT sinv,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    const ST_double *CQREG_RESTRICT dz,
+    const ST_double *CQREG_RESTRICT dx,
+    const ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT ds,
+    ST_double fp, ST_double fd, ST_int N)
+{
+    ST_double g0 = 0.0, gfpfd = 0.0;
+
+    for (ST_int i = 0; i < N; i++) {
+        g0 += z[i] * x_p[i] + w[i] * s[i];
+        gfpfd += (z[i] + fd * dz[i]) * (x_p[i] + fp * dx[i])
+               + (w[i] + fd * dw[i]) * (s[i] + fp * ds[i]);
+        dxdz[i] = dx[i] * dz[i];
+        dsdw[i] = ds[i] * dw[i];
+        xinv[i] = 1.0 / x_p[i];
+        sinv[i] = 1.0 / s[i];
+    }
+
+    *g0_out = g0;
+    *gfpfd_out = gfpfd;
+}
+
+static void corrector_loop3_scalar(
+    ST_double *CQREG_RESTRICT dx,
+    ST_double *CQREG_RESTRICT ds,
+    ST_double *CQREG_RESTRICT dz,
+    ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT q,
+    const ST_double *CQREG_RESTRICT tmp,
+    const ST_double *CQREG_RESTRICT xi,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT dxdz,
+    const ST_double *CQREG_RESTRICT dsdw,
+    const ST_double *CQREG_RESTRICT xinv,
+    const ST_double *CQREG_RESTRICT sinv,
+    ST_double mu, ST_int N)
+{
+    for (ST_int i = 0; i < N; i++) {
+        dx[i] = q[i] * (tmp[i] + xi[i] - (z[i] - w[i]) - dxdz[i] + dsdw[i]);
+        ds[i] = -dx[i];
+        dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i];
+        dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i];
+    }
+}
+
+/* Dispatcher functions that select SIMD or scalar based on availability */
+static inline void corrector_loop1(
+    ST_double *g0_out, ST_double *gfpfd_out,
+    ST_double *dxdz, ST_double *dsdw, ST_double *xinv, ST_double *sinv,
+    const ST_double *z, const ST_double *x_p, const ST_double *w, const ST_double *s,
+    const ST_double *dz, const ST_double *dx, const ST_double *dw, const ST_double *ds,
+    ST_double fp, ST_double fd, ST_int N)
+{
+#if CQREG_USE_NEON
+    if (N >= 64) {
+        corrector_loop1_neon(g0_out, gfpfd_out, dxdz, dsdw, xinv, sinv,
+                             z, x_p, w, s, dz, dx, dw, ds, fp, fd, N);
+        return;
+    }
+#endif
+    corrector_loop1_scalar(g0_out, gfpfd_out, dxdz, dsdw, xinv, sinv,
+                           z, x_p, w, s, dz, dx, dw, ds, fp, fd, N);
+}
+
+static inline void corrector_loop3(
+    ST_double *dx, ST_double *ds, ST_double *dz, ST_double *dw,
+    const ST_double *q, const ST_double *tmp, const ST_double *xi,
+    const ST_double *z, const ST_double *w,
+    const ST_double *dxdz, const ST_double *dsdw,
+    const ST_double *xinv, const ST_double *sinv,
+    ST_double mu, ST_int N)
+{
+#if CQREG_USE_NEON
+    if (N >= 64) {
+        corrector_loop3_neon(dx, ds, dz, dw, q, tmp, xi, z, w,
+                             dxdz, dsdw, xinv, sinv, mu, N);
+        return;
+    }
+#endif
+    corrector_loop3_scalar(dx, ds, dz, dw, q, tmp, xi, z, w,
+                           dxdz, dsdw, xinv, sinv, mu, N);
+}
 
 /* ============================================================================
  * Helper: compute primal and dual step lengths in a single fused loop
@@ -327,11 +589,17 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     double t_phase;
 #endif
 
+    /* Get tolerance from config (use default if not set) */
+    ST_double ipm_tol = ipm->config.tol_gap;
+    if (ipm_tol <= 0.0 || ipm_tol > 1.0) {
+        ipm_tol = IPM_TOL_DEFAULT;
+    }
+
     for (iter = 0; iter < IPM_MAX_ITER; iter++) {
 
-        /* Check convergence */
-        if (gap < IPM_TOL || !isfinite(gap)) {
-            IPM_LOG("Converged at iter %d, gap=%.6e\n", iter, gap);
+        /* Check convergence using configurable tolerance */
+        if (gap < ipm_tol || !isfinite(gap)) {
+            IPM_LOG("Converged at iter %d, gap=%.6e (tol=%.6e)\n", iter, gap, ipm_tol);
             break;
         }
 
@@ -445,24 +713,15 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 #if FN_TIMING
             double t_corr = ctools_timer_seconds();
 #endif
-            /* Fused loop: compute g0, gfpfd, dxdz, dsdw, xinv, sinv in one pass */
+            /* SIMD-optimized loop1: compute g0, gfpfd, and corrector intermediates */
             ST_double g0 = 0.0, gfpfd = 0.0;
             ST_double *dxdz = fx;
             ST_double *dsdw = fs;
             ST_double *xinv = fw;
             /* sinv already points to pre-allocated ipm->fn_sinv */
 
-            for (i = 0; i < N; i++) {
-                /* Centering parameter terms */
-                g0 += z[i] * x_p[i] + w[i] * s[i];
-                gfpfd += (z[i] + fd * dz[i]) * (x_p[i] + fp * dx[i])
-                       + (w[i] + fd * dw[i]) * (s[i] + fp * ds[i]);
-                /* Corrector intermediates */
-                dxdz[i] = dx[i] * dz[i];
-                dsdw[i] = ds[i] * dw[i];
-                xinv[i] = 1.0 / x_p[i];
-                sinv[i] = 1.0 / s[i];
-            }
+            corrector_loop1(&g0, &gfpfd, dxdz, dsdw, xinv, sinv,
+                           z, x_p, w, s, dz, dx, dw, ds, fp, fd, N);
 
             ST_double mu = pow(gfpfd / g0, 3.0) * g0 / (2.0 * N);
 #if FN_TIMING
@@ -506,13 +765,9 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             t_corr = ctools_timer_seconds();
 #endif
 
-            /* Recompute corrected directions */
-            for (i = 0; i < N; i++) {
-                dx[i] = q[i] * (tmp[i] + xi[i] - (z[i] - w[i]) - dxdz[i] + dsdw[i]);
-                ds[i] = -dx[i];
-                dz[i] = (mu - z[i] * dx[i]) * xinv[i] - z[i] - dxdz[i];
-                dw[i] = (mu - w[i] * ds[i]) * sinv[i] - w[i] - dsdw[i];
-            }
+            /* SIMD-optimized loop3: recompute corrected directions */
+            corrector_loop3(dx, ds, dz, dw, q, tmp, xi, z, w,
+                           dxdz, dsdw, xinv, sinv, mu, N);
 #if FN_TIMING
             fn_corr_loop3 += ctools_timer_seconds() - t_corr;
             t_corr = ctools_timer_seconds();
@@ -609,7 +864,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 
     /* Store results in ipm state */
     ipm->iterations = iter;
-    ipm->converged = (gap < IPM_TOL) ? 1 : 0;
+    ipm->converged = (gap < ipm_tol) ? 1 : 0;
 
     /* Compute final residuals */
     blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
