@@ -1,0 +1,483 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_fitted_method.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. * Get qreg results
+. quietly qreg price mpg
+
+. local b_cons = _b[_cons]
+
+. local b_mpg = _b[mpg]
+
+. predict resid, residuals
+
+. gen fitted = price - resid
+
+. 
+. local N = 74
+
+. local q = 0.5
+
+. local alpha = 0.05
+
+. 
+. display "============================================================"
+============================================================
+
+. display "Understanding Stata's fitted method for sparsity estimation"
+Understanding Stata's fitted method for sparsity estimation
+
+. display "============================================================"
+============================================================
+
+. display ""
+
+
+. display "Coefficients: b[_cons] = " `b_cons' ", b[mpg] = " `b_mpg'
+Coefficients: b[_cons] = 8088.6667, b[mpg] = -135.66667
+
+. display "N = " `N' ", q = " `q'
+N = 74, q = .5
+
+. display ""
+
+
+. 
+. * Stata's reported values
+. quietly qreg price mpg
+
+. display "qreg IID fitted sparsity = " e(sparsity) ", bandwidth = " e(bwidth)
+qreg IID fitted sparsity = 6650.0766, bandwidth = .23141524
+
+. 
+. quietly qreg price mpg, vce(iid, residual)
+
+. display "qreg IID residual sparsity = " e(sparsity) ", bandwidth = " e(bwidth
+> )
+qreg IID residual sparsity = 4460.3651, bandwidth = .23353843
+
+. 
+. display ""
+
+
+. display "============================================================"
+============================================================
+
+. display "Testing different sparsity estimation methods"
+Testing different sparsity estimation methods
+
+. display "============================================================"
+============================================================
+
+. 
+. * Method 1: Difference quotient on residuals (residual method)
+. local z_alpha = invnormal(1 - `alpha'/2)
+
+. local z_q = invnormal(`q')
+
+. local phi_zq = normalden(`z_q')
+
+. local h_prob_N = `z_alpha'^(2/3) * ((1.5 * `phi_zq'^2) / (2*`z_q'^2 + 1))^(1/
+> 3) * `N'^(-1/3)
+
+. 
+. * Exclude LP basis observations for residual method
+. count if abs(resid) < 1e-8
+  2
+
+. local n_basis = r(N)
+
+. local N_adj = `N' - `n_basis'
+
+. local h_prob_adj = `z_alpha'^(2/3) * ((1.5 * `phi_zq'^2) / (2*`z_q'^2 + 1))^(
+> 1/3) * `N_adj'^(-1/3)
+
+. 
+. display ""
+
+
+. display "Hall-Sheather bandwidth (N=" `N' "): " `h_prob_N'
+Hall-Sheather bandwidth (N=74): .23141524
+
+. display "Hall-Sheather bandwidth (N_adj=" `N_adj' "): " `h_prob_adj'
+Hall-Sheather bandwidth (N_adj=72): .23353843
+
+. display "LP basis observations: " `n_basis'
+LP basis observations: 2
+
+. 
+. * Difference quotient on residuals
+. tempvar resid_nobase
+
+. gen `resid_nobase' = resid if abs(resid) >= 1e-8
+(2 missing values generated)
+
+. _pctile `resid_nobase', p(`=(`q'-`h_prob_adj')*100' `=(`q'+`h_prob_adj')*100'
+> )
+
+. local r_lo = r(r1)
+
+. local r_hi = r(r2)
+
+. local s_dq_resid = (`r_hi' - `r_lo') / (2 * `h_prob_adj')
+
+. display ""
+
+
+. display "Method 1: Difference quotient on residuals (excl. basis)"
+Method 1: Difference quotient on residuals (excl. basis)
+
+. display "  r_lo = " `r_lo' ", r_hi = " `r_hi'
+  r_lo = -756.66669, r_hi = 1326.6666
+
+. display "  sparsity = " `s_dq_resid'
+  sparsity = 4460.365
+
+. 
+. * Method 2: Difference quotient on Y
+. _pctile price, p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local y_lo = r(r1)
+
+. local y_hi = r(r2)
+
+. local s_dq_y = (`y_hi' - `y_lo') / (2 * `h_prob_N')
+
+. display ""
+
+
+. display "Method 2: Difference quotient on Y"
+Method 2: Difference quotient on Y
+
+. display "  y_lo = " `y_lo' ", y_hi = " `y_hi'
+  y_lo = 4296, y_hi = 6303
+
+. display "  sparsity = " `s_dq_y'
+  sparsity = 4336.361
+
+. 
+. * Method 3: Difference quotient on fitted values
+. _pctile fitted, p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local f_lo = r(r1)
+
+. local f_hi = r(r2)
+
+. local s_dq_fit = (`f_hi' - `f_lo') / (2 * `h_prob_N')
+
+. display ""
+
+
+. display "Method 3: Difference quotient on fitted values"
+Method 3: Difference quotient on fitted values
+
+. display "  f_lo = " `f_lo' ", f_hi = " `f_hi'
+  f_lo = 4832.6665, f_hi = 5646.6665
+
+. display "  sparsity = " `s_dq_fit'
+  sparsity = 1758.7433
+
+. 
+. * Method 4: Sort Y by fitted, then take quantiles of Y
+. gsort fitted
+
+. tempvar y_sorted order_idx
+
+. gen `order_idx' = _n
+
+. gen `y_sorted' = price
+
+. _pctile `y_sorted', p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local ys_lo = r(r1)
+
+. local ys_hi = r(r2)
+
+. local s_sorted = (`ys_hi' - `ys_lo') / (2 * `h_prob_N')
+
+. display ""
+
+
+. display "Method 4: Y quantiles after sorting by fitted"
+Method 4: Y quantiles after sorting by fitted
+
+. display "  ys_lo = " `ys_lo' ", ys_hi = " `ys_hi'
+  ys_lo = 4296, ys_hi = 6303
+
+. display "  sparsity = " `s_sorted'
+  sparsity = 4336.361
+
+. 
+. * Restore sort order
+. sort `order_idx'
+
+. 
+. * Method 5: Kernel density on residuals at 0 (Silverman bandwidth)
+. local r_25 = 0
+
+. local r_75 = 0
+
+. _pctile resid, p(25 75)
+
+. local r_25 = r(r1)
+
+. local r_75 = r(r2)
+
+. local iqr_r = `r_75' - `r_25'
+
+. local h_silverman = 0.9 * `iqr_r' / 1.34 * `N'^(-0.2)
+
+. display ""
+
+
+. display "Method 5: Kernel density on residuals (Silverman bandwidth)"
+Method 5: Kernel density on residuals (Silverman bandwidth)
+
+. display "  IQR of residuals = " `iqr_r'
+  IQR of residuals = 2551.3334
+
+. display "  Silverman h = " `h_silverman'
+  Silverman h = 724.53368
+
+. 
+. gen kernel_val = 0
+
+. replace kernel_val = 0.75 * (1 - (resid/`h_silverman')^2) if abs(resid) < `h_
+> silverman'
+(30 real changes made)
+
+. qui sum kernel_val
+
+. local sum_K = r(sum)
+
+. local f0_silver = `sum_K' / (`N' * `h_silverman')
+
+. local s_silver = 1 / `f0_silver'
+
+. display "  f(0) = " `f0_silver'
+  f(0) = .00032035
+
+. display "  sparsity = " `s_silver'
+  sparsity = 3121.6145
+
+. drop kernel_val
+
+. 
+. * Method 6: Kernel density on residuals at 0 (Hall-Sheather bandwidth)
+. * Convert h_prob to residual scale using residual quantiles
+. _pctile resid, p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local h_resid = (r(r2) - r(r1)) / 2
+
+. display ""
+
+
+. display "Method 6: Kernel density on residuals (H-S bandwidth)"
+Method 6: Kernel density on residuals (H-S bandwidth)
+
+. display "  h in residual scale = " `h_resid'
+  h in residual scale = 1041.6667
+
+. 
+. gen kernel_val = 0
+
+. replace kernel_val = 0.75 * (1 - (resid/`h_resid')^2) if abs(resid) < `h_resi
+> d'
+(39 real changes made)
+
+. qui sum kernel_val
+
+. local sum_K = r(sum)
+
+. local f0_hs = `sum_K' / (`N' * `h_resid')
+
+. local s_hs = 1 / `f0_hs'
+
+. display "  f(0) = " `f0_hs'
+  f(0) = .00028277
+
+. display "  sparsity = " `s_hs'
+  sparsity = 3536.4154
+
+. drop kernel_val
+
+. 
+. * Method 7: Kernel density on residuals (H-S bandwidth in FITTED scale)
+. _pctile fitted, p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local h_fitted = (r(r2) - r(r1)) / 2
+
+. display ""
+
+
+. display "Method 7: Kernel density on residuals (H-S bandwidth in fitted scale
+> )"
+Method 7: Kernel density on residuals (H-S bandwidth in fitted scale)
+
+. display "  h in fitted scale = " `h_fitted'
+  h in fitted scale = 407
+
+. 
+. gen kernel_val = 0
+
+. replace kernel_val = 0.75 * (1 - (resid/`h_fitted')^2) if abs(resid) < `h_fit
+> ted'
+(22 real changes made)
+
+. qui sum kernel_val
+
+. local sum_K = r(sum)
+
+. local f0_fit = `sum_K' / (`N' * `h_fitted')
+
+. local s_fit = 1 / `f0_fit'
+
+. display "  f(0) = " `f0_fit'
+  f(0) = .00043717
+
+. display "  sparsity = " `s_fit'
+  sparsity = 2287.4374
+
+. drop kernel_val
+
+. 
+. * Method 8: Kernel density on residuals (H-S bandwidth in Y scale)
+. _pctile price, p(`=(`q'-`h_prob_N')*100' `=(`q'+`h_prob_N')*100')
+
+. local h_y = (r(r2) - r(r1)) / 2
+
+. display ""
+
+
+. display "Method 8: Kernel density on residuals (H-S bandwidth in Y scale)"
+Method 8: Kernel density on residuals (H-S bandwidth in Y scale)
+
+. display "  h in Y scale = " `h_y'
+  h in Y scale = 1003.5
+
+. 
+. gen kernel_val = 0
+
+. replace kernel_val = 0.75 * (1 - (resid/`h_y')^2) if abs(resid) < `h_y'
+(37 real changes made)
+
+. qui sum kernel_val
+
+. local sum_K = r(sum)
+
+. local f0_y = `sum_K' / (`N' * `h_y')
+
+. local s_y = 1 / `f0_y'
+
+. display "  f(0) = " `f0_y'
+  f(0) = .00028639
+
+. display "  sparsity = " `s_y'
+  sparsity = 3491.7777
+
+. drop kernel_val
+
+. 
+. * Method 9: Per-observation kernel density on Y at fitted values (Powell)
+. * For each observation i, estimate f_i = density of Y at yhat_i
+. display ""
+
+
+. display "Method 9: Per-observation kernel density (Powell method)"
+Method 9: Per-observation kernel density (Powell method)
+
+. display "  h in Y scale = " `h_y'
+  h in Y scale = 1003.5
+
+. 
+. gen obs_density = 0
+
+. qui forval i = 1/`N' {
+
+. qui sum obs_density
+
+. local avg_f = r(mean)
+
+. local s_powell = 1 / `avg_f'
+
+. display "  Average f = " `avg_f'
+  Average f = .00021096
+
+. display "  sparsity = " `s_powell'
+  sparsity = 4740.1697
+
+. 
+. display ""
+
+
+. display "============================================================"
+============================================================
+
+. display "Summary - Target: qreg IID fitted sparsity = 6650.08"
+Summary - Target: qreg IID fitted sparsity = 6650.08
+
+. display "============================================================"
+============================================================
+
+. display "Method 1 (DQ residuals, excl basis): " %8.2f `s_dq_resid'
+Method 1 (DQ residuals, excl basis):  4460.37
+
+. display "Method 2 (DQ Y):                     " %8.2f `s_dq_y'
+Method 2 (DQ Y):                      4336.36
+
+. display "Method 3 (DQ fitted):                " %8.2f `s_dq_fit'
+Method 3 (DQ fitted):                 1758.74
+
+. display "Method 4 (DQ Y sorted by fitted):    " %8.2f `s_sorted'
+Method 4 (DQ Y sorted by fitted):     4336.36
+
+. display "Method 5 (KDE Silverman):            " %8.2f `s_silver'
+Method 5 (KDE Silverman):             3121.61
+
+. display "Method 6 (KDE H-S residual):         " %8.2f `s_hs'
+Method 6 (KDE H-S residual):          3536.42
+
+. display "Method 7 (KDE H-S fitted):           " %8.2f `s_fit'
+Method 7 (KDE H-S fitted):            2287.44
+
+. display "Method 8 (KDE H-S Y):                " %8.2f `s_y'
+Method 8 (KDE H-S Y):                 3491.78
+
+. display "Method 9 (Powell per-obs):           " %8.2f `s_powell'
+Method 9 (Powell per-obs):            4740.17
+
+. 
+end of do-file

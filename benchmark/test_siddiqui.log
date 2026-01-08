@@ -1,0 +1,156 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_siddiqui.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. local q = 0.5
+
+. local h = 0.23141524
+
+. 
+. * Fit quantile regression at q-h, q, and q+h
+. local q_lo = `q' - `h'
+
+. local q_hi = `q' + `h'
+
+. 
+. display "q = " `q'
+q = .5
+
+. display "h = " `h'
+h = .23141524
+
+. display "q_lo = " `q_lo'
+q_lo = .26858476
+
+. display "q_hi = " `q_hi'
+q_hi = .73141524
+
+. 
+. * Get mean of X
+. quietly sum mpg
+
+. local x_bar = r(mean)
+
+. display "X_bar (mean mpg) = " `x_bar'
+X_bar (mean mpg) = 21.297297
+
+. 
+. * Fit at q_lo
+. quietly qreg price mpg, quantile(`q_lo')
+
+. local b0_lo = _b[_cons]
+
+. local b1_lo = _b[mpg]
+
+. local Qhat_lo = `b0_lo' + `b1_lo' * `x_bar'
+
+. display ""
+
+
+. display "=== Quantile regression at q-h = " `q_lo' " ==="
+=== Quantile regression at q-h = .26858476 ===
+
+. display "b[_cons] = " `b0_lo'
+b[_cons] = 6266.75
+
+. display "b[mpg] = " `b1_lo'
+b[mpg] = -81.25
+
+. display "Q_hat(q-h | X_bar) = " `Qhat_lo'
+Q_hat(q-h | X_bar) = 4536.3446
+
+. 
+. * Fit at q_hi
+. quietly qreg price mpg, quantile(`q_hi')
+
+. local b0_hi = _b[_cons]
+
+. local b1_hi = _b[mpg]
+
+. local Qhat_hi = `b0_hi' + `b1_hi' * `x_bar'
+
+. display ""
+
+
+. display "=== Quantile regression at q+h = " `q_hi' " ==="
+=== Quantile regression at q+h = .73141524 ===
+
+. display "b[_cons] = " `b0_hi'
+b[_cons] = 13545.5
+
+. display "b[mpg] = " `b1_hi'
+b[mpg] = -278.5
+
+. display "Q_hat(q+h | X_bar) = " `Qhat_hi'
+Q_hat(q+h | X_bar) = 7614.2027
+
+. 
+. * Compute Siddiqui sparsity
+. local s_siddiqui = (`Qhat_hi' - `Qhat_lo') / (2 * `h')
+
+. display ""
+
+
+. display "=== Siddiqui (fitted) sparsity estimate ==="
+=== Siddiqui (fitted) sparsity estimate ===
+
+. display "Q_hat(q+h) - Q_hat(q-h) = " (`Qhat_hi' - `Qhat_lo')
+Q_hat(q+h) - Q_hat(q-h) = 3077.8581
+
+. display "Sparsity = [Q(q+h) - Q(q-h)] / (2h) = " `s_siddiqui'
+Sparsity = [Q(q+h) - Q(q-h)] / (2h) = 6650.0765
+
+. 
+. * Compare to qreg fitted method
+. display ""
+
+
+. display "=== Stata qreg IID fitted ==="
+=== Stata qreg IID fitted ===
+
+. quietly qreg price mpg
+
+. display "e(sparsity) = " e(sparsity)
+e(sparsity) = 6650.0766
+
+. display ""
+
+
+. display "Ratio: Siddiqui / qreg = " `s_siddiqui' / e(sparsity)
+Ratio: Siddiqui / qreg = .99999999
+
+. 
+end of do-file

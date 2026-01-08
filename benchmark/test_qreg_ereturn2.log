@@ -1,0 +1,124 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_qreg_ereturn2.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. display "=== IID Residual method ==="
+=== IID Residual method ===
+
+. qreg price mpg, vce(iid, residual)
+
+Iteration 1:  WLS sum of weighted deviations =  70552.192
+
+Iteration 1:  Sum of abs. weighted deviations =    75229.5
+Iteration 2:  Sum of abs. weighted deviations =   64766.75
+Iteration 3:  Sum of abs. weighted deviations =  64760.833
+
+Median regression                                   Number of obs =         74
+  Raw sum of deviations  71102.5 (about 4934)
+  Min sum of deviations 64760.83                    Pseudo R2     =     0.0892
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -135.6667   45.11675    -3.01   0.004    -225.6053   -45.72806
+       _cons |   8088.667   995.2255     8.13   0.000     6104.721    10072.61
+------------------------------------------------------------------------------
+
+. display "sparsity = " e(sparsity)
+sparsity = 4460.3651
+
+. display "f_r = " e(f_r)
+f_r = .0002242
+
+. display "bwidth = " e(bwidth)
+bwidth = .23353843
+
+. display "denmethod = " e(denmethod)
+denmethod = residual
+
+. 
+. display ""
+
+
+. display "=== IID Fitted method (default) ==="
+=== IID Fitted method (default) ===
+
+. qreg price mpg
+
+Iteration 1:  WLS sum of weighted deviations =  70552.192
+
+Iteration 1:  Sum of abs. weighted deviations =    75229.5
+Iteration 2:  Sum of abs. weighted deviations =   64766.75
+Iteration 3:  Sum of abs. weighted deviations =  64760.833
+
+Median regression                                   Number of obs =         74
+  Raw sum of deviations  71102.5 (about 4934)
+  Min sum of deviations 64760.83                    Pseudo R2     =     0.0892
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -135.6667   67.26576    -2.02   0.047    -269.7585   -1.574816
+       _cons |   8088.667   1483.808     5.45   0.000     5130.749    11046.58
+------------------------------------------------------------------------------
+
+. display "sparsity = " e(sparsity)
+sparsity = 6650.0766
+
+. display "f_r = " e(f_r)
+f_r = .00015037
+
+. display "bwidth = " e(bwidth)
+bwidth = .23141524
+
+. display "denmethod = " e(denmethod)
+denmethod = fitted
+
+. 
+. display ""
+
+
+. display "Note: sparsity = 1/f_r"
+Note: sparsity = 1/f_r
+
+. display "Residual: 1/f_r = " 1/0.0002241622
+Residual: 1/f_r = 4461.0554
+
+. display "Fitted: 1/f_r = " 1/0.0001503742
+Fitted: 1/f_r = 6650.0769
+
+. 
+end of do-file

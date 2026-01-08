@@ -1,0 +1,193 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_debug3.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. quietly qreg price mpg
+
+. predict resid, residuals
+
+. gen fitted = price - resid
+
+. 
+. display "=== Data Ranges ==="
+=== Data Ranges ===
+
+. sum price, detail
+
+                            Price
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%         3291           3291
+ 5%         3748           3299
+10%         3895           3667       Obs                  74
+25%         4195           3748       Sum of wgt.          74
+
+50%       5006.5                      Mean           6165.257
+                        Largest       Std. dev.      2949.496
+75%         6342          13466
+90%        11385          13594       Variance        8699526
+95%        13466          14500       Skewness       1.653434
+99%        15906          15906       Kurtosis       4.819188
+
+. local y_iqr = r(p75) - r(p25)
+
+. display "Y (price) IQR = " `y_iqr'
+Y (price) IQR = 2147
+
+. 
+. sum fitted, detail
+
+                           fitted
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%     2526.333       2526.333
+ 5%         3476       3340.333
+10%     4154.333       3340.333       Obs                  74
+25%         4697           3476       Sum of wgt.          74
+
+50%     5375.333                      Mean           5199.333
+                        Largest       Std. dev.      784.8999
+75%     5646.667       6189.333
+90%     6189.333       6189.333       Variance       616067.9
+95%     6189.333       6460.667       Skewness      -.9487177
+99%     6460.667       6460.667       Kurtosis       3.975005
+
+. local fit_iqr = r(p75) - r(p25)
+
+. display "Fitted IQR = " `fit_iqr'
+Fitted IQR = 949.6665
+
+. 
+. sum resid, detail
+
+                          Residuals
+-------------------------------------------------------------
+      Percentiles      Smallest
+ 1%    -2084.333      -2084.333
+ 5%        -1556      -1636.667
+10%        -1275      -1586.667       Obs                  74
+25%         -778          -1556       Sum of wgt.          74
+
+50%            0                      Mean           965.9234
+                        Largest       Std. dev.      2673.188
+75%     1773.333       7133.333
+90%         5038       7276.667       Variance        7145936
+95%     7133.333       8310.667       Skewness       1.614233
+99%     10666.33       10666.33       Kurtosis       5.055555
+
+. local resid_iqr = r(p75) - r(p25)
+
+. display "Residual IQR = " `resid_iqr'
+Residual IQR = 2551.3334
+
+. 
+. local N = 74
+
+. local q = 0.5
+
+. local h_prob = 0.23141524
+
+. 
+. display _n "=== Bandwidth in different scales ==="
+
+=== Bandwidth in different scales ===
+
+. display "h_prob = " `h_prob'
+h_prob = .23141524
+
+. 
+. * Using residual quantiles
+. _pctile resid, p(`=(0.5-`h_prob')*100' `=(0.5+`h_prob')*100')
+
+. local h_resid = (r(r2) - r(r1)) / 2
+
+. display "h from residual quantiles = " `h_resid'
+h from residual quantiles = 1041.6667
+
+. 
+. * Using fitted value quantiles
+. _pctile fitted, p(`=(0.5-`h_prob')*100' `=(0.5+`h_prob')*100')
+
+. local h_fitted = (r(r2) - r(r1)) / 2
+
+. display "h from fitted quantiles = " `h_fitted'
+h from fitted quantiles = 407
+
+. 
+. * Using Y quantiles
+. _pctile price, p(`=(0.5-`h_prob')*100' `=(0.5+`h_prob')*100')
+
+. local h_y = (r(r2) - r(r1)) / 2
+
+. display "h from Y quantiles = " `h_y'
+h from Y quantiles = 1003.5
+
+. 
+. * What sparsity would difference quotient give with residual h?
+. local s_dq = (r(r2) - r(r1)) / (2 * `h_prob')
+
+. * Wait, that's not right. Let me use residuals.
+. _pctile resid, p(`=(0.5-`h_prob')*100' `=(0.5+`h_prob')*100')
+
+. local r_lo = r(r1)
+
+. local r_hi = r(r2)
+
+. local s_dq = (`r_hi' - `r_lo') / (2 * `h_prob')
+
+. display _n "Difference quotient sparsity = " `s_dq'
+
+Difference quotient sparsity = 4501.2881
+
+. 
+. * What does Stata report?
+. display _n "=== Stata reported values ==="
+
+=== Stata reported values ===
+
+. quietly qreg price mpg, vce(iid, residual)
+
+. display "qreg IID residual sparsity = " e(sparsity)
+qreg IID residual sparsity = 4460.3651
+
+. 
+. quietly qreg price mpg
+
+. display "qreg IID fitted sparsity = " e(sparsity)
+qreg IID fitted sparsity = 6650.0766
+
+. 
+end of do-file

@@ -343,77 +343,96 @@ ST_double cqreg_density_at_quantile(const ST_double *data,
  *   Average sparsity (for compatibility with IID method)
  */
 ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
+                                        const ST_double *y,
                                         const ST_double *residuals,
                                         ST_int N,
                                         ST_double q,
                                         cqreg_bw_method bw_method)
 {
-    if (obs_density == NULL || residuals == NULL || N <= 0) {
+    if (obs_density == NULL || y == NULL || residuals == NULL || N <= 0) {
         return 1.0;
     }
 
     /*
-     * The fitted method estimates local density using kernel smoothing.
-     * For quantile regression, the density at the quantile is estimated
-     * by counting observations in a bandwidth around residual = 0.
+     * Fitted method density estimation for robust VCE (Powell sandwich).
      *
-     * Bandwidth is computed in probability units, then scaled by the
-     * local dispersion of residuals.
+     * For each observation i, estimate the conditional density of Y at the
+     * fitted value ŷ_i:
+     *   f_i = (1/(N*h)) * sum_j K((y_j - ŷ_i) / h)
+     *
+     * where:
+     *   ŷ_i = y_i - r_i (fitted value at observation i)
+     *   h = bandwidth in Y scale
+     *
+     * This is Stata's "fitted" method for vce(robust).
      */
 
     /* Compute bandwidth in probability units */
     ST_double h_prob = cqreg_compute_bandwidth(N, q, bw_method);
 
-    /* Sort residuals to find quantiles */
-    ST_double *sorted = (ST_double *)malloc(N * sizeof(ST_double));
-    if (sorted == NULL) {
+    /*
+     * Compute bandwidth in Y scale using the fitted values.
+     * The bandwidth should be proportional to the spread of fitted values.
+     */
+    ST_double *fitted = (ST_double *)malloc(N * sizeof(ST_double));
+    if (fitted == NULL) {
         /* Fallback: uniform density */
         for (ST_int i = 0; i < N; i++) {
-            obs_density[i] = 1.0;
+            obs_density[i] = 1.0 / N;
         }
-        return 1.0;
+        return (ST_double)N;
     }
-    memcpy(sorted, residuals, N * sizeof(ST_double));
-    cqreg_sort_ascending(sorted, N);
 
-    /* Find the residual scale from the bandwidth region around 0 */
+    /* Compute fitted values: ŷ_i = y_i - r_i */
+    for (ST_int i = 0; i < N; i++) {
+        fitted[i] = y[i] - residuals[i];
+    }
+    cqreg_sort_ascending(fitted, N);
+
+    /* Get bandwidth in fitted value scale from probability bandwidth */
     ST_double q_lo = q - h_prob;
     ST_double q_hi = q + h_prob;
-
-    /* Clamp to valid range */
     if (q_lo < 0.01) q_lo = 0.01;
     if (q_hi > 0.99) q_hi = 0.99;
 
-    /* Get corresponding residual quantiles */
-    ST_double r_lo = cqreg_sample_quantile(sorted, N, q_lo);
-    ST_double r_hi = cqreg_sample_quantile(sorted, N, q_hi);
+    ST_double fit_lo = cqreg_sample_quantile(fitted, N, q_lo);
+    ST_double fit_hi = cqreg_sample_quantile(fitted, N, q_hi);
 
-    /* Bandwidth in residual scale */
-    ST_double h_resid = (r_hi - r_lo) / 2.0;
-    if (h_resid < 1e-10) {
-        h_resid = 1.0;  /* Fallback for degenerate cases */
+    /* Bandwidth h in fitted value scale */
+    ST_double h = (fit_hi - fit_lo) / 2.0;
+    if (h < 1e-10) {
+        h = 1.0;
     }
 
+    free(fitted);
+
     /*
-     * Use kernel density estimation for each observation.
-     * The density at residual=0 is estimated using Epanechnikov kernel.
+     * Compute per-observation density:
+     * f_i = (1/(N*h)) * sum_j K((y_j - ŷ_i) / h)
+     *
+     * where ŷ_i = y_i - r_i (fitted value)
      */
     ST_double total_density = 0.0;
+    ST_double h_inv = 1.0 / h;
+    ST_double N_h_inv = 1.0 / ((ST_double)N * h);
 
-    #pragma omp parallel for reduction(+:total_density) if(N > 10000)
     for (ST_int i = 0; i < N; i++) {
-        ST_double u = residuals[i] / h_resid;
+        ST_double yhat_i = y[i] - residuals[i];  /* Fitted value at i */
+        ST_double sum_K = 0.0;
 
-        /* Epanechnikov kernel at u */
-        ST_double K = 0.0;
-        if (fabs(u) < 1.0) {
-            K = 0.75 * (1.0 - u * u);
+        /* Sum kernel contributions from all observations */
+        for (ST_int j = 0; j < N; j++) {
+            ST_double u = (y[j] - yhat_i) * h_inv;
+
+            /* Epanechnikov kernel */
+            if (fabs(u) < 1.0) {
+                sum_K += 0.75 * (1.0 - u * u);
+            }
         }
 
-        /* Density estimate: K(u) / h */
-        obs_density[i] = K / h_resid;
+        obs_density[i] = sum_K * N_h_inv;
 
-        /* For numerical stability, use a minimum density */
+        /* Ensure minimum density for numerical stability */
         if (obs_density[i] < 1e-10) {
             obs_density[i] = 1e-10;
         }
@@ -421,9 +440,7 @@ ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
         total_density += obs_density[i];
     }
 
-    free(sorted);
-
-    /* Return average sparsity (1/f) */
+    /* Return average sparsity */
     ST_double avg_density = total_density / N;
     if (avg_density < 1e-10) avg_density = 1e-10;
 

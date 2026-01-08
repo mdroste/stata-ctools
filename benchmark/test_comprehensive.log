@@ -1,0 +1,237 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_comprehensive.do 
+
+. clear all
+
+. set more off
+
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. display "============================================================"
+============================================================
+
+. display "Comprehensive comparison: qreg vs cqreg"
+Comprehensive comparison: qreg vs cqreg
+
+. display "============================================================"
+============================================================
+
+. 
+. * Test 1: Default (should be IID fitted)
+. display ""
+
+
+. display "=== Test 1: Default settings ==="
+=== Test 1: Default settings ===
+
+. quietly qreg price mpg
+
+. local qreg_default_se = _se[mpg]
+
+. local qreg_default_sp = e(sparsity)
+
+. local qreg_default_den = e(denmethod)
+
+. 
+. quietly cqreg price mpg
+
+. local cqreg_default_se = _se[mpg]
+
+. local cqreg_default_sp = e(sparsity)
+
+. local cqreg_default_den = e(denmethod)
+
+. 
+. display "qreg default:  SE=" %8.4f `qreg_default_se' " sparsity=" %8.2f `qreg
+> _default_sp' " denmethod=" "`qreg_default_den'"
+qreg default:  SE= 67.2658 sparsity= 6650.08 denmethod=fitted
+
+. display "cqreg default: SE=" %8.4f `cqreg_default_se' " sparsity=" %8.2f `cqr
+> eg_default_sp' " denmethod=" "`cqreg_default_den'"
+cqreg default: SE= 67.2658 sparsity= 6650.08 denmethod=fitted
+
+. display "Ratio: " %6.4f `cqreg_default_se'/`qreg_default_se'
+Ratio: 1.0000
+
+. 
+. * Test 2: IID with residual method
+. display ""
+
+
+. display "=== Test 2: IID with residual method ==="
+=== Test 2: IID with residual method ===
+
+. quietly qreg price mpg, vce(iid, residual)
+
+. local qreg_resid_se = _se[mpg]
+
+. local qreg_resid_sp = e(sparsity)
+
+. 
+. quietly cqreg price mpg, vce(iid) denmethod(residual)
+
+. local cqreg_resid_se = _se[mpg]
+
+. local cqreg_resid_sp = e(sparsity)
+
+. 
+. display "qreg iid resid:  SE=" %8.4f `qreg_resid_se' " sparsity=" %8.2f `qreg
+> _resid_sp'
+qreg iid resid:  SE= 45.1168 sparsity= 4460.37
+
+. display "cqreg iid resid: SE=" %8.4f `cqreg_resid_se' " sparsity=" %8.2f `cqr
+> eg_resid_sp'
+cqreg iid resid: SE= 45.1168 sparsity= 4460.37
+
+. display "Ratio: " %6.4f `cqreg_resid_se'/`qreg_resid_se'
+Ratio: 1.0000
+
+. 
+. * Test 3: Robust VCE
+. display ""
+
+
+. display "=== Test 3: Robust VCE ==="
+=== Test 3: Robust VCE ===
+
+. quietly qreg price mpg, vce(robust)
+
+. local qreg_robust_se = _se[mpg]
+
+. local qreg_robust_sp = e(sparsity)
+
+. 
+. quietly cqreg price mpg, vce(robust)
+
+. local cqreg_robust_se = _se[mpg]
+
+. local cqreg_robust_sp = e(sparsity)
+
+. 
+. display "qreg robust:  SE=" %8.4f `qreg_robust_se' " sparsity=" %8.2f `qreg_r
+> obust_sp'
+qreg robust:  SE= 43.4520 sparsity=       .
+
+. display "cqreg robust: SE=" %8.4f `cqreg_robust_se' " sparsity=" %8.2f `cqreg
+> _robust_sp'
+cqreg robust: SE= 63.2608 sparsity= 4695.02
+
+. display "Ratio: " %6.4f `cqreg_robust_se'/`qreg_robust_se'
+Ratio: 1.4559
+
+. 
+. * Test 4: Multiple regressors
+. display ""
+
+
+. display "=== Test 4: Multiple regressors ==="
+=== Test 4: Multiple regressors ===
+
+. quietly qreg price mpg weight
+
+. local qreg_mpg = _se[mpg]
+
+. local qreg_wgt = _se[weight]
+
+. 
+. quietly cqreg price mpg weight
+
+. local cqreg_mpg = _se[mpg]
+
+. local cqreg_wgt = _se[weight]
+
+. 
+. display "qreg:  SE[mpg]=" %8.4f `qreg_mpg' " SE[weight]=" %8.4f `qreg_wgt'
+qreg:  SE[mpg]=121.1579 SE[weight]=  0.9019
+
+. display "cqreg: SE[mpg]=" %8.4f `cqreg_mpg' " SE[weight]=" %8.4f `cqreg_wgt'
+cqreg: SE[mpg]=121.1579 SE[weight]=  0.9019
+
+. display "Ratios: mpg=" %6.4f `cqreg_mpg'/`qreg_mpg' " weight=" %6.4f `cqreg_w
+> gt'/`qreg_wgt'
+Ratios: mpg=1.0000 weight=1.0000
+
+. 
+. * Test 5: Different quantile
+. display ""
+
+
+. display "=== Test 5: 75th percentile ==="
+=== Test 5: 75th percentile ===
+
+. quietly qreg price mpg, quantile(0.75)
+
+. local qreg_q75_se = _se[mpg]
+
+. local qreg_q75_sp = e(sparsity)
+
+. 
+. quietly cqreg price mpg, quantile(0.75)
+
+. local cqreg_q75_se = _se[mpg]
+
+. local cqreg_q75_sp = e(sparsity)
+
+. 
+. display "qreg Q75:  SE=" %8.4f `qreg_q75_se' " sparsity=" %8.2f `qreg_q75_sp'
+qreg Q75:  SE=128.1401 sparsity=14628.06
+
+. display "cqreg Q75: SE=" %8.4f `cqreg_q75_se' " sparsity=" %8.2f `cqreg_q75_s
+> p'
+cqreg Q75: SE=128.1401 sparsity=14628.06
+
+. display "Ratio: " %6.4f `cqreg_q75_se'/`qreg_q75_se'
+Ratio: 1.0000
+
+. 
+. display ""
+
+
+. display "============================================================"
+============================================================
+
+. display "Summary: All ratios should be 1.0000 for exact match"
+Summary: All ratios should be 1.0000 for exact match
+
+. display "============================================================"
+============================================================
+
+. 
+end of do-file

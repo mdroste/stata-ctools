@@ -179,6 +179,7 @@ void cqreg_sort_ascending(ST_double *data, ST_int N);
  *   Average sparsity (1 / mean density)
  */
 ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
+                                        const ST_double *y,
                                         const ST_double *residuals,
                                         ST_int N,
                                         ST_double q,

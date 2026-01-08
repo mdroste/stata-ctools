@@ -1,0 +1,157 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_debug2.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. 
+. quietly qreg price mpg
+
+. predict resid, residuals
+
+. 
+. * Count LP basis observations (residual = 0)
+. count if abs(resid) < 1e-8
+  2
+
+. local n_basis = r(N)
+
+. display "LP basis observations (|r| < 1e-8): " `n_basis'
+LP basis observations (|r| < 1e-8): 2
+
+. 
+. * Hall-Sheather bandwidth
+. local N = 74
+
+. local q = 0.5
+
+. local alpha = 0.05
+
+. local z_alpha = invnormal(1 - `alpha'/2)  
+
+. local z_q = invnormal(`q')
+
+. local phi_zq = normalden(`z_q')
+
+. local h_prob = `z_alpha'^(2/3) * ((1.5 * `phi_zq'^2) / (2*`z_q'^2 + 1))^(1/3)
+>  * `N'^(-1/3)
+
+. display "h_prob (Hall-Sheather) = " `h_prob'
+h_prob (Hall-Sheather) = .23141524
+
+. 
+. * Residual quantiles for bandwidth
+. _pctile resid, p(`=(`q'-`h_prob')*100' `=(`q'+`h_prob')*100')
+
+. local r_lo = r(r1)
+
+. local r_hi = r(r2)
+
+. local h_resid = (`r_hi' - `r_lo') / 2
+
+. display "h_resid = " `h_resid'
+h_resid = 1041.6667
+
+. 
+. * Kernel density at 0 (all observations)
+. gen kernel_all = 0
+
+. replace kernel_all = 0.75 * (1 - (resid/`h_resid')^2) if abs(resid) < `h_resi
+> d'
+(39 real changes made)
+
+. qui sum kernel_all
+
+. local f0_all = r(sum) / (`N' * `h_resid')
+
+. local s_all = 1 / `f0_all'
+
+. display "Kernel density at 0 (all obs): f(0)=" `f0_all' ", sparsity=" `s_all'
+Kernel density at 0 (all obs): f(0)=.00028277, sparsity=3536.4154
+
+. 
+. * Kernel density at 0 (excluding LP basis)
+. gen kernel_no_basis = 0
+
+. replace kernel_no_basis = 0.75 * (1 - (resid/`h_resid')^2) if abs(resid) < `h
+> _resid' & abs(resid) >= 1e-8
+(37 real changes made)
+
+. qui sum kernel_no_basis
+
+. local N_adj = `N' - `n_basis'
+
+. local f0_nb = r(sum) / (`N_adj' * `h_resid')
+
+. local s_nb = 1 / `f0_nb'
+
+. display "Kernel density at 0 (no basis): f(0)=" `f0_nb' ", sparsity=" `s_nb'
+Kernel density at 0 (no basis): f(0)=.00027063, sparsity=3695.1229
+
+. 
+. * What SE would these give?
+. * First get (X'X)^{-1}[1,1] from the IID residual result
+. quietly qreg price mpg, vce(iid, residual)
+
+. local se_iid_resid = _se[mpg]
+
+. local s_iid_resid = e(sparsity)
+
+. local xtx_inv11 = (`se_iid_resid'^2) / (0.25 * `s_iid_resid'^2)
+
+. display "(X'X)^{-1}[1,1] = " `xtx_inv11'
+(X'X)^{-1}[1,1] = .00040926
+
+. 
+. local se_all = sqrt(0.25 * `s_all'^2 * `xtx_inv11')
+
+. local se_nb = sqrt(0.25 * `s_nb'^2 * `xtx_inv11')
+
+. display "Predicted SE (all obs):      " `se_all'
+Predicted SE (all obs):      35.770969
+
+. display "Predicted SE (no basis):     " `se_nb'
+Predicted SE (no basis):     37.376301
+
+. 
+. display ""
+
+
+. display "Actual qreg robust SE:       " 43.452
+Actual qreg robust SE:       43.452
+
+. display "Actual qreg IID residual SE: " 45.117
+Actual qreg IID residual SE: 45.117
+
+. 
+end of do-file

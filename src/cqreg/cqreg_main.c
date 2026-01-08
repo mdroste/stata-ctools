@@ -195,6 +195,120 @@ static ST_int load_clusters(cqreg_state *state,
 }
 
 /* ============================================================================
+ * Helper: Siddiqui (Fitted) Sparsity Estimation
+ * ============================================================================ */
+
+/*
+ * Estimate sparsity using the Siddiqui difference quotient method.
+ * This is Stata's default "fitted" method for vce(iid).
+ *
+ * The method:
+ * 1. Fit quantile regression at τ-h and τ+h
+ * 2. Evaluate predicted quantiles at X̄ (mean of X)
+ * 3. Sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h)
+ *
+ * Reference: Hendricks and Koenker (1992), Koenker (2005, sec. 3.4)
+ */
+static ST_double estimate_siddiqui_sparsity(const ST_double *y,
+                                            const ST_double *X,
+                                            ST_int N, ST_int K,
+                                            ST_double quantile,
+                                            cqreg_bw_method bw_method,
+                                            const cqreg_ipm_config *ipm_config)
+{
+    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double q_lo = quantile - h;
+    ST_double q_hi = quantile + h;
+
+    /* Check bounds */
+    if (q_lo <= 0.0 || q_hi >= 1.0) {
+        /* Fallback to IQR-based estimate */
+        return 1.0;
+    }
+
+    /* Allocate temporary arrays for beta coefficients */
+    ST_double *beta_lo = (ST_double *)malloc(K * sizeof(ST_double));
+    ST_double *beta_hi = (ST_double *)malloc(K * sizeof(ST_double));
+
+    if (beta_lo == NULL || beta_hi == NULL) {
+        free(beta_lo);
+        free(beta_hi);
+        return 1.0;
+    }
+
+    /* Create temporary IPM states for the auxiliary regressions */
+    cqreg_ipm_state *ipm_lo = cqreg_ipm_create(N, K, ipm_config);
+    cqreg_ipm_state *ipm_hi = cqreg_ipm_create(N, K, ipm_config);
+
+    if (ipm_lo == NULL || ipm_hi == NULL) {
+        cqreg_ipm_free(ipm_lo);
+        cqreg_ipm_free(ipm_hi);
+        free(beta_lo);
+        free(beta_hi);
+        return 1.0;
+    }
+
+    /* Solve quantile regression at q_lo */
+    ST_int rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo);
+
+    /* Solve quantile regression at q_hi */
+    ST_int rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
+
+    /* Check convergence */
+    if (rc_lo <= 0 || rc_hi <= 0) {
+        cqreg_ipm_free(ipm_lo);
+        cqreg_ipm_free(ipm_hi);
+        free(beta_lo);
+        free(beta_hi);
+        return 1.0;
+    }
+
+    /* Compute X̄ (mean of each column of X) */
+    ST_double *x_bar = (ST_double *)calloc(K, sizeof(ST_double));
+    if (x_bar == NULL) {
+        cqreg_ipm_free(ipm_lo);
+        cqreg_ipm_free(ipm_hi);
+        free(beta_lo);
+        free(beta_hi);
+        return 1.0;
+    }
+
+    for (ST_int k = 0; k < K; k++) {
+        const ST_double *Xk = &X[k * N];
+        ST_double sum = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            sum += Xk[i];
+        }
+        x_bar[k] = sum / (ST_double)N;
+    }
+
+    /* Compute Q̂(τ-h|X̄) = X̄'β_lo and Q̂(τ+h|X̄) = X̄'β_hi */
+    ST_double Qhat_lo = 0.0;
+    ST_double Qhat_hi = 0.0;
+    for (ST_int k = 0; k < K; k++) {
+        Qhat_lo += x_bar[k] * beta_lo[k];
+        Qhat_hi += x_bar[k] * beta_hi[k];
+    }
+
+    /* Siddiqui sparsity = (Q̂(τ+h|X̄) - Q̂(τ-h|X̄)) / (2h) */
+    ST_double sparsity = (Qhat_hi - Qhat_lo) / (2.0 * h);
+
+    /* Ensure positive sparsity */
+    if (sparsity < 1e-10) {
+        sparsity = 1e-10;
+    }
+
+    /* Cleanup */
+    cqreg_ipm_free(ipm_lo);
+    cqreg_ipm_free(ipm_hi);
+    free(beta_lo);
+    free(beta_hi);
+    free(x_bar);
+
+    return sparsity;
+}
+
+/* ============================================================================
  * Helper: Store results to Stata
  * ============================================================================ */
 
@@ -527,15 +641,21 @@ ST_retcode cqreg_full_regression(const char *args)
     if (state->density_method == CQREG_DENSITY_FITTED && state->vce_type == CQREG_VCE_ROBUST) {
         /* Fitted method for robust: compute per-observation densities */
         state->sparsity = cqreg_estimate_fitted_density(state->obs_density,
+                                                        state->y,
                                                         state->residuals,
                                                         N, quantile,
                                                         state->bw_method);
         state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
-        /* Fitted method for IID: use kernel density for scalar sparsity */
-        state->sparsity = cqreg_estimate_kernel_density_sparsity(state->sparsity_state,
-                                                                  state->residuals);
-        state->bandwidth = state->sparsity_state->bandwidth;
+        /* Fitted method for IID: use Siddiqui difference quotient method.
+         * This fits QR at τ±h and computes sparsity at mean(X).
+         * Matches Stata's default vce(iid) "fitted" method exactly.
+         */
+        state->sparsity = estimate_siddiqui_sparsity(state->y, state->X,
+                                                     N, K, quantile,
+                                                     state->bw_method,
+                                                     &ipm_config);
+        state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
     } else {
         /* Residual method: use difference quotient sparsity */
         state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);
