@@ -17,12 +17,13 @@
 *!   verbose            - Display progress information
 *!   tolerance(#)       - Convergence tolerance (default: 1e-8)
 *!   maxiter(#)         - Maximum IPM iterations (default: 200)
+*!   nopreprocess       - Skip preprocessing (debug option)
 
 program define cqreg, eclass
     version 14.0
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200)]
+        VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
@@ -187,6 +188,7 @@ program define cqreg, eclass
     scalar __cqreg_verbose = ("`verbose'" != "")
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
+    scalar __cqreg_nopreprocess = `nopreprocess'
 
     * Display info if verbose
     if "`verbose'" != "" {
@@ -368,7 +370,7 @@ program define cqreg, eclass
     * Clean up scalars
     capture scalar drop __cqreg_quantile __cqreg_K __cqreg_G
     capture scalar drop __cqreg_vce_type __cqreg_bw_method __cqreg_verbose
-    capture scalar drop __cqreg_tolerance __cqreg_maxiter
+    capture scalar drop __cqreg_tolerance __cqreg_maxiter __cqreg_nopreprocess
     capture scalar drop __cqreg_N __cqreg_K_keep __cqreg_sum_adev
     capture scalar drop __cqreg_sparsity __cqreg_bandwidth
     capture scalar drop __cqreg_iterations __cqreg_converged __cqreg_cons

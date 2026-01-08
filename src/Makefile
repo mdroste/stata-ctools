@@ -90,6 +90,7 @@ CREGHDFE_SRCS = creghdfe/creghdfe_types.c \
 CQREG_SRCS = cqreg/cqreg_types.c \
              cqreg/cqreg_linalg.c \
              cqreg/cqreg_ipm.c \
+             cqreg/cqreg_fn.c \
              cqreg/cqreg_irls.c \
              cqreg/cqreg_sparsity.c \
              cqreg/cqreg_vce.c \
