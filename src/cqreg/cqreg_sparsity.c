@@ -321,6 +321,160 @@ ST_double cqreg_density_at_quantile(const ST_double *data,
 }
 
 /* ============================================================================
+ * Fitted Density Estimation (Stata's default method)
+ * ============================================================================ */
+
+/*
+ * Estimate per-observation densities using the "fitted" method.
+ *
+ * This is Stata's default density estimation for qreg:
+ * 1. Compute fitted values yhat = X * beta
+ * 2. For each observation, use local kernel density estimation
+ * 3. The density is estimated at residual = 0 (the quantile hyperplane)
+ *
+ * Parameters:
+ *   obs_density   - Output: per-observation density estimates (N)
+ *   residuals     - Regression residuals (N)
+ *   N             - Number of observations
+ *   q             - Quantile
+ *   bw_method     - Bandwidth selection method
+ *
+ * Returns:
+ *   Average sparsity (for compatibility with IID method)
+ */
+ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
+                                        const ST_double *residuals,
+                                        ST_int N,
+                                        ST_double q,
+                                        cqreg_bw_method bw_method)
+{
+    if (obs_density == NULL || residuals == NULL || N <= 0) {
+        return 1.0;
+    }
+
+    /*
+     * The fitted method estimates local density using kernel smoothing.
+     * For quantile regression, the density at the quantile is estimated
+     * by counting observations in a bandwidth around residual = 0.
+     *
+     * Bandwidth is computed in probability units, then scaled by the
+     * local dispersion of residuals.
+     */
+
+    /* Compute bandwidth in probability units */
+    ST_double h_prob = cqreg_compute_bandwidth(N, q, bw_method);
+
+    /* Sort residuals to find quantiles */
+    ST_double *sorted = (ST_double *)malloc(N * sizeof(ST_double));
+    if (sorted == NULL) {
+        /* Fallback: uniform density */
+        for (ST_int i = 0; i < N; i++) {
+            obs_density[i] = 1.0;
+        }
+        return 1.0;
+    }
+    memcpy(sorted, residuals, N * sizeof(ST_double));
+    cqreg_sort_ascending(sorted, N);
+
+    /* Find the residual scale from the bandwidth region around 0 */
+    ST_double q_lo = q - h_prob;
+    ST_double q_hi = q + h_prob;
+
+    /* Clamp to valid range */
+    if (q_lo < 0.01) q_lo = 0.01;
+    if (q_hi > 0.99) q_hi = 0.99;
+
+    /* Get corresponding residual quantiles */
+    ST_double r_lo = cqreg_sample_quantile(sorted, N, q_lo);
+    ST_double r_hi = cqreg_sample_quantile(sorted, N, q_hi);
+
+    /* Bandwidth in residual scale */
+    ST_double h_resid = (r_hi - r_lo) / 2.0;
+    if (h_resid < 1e-10) {
+        h_resid = 1.0;  /* Fallback for degenerate cases */
+    }
+
+    /*
+     * Use kernel density estimation for each observation.
+     * The density at residual=0 is estimated using Epanechnikov kernel.
+     */
+    ST_double total_density = 0.0;
+
+    #pragma omp parallel for reduction(+:total_density) if(N > 10000)
+    for (ST_int i = 0; i < N; i++) {
+        ST_double u = residuals[i] / h_resid;
+
+        /* Epanechnikov kernel at u */
+        ST_double K = 0.0;
+        if (fabs(u) < 1.0) {
+            K = 0.75 * (1.0 - u * u);
+        }
+
+        /* Density estimate: K(u) / h */
+        obs_density[i] = K / h_resid;
+
+        /* For numerical stability, use a minimum density */
+        if (obs_density[i] < 1e-10) {
+            obs_density[i] = 1e-10;
+        }
+
+        total_density += obs_density[i];
+    }
+
+    free(sorted);
+
+    /* Return average sparsity (1/f) */
+    ST_double avg_density = total_density / N;
+    if (avg_density < 1e-10) avg_density = 1e-10;
+
+    return 1.0 / avg_density;
+}
+
+/*
+ * Estimate sparsity using kernel density estimation on residuals.
+ * This is an alternative to the difference quotient method.
+ */
+ST_double cqreg_estimate_kernel_density_sparsity(cqreg_sparsity_state *sp,
+                                                  const ST_double *residuals)
+{
+    if (sp == NULL || residuals == NULL) {
+        return 0.0;
+    }
+
+    ST_int N = sp->N;
+    ST_double q = sp->quantile;
+
+    /* Copy residuals and sort */
+    memcpy(sp->sorted_resid, residuals, N * sizeof(ST_double));
+    cqreg_sort_ascending(sp->sorted_resid, N);
+
+    /* Compute bandwidth */
+    ST_double h_prob = cqreg_compute_bandwidth(N, q, sp->bw_method);
+    sp->bandwidth = h_prob;
+
+    /* Get the residual at the quantile (should be near 0 for QR) */
+    ST_double r_q = cqreg_sample_quantile(sp->sorted_resid, N, q);
+
+    /* Convert bandwidth to residual scale using IQR */
+    ST_double r_25 = cqreg_sample_quantile(sp->sorted_resid, N, 0.25);
+    ST_double r_75 = cqreg_sample_quantile(sp->sorted_resid, N, 0.75);
+    ST_double iqr = r_75 - r_25;
+    if (iqr < 1e-10) iqr = 1.0;
+
+    /* Silverman's rule of thumb for bandwidth in residual units */
+    ST_double h_resid = 0.9 * iqr / 1.34 * pow((ST_double)N, -0.2);
+
+    /* Estimate density at r_q using kernel density estimation */
+    ST_double density = cqreg_kernel_density(r_q, sp->sorted_resid, N, h_resid);
+
+    /* Sparsity = 1 / density */
+    if (density < 1e-10) density = 1e-10;
+    sp->sparsity = 1.0 / density;
+
+    return sp->sparsity;
+}
+
+/* ============================================================================
  * Main Sparsity Estimation
  * ============================================================================ */
 

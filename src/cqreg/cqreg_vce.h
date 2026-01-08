@@ -88,6 +88,29 @@ ST_int cqreg_vce_robust(ST_double *V,
                         ST_double bandwidth,
                         ST_double sparsity);
 
+/*
+ * Compute robust variance using Powell sandwich with per-observation densities.
+ * V = (X'DX)^{-1} * tau(1-tau) * (X'X) * (X'DX)^{-1}
+ * where D = diag(f_i(0)) is the matrix of per-observation density estimates.
+ *
+ * This is Stata's default "fitted" method for vce(robust).
+ *
+ * Parameters:
+ *   V           - Output: variance-covariance matrix (K x K)
+ *   X           - Design matrix (N x K, column-major)
+ *   obs_density - Per-observation density estimates f_i(0) (N)
+ *   N, K        - Dimensions
+ *   q           - Quantile
+ *
+ * Returns:
+ *   0 on success, -1 on failure
+ */
+ST_int cqreg_vce_robust_fitted(ST_double *V,
+                               const ST_double *X,
+                               const ST_double *obs_density,
+                               ST_int N, ST_int K,
+                               ST_double q);
+
 /* ============================================================================
  * Cluster-Robust VCE
  * ============================================================================ */

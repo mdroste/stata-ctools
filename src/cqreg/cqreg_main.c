@@ -268,6 +268,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int G = read_scalar_int("__cqreg_G", 0);
     ST_int vce_type = read_scalar_int("__cqreg_vce_type", 0);
     ST_int bw_method = read_scalar_int("__cqreg_bw_method", 0);
+    ST_int density_method = read_scalar_int("__cqreg_density_method", 1);  /* Default: fitted */
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-8);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
@@ -357,6 +358,7 @@ ST_retcode cqreg_full_regression(const char *args)
     state->quantile = quantile;
     state->vce_type = (cqreg_vce_type)vce_type;
     state->bw_method = (cqreg_bw_method)bw_method;
+    state->density_method = (cqreg_density_method)density_method;
 
     main_debug_log("State created. Loading data...\n");
 
@@ -508,14 +510,45 @@ ST_retcode cqreg_full_regression(const char *args)
         return 920;
     }
 
-    main_debug_log("Estimating sparsity...\n");
-    /* Estimate sparsity */
-    state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);
-    state->bandwidth = state->sparsity_state->bandwidth;
+    main_debug_log("Estimating sparsity/density (method=%d, vce=%d)...\n",
+                   state->density_method, state->vce_type);
+
+    /*
+     * Estimate sparsity based on density method and VCE type:
+     *
+     * For IID VCE:
+     * - RESIDUAL: Difference quotient on residuals (matches qreg vce(iid, residual))
+     * - FITTED: Kernel density on residuals for scalar sparsity (matches qreg default)
+     *
+     * For Robust VCE:
+     * - RESIDUAL: Difference quotient sparsity with score-based sandwich
+     * - FITTED: Per-observation densities with Powell sandwich
+     */
+    if (state->density_method == CQREG_DENSITY_FITTED && state->vce_type == CQREG_VCE_ROBUST) {
+        /* Fitted method for robust: compute per-observation densities */
+        state->sparsity = cqreg_estimate_fitted_density(state->obs_density,
+                                                        state->residuals,
+                                                        N, quantile,
+                                                        state->bw_method);
+        state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
+    } else if (state->density_method == CQREG_DENSITY_FITTED) {
+        /* Fitted method for IID: use kernel density for scalar sparsity */
+        state->sparsity = cqreg_estimate_kernel_density_sparsity(state->sparsity_state,
+                                                                  state->residuals);
+        state->bandwidth = state->sparsity_state->bandwidth;
+    } else {
+        /* Residual method: use difference quotient sparsity */
+        state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);
+        state->bandwidth = state->sparsity_state->bandwidth;
+    }
+
     main_debug_log("Sparsity=%.4f, bandwidth=%.6f\n", state->sparsity, state->bandwidth);
 
     if (verbose) {
-        ctools_msg("cqreg", "Sparsity: %.4f, bandwidth: %.6f", state->sparsity, state->bandwidth);
+        const char *method_name = (state->density_method == CQREG_DENSITY_FITTED) ? "fitted" :
+                                  (state->density_method == CQREG_DENSITY_RESIDUAL) ? "residual" : "kernel";
+        ctools_msg("cqreg", "Sparsity: %.4f, bandwidth: %.6f (method: %s)",
+                   state->sparsity, state->bandwidth, method_name);
     }
 
     main_debug_log("Computing VCE...\n");

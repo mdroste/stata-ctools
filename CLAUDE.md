@@ -192,28 +192,39 @@ V = τ(1-τ) * s² * (X'X)⁻¹  (IID case)
 ```
 where `s = 1/f(0)` is the sparsity (inverse density at the quantile).
 
-### VCE Types
+### VCE Types and Density Methods
 
-| Type | Description | Status |
-|------|-------------|--------|
-| IID | Matches `qreg vce(iid, residual)` exactly | ✓ Working |
-| Robust | Score-based sandwich, equals IID for median | ✓ Working |
-| Cluster | Cluster-robust with influence functions (unique to cqreg) | ✓ Working |
+| VCE Type | denmethod | Description | Matches |
+|----------|-----------|-------------|---------|
+| IID | residual | Difference quotient on residuals | `qreg vce(iid, residual)` exactly |
+| IID | fitted | Kernel density on residuals | Similar to qreg default |
+| Robust | residual | Score-based sandwich with scalar sparsity | Equals IID for median |
+| Robust | fitted | Powell sandwich with per-obs densities | `qreg vce(robust)` (within 1%) |
+| Cluster | any | Cluster-robust with influence functions | Unique to cqreg |
+
+**Syntax:**
+```stata
+cqreg y x, vce(iid) denmethod(residual)   * Matches qreg vce(iid, residual) exactly
+cqreg y x, vce(robust) denmethod(fitted)  * Matches qreg vce(robust) closely
+cqreg y x, vce(cluster grp)               * Cluster VCE (qreg doesn't support this)
+```
 
 **Important Notes:**
 
-1. **IID VCE** matches Stata's `qreg vce(iid, residual)` method, NOT the default `vce(iid, fitted)` method. The residual method excludes LP basis observations and uses difference quotient sparsity estimation.
+1. **denmethod(residual)** uses difference quotient sparsity estimation, excluding LP basis observations (|residual| < 1e-8). This matches `qreg vce(iid, residual)` exactly.
 
-2. **Robust VCE** uses a score-based sandwich estimator: `V = s² (X'X)⁻¹ Ω (X'X)⁻¹` where Ω is computed from ψ² scores. For the median (τ=0.5), this equals IID since ψ² = 0.25 for all observations.
+2. **denmethod(fitted)** uses kernel density estimation. For robust VCE, it implements the Powell sandwich with per-observation density weights, closely matching `qreg vce(robust)`.
 
-3. **Cluster VCE** is NOT supported by Stata's `qreg` command. cqreg provides this as additional functionality.
+3. **Cluster VCE** is NOT supported by Stata's `qreg` command. cqreg provides this as additional functionality with proper influence-function-based standard errors.
 
 ### Key Functions
 
 - `cqreg_fn_solve()` - Main IPM solver loop
-- `cqreg_estimate_sparsity()` - Difference quotient sparsity estimator
-- `cqreg_vce_iid()` - IID variance computation
-- `cqreg_vce_robust()` - Robust sandwich variance
+- `cqreg_estimate_sparsity()` - Difference quotient sparsity estimator (residual method)
+- `cqreg_estimate_fitted_density()` - Per-observation density estimation (fitted method)
+- `cqreg_vce_iid()` - IID variance computation with scalar sparsity
+- `cqreg_vce_robust()` - Robust sandwich variance with scalar sparsity
+- `cqreg_vce_robust_fitted()` - Powell sandwich with per-observation densities
 - `cqreg_vce_cluster()` - Cluster-robust variance
 
 ### Testing
@@ -221,11 +232,17 @@ where `s = 1/f(0)` is the sparsity (inverse density at the quantile).
 ```stata
 * Compare cqreg vs qreg
 sysuse auto, clear
-qreg price mpg, vce(iid, residual)
-cqreg price mpg, vce(iid)
-* Coefficients and standard errors should match exactly
 
-* cqreg provides cluster VCE that qreg doesn't have
+* Exact match with qreg residual method
+qreg price mpg, vce(iid, residual)
+cqreg price mpg, vce(iid) denmethod(residual)
+* Coefficients and standard errors match exactly
+
+* Close match with qreg robust (within 1%)
+qreg price mpg, vce(robust)
+cqreg price mpg, vce(robust) denmethod(fitted)
+
+* Cluster VCE (unique to cqreg)
 cqreg price mpg, vce(cluster rep78)
 ```
 

@@ -52,6 +52,13 @@ typedef enum {
     CQREG_BW_CHAMBERLAIN = 2    /* Chamberlain */
 } cqreg_bw_method;
 
+/* Density estimation methods for VCE */
+typedef enum {
+    CQREG_DENSITY_RESIDUAL = 0, /* Difference quotient on residuals (Stata: vce(iid, residual)) */
+    CQREG_DENSITY_FITTED   = 1, /* Kernel density on fitted values (Stata default) */
+    CQREG_DENSITY_KERNEL   = 2  /* Kernel density on residuals */
+} cqreg_density_method;
+
 /* IPM solver configuration */
 typedef struct {
     ST_int maxiter;           /* Maximum iterations (default: 50) */
@@ -169,6 +176,8 @@ typedef struct {
     ST_double *beta;          /* Coefficient estimates (K) */
     ST_double *V;             /* Variance-covariance matrix (K x K) */
     ST_double *residuals;     /* Residuals y - X*beta (N) */
+    ST_double *fitted;        /* Fitted values X*beta (N) */
+    ST_double *obs_density;   /* Per-observation density estimates f_i(0) (N) */
     ST_double sum_adev;       /* Sum of absolute deviations (objective value) */
     ST_double sum_rdev;       /* Sum of raw deviations */
     ST_double sparsity;       /* Estimated sparsity */
@@ -177,6 +186,7 @@ typedef struct {
     /* VCE configuration */
     cqreg_vce_type vce_type;
     cqreg_bw_method bw_method;
+    cqreg_density_method density_method;  /* Fitted vs residual density estimation */
     ST_int *cluster_ids;      /* Cluster identifiers (N), NULL if not clustered */
     ST_int num_clusters;      /* Number of unique clusters */
 

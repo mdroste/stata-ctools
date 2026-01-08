@@ -294,12 +294,17 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
     state->V = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
     state->residuals = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    if (state->beta == NULL || state->V == NULL || state->residuals == NULL) goto cleanup;
+    state->fitted = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    state->obs_density = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (state->beta == NULL || state->V == NULL || state->residuals == NULL ||
+        state->fitted == NULL || state->obs_density == NULL) goto cleanup;
 
     /* Initialize to zero */
     memset(state->beta, 0, K * sizeof(ST_double));
     memset(state->V, 0, K * K * sizeof(ST_double));
     memset(state->residuals, 0, N * sizeof(ST_double));
+    memset(state->fitted, 0, N * sizeof(ST_double));
+    memset(state->obs_density, 0, N * sizeof(ST_double));
 
     /* Initialize other fields */
     state->weights = NULL;
@@ -313,6 +318,7 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->bandwidth = 0.0;
     state->vce_type = CQREG_VCE_IID;
     state->bw_method = CQREG_BW_HSHEATHER;
+    state->density_method = CQREG_DENSITY_FITTED;  /* Match Stata's default */
     state->cluster_ids = NULL;
     state->num_clusters = 0;
     state->ipm = NULL;
@@ -341,6 +347,8 @@ void cqreg_state_free(cqreg_state *state)
     cqreg_aligned_free(state->beta);
     cqreg_aligned_free(state->V);
     cqreg_aligned_free(state->residuals);
+    cqreg_aligned_free(state->fitted);
+    cqreg_aligned_free(state->obs_density);
 
     /* Free cluster IDs */
     cqreg_aligned_free(state->cluster_ids);

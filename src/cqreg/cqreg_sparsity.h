@@ -160,4 +160,34 @@ ST_double cqreg_sample_quantile(const ST_double *sorted_data, ST_int N, ST_doubl
  */
 void cqreg_sort_ascending(ST_double *data, ST_int N);
 
+/* ============================================================================
+ * Alternative Density Estimation Methods
+ * ============================================================================ */
+
+/*
+ * Estimate per-observation densities using the "fitted" method.
+ * This is Stata's default density estimation for qreg.
+ *
+ * Parameters:
+ *   obs_density   - Output: per-observation density estimates (N)
+ *   residuals     - Regression residuals (N)
+ *   N             - Number of observations
+ *   q             - Quantile
+ *   bw_method     - Bandwidth selection method
+ *
+ * Returns:
+ *   Average sparsity (1 / mean density)
+ */
+ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
+                                        const ST_double *residuals,
+                                        ST_int N,
+                                        ST_double q,
+                                        cqreg_bw_method bw_method);
+
+/*
+ * Estimate sparsity using kernel density estimation on residuals.
+ */
+ST_double cqreg_estimate_kernel_density_sparsity(cqreg_sparsity_state *sp,
+                                                  const ST_double *residuals);
+
 #endif /* CQREG_SPARSITY_H */

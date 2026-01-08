@@ -432,6 +432,166 @@ cleanup:
 }
 
 /* ============================================================================
+ * Robust VCE with Per-Observation Densities (Fitted Method)
+ * ============================================================================ */
+
+ST_int cqreg_vce_robust_fitted(ST_double *V,
+                               const ST_double *X,
+                               const ST_double *obs_density,
+                               ST_int N, ST_int K,
+                               ST_double q)
+{
+    /*
+     * Powell sandwich VCE with per-observation densities (Stata's "fitted" method).
+     *
+     * Formula: V = (X'DX)^{-1} * tau(1-tau) * (X'X) * (X'DX)^{-1}
+     *
+     * where D = diag(f_i(0)) and f_i(0) is the density estimate at observation i.
+     *
+     * This uses the asymptotic variance formula from Powell (1991):
+     * J = E[f_i(0) X_i X_i']  (approximate Hessian)
+     * I = tau(1-tau) E[X_i X_i']  (score variance)
+     * V = J^{-1} I J^{-1}
+     */
+
+    vce_debug_open();
+    vce_debug_log("cqreg_vce_robust_fitted: ENTRY N=%d K=%d q=%.4f\n", N, K, q);
+
+    ST_int i, j, k;
+    ST_double *XDX = NULL;      /* X' D X where D = diag(obs_density) */
+    ST_double *XDX_inv = NULL;  /* (X'DX)^{-1} */
+    ST_double *XtX = NULL;      /* X' X */
+    ST_double *L = NULL;        /* Cholesky factor */
+    ST_int rc = 0;
+
+    /* Allocate matrices */
+    XDX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XDX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XtX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+
+    if (XDX == NULL || XDX_inv == NULL || XtX == NULL || L == NULL) {
+        vce_debug_log("  ERROR: allocation failed\n");
+        rc = -1;
+        goto cleanup;
+    }
+
+    /* Compute X'DX = sum_i f_i * X_i * X_i' */
+    memset(XDX, 0, K * K * sizeof(ST_double));
+
+    for (i = 0; i < N; i++) {
+        ST_double f_i = obs_density[i];
+        for (j = 0; j < K; j++) {
+            ST_double Xij = X[j * N + i];
+            ST_double f_Xij = f_i * Xij;
+            for (k = j; k < K; k++) {
+                ST_double Xik = X[k * N + i];
+                ST_double contrib = f_Xij * Xik;
+                XDX[j * K + k] += contrib;
+                if (k != j) {
+                    XDX[k * K + j] += contrib;
+                }
+            }
+        }
+    }
+
+    vce_debug_log("  XDX[0,0] = %.6e\n", XDX[0]);
+
+    /* Compute X'X */
+    memset(XtX, 0, K * K * sizeof(ST_double));
+
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+
+        /* Diagonal */
+        ST_double diag_sum = 0.0;
+        for (i = 0; i < N; i++) {
+            diag_sum += Xj[i] * Xj[i];
+        }
+        XtX[j * K + j] = diag_sum;
+
+        /* Off-diagonal */
+        for (k = j + 1; k < K; k++) {
+            const ST_double *Xk = &X[k * N];
+            ST_double dot = 0.0;
+            for (i = 0; i < N; i++) {
+                dot += Xj[i] * Xk[i];
+            }
+            XtX[j * K + k] = dot;
+            XtX[k * K + j] = dot;
+        }
+    }
+
+    vce_debug_log("  XtX[0,0] = %.6e\n", XtX[0]);
+
+    /* Compute (X'DX)^{-1} using Cholesky */
+    memcpy(L, XDX, K * K * sizeof(ST_double));
+
+    /* Add regularization for numerical stability */
+    for (j = 0; j < K; j++) {
+        L[j * K + j] += 1e-10;
+    }
+
+    if (cqreg_cholesky(L, K) != 0) {
+        vce_debug_log("  ERROR: Cholesky of XDX failed\n");
+        rc = -1;
+        goto cleanup;
+    }
+
+    cqreg_invert_cholesky(XDX_inv, L, K);
+
+    vce_debug_log("  XDX_inv[0,0] = %.6e\n", XDX_inv[0]);
+
+    /* Compute V = tau(1-tau) * (X'DX)^{-1} * X'X * (X'DX)^{-1} */
+    ST_double scale = q * (1.0 - q);
+    vce_debug_log("  scale (q*(1-q)) = %.6e\n", scale);
+
+    /* temp = X'X * (X'DX)^{-1} */
+    ST_double *temp = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (temp == NULL) {
+        rc = -1;
+        goto cleanup;
+    }
+
+    memset(temp, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K; k++) {
+                sum += XtX[i * K + k] * XDX_inv[k * K + j];
+            }
+            temp[i * K + j] = sum;
+        }
+    }
+
+    /* V = scale * (X'DX)^{-1} * temp */
+    memset(V, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K; k++) {
+                sum += XDX_inv[i * K + k] * temp[k * K + j];
+            }
+            V[i * K + j] = scale * sum;
+        }
+    }
+
+    cqreg_aligned_free(temp);
+
+    vce_debug_log("  V[0,0] = %.6e, SE[0] = %.4f\n", V[0], sqrt(V[0]));
+
+cleanup:
+    vce_debug_log("cqreg_vce_robust_fitted: EXIT rc=%d\n", rc);
+    vce_debug_close();
+    cqreg_aligned_free(XDX);
+    cqreg_aligned_free(XDX_inv);
+    cqreg_aligned_free(XtX);
+    cqreg_aligned_free(L);
+
+    return rc;
+}
+
+/* ============================================================================
  * Cluster-Robust VCE
  * ============================================================================ */
 
@@ -580,22 +740,41 @@ ST_int cqreg_compute_vce(cqreg_state *state, const ST_double *X)
 
     switch (state->vce_type) {
         case CQREG_VCE_IID:
+            /*
+             * IID VCE: Always uses scalar sparsity, just different estimation methods.
+             * - Residual: difference quotient on residuals (matches qreg vce(iid, residual))
+             * - Fitted: kernel density on residuals (matches qreg vce(iid, fitted) = default)
+             * Both use the simple IID formula: V = q(1-q) * s^2 * (X'X)^{-1}
+             */
             rc = cqreg_vce_iid(state->V, X, state->residuals,
                               state->N, state->K,
                               state->quantile, state->sparsity);
             break;
 
         case CQREG_VCE_ROBUST:
-            rc = cqreg_vce_robust(state->V, X, state->residuals,
-                                 state->N, state->K,
-                                 state->quantile, state->bandwidth,
-                                 state->sparsity);
+            /*
+             * Robust VCE: Use fitted method (Powell sandwich) for per-observation
+             * density weights, or residual method with scalar sparsity.
+             */
+            if (state->density_method == CQREG_DENSITY_FITTED) {
+                /* Fitted method: use per-observation densities */
+                rc = cqreg_vce_robust_fitted(state->V, X, state->obs_density,
+                                            state->N, state->K,
+                                            state->quantile);
+            } else {
+                /* Residual method: use scalar sparsity */
+                rc = cqreg_vce_robust(state->V, X, state->residuals,
+                                     state->N, state->K,
+                                     state->quantile, state->bandwidth,
+                                     state->sparsity);
+            }
             break;
 
         case CQREG_VCE_CLUSTER:
             if (state->cluster_ids == NULL) {
                 return -1;
             }
+            /* Cluster VCE always uses scalar sparsity */
             rc = cqreg_vce_cluster(state->V, X, state->residuals,
                                   state->cluster_ids, state->num_clusters,
                                   state->N, state->K,

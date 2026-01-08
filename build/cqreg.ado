@@ -13,6 +13,7 @@
 *!   quantile(#)        - Quantile to estimate (default: 0.5)
 *!   absorb(varlist)    - Fixed effects to absorb (optional)
 *!   vce(vcetype)       - Variance estimation: iid (default), robust, cluster
+*!   denmethod(method)  - Density estimation: fitted (default), residual
 *!   bwmethod(method)   - Bandwidth method: hsheather (default), bofinger, chamberlain
 *!   verbose            - Display progress information
 *!   tolerance(#)       - Convergence tolerance (default: 1e-8)
@@ -25,7 +26,7 @@ program define cqreg, eclass
     local cmdline "cqreg `0'"
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
@@ -107,6 +108,30 @@ program define cqreg, eclass
         else {
             di as error "cqreg: unrecognized bandwidth method: `bwmethod'"
             di as error "       Valid options: hsheather, bofinger, chamberlain"
+            exit 198
+        }
+    }
+
+    * Parse density estimation method
+    local denmethod_num = 1  // 0=residual, 1=fitted (default), 2=kernel
+    local denmethod_name "fitted"
+    if "`denmethod'" != "" {
+        local den_lower = lower(trim("`denmethod'"))
+        if "`den_lower'" == "residual" | "`den_lower'" == "res" {
+            local denmethod_num = 0
+            local denmethod_name "residual"
+        }
+        else if "`den_lower'" == "fitted" | "`den_lower'" == "fit" {
+            local denmethod_num = 1
+            local denmethod_name "fitted"
+        }
+        else if "`den_lower'" == "kernel" {
+            local denmethod_num = 2
+            local denmethod_name "kernel"
+        }
+        else {
+            di as error "cqreg: unrecognized density method: `denmethod'"
+            di as error "       Valid options: fitted (default), residual"
             exit 198
         }
     }
@@ -197,6 +222,7 @@ program define cqreg, eclass
     scalar __cqreg_G = `nfe'                // number of FE groups
     scalar __cqreg_vce_type = `vcetype'
     scalar __cqreg_bw_method = `bwmethod_num'
+    scalar __cqreg_density_method = `denmethod_num'
     scalar __cqreg_verbose = ("`verbose'" != "")
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
@@ -216,6 +242,7 @@ program define cqreg, eclass
         }
         di as text "Obs:        " as result `nobs'
         di as text "VCE type:   " as result cond(`vcetype'==0, "iid", cond(`vcetype'==1, "robust", "cluster(`clustervar_orig')"))
+        di as text "Density:    " as result "`denmethod_name'"
         di as text "Bandwidth:  " as result cond(`bwmethod_num'==0, "Hall-Sheather", cond(`bwmethod_num'==1, "Bofinger", "Chamberlain"))
         di as text "{hline 60}"
         di ""
@@ -359,7 +386,7 @@ program define cqreg, eclass
     ereturn local properties "b V"
     ereturn local marginsnotok "stdp stddp residuals"
     ereturn local vce = cond(`vcetype'==0, "iid", cond(`vcetype'==1, "robust", "cluster"))
-    ereturn local denmethod "fitted"
+    ereturn local denmethod "`denmethod_name'"
     ereturn local bwmethod = cond(`bwmethod_num'==0, "hsheather", cond(`bwmethod_num'==1, "bofinger", "chamberlain"))
     ereturn local depvar "`depvar'"
     if `nfe' > 0 {
@@ -403,7 +430,7 @@ program define cqreg, eclass
 
     * Clean up scalars
     capture scalar drop __cqreg_quantile __cqreg_K __cqreg_G
-    capture scalar drop __cqreg_vce_type __cqreg_bw_method __cqreg_verbose
+    capture scalar drop __cqreg_vce_type __cqreg_bw_method __cqreg_density_method __cqreg_verbose
     capture scalar drop __cqreg_tolerance __cqreg_maxiter __cqreg_nopreprocess
     capture scalar drop __cqreg_N __cqreg_K_keep __cqreg_sum_adev
     capture scalar drop __cqreg_sparsity __cqreg_bandwidth
