@@ -164,27 +164,26 @@ ST_double cqreg_kernel_triangular(ST_double u)
 ST_double cqreg_bandwidth_hsheather(ST_int N, ST_double q, ST_double alpha)
 {
     /*
-     * Hall-Sheather (1988) optimal bandwidth:
-     * h = z_{1-alpha/2}^{2/3} * (1.5 * phi(z_q)^2 / (2*z_{1-alpha/2}^2 + 1))^{1/3} * n^{-1/3}
+     * Hall-Sheather (1988) optimal bandwidth for quantile regression.
      *
-     * Note: Stata's implementation multiplies by an additional factor of about 2
-     * to account for the Epanechnikov kernel efficiency.
+     * Formula (from R's quantreg package):
+     * h = n^{-1/3} * z_{1-alpha/2}^{2/3} * ((1.5 * phi(z_q)^2) / (2*z_q^2 + 1))^{1/3}
+     *
+     * where:
+     *   z_q = Phi^{-1}(q)     - quantile of standard normal at q
+     *   phi(z_q) = N(z_q; 0,1) - standard normal density at z_q
+     *   z_{1-alpha/2}         - critical value for confidence level (default alpha=0.05)
+     *
+     * Reference: Hall, P. and Sheather, S.J. (1988), JRSS(B), 50, 381-391.
      */
     ST_double z_alpha = cqreg_qnorm(1.0 - alpha / 2.0);
     ST_double z_q = cqreg_qnorm(q);
     ST_double phi_zq = cqreg_dnorm(z_q);
 
     ST_double numer = 1.5 * phi_zq * phi_zq;
-    ST_double denom = 2.0 * z_alpha * z_alpha + 1.0;
+    ST_double denom = 2.0 * z_q * z_q + 1.0;  /* NOTE: uses z_q, not z_alpha! */
 
     ST_double h = pow(z_alpha, 2.0/3.0) * pow(numer / denom, 1.0/3.0) * pow((ST_double)N, -1.0/3.0);
-
-    /*
-     * Scale the bandwidth for use with Epanechnikov kernel in density estimation.
-     * The original Hall-Sheather bandwidth is designed for Gaussian kernel;
-     * for Epanechnikov, a scaling factor is needed.
-     */
-    h *= 2.0;
 
     return h;
 }
@@ -263,20 +262,29 @@ void cqreg_sort_ascending(ST_double *data, ST_int N)
 
 ST_double cqreg_sample_quantile(const ST_double *sorted_data, ST_int N, ST_double q)
 {
-    /* Type 7 quantile (R default): linear interpolation */
-    ST_double index = (N - 1) * q;
-    ST_int lo = (ST_int)floor(index);
-    ST_int hi = (ST_int)ceil(index);
+    /*
+     * Stata-compatible quantile calculation.
+     *
+     * Stata's _pctile uses ceiling(N * q) as the index (1-based).
+     * For 0-based indexing: index = ceiling(N * q) - 1
+     *
+     * This returns the smallest value x such that at least q*100% of
+     * the observations are <= x.
+     */
 
-    if (lo < 0) lo = 0;
-    if (hi >= N) hi = N - 1;
+    if (N <= 0) return 0.0;
+    if (N == 1) return sorted_data[0];
 
-    if (lo == hi) {
-        return sorted_data[lo];
-    }
+    /* Compute the 1-based index using ceiling */
+    ST_double raw_index = (ST_double)N * q;
+    ST_int idx = (ST_int)ceil(raw_index);
 
-    ST_double frac = index - (ST_double)lo;
-    return sorted_data[lo] * (1.0 - frac) + sorted_data[hi] * frac;
+    /* Convert to 0-based and clamp */
+    idx = idx - 1;
+    if (idx < 0) idx = 0;
+    if (idx >= N) idx = N - 1;
+
+    return sorted_data[idx];
 }
 
 /* ============================================================================
@@ -316,6 +324,9 @@ ST_double cqreg_density_at_quantile(const ST_double *data,
  * Main Sparsity Estimation
  * ============================================================================ */
 
+/* Threshold for identifying LP basis observations (residuals ≈ 0) */
+#define CQREG_BASIS_THRESHOLD 1e-8
+
 ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
                                   const ST_double *residuals)
 {
@@ -326,42 +337,72 @@ ST_double cqreg_estimate_sparsity(cqreg_sparsity_state *sp,
     ST_int N = sp->N;
     ST_double q = sp->quantile;
 
-    /* Copy residuals and sort */
-    memcpy(sp->sorted_resid, residuals, N * sizeof(ST_double));
-    cqreg_sort_ascending(sp->sorted_resid, N);
+    /*
+     * Stata's qreg vce(iid, residual) method:
+     * 1. Exclude LP basis observations (those with |residual| ≈ 0)
+     * 2. Compute bandwidth using N_adj = N - n_basis
+     * 3. Compute difference quotient sparsity from non-basis residuals
+     *
+     * The basis observations are exactly on the quantile hyperplane and
+     * create discontinuities in the empirical quantile function.
+     */
 
-    /* Compute bandwidth (as a proportion/quantile) */
-    ST_double h = cqreg_compute_bandwidth(N, q, sp->bw_method);
-    sp->bandwidth = h;
+    /* Count and copy non-basis residuals */
+    ST_int n_basis = 0;
+    ST_int N_adj = 0;
+
+    for (ST_int i = 0; i < N; i++) {
+        if (fabs(residuals[i]) < CQREG_BASIS_THRESHOLD) {
+            n_basis++;
+        } else {
+            sp->sorted_resid[N_adj++] = residuals[i];
+        }
+    }
+
+    /* Handle edge case: all observations are basis (shouldn't happen) */
+    if (N_adj < 2) {
+        /* Fall back to using all residuals */
+        memcpy(sp->sorted_resid, residuals, N * sizeof(ST_double));
+        N_adj = N;
+    }
+
+    /* Sort the non-basis residuals */
+    cqreg_sort_ascending(sp->sorted_resid, N_adj);
+
+    /* Compute bandwidth using adjusted N (in probability units, 0-1 scale) */
+    ST_double h_prob = cqreg_compute_bandwidth(N_adj, q, sp->bw_method);
+    sp->bandwidth = h_prob;
 
     /*
-     * Estimate sparsity using difference quotient method (like Stata's qreg).
+     * Use the difference quotient (Siddiqui) method:
+     * sparsity = (F^{-1}(q+h) - F^{-1}(q-h)) / (2h)
      *
-     * The sparsity s = 1/f(0) is estimated as:
-     * s = (x_{ceil(n*(q+h))} - x_{floor(n*(q-h))}) / (2*h)
-     *
-     * where x are ordered residuals and h is the bandwidth.
-     * This estimates the reciprocal density at the conditional quantile.
+     * where F^{-1} is the empirical quantile function of the residuals.
      */
 
-    /* Compute indices */
-    ST_double q_lo = q - h;
-    ST_double q_hi = q + h;
+    /* Compute indices for bandwidth region */
+    ST_double q_lo = q - h_prob;
+    ST_double q_hi = q + h_prob;
 
-    /* Clamp to valid range */
-    if (q_lo < 0.0) q_lo = 0.0;
-    if (q_hi > 1.0) q_hi = 1.0;
+    /* Check for valid range - if out of bounds, cannot compute VCE */
+    if (q_lo <= 0.0 || q_hi >= 1.0) {
+        /*
+         * This matches Stata's behavior: VCE computation fails if
+         * tau ± h goes outside (0, 1). Return a fallback value.
+         */
+        ST_double r_25 = cqreg_sample_quantile(sp->sorted_resid, N_adj, 0.25);
+        ST_double r_75 = cqreg_sample_quantile(sp->sorted_resid, N_adj, 0.75);
+        sp->sparsity = (r_75 - r_25) / 0.5;  /* IQR-based fallback */
+        if (sp->sparsity < 1e-10) sp->sparsity = 1.0;
+        return sp->sparsity;
+    }
 
-    /* Get corresponding order statistics */
-    ST_double x_lo = cqreg_sample_quantile(sp->sorted_resid, N, q_lo);
-    ST_double x_hi = cqreg_sample_quantile(sp->sorted_resid, N, q_hi);
+    /* Get corresponding order statistics from non-basis residuals */
+    ST_double x_lo = cqreg_sample_quantile(sp->sorted_resid, N_adj, q_lo);
+    ST_double x_hi = cqreg_sample_quantile(sp->sorted_resid, N_adj, q_hi);
 
-    /* Sparsity = difference in residuals / difference in quantiles
-     * This is the slope of the quantile function, which is 1/density
-     */
-    ST_double dq = q_hi - q_lo;
-    if (dq < 1e-10) dq = 2.0 * h;  /* Fallback */
-
+    /* Difference quotient sparsity */
+    ST_double dq = 2.0 * h_prob;
     sp->sparsity = (x_hi - x_lo) / dq;
 
     /* Ensure positive sparsity */

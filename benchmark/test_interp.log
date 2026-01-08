@@ -1,0 +1,211 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /Users/Mike/Documents/GitHub/stata-ctools/benchmark/test_interp.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. drop if missing(price, mpg, weight, rep78)
+(5 observations deleted)
+
+. 
+. qreg price mpg weight, quantile(0.5)
+
+Iteration 1:  WLS sum of weighted deviations =  63341.574
+
+Iteration 1:  Sum of abs. weighted deviations =  63536.156
+Iteration 2:  Sum of abs. weighted deviations =  58812.858
+Iteration 3:  Sum of abs. weighted deviations =  58491.205
+Iteration 4:  Sum of abs. weighted deviations =  58480.736
+Iteration 5:  Sum of abs. weighted deviations =  58477.095
+Iteration 6:  Sum of abs. weighted deviations =  58466.957
+
+Median regression                                   Number of obs =         69
+  Raw sum of deviations    65163 (about 5079)
+  Min sum of deviations 58466.96                    Pseudo R2     =     0.1028
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -64.08696   121.1752    -0.53   0.599    -306.0211    177.8472
+      weight |   .5782609    .896591     0.64   0.521    -1.211841    2.368363
+       _cons |       4812   5051.627     0.95   0.344    -5273.898     14897.9
+------------------------------------------------------------------------------
+
+. predict double resid, resid
+
+. 
+. * Exclude basis
+. gen byte basis = abs(resid) < 1e-8
+
+. 
+. * Sort non-basis residuals
+. preserve
+
+. keep if !basis
+(3 observations deleted)
+
+. sort resid
+
+. gen obs_num = _n
+
+. 
+. * Get the relevant observations
+. local N = _N
+
+. local q_lo = 0.25958888
+
+. local q_hi = 0.74041112
+
+. 
+. * Different index calculations
+. local idx_type7_lo = (`N' - 1) * `q_lo'  // Type 7: (n-1)*p, 0-based
+
+. local idx_type7_hi = (`N' - 1) * `q_hi'
+
+. 
+. local idx_ceil_lo = ceil(`N' * `q_lo')   // Ceiling
+
+. local idx_ceil_hi = ceil(`N' * `q_hi')
+
+. 
+. local idx_floor_lo = floor(`N' * `q_lo') // Floor  
+
+. local idx_floor_hi = floor(`N' * `q_hi')
+
+. 
+. local idx_round_lo = round(`N' * `q_lo') // Round
+
+. local idx_round_hi = round(`N' * `q_hi')
+
+. 
+. display "N = " `N'
+N = 66
+
+. display _n "=== INDEX CALCULATIONS ==="
+
+=== INDEX CALCULATIONS ===
+
+. display "Type 7 (R default): lo=" %6.2f `idx_type7_lo' " hi=" %6.2f `idx_type
+> 7_hi'
+Type 7 (R default): lo= 16.87 hi= 48.13
+
+. display "Ceiling: lo=" `idx_ceil_lo' " hi=" `idx_ceil_hi'
+Ceiling: lo=18 hi=49
+
+. display "Floor: lo=" `idx_floor_lo' " hi=" `idx_floor_hi'
+Floor: lo=17 hi=48
+
+. display "Round: lo=" `idx_round_lo' " hi=" `idx_round_hi'
+Round: lo=17 hi=49
+
+. 
+. display _n "=== VALUES AT INDICES ==="
+
+=== VALUES AT INDICES ===
+
+. display "Stata returns: lo=-731.00 hi=1617.00"
+Stata returns: lo=-731.00 hi=1617.00
+
+. foreach i in 17 18 48 49 50 {
+  2.     sum resid if obs_num == `i', meanonly
+  3.     display "Obs `i': " %12.4f r(mean)
+  4. }
+Obs 17:    -736.9565
+Obs 18:    -731.0000
+Obs 48:    1520.5217
+Obs 49:    1617.0000
+Obs 50:    1760.0000
+
+. 
+. * Type 7 interpolation
+. local lo_floor = floor(`idx_type7_lo')
+
+. local lo_ceil = `lo_floor' + 1
+
+. local frac_lo = `idx_type7_lo' - `lo_floor'
+
+. sum resid if obs_num == `lo_floor' + 1, meanonly  // 1-based
+
+. local val_lo_floor = r(mean)
+
+. sum resid if obs_num == `lo_ceil' + 1, meanonly
+
+. local val_lo_ceil = r(mean)
+
+. local interp_lo = `val_lo_floor' * (1 - `frac_lo') + `val_lo_ceil' * `frac_lo
+> '
+
+. 
+. local hi_floor = floor(`idx_type7_hi')
+
+. local hi_ceil = `hi_floor' + 1
+
+. local frac_hi = `idx_type7_hi' - `hi_floor'
+
+. sum resid if obs_num == `hi_floor' + 1, meanonly
+
+. local val_hi_floor = r(mean)
+
+. sum resid if obs_num == `hi_ceil' + 1, meanonly
+
+. local val_hi_ceil = r(mean)
+
+. local interp_hi = `val_hi_floor' * (1 - `frac_hi') + `val_hi_ceil' * `frac_hi
+> '
+
+. 
+. display _n "=== INTERPOLATED VALUES ==="
+
+=== INTERPOLATED VALUES ===
+
+. display "Type 7 lo: " %12.4f `interp_lo' " (floor=" %12.4f `val_lo_floor' " c
+> eil=" %12.4f `val_lo_ceil' " frac=" %6.4f `frac_lo' ")"
+Type 7 lo:    -731.7548 (floor=   -736.9565 ceil=   -731.0000 frac=0.8733)
+
+. display "Type 7 hi: " %12.4f `interp_hi' " (floor=" %12.4f `val_hi_floor' " c
+> eil=" %12.4f `val_hi_ceil' " frac=" %6.4f `frac_hi' ")"
+Type 7 hi:    1635.1214 (floor=   1617.0000 ceil=   1760.0000 frac=0.1267)
+
+. 
+. * Check what Stata's _pctile actually returns
+. _pctile resid, percentile(`=`q_lo'*100' `=`q_hi'*100')
+
+. display _n "Stata _pctile: lo=" %12.4f r(r1) " hi=" %12.4f r(r2)
+
+Stata _pctile: lo=   -731.0000 hi=   1617.0000
+
+. 
+. restore
+
+. 
+end of do-file

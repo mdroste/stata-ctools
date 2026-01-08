@@ -8,6 +8,10 @@
 clear all
 set more off
 
+* Add ctools build directory to adopath
+adopath + "./build"
+adopath + "../build"
+
 * Load test data
 sysuse auto, clear
 drop if missing(price, mpg, weight, rep78)

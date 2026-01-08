@@ -1,0 +1,163 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_gauss.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. drop if missing(price, mpg, weight, rep78)
+(5 observations deleted)
+
+. 
+. qreg price mpg weight, quantile(0.5)
+
+Iteration 1:  WLS sum of weighted deviations =  63341.574
+
+Iteration 1:  Sum of abs. weighted deviations =  63536.156
+Iteration 2:  Sum of abs. weighted deviations =  58812.858
+Iteration 3:  Sum of abs. weighted deviations =  58491.205
+Iteration 4:  Sum of abs. weighted deviations =  58480.736
+Iteration 5:  Sum of abs. weighted deviations =  58477.095
+Iteration 6:  Sum of abs. weighted deviations =  58466.957
+
+Median regression                                   Number of obs =         69
+  Raw sum of deviations    65163 (about 5079)
+  Min sum of deviations 58466.96                    Pseudo R2     =     0.1028
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -64.08696   121.1752    -0.53   0.599    -306.0211    177.8472
+      weight |   .5782609    .896591     0.64   0.521    -1.211841    2.368363
+       _cons |       4812   5051.627     0.95   0.344    -5273.898     14897.9
+------------------------------------------------------------------------------
+
+. predict double resid, resid
+
+. 
+. local N = 69
+
+. local q = 0.5
+
+. 
+. * Get qreg implied sparsity
+. gen cons = 1
+
+. mkmat mpg weight cons, matrix(X)
+
+. matrix XtX = X' * X
+
+. matrix XtX_inv = syminv(XtX)
+
+. local v11 = e(V)[1,1]
+
+. local implied_s = sqrt(`v11' / (0.25 * XtX_inv[1,1]))
+
+. 
+. display "qreg implied sparsity: " %12.4f `implied_s'
+qreg implied sparsity:    6947.1948
+
+. 
+. * Compute Silverman bandwidth for Gaussian kernel
+. summ resid
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+       resid |         69    945.1418    2578.762  -1875.739   9959.087
+
+. local sd = r(sd)
+
+. _pctile resid, percentile(25 75)
+
+. local iqr = r(r2) - r(r1)
+
+. 
+. local h_gauss = 1.06 * min(`sd', `iqr'/1.349) * `N'^(-0.2)
+
+. display "Gaussian KDE bandwidth: " %12.4f `h_gauss'
+Gaussian KDE bandwidth:     791.0833
+
+. 
+. * Compute Gaussian KDE at 0
+. local sum_gauss = 0
+
+. forvalues i = 1/`N' {
+  2.     local r = resid[`i']
+  3.     local u = `r' / `h_gauss'
+  4.     local k = exp(-0.5 * `u'^2) / sqrt(2 * c(pi))
+  5.     local sum_gauss = `sum_gauss' + `k'
+  6. }
+
+. local f0_gauss = `sum_gauss' / (`N' * `h_gauss')
+
+. local sparsity_gauss = 1/`f0_gauss'
+
+. display "Gaussian f(0) = " %12.10f `f0_gauss'
+Gaussian f(0) = 0.0007929908
+
+. display "Gaussian sparsity = " %12.4f `sparsity_gauss'
+Gaussian sparsity =    1261.0486
+
+. display "Ratio to qreg: " %8.4f (`sparsity_gauss' / `implied_s')
+Ratio to qreg:   0.1815
+
+. 
+. * Try with different bandwidth scales
+. display _n "=== GAUSSIAN KDE WITH SCALED BANDWIDTH ==="
+
+=== GAUSSIAN KDE WITH SCALED BANDWIDTH ===
+
+. foreach mult in 0.5 0.75 1.0 1.25 1.5 2.0 2.5 3.0 {
+  2.     local h = `h_gauss' * `mult'
+  3.     local sum = 0
+  4.     forvalues i = 1/`N' {
+  5.         local r = resid[`i']
+  6.         local u = `r' / `h'
+  7.         local k = exp(-0.5 * `u'^2) / sqrt(2 * c(pi))
+  8.         local sum = `sum' + `k'
+  9.     }
+ 10.     local f0 = `sum' / (`N' * `h')
+ 11.     local sparsity = 1/`f0'
+ 12.     display "mult=" %4.2f `mult' " h=" %8.1f `h' " sparsity=" %10.2f `spar
+> sity' " ratio=" %6.4f (`sparsity'/`implied_s')
+ 13. }
+mult=0.50 h=   395.5 sparsity=      0.69 ratio=0.0001
+mult=0.75 h=   593.3 sparsity=    256.57 ratio=0.0369
+mult=1.00 h=   791.1 sparsity=   1261.05 ratio=0.1815
+mult=1.25 h=   988.9 sparsity=   2293.89 ratio=0.3302
+mult=1.50 h=  1186.6 sparsity=   3167.58 ratio=0.4560
+mult=2.00 h=  1582.2 sparsity=   4624.30 ratio=0.6656
+mult=2.50 h=  1977.7 sparsity=   5881.14 ratio=0.8465
+mult=3.00 h=  2373.2 sparsity=   7029.60 ratio=1.0119
+
+. 
+end of do-file

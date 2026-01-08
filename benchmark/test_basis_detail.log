@@ -1,0 +1,171 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /Users/Mike/Documents/GitHub/stata-ctools/benchmark/test_basis_detail.do 
+
+. clear all
+
+. set more off
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. drop if missing(price, mpg, weight, rep78)
+(5 observations deleted)
+
+. 
+. qreg price mpg weight, quantile(0.5)
+
+Iteration 1:  WLS sum of weighted deviations =  63341.574
+
+Iteration 1:  Sum of abs. weighted deviations =  63536.156
+Iteration 2:  Sum of abs. weighted deviations =  58812.858
+Iteration 3:  Sum of abs. weighted deviations =  58491.205
+Iteration 4:  Sum of abs. weighted deviations =  58480.736
+Iteration 5:  Sum of abs. weighted deviations =  58477.095
+Iteration 6:  Sum of abs. weighted deviations =  58466.957
+
+Median regression                                   Number of obs =         69
+  Raw sum of deviations    65163 (about 5079)
+  Min sum of deviations 58466.96                    Pseudo R2     =     0.1028
+
+------------------------------------------------------------------------------
+       price | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+         mpg |  -64.08696   121.1752    -0.53   0.599    -306.0211    177.8472
+      weight |   .5782609    .896591     0.64   0.521    -1.211841    2.368363
+       _cons |       4812   5051.627     0.95   0.344    -5273.898     14897.9
+------------------------------------------------------------------------------
+
+. predict double resid, resid
+
+. 
+. * Show residuals near 0 with various thresholds
+. display "=== RESIDUALS NEAR ZERO ==="
+=== RESIDUALS NEAR ZERO ===
+
+. sort resid
+
+. gen abs_resid = abs(resid)
+
+. format resid %15.10f
+
+. format abs_resid %15.10f
+
+. 
+. list resid abs_resid if abs_resid < 1e-6
+
+     +------------------------------+
+     |         resid      abs_resid |
+     |------------------------------|
+ 34. | -0.0000000000   0.0000000000 |
+ 35. |  0.0000000000   0.0000000000 |
+ 36. |  0.0000000000   0.0000000000 |
+     +------------------------------+
+
+. 
+. * Count at different thresholds
+. foreach thresh in 1e-10 1e-9 1e-8 1e-7 1e-6 {
+  2.     count if abs_resid < `thresh'
+  3.     display "Threshold `thresh': " r(N) " basis obs"
+  4. }
+  3
+Threshold 1e-10: 3 basis obs
+  3
+Threshold 1e-9: 3 basis obs
+  3
+Threshold 1e-8: 3 basis obs
+  3
+Threshold 1e-7: 3 basis obs
+  3
+Threshold 1e-6: 3 basis obs
+
+. 
+. * The actual basis observations in qreg are those with residual = 0 exactly
+. * In linear programming, the basis is where the constraint is exactly binding
+. * For qreg: u_i - v_i = residual, and either u_i = 0 or v_i = 0
+. * Basis observation: residual = 0 (on the hyperplane)
+. 
+. * Show the specific residual values around the median
+. _pctile resid if abs_resid >= 1e-8, percentile(25.958888 74.041112)
+
+. display _n "Percentile at 25.96: " %15.6f r(r1)
+
+Percentile at 25.96:     -731.000000
+
+. display "Percentile at 74.04: " %15.6f r(r2)
+Percentile at 74.04:     1617.000000
+
+. 
+. * Compare with my indexing
+. gen seq = _n if abs_resid >= 1e-8
+(3 missing values generated)
+
+. sort resid
+
+. * With N_adj = 66, index = (66-1) * q = 65 * q
+. * q_lo = 0.25959: index = 16.87
+. * q_hi = 0.74041: index = 48.13
+. 
+. display _n "Manual check of order statistics:"
+
+Manual check of order statistics:
+
+. list resid if seq == 17
+
+     +-----------------+
+     |           resid |
+     |-----------------|
+ 17. | -736.9565217391 |
+     +-----------------+
+
+. list resid if seq == 18
+
+     +-----------------+
+     |           resid |
+     |-----------------|
+ 18. | -731.0000000000 |
+     +-----------------+
+
+. list resid if seq == 48
+
+     +----------------+
+     |          resid |
+     |----------------|
+ 48. | 846.9565217391 |
+     +----------------+
+
+. list resid if seq == 49
+
+     +----------------+
+     |          resid |
+     |----------------|
+ 49. | 851.9565217391 |
+     +----------------+
+
+. 
+end of do-file

@@ -62,7 +62,9 @@ ST_int cqreg_vce_iid(ST_double *V,
 
 /*
  * Compute robust variance using Powell sandwich estimator.
- * V = D * M * D where D = (X'X)^{-1} and M is kernel-weighted.
+ * V = J^{-1} * I * J^{-1} where:
+ *   J = (1/n) * sum_i f_i(0) * X_i X_i' (density-weighted Hessian)
+ *   I = tau*(1-tau) * (1/n) * X'X       (score variance)
  *
  * This allows for heteroskedasticity in the error distribution.
  *
@@ -72,7 +74,8 @@ ST_int cqreg_vce_iid(ST_double *V,
  *   residuals - Regression residuals (N)
  *   N, K      - Dimensions
  *   q         - Quantile
- *   bandwidth - Kernel bandwidth
+ *   bandwidth - Kernel bandwidth (probability scale)
+ *   sparsity  - Estimated sparsity (for bandwidth conversion to residual scale)
  *
  * Returns:
  *   0 on success, -1 on failure
@@ -82,7 +85,8 @@ ST_int cqreg_vce_robust(ST_double *V,
                         const ST_double *residuals,
                         ST_int N, ST_int K,
                         ST_double q,
-                        ST_double bandwidth);
+                        ST_double bandwidth,
+                        ST_double sparsity);
 
 /* ============================================================================
  * Cluster-Robust VCE
