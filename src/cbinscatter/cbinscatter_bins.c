@@ -294,7 +294,6 @@ ST_retcode compute_bins_single_group(
     ST_retcode rc = CBINSCATTER_OK;
     ST_int *sort_idx = NULL;
     ST_int *bin_ids = NULL;
-    ST_double *cutpoints = NULL;
     ST_int i, q, nq;
 
     nq = config->nquantiles;
@@ -309,75 +308,79 @@ ST_retcode compute_bins_single_group(
         goto cleanup;
     }
 
-    /* Initialize sort indices */
-    for (i = 0; i < N; i++) {
+    /* Initialize sort indices (8x unrolled) */
+    ST_int N8 = N - (N % 8);
+    for (i = 0; i < N8; i += 8) {
+        sort_idx[i]     = i;
+        sort_idx[i + 1] = i + 1;
+        sort_idx[i + 2] = i + 2;
+        sort_idx[i + 3] = i + 3;
+        sort_idx[i + 4] = i + 4;
+        sort_idx[i + 5] = i + 5;
+        sort_idx[i + 6] = i + 6;
+        sort_idx[i + 7] = i + 7;
+    }
+    for (; i < N; i++) {
         sort_idx[i] = i;
     }
 
     if (weights == NULL && N >= QUICKSELECT_THRESHOLD) {
         /*
-         * Unweighted, large N: Use quickselect O(N) to find cutpoints
+         * Unweighted, large N: Use quickselect O(N) to partition into bins
          *
-         * Strategy: Find the nq-1 quantile positions using quickselect.
-         * Each quickselect partitions around the k-th element, leaving
-         * all elements < k in positions 0..k-1.
+         * Strategy: Find the nq-1 quantile boundary positions using quickselect.
+         * After each quickselect, the array is partitioned such that elements
+         * at positions [boundary[q-1], boundary[q]) belong to bin q.
+         * This avoids binary search for bin assignment - just use position.
          */
-        cutpoints = (ST_double *)malloc((nq + 1) * sizeof(ST_double));
-        if (!cutpoints) {
+        ST_int *boundaries = (ST_int *)malloc((nq + 1) * sizeof(ST_int));
+        if (!boundaries) {
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
 
-        /* Find quantile cutpoint positions using quickselect */
+        /* Find quantile boundary positions using quickselect */
+        boundaries[0] = 0;
+        boundaries[nq] = N;
+
         ST_int prev_pos = 0;
         for (q = 1; q < nq; q++) {
             ST_int target_pos = (ST_int)(((int64_t)q * N) / nq);
             if (target_pos >= N) target_pos = N - 1;
+            if (target_pos < prev_pos) target_pos = prev_pos;
 
-            /* quickselect finds element at target_pos */
+            /* quickselect partitions: [prev_pos, target_pos) <= x[target_pos] */
             quickselect_indexed(x, sort_idx, prev_pos, N - 1, target_pos);
-            cutpoints[q] = x[sort_idx[target_pos]];
-
-            /* Next search starts after this position */
+            boundaries[q] = target_pos;
             prev_pos = target_pos;
         }
 
-        /* Set boundary cutpoints */
-        /* Find min (quickselect with k=0) */
-        quickselect_indexed(x, sort_idx, 0, N - 1, 0);
-        cutpoints[0] = x[sort_idx[0]];
-        cutpoints[nq] = cutpoints[nq - 1];  /* Will be updated below */
-
-        /* Find max */
-        quickselect_indexed(x, sort_idx, N - 1, N - 1, N - 1);
-        cutpoints[nq] = x[sort_idx[N - 1]];
-
-        /* Assign bins using cutpoints */
+        /*
+         * After quickselect, sort_idx is partitioned by quantile:
+         * - sort_idx[boundaries[0]..boundaries[1]) -> bin 1
+         * - sort_idx[boundaries[1]..boundaries[2]) -> bin 2
+         * - etc.
+         *
+         * Assign bins directly from position - O(N) with no binary search
+         */
+        ST_int current_bin = 1;
+        ST_int next_boundary = boundaries[1];
         for (i = 0; i < N; i++) {
-            if (IS_MISSING(x[i])) {
-                bin_ids[i] = 0;
-            } else {
-                /* Binary search for bin */
-                ST_double xi = x[i];
-                ST_int lo = 1, hi = nq;
+            /* Advance to next bin if we've passed the boundary */
+            while (current_bin < nq && i >= next_boundary) {
+                current_bin++;
+                next_boundary = boundaries[current_bin];
+            }
 
-                if (xi <= cutpoints[1]) {
-                    bin_ids[i] = 1;
-                } else if (xi > cutpoints[nq - 1]) {
-                    bin_ids[i] = nq;
-                } else {
-                    while (lo < hi) {
-                        ST_int mid = (lo + hi) / 2;
-                        if (xi > cutpoints[mid]) {
-                            lo = mid + 1;
-                        } else {
-                            hi = mid;
-                        }
-                    }
-                    bin_ids[i] = lo;
-                }
+            ST_int orig_idx = sort_idx[i];
+            if (IS_MISSING(x[orig_idx])) {
+                bin_ids[orig_idx] = 0;
+            } else {
+                bin_ids[orig_idx] = current_bin;
             }
         }
+
+        free(boundaries);
 
     } else if (weights == NULL) {
         /*
@@ -444,7 +447,6 @@ ST_retcode compute_bins_single_group(
 cleanup:
     free(sort_idx);
     free(bin_ids);
-    free(cutpoints);
     return rc;
 }
 
