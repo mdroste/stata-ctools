@@ -1,0 +1,207 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do validation/debug_test16.do 
+
+. * Debug Test 16 - Merge with no matches
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. 
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. clear
+
+. input int id float value
+
+           id      value
+  1. 1 10
+  2. 2 20
+  3. 3 30
+  4. end
+
+. tempfile master
+
+. quietly save `master'
+
+. 
+. clear
+
+. input int id float other
+
+           id      other
+  1. 100 1.5
+  2. 200 2.5
+  3. 300 3.5
+  4. end
+
+. tempfile using_data
+
+. quietly save `using_data'
+
+. 
+. di "=== STATA MERGE ==="
+=== STATA MERGE ===
+
+. use `master', clear
+
+. merge 1:1 id using `using_data'
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             6
+        from master                         3  (_merge==1)
+        from using                          3  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+
+. list, sep(0)
+
+     +---------------------------------------+
+     |  id   value   other            _merge |
+     |---------------------------------------|
+  1. |   1      10       .   Master only (1) |
+  2. |   2      20       .   Master only (1) |
+  3. |   3      30       .   Master only (1) |
+  4. | 100       .     1.5    Using only (2) |
+  5. | 200       .     2.5    Using only (2) |
+  6. | 300       .     3.5    Using only (2) |
+     +---------------------------------------+
+
+. describe
+
+Contains data from /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St89778.00
+> 0001
+ Observations:             6                  
+    Variables:             4                  9 Jan 2026 00:41
+-------------------------------------------------------------------------------
+Variable      Storage   Display    Value
+    name         type    format    label      Variable label
+-------------------------------------------------------------------------------
+id              int     %8.0g                 
+value           float   %9.0g                 
+other           float   %9.0g                 
+_merge          byte    %23.0g     _merge     Matching result from merge
+-------------------------------------------------------------------------------
+Sorted by: 
+     Note: Dataset has changed since last saved.
+
+. 
+. tempfile stata_merged
+
+. quietly save `stata_merged'
+
+. 
+. di ""
+
+
+. di "=== CMERGE ==="
+=== CMERGE ===
+
+. use `master', clear
+
+. cmerge 1:1 id using `using_data'
+
+    Result                             Number of obs
+    -----------------------------------------------
+    Not matched                                      6
+        from master                                  3  (_merge==1)
+        from using                                   3  (_merge==2)
+
+    Matched                                          0  (_merge==3)
+    -----------------------------------------------
+
+. list, sep(0)
+
+     +------------------------------+
+     |  id   value   other   _merge |
+     |------------------------------|
+  1. |   1      10       .        1 |
+  2. |   2      20       .        1 |
+  3. |   3      30       .        1 |
+  4. | 100       .     1.5        2 |
+  5. | 200       .     2.5        2 |
+  6. | 300       .     3.5        2 |
+     +------------------------------+
+
+. describe
+
+Contains data from /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St89778.00
+> 0001
+ Observations:             6                  
+    Variables:             4                  9 Jan 2026 00:41
+-------------------------------------------------------------------------------
+Variable      Storage   Display    Value
+    name         type    format    label      Variable label
+-------------------------------------------------------------------------------
+id              int     %8.0g                 
+value           float   %9.0g                 
+other           double  %10.0g                
+_merge          byte    %8.0g                 
+-------------------------------------------------------------------------------
+Sorted by: 
+     Note: Dataset has changed since last saved.
+
+. 
+. tempfile cmerge_merged
+
+. quietly save `cmerge_merged'
+
+. 
+. di ""
+
+
+. di "=== COMPARISON ==="
+=== COMPARISON ===
+
+. use `stata_merged', clear
+
+. cf _all using `cmerge_merged', all verbose
+              id: match
+           value: match
+           other: match
+          _merge: match
+
+. 
+end of do-file

@@ -76,40 +76,31 @@ program define csort
         }
     }
 
-    * Get variable indices (1-based for Stata)
+    * Get ALL permanent variables in the dataset (we need to sort all of them)
+    * Use unab to expand varlist and avoid temporary variables
+    unab allvars : *
+
+    * Find indices of sort variables within all variables (1-based)
     local var_indices ""
-    foreach var of local varlist {
-        * Find variable index
-        local idx = 0
-        local allvars : char _dta[__varlist]
-        if ("`allvars'" == "") {
-            qui ds
-            local allvars `r(varlist)'
-        }
-        local pos = 1
+    foreach sortvar of local varlist {
+        local idx = 1
         foreach v of local allvars {
-            if ("`v'" == "`var'") {
-                local idx = `pos'
+            if ("`v'" == "`sortvar'") {
+                local var_indices "`var_indices' `idx'"
                 continue, break
             }
-            local ++pos
+            local ++idx
         }
-        if (`idx' == 0) {
-            * Variable not found in simple list, try describe
-            qui describe `var', varlist
-            * Just use position
-            local idx = `pos'
-        }
-        local var_indices "`var_indices' `idx'"
     }
 
     if ("`verbose'" != "") {
         di as text "csort: Sorting on variables: `varlist'"
-        di as text "       Variable indices: `var_indices'"
+        di as text "       All variables: `allvars'"
+        di as text "       Sort key indices: `var_indices'"
     }
 
-    * Call the C plugin
-    plugin call ctools_plugin `varlist' `if' `in', "csort `var_indices'"
+    * Call the C plugin with ALL variables (so it can sort the entire dataset)
+    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices'"
 
     * Display timing if requested
     if ("`timeit'" != "") {
@@ -120,6 +111,6 @@ program define csort
         di as text "  Total: " as result %8.4f _csort_time_total " sec"
     }
 
-    * Set sort order in Stata
-    sort `varlist'
+    * Set sort order in Stata (use stable to match csort's stable radix sort)
+    sort `varlist', stable
 end

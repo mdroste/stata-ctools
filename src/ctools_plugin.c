@@ -33,6 +33,7 @@
 #include "cexport_impl.h"
 #include "cmerge_impl.h"
 #include "cqreg_impl.h"
+#include "cbinscatter_impl.h"
 
 /*
     Main plugin entry point.
@@ -96,6 +97,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cqreg") == 0) {
         rc = cqreg_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cbinscatter") == 0) {
+        rc = cbinscatter_main(cmd_args);
     }
     else {
         char msg[256];

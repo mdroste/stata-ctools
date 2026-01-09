@@ -1,0 +1,219 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do validation/debug_simple.do 
+
+. * Debug with simple data
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. 
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. * Create simple master data (10 rows, 3 groups)
+. clear
+
+. input int id int grp float value
+
+           id       grp      value
+  1. 1 2 10
+  2. 2 1 20
+  3. 3 3 30
+  4. 4 1 40
+  5. 5 2 50
+  6. 6 3 60
+  7. 7 1 70
+  8. 8 2 80
+  9. 9 3 90
+ 10. 10 1 100
+ 11. end
+
+. 
+. di "=== ORIGINAL MASTER DATA ==="
+=== ORIGINAL MASTER DATA ===
+
+. list, sep(0)
+
+     +------------------+
+     | id   grp   value |
+     |------------------|
+  1. |  1     2      10 |
+  2. |  2     1      20 |
+  3. |  3     3      30 |
+  4. |  4     1      40 |
+  5. |  5     2      50 |
+  6. |  6     3      60 |
+  7. |  7     1      70 |
+  8. |  8     2      80 |
+  9. |  9     3      90 |
+ 10. | 10     1     100 |
+     +------------------+
+
+. 
+. tempfile master
+
+. quietly save `master'
+
+. 
+. * Create using data
+. clear
+
+. input int grp str10 label
+
+          grp       label
+  1. 1 "GroupA"
+  2. 2 "GroupB"
+  3. 3 "GroupC"
+  4. end
+
+. tempfile using_data
+
+. quietly save `using_data'
+
+. 
+. di ""
+
+
+. di "=== STATA m:1 MERGE ==="
+=== STATA m:1 MERGE ===
+
+. use `master', clear
+
+. merge m:1 grp using `using_data'
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                10  (_merge==3)
+    -----------------------------------------
+
+. list id grp value label _merge, sep(0)
+
+     +-----------------------------------------+
+     | id   grp   value    label        _merge |
+     |-----------------------------------------|
+  1. |  2     1      20   GroupA   Matched (3) |
+  2. | 10     1     100   GroupA   Matched (3) |
+  3. |  4     1      40   GroupA   Matched (3) |
+  4. |  7     1      70   GroupA   Matched (3) |
+  5. |  8     2      80   GroupB   Matched (3) |
+  6. |  1     2      10   GroupB   Matched (3) |
+  7. |  5     2      50   GroupB   Matched (3) |
+  8. |  9     3      90   GroupC   Matched (3) |
+  9. |  3     3      30   GroupC   Matched (3) |
+ 10. |  6     3      60   GroupC   Matched (3) |
+     +-----------------------------------------+
+
+. 
+. di ""
+
+
+. di "=== CMERGE m:1 (verbose) ==="
+=== CMERGE m:1 (verbose) ===
+
+. use `master', clear
+
+. cmerge m:1 grp using `using_data', verbose
+
+------------------------------------------------------------
+cmerge: C-Accelerated Merge (Full Native)
+------------------------------------------------------------
+Merge type:  m:1
+Key vars:    grp
+Using file:  /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St01590.000002
+Master obs:  10
+Master vars: 3
+Sorted:      no
+------------------------------------------------------------
+
+Phase 1: Loading using dataset into C...
+  Using dataset: 3 obs, 2 vars
+cmerge: Loading using dataset into C...
+  Loaded 3 obs, 2 vars in 0.0 ms
+cmerge: Sorting using dataset...
+  Sorted in 0.0 ms
+
+Phase 2: Executing merge in C...
+cmerge: Loading master dataset...
+  Loaded 10 obs, 5 vars in 0.1 ms
+cmerge: Sorting master dataset...
+  Sorted in 0.1 ms
+cmerge: Performing sorted merge join...
+  Merge produced 10 rows in 0.0 ms
+cmerge: Building output dataset...
+  Built output in 0.1 ms
+cmerge: Storing results to Stata...
+  Stored 10 obs in 0.1 ms
+
+Total C time: 0.2 ms
+  Load master: 0.1 ms, Sort master: 0.1 ms
+  Merge: 0.0 ms, Build: 0.1 ms, Store: 0.1 ms
+
+    Result                             Number of obs
+    -----------------------------------------------
+    Not matched                                      0
+
+    Matched                                         10  (_merge==3)
+    -----------------------------------------------
+
+Total time:     0.016 seconds
+
+. list id grp value label _merge, sep(0)
+
+     +------------------------------------+
+     | id   grp   value    label   _merge |
+     |------------------------------------|
+  1. |  2     1      20   GroupA        3 |
+  2. |  4     1      40   GroupA        3 |
+  3. |  7     1      70   GroupA        3 |
+  4. | 10     1     100   GroupA        3 |
+  5. |  1     2      10   GroupB        3 |
+  6. |  5     2      50   GroupB        3 |
+  7. |  8     2      80   GroupB        3 |
+  8. |  3     3      30   GroupC        3 |
+  9. |  6     3      60   GroupC        3 |
+ 10. |  9     3      90   GroupC        3 |
+     +------------------------------------+
+
+. 
+end of do-file

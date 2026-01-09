@@ -57,7 +57,7 @@ program define cmerge, rclass
         ASSert(string) ///
         GENerate(name) ///
         NOGENerate ///
-        KEEPUSing(varlist) ///
+        KEEPUSing(string) ///
         SORTED ///
         FORCE ///
         NOREPort ///
@@ -395,6 +395,32 @@ program define cmerge, rclass
     qui ds
     local using_allvars `r(varlist)'
 
+    * Build list of non-key using variable names and types (in order)
+    * These will be used to create correctly-typed placeholder variables
+    local using_nonkey_varnames ""
+    local using_nonkey_vartypes ""
+    foreach v of local using_allvars {
+        local is_key = 0
+        foreach k of local keyvars {
+            if "`v'" == "`k'" {
+                local is_key = 1
+            }
+        }
+        if !`is_key' {
+            local using_nonkey_varnames "`using_nonkey_varnames' `v'"
+            * Determine variable type
+            capture confirm string variable `v'
+            if _rc == 0 {
+                * It's a string - get the storage type
+                local vtype : type `v'
+                local using_nonkey_vartypes "`using_nonkey_vartypes' `vtype'"
+            }
+            else {
+                local using_nonkey_vartypes "`using_nonkey_vartypes' double"
+            }
+        }
+    }
+
     * Call plugin to load using data into C memory
     * IMPORTANT: Must pass varlist to plugin so it can access the data
     capture noisily plugin call ctools_plugin `using_allvars', "cmerge `plugin_args'"
@@ -435,8 +461,18 @@ program define cmerge, rclass
 
     * Add placeholder variables for using non-key vars and _merge
     * These will be overwritten by the plugin
-    forval v = 1/`using_nonkey_nvars' {
-        capture gen double __using_temp`v' = .
+    * Create placeholders with correct types matching using variables
+    local v = 1
+    foreach vtype of local using_nonkey_vartypes {
+        if substr("`vtype'", 1, 3) == "str" {
+            * String variable - create with correct length
+            capture gen `vtype' __using_temp`v' = ""
+        }
+        else {
+            * Numeric variable
+            capture gen double __using_temp`v' = .
+        }
+        local ++v
     }
     if "`nogenerate'" == "" {
         capture gen byte `generate' = .
@@ -444,18 +480,16 @@ program define cmerge, rclass
 
     * For merges that may include using-only rows, expand dataset to accommodate
     * Maximum output size = master_nobs + using_nobs (if all using rows are unmatched)
-    * We only need to expand if keep doesn't exclude using-only rows
+    * Always expand - the C plugin produces all rows, keep() filtering happens after
     local expanded = 0
-    if !`keep_excludes_using' {
-        local max_output_nobs = `master_nobs' + `using_nobs'
-        if `max_output_nobs' > `master_nobs' {
-            qui set obs `max_output_nobs'
-            local expanded = 1
-        }
+    local max_output_nobs = `master_nobs' + `using_nobs'
+    if `max_output_nobs' > `master_nobs' {
+        qui set obs `max_output_nobs'
+        local expanded = 1
     }
 
     * Build plugin command for execute
-    * Pass original master_nobs so plugin knows how many real observations to process
+    * Pass original master_nobs and master_nvars so plugin knows real data sizes
     local plugin_args "execute `merge_code' `nkeys' `keyvar_indices'"
     if `master_sorted' {
         local plugin_args "`plugin_args' sorted"
@@ -473,6 +507,8 @@ program define cmerge, rclass
     if `expanded' {
         local plugin_args "`plugin_args' master_nobs `master_nobs'"
     }
+    * Always pass original master_nvars (before adding placeholders)
+    local plugin_args "`plugin_args' master_nvars `master_nvars'"
 
     * Get all variables in master dataset for plugin call
     qui ds
@@ -494,6 +530,25 @@ program define cmerge, rclass
     local merge_using = scalar(_cmerge_N_2)
     local merge_matched = scalar(_cmerge_N_3)
     local total_obs = scalar(_cmerge_N)
+
+    * Rename placeholder variables to actual using variable names
+    local v = 1
+    foreach varname of local using_nonkey_varnames {
+        * Check if variable already exists in master (skip if so)
+        capture confirm variable `varname'
+        if _rc != 0 {
+            * Variable doesn't exist, rename placeholder to this name
+            capture rename __using_temp`v' `varname'
+        }
+        else {
+            * Variable exists in master, just drop the placeholder
+            * (master values are kept, like native merge behavior)
+            capture drop __using_temp`v'
+        }
+        local ++v
+    }
+    * Drop any remaining placeholders (shouldn't happen but just in case)
+    capture drop __using_temp*
 
     * Trim excess observations if we over-expanded
     * (happens when some using rows matched and weren't added as using-only)
@@ -572,18 +627,18 @@ program define cmerge, rclass
     * Display merge table if not suppressed
     if "`noreport'" == "" {
         di as text ""
-        di as text "    Result" _col(40) "Number of obs"
-        di as text "    {hline 47}"
-        di as text "    Not matched" _col(40) as result %15.0fc `=`merge_master' + `merge_using''
+        di as text "    Result" _col(33) "Number of obs"
+        di as text "    {hline 41}"
+        di as text "    Not matched" _col(33) as result %13.0fc `=`merge_master' + `merge_using''
         if `merge_master' > 0 {
-            di as text "        from master" _col(40) as result %15.0fc `merge_master' as text "  (_merge==1)"
+            di as text "        from master" _col(33) as result %13.0fc `merge_master' as text "  (_merge==1)"
         }
         if `merge_using' > 0 {
-            di as text "        from using" _col(40) as result %15.0fc `merge_using' as text "  (_merge==2)"
+            di as text "        from using" _col(33) as result %13.0fc `merge_using' as text "  (_merge==2)"
         }
         di as text ""
-        di as text "    Matched" _col(40) as result %15.0fc `merge_matched' as text "  (_merge==3)"
-        di as text "    {hline 47}"
+        di as text "    Matched" _col(33) as result %13.0fc `merge_matched' as text "  (_merge==3)"
+        di as text "    {hline 41}"
     }
 
     * Display timing if requested

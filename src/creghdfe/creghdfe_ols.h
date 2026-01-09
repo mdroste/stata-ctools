@@ -37,10 +37,12 @@ void compute_xtx_xty(
     ST_double *xty          /* Output: (K-1) x 1 */
 );
 
-/* Compute weighted X'WX and X'Wy where W = diag(weights) */
+/* Compute weighted X'WX and X'Wy where W = diag(weights)
+ * For aweight/pweight: normalizes weights to sum to N (matches reghdfe.mata line 3598, 3609) */
 void compute_xtx_xty_weighted(
     const ST_double *data,     /* N x K matrix in column-major order */
     const ST_double *weights,  /* N x 1 weight vector */
+    ST_int weight_type,        /* 0=none, 1=aweight, 2=fweight, 3=pweight */
     ST_int N,
     ST_int K,                  /* K includes y as first column */
     ST_double *xtx,            /* Output: (K-1) x (K-1) */

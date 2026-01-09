@@ -717,7 +717,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * STEP 8: OLS with collinearity detection
      * ================================================================ */
     K_x = K - 1;  /* Excluding y */
-    df_r = N - df_a;
+    /* For fweight, use sum(weights) as effective N in df calculation (reghdfe.mata line 3594) */
+    ST_int N_eff_df = (weight_type == 2) ? (ST_int)g_state->sum_weights : N;
+    df_r = N_eff_df - df_a;
 
     /* Allocate for collinearity detection */
     xtx = (ST_double *)malloc(K_x * K_x * sizeof(ST_double));
@@ -881,11 +883,16 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Compute X'X and X'y on non-collinear data (weighted if using weights) */
     if (has_weights) {
-        compute_xtx_xty_weighted(data_keep, g_state->weights, N, K_keep + 1, xtx_keep, xty_keep);
-        /* Weighted TSS_within = sum(w_i * y_i^2) */
+        compute_xtx_xty_weighted(data_keep, g_state->weights, weight_type, N, K_keep + 1, xtx_keep, xty_keep);
+        /* Weighted TSS_within = sum(w_i * y_i^2) - with normalized weights for aw/pw */
         tss_within = 0.0;
+        ST_double w_scale = 1.0;
+        if (weight_type == 1 || weight_type == 3) {
+            w_scale = (ST_double)N / g_state->sum_weights;
+        }
         for (idx = 0; idx < N; idx++) {
-            tss_within += g_state->weights[idx] * data_keep[idx] * data_keep[idx];
+            ST_double w = g_state->weights[idx] * w_scale;
+            tss_within += w * data_keep[idx] * data_keep[idx];
         }
     } else {
         compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
@@ -1211,11 +1218,13 @@ ST_retcode do_full_regression(int argc, char *argv[])
         if (resid) {
             /* Pass weights for weighted VCE (NULL if no weights) */
             ST_double *vce_weights = has_weights ? g_state->weights : NULL;
+            /* N_eff = sum(weights) for fweight, else N */
+            ST_int N_eff = (weight_type == 2) ? (ST_int)g_state->sum_weights : N;
             if (vcetype == 1) {
-                compute_vce_robust(data_with_cons, resid, inv_xx_keep, vce_weights, N, K_with_cons, df_a, V_keep);
+                compute_vce_robust(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, N, N_eff, K_with_cons, df_a, V_keep);
             } else {
                 ST_int df_m_cluster = K_keep;
-                compute_vce_cluster(data_with_cons, resid, inv_xx_keep, vce_weights, cluster_ids, N, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
+                compute_vce_cluster(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, cluster_ids, N, N_eff, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
             }
         }
     }

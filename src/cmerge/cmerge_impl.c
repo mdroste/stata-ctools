@@ -142,8 +142,8 @@ static int cmerge_compare_keys_internal(stata_data *data,
  * ============================================================================ */
 
 typedef struct {
-    size_t master_row;     /* Index in master, or SIZE_MAX if none */
-    size_t using_row;      /* Index in using, or SIZE_MAX if none */
+    size_t master_row;     /* Index in master (after sorting), or SIZE_MAX if none */
+    size_t using_row;      /* Index in using (after sorting), or SIZE_MAX if none */
     int merge_result;      /* _merge value */
 } cmerge_output_row_t;
 
@@ -218,7 +218,7 @@ static int64_t cmerge_sorted_merge_join(
                 out[output_count].master_row = m_idx;
                 out[output_count].using_row = SIZE_MAX;
                 out[output_count].merge_result = MERGE_RESULT_MASTER_ONLY;
-                output_count++;
+                    output_count++;
                 m_idx++;
             }
             else if (cmp > 0) {
@@ -226,7 +226,7 @@ static int64_t cmerge_sorted_merge_join(
                 out[output_count].master_row = SIZE_MAX;
                 out[output_count].using_row = u_idx;
                 out[output_count].merge_result = MERGE_RESULT_USING_ONLY;
-                output_count++;
+                    output_count++;
                 u_idx++;
             }
             else {
@@ -292,14 +292,18 @@ static int64_t cmerge_sorted_merge_join(
                             out[output_count].master_row = m_start;
                             out[output_count].using_row = u_start + i;
                             out[output_count].merge_result = MERGE_RESULT_BOTH;
-                            output_count++;
+                                output_count++;
                         }
                         break;
 
                     case MERGE_M_M:
-                        /* m:m - full Cartesian product of matching rows */
-                        for (size_t i = 0; i < m_count; i++) {
-                            for (size_t j = 0; j < u_count; j++) {
+                        /* m:m - sequential pairing within groups (Stata behavior)
+                           First master matches first using, second to second, etc.
+                           Extra rows on either side become unmatched. */
+                        {
+                            size_t pairs = (m_count < u_count) ? m_count : u_count;
+                            /* Output matched pairs */
+                            for (size_t i = 0; i < pairs; i++) {
                                 if (output_count >= output_capacity) {
                                     output_capacity *= 2;
                                     cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
@@ -307,9 +311,35 @@ static int64_t cmerge_sorted_merge_join(
                                     out = new_out;
                                 }
                                 out[output_count].master_row = m_start + i;
-                                out[output_count].using_row = u_start + j;
+                                out[output_count].using_row = u_start + i;
                                 out[output_count].merge_result = MERGE_RESULT_BOTH;
-                                output_count++;
+                                    output_count++;
+                            }
+                            /* Output excess master rows as master-only */
+                            for (size_t i = pairs; i < m_count; i++) {
+                                if (output_count >= output_capacity) {
+                                    output_capacity *= 2;
+                                    cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
+                                    if (!new_out) { free(out); return -1; }
+                                    out = new_out;
+                                }
+                                out[output_count].master_row = m_start + i;
+                                out[output_count].using_row = SIZE_MAX;
+                                out[output_count].merge_result = MERGE_RESULT_MASTER_ONLY;
+                                    output_count++;
+                            }
+                            /* Output excess using rows as using-only */
+                            for (size_t i = pairs; i < u_count; i++) {
+                                if (output_count >= output_capacity) {
+                                    output_capacity *= 2;
+                                    cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
+                                    if (!new_out) { free(out); return -1; }
+                                    out = new_out;
+                                }
+                                out[output_count].master_row = SIZE_MAX;
+                                out[output_count].using_row = u_start + i;
+                                out[output_count].merge_result = MERGE_RESULT_USING_ONLY;
+                                                    output_count++;
                             }
                         }
                         break;
@@ -336,6 +366,10 @@ typedef struct {
     int source_var_idx;       /* Variable index in source */
     int is_master;            /* 1 if from master, 0 if from using */
     stata_variable *out_var;  /* Output variable to populate */
+    /* Additional fields for key variables */
+    stata_data *alt_source;   /* Alternative data source (using for key vars) */
+    int alt_var_idx;          /* Variable index in alternative source */
+    int is_key_var;           /* 1 if this is a key variable */
 } construct_var_args_t;
 
 static void *construct_var_thread(void *arg)
@@ -350,52 +384,75 @@ static void *construct_var_thread(void *arg)
     out->nobs = nobs;
     out->str_maxlen = src_var->str_maxlen;
 
+    /* For key variables, we need to pull from using data when master_row is SIZE_MAX */
+    int is_key = args->is_key_var;
+    stata_variable *alt_var = NULL;
+    if (is_key && args->alt_source) {
+        alt_var = &args->alt_source->vars[args->alt_var_idx];
+    }
+
     if (src_var->type == STATA_TYPE_DOUBLE) {
         out->data.dbl = malloc(nobs * sizeof(double));
         if (!out->data.dbl) return NULL;
 
         double missing = SV_missval;
         double *src_data = src_var->data.dbl;
+        double *alt_data = (is_key && alt_var) ? alt_var->data.dbl : NULL;
         double *dst_data = out->data.dbl;
         int is_master = args->is_master;
 
-        /* 4x loop unrolling for better performance */
-        size_t i = 0;
-        size_t nobs_4 = nobs - (nobs % 4);
+        for (size_t i = 0; i < nobs; i++) {
+            size_t master_row = rows[i].master_row;
+            size_t using_row = rows[i].using_row;
 
-        for (; i < nobs_4; i += 4) {
-            size_t r0 = is_master ? rows[i].master_row : rows[i].using_row;
-            size_t r1 = is_master ? rows[i+1].master_row : rows[i+1].using_row;
-            size_t r2 = is_master ? rows[i+2].master_row : rows[i+2].using_row;
-            size_t r3 = is_master ? rows[i+3].master_row : rows[i+3].using_row;
-
-            dst_data[i]   = (r0 == SIZE_MAX) ? missing : src_data[r0];
-            dst_data[i+1] = (r1 == SIZE_MAX) ? missing : src_data[r1];
-            dst_data[i+2] = (r2 == SIZE_MAX) ? missing : src_data[r2];
-            dst_data[i+3] = (r3 == SIZE_MAX) ? missing : src_data[r3];
-        }
-
-        /* Handle remaining elements */
-        for (; i < nobs; i++) {
-            size_t src_row = is_master ? rows[i].master_row : rows[i].using_row;
-            dst_data[i] = (src_row == SIZE_MAX) ? missing : src_data[src_row];
+            if (is_key) {
+                /* Key variable: use master if available, else using */
+                if (master_row != SIZE_MAX) {
+                    dst_data[i] = src_data[master_row];
+                } else if (alt_data && using_row != SIZE_MAX) {
+                    dst_data[i] = alt_data[using_row];
+                } else {
+                    dst_data[i] = missing;
+                }
+            } else {
+                /* Non-key variable: use designated source */
+                size_t src_row = is_master ? master_row : using_row;
+                dst_data[i] = (src_row == SIZE_MAX) ? missing : src_data[src_row];
+            }
         }
     } else {
         out->data.str = malloc(nobs * sizeof(char *));
         if (!out->data.str) return NULL;
 
         char **src_data = src_var->data.str;
+        char **alt_data = (is_key && alt_var) ? alt_var->data.str : NULL;
         char **dst_data = out->data.str;
         int is_master = args->is_master;
 
         for (size_t i = 0; i < nobs; i++) {
-            size_t src_row = is_master ? rows[i].master_row : rows[i].using_row;
+            size_t master_row = rows[i].master_row;
+            size_t using_row = rows[i].using_row;
 
-            if (src_row == SIZE_MAX) {
-                dst_data[i] = strdup("");
+            if (is_key) {
+                /* Key variable: use master if available, else using */
+                if (master_row != SIZE_MAX) {
+                    char *s = src_data[master_row];
+                    dst_data[i] = strdup(s ? s : "");
+                } else if (alt_data && using_row != SIZE_MAX) {
+                    char *s = alt_data[using_row];
+                    dst_data[i] = strdup(s ? s : "");
+                } else {
+                    dst_data[i] = strdup("");
+                }
             } else {
-                char *s = src_data[src_row];
-                dst_data[i] = strdup(s ? s : "");
+                /* Non-key variable: use designated source */
+                size_t src_row = is_master ? master_row : using_row;
+                if (src_row == SIZE_MAX) {
+                    dst_data[i] = strdup("");
+                } else {
+                    char *s = src_data[src_row];
+                    dst_data[i] = strdup(s ? s : "");
+                }
             }
         }
     }
@@ -540,7 +597,7 @@ static ST_retcode cmerge_execute(const char *args)
         return 459;
     }
 
-    /* Parse args: "merge_type nkeys key1 key2 ... [sorted] [verbose] [nogenerate] [master_nobs N]" */
+    /* Parse args: "merge_type nkeys key1 key2 ... [sorted] [verbose] [nogenerate] [master_nobs N] [master_nvars N]" */
     char args_copy[4096];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
@@ -552,6 +609,7 @@ static ST_retcode cmerge_execute(const char *args)
     int verbose = 0;
     int nogenerate = 0;
     size_t actual_master_nobs = 0;  /* If set, use this instead of SF_nobs() for master */
+    size_t actual_master_nvars = 0; /* Original master nvars before placeholders added */
     int arg_idx = 0;
 
     char *token = strtok(args_copy, " ");
@@ -580,6 +638,13 @@ static ST_retcode cmerge_execute(const char *args)
             token = strtok(NULL, " ");
             if (token) {
                 actual_master_nobs = (size_t)atol(token);
+            }
+        }
+        else if (strcmp(token, "master_nvars") == 0) {
+            /* Next token is the original master nvars (before placeholders) */
+            token = strtok(NULL, " ");
+            if (token) {
+                actual_master_nvars = (size_t)atol(token);
             }
         }
         /* Ignore other options (keep_excludes_using) - no longer used */
@@ -694,6 +759,8 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
 
+    /* Note: Output order is sorted by key variables, matching Stata's merge behavior */
+
     /* Build output dataset */
     if (verbose) {
         SF_display("cmerge: Building output dataset...\n");
@@ -717,8 +784,14 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
 
-    /* Total output variables = master vars + using non-key vars + _merge */
-    size_t output_nvars = master_nvars + n_using_nonkey;
+    /* Use actual_master_nvars if provided, otherwise use loaded master_nvars
+       actual_master_nvars is the count of REAL master variables, before
+       placeholder variables were added by the .ado file */
+    size_t real_master_nvars = (actual_master_nvars > 0) ? actual_master_nvars : master_nvars;
+
+    /* Total output variables = real master vars + using non-key vars + _merge
+       This should match the Stata varlist size (real_master_nvars + n_using_nonkey + 1) */
+    size_t output_nvars = real_master_nvars + n_using_nonkey;
     if (!nogenerate) {
         output_nvars++;  /* For _merge */
     }
@@ -738,7 +811,7 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* Parallel construction of output variables */
-    size_t n_threads = master_nvars + n_using_nonkey;
+    size_t n_threads = real_master_nvars + n_using_nonkey;
     pthread_t *threads = malloc(n_threads * sizeof(pthread_t));
     construct_var_args_t *thread_args = malloc(n_threads * sizeof(construct_var_args_t));
 
@@ -754,14 +827,28 @@ static ST_retcode cmerge_execute(const char *args)
 
     size_t thread_idx = 0;
 
-    /* Master variables */
-    for (size_t v = 0; v < master_nvars; v++) {
+    /* Master variables (only the real ones, not placeholder vars) */
+    for (size_t v = 0; v < real_master_nvars; v++) {
         thread_args[thread_idx].output_rows = output_rows;
         thread_args[thread_idx].output_nobs = (size_t)output_nobs;
         thread_args[thread_idx].source = &master;
         thread_args[thread_idx].source_var_idx = (int)v;
         thread_args[thread_idx].is_master = 1;
         thread_args[thread_idx].out_var = &output.vars[thread_idx];
+
+        /* Check if this is a key variable - if so, provide using data for fallback */
+        thread_args[thread_idx].is_key_var = 0;
+        thread_args[thread_idx].alt_source = NULL;
+        thread_args[thread_idx].alt_var_idx = 0;
+        for (int k = 0; k < nkeys; k++) {
+            if (master_key_indices[k] == (int)v) {
+                /* This is a key variable - set up using data as alternative source */
+                thread_args[thread_idx].is_key_var = 1;
+                thread_args[thread_idx].alt_source = &g_using_data;
+                thread_args[thread_idx].alt_var_idx = g_using_key_indices[k];
+                break;
+            }
+        }
 
         pthread_create(&threads[thread_idx], NULL, construct_var_thread, &thread_args[thread_idx]);
         thread_idx++;
@@ -776,6 +863,9 @@ static ST_retcode cmerge_execute(const char *args)
         thread_args[thread_idx].source_var_idx = v;
         thread_args[thread_idx].is_master = 0;
         thread_args[thread_idx].out_var = &output.vars[thread_idx];
+        thread_args[thread_idx].is_key_var = 0;
+        thread_args[thread_idx].alt_source = NULL;
+        thread_args[thread_idx].alt_var_idx = 0;
 
         pthread_create(&threads[thread_idx], NULL, construct_var_thread, &thread_args[thread_idx]);
         thread_idx++;

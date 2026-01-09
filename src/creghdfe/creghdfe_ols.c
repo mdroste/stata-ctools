@@ -128,11 +128,13 @@ void compute_xtx_xty(
 /* ========================================================================
  * Compute weighted X'WX and X'Wy - BLAS-like implementation
  * W = diag(weights), so X'WX = sum_i (w_i * x_i * x_i')
+ * For aweight/pweight: normalizes weights to sum to N (matches reghdfe.mata line 3598, 3609)
  * ======================================================================== */
 
 void compute_xtx_xty_weighted(
     const ST_double *data,     /* N x K matrix in column-major order */
     const ST_double *weights,  /* N x 1 weight vector */
+    ST_int weight_type,        /* 0=none, 1=aweight, 2=fweight, 3=pweight */
     ST_int N,
     ST_int K,                  /* K includes y as first column */
     ST_double *xtx,            /* Output: (K-1) x (K-1) */
@@ -143,6 +145,15 @@ void compute_xtx_xty_weighted(
     ST_int K_x = K - 1;  /* Number of X columns (excluding y) */
     const ST_double *y = &data[0];  /* Column 0 is y */
 
+    /* For aweight/pweight: normalize weights to sum to N (reghdfe.mata line 3598) */
+    ST_double *w_norm = NULL;
+    ST_double weight_scale = 1.0;
+    if (weight_type == 1 || weight_type == 3) {
+        ST_double sum_w = 0.0;
+        for (i = 0; i < N; i++) sum_w += weights[i];
+        weight_scale = (ST_double)N / sum_w;
+    }
+
     /* Initialize output */
     memset(xtx, 0, K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
@@ -150,6 +161,10 @@ void compute_xtx_xty_weighted(
     /* Compute X'WX and X'Wy where W = diag(weights) */
     for (i = 0; i < N; i++) {
         ST_double w = weights[i];
+        /* Normalize for aweight/pweight */
+        if (weight_type == 1 || weight_type == 3) {
+            w = w * weight_scale;
+        }
         ST_double yi = y[i];
 
         for (j = 0; j < K_x; j++) {

@@ -18,6 +18,9 @@
 #include "ctools_timer.h"
 #include "csort_impl.h"
 
+/* Debug flag - set to 1 to enable debug output */
+#define CSORT_DEBUG 0
+
 /* Parse the sort variable indices from the argument string */
 static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 {
@@ -135,6 +138,39 @@ ST_retcode csort_main(const char *args)
     /* ================================================================
        PHASE 2: Sort the data
        ================================================================ */
+#if CSORT_DEBUG
+    {
+        char dbg[512];
+        snprintf(dbg, sizeof(dbg), "csort debug: nobs=%zu nvars=%zu nsort=%zu\n",
+                 data.nobs, data.nvars, nsort);
+        SF_display(dbg);
+        snprintf(dbg, sizeof(dbg), "csort debug: sort_vars = [");
+        SF_display(dbg);
+        for (size_t i = 0; i < nsort; i++) {
+            snprintf(dbg, sizeof(dbg), "%d ", sort_vars[i]);
+            SF_display(dbg);
+        }
+        SF_display("]\n");
+
+        /* Show first 5 observations of first string var (make) */
+        if (data.vars[0].type == STATA_TYPE_STRING) {
+            SF_display("csort debug: First 5 make values (before sort):\n");
+            for (size_t i = 0; i < 5 && i < data.nobs; i++) {
+                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, data.vars[0].data.str[i]);
+                SF_display(dbg);
+            }
+        }
+
+        /* Show initial sort_order */
+        SF_display("csort debug: Initial sort_order (first 10): ");
+        for (size_t i = 0; i < 10 && i < data.nobs; i++) {
+            snprintf(dbg, sizeof(dbg), "%zu ", data.sort_order[i]);
+            SF_display(dbg);
+        }
+        SF_display("\n");
+    }
+#endif
+
     timer.sort_time = ctools_timer_seconds();
 
     rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
@@ -148,6 +184,28 @@ ST_retcode csort_main(const char *args)
         free(sort_vars);
         return 920;
     }
+
+#if CSORT_DEBUG
+    {
+        char dbg[512];
+        /* Show sort_order after sort */
+        SF_display("csort debug: Final sort_order (first 10): ");
+        for (size_t i = 0; i < 10 && i < data.nobs; i++) {
+            snprintf(dbg, sizeof(dbg), "%zu ", data.sort_order[i]);
+            SF_display(dbg);
+        }
+        SF_display("\n");
+
+        /* Show first 5 make values after sort (data is now permuted) */
+        if (data.vars[0].type == STATA_TYPE_STRING) {
+            SF_display("csort debug: First 5 make values (after sort):\n");
+            for (size_t i = 0; i < 5 && i < data.nobs; i++) {
+                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, data.vars[0].data.str[i]);
+                SF_display(dbg);
+            }
+        }
+    }
+#endif
 
     /* ================================================================
        PHASE 3: Transfer sorted data back to Stata

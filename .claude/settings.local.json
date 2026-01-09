@@ -16,7 +16,8 @@
       "WebSearch",
       "WebFetch(domain:rdrr.io)",
       "WebFetch(domain:www.stata.com)",
-      "WebFetch(domain:www.rdocumentation.org)"
+      "WebFetch(domain:www.rdocumentation.org)",
+      "Bash(echo:*)"
     ]
   }
 }

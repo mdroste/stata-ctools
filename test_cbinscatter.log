@@ -1,0 +1,807 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark/test_cbinscatter.do 
+
+. * Test cbinscatter functionality
+. * Part of the ctools test suite
+. 
+. clear all
+
+. set more off
+
+. 
+. di "======================================"
+======================================
+
+. di "cbinscatter Test Suite"
+cbinscatter Test Suite
+
+. di "======================================"
+======================================
+
+. 
+. * Change to project root
+. cd "/Users/Mike/Documents/GitHub/stata-ctools"
+/Users/Mike/Documents/GitHub/stata-ctools
+
+. 
+. * Ensure build directory is in adopath
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. 
+. * Test 1: Basic usage with auto data
+. di _n "Test 1: Basic cbinscatter with auto data"
+
+Test 1: Basic cbinscatter with auto data
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. describe
+
+Contains data from /Applications/Stata/ado/base/a/auto.dta
+ Observations:            74                  1978 automobile data
+    Variables:            12                  13 Apr 2022 17:45
+                                              (_dta has notes)
+-------------------------------------------------------------------------------
+Variable      Storage   Display    Value
+    name         type    format    label      Variable label
+-------------------------------------------------------------------------------
+make            str18   %-18s                 Make and model
+price           int     %8.0gc                Price
+mpg             int     %8.0g                 Mileage (mpg)
+rep78           int     %8.0g                 Repair record 1978
+headroom        float   %6.1f                 Headroom (in.)
+trunk           int     %8.0g                 Trunk space (cu. ft.)
+weight          int     %8.0gc                Weight (lbs.)
+length          int     %8.0g                 Length (in.)
+turn            int     %8.0g                 Turn circle (ft.)
+displacement    int     %8.0g                 Displacement (cu. in.)
+gear_ratio      float   %6.2f                 Gear ratio
+foreign         byte    %8.0g      origin     Car origin
+-------------------------------------------------------------------------------
+Sorted by: foreign
+
+. 
+. * Simple binscatter of price vs mpg
+. cbinscatter price mpg, nquantiles(10) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Bins:       10
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. 
+. di "N = " e(N)
+N = 74
+
+. di "nquantiles = " e(nquantiles)
+nquantiles = 10
+
+. di "num_groups = " e(num_groups)
+num_groups = 1
+
+. matrix list e(bindata)
+
+e(bindata)[10,7]
+            c1         c2         c3         c4         c5         c6
+ r1          1          1       13.5   11139.25          0          0
+ r2          1          2  15.857143  7296.4286          0          0
+ r3          1          3     17.625    6618.75          0          0
+ r4          1          4  18.428571  4842.8571          0          0
+ r5          1          5  19.285714  4755.4286          0          0
+ r6          1          6     21.125   6531.375          0          0
+ r7          1          7  22.714286  5291.1429          0          0
+ r8          1          8     24.625   5626.125          0          0
+ r9          1          9  27.285714       4524          0          0
+r10          1         10  33.714286  4276.5714          0          0
+
+            c7
+ r1          8
+ r2          7
+ r3          8
+ r4          7
+ r5          7
+ r6          8
+ r7          7
+ r8          8
+ r9          7
+r10          7
+
+. 
+. * Test 2: With controls
+. di _n "Test 2: cbinscatter with controls"
+
+Test 2: cbinscatter with controls
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. cbinscatter price mpg, controls(weight length) nquantiles(10) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Controls:   weight length
+Bins:       10
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter: residualization complete (0.000 sec)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. 
+. di "N = " e(N)
+N = 74
+
+. matrix list e(bindata)
+
+e(bindata)[10,7]
+             c1          c2          c3          c4          c5          c6
+ r1           1           1  -5.6584282   470.88692           0           0
+ r2           1           2  -3.6958529  -404.82612           0           0
+ r3           1           3  -2.7536763  -130.51398           0           0
+ r4           1           4  -1.5346912  -1133.1007           0           0
+ r5           1           5  -.91006193  -1510.9553           0           0
+ r6           1           6  -.08804801   1633.7516           0           0
+ r7           1           7   .70916518   94.543276           0           0
+ r8           1           8   2.0702741   266.34123           0           0
+ r9           1           9   4.3442554  -177.14024           0           0
+r10           1          10   10.586495   1037.4859           0           0
+
+             c7
+ r1           8
+ r2           7
+ r3           8
+ r4           7
+ r5           7
+ r6           8
+ r7           7
+ r8           8
+ r9           7
+r10           7
+
+. 
+. * Test 3: With absorb
+. di _n "Test 3: cbinscatter with absorb"
+
+Test 3: cbinscatter with absorb
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. * Create a non-missing rep78 for more observations
+. replace rep78 = 3 if rep78 == .
+(5 real changes made)
+
+. cbinscatter price mpg, absorb(foreign rep78) nquantiles(10) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Absorb:     foreign rep78
+Bins:       10
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 22 observations (52 dropped)
+cbinscatter HDFE iter 0: change_y=9.29e-01 change_x=9.70e-01
+cbinscatter HDFE iter 1: change_y=2.05e-17 change_x=2.86e-17
+cbinscatter HDFE converged in 2 iterations
+cbinscatter: residualization complete (0.000 sec)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+(dropped 52 observations due to missing values)
+
+. 
+. di "N = " e(N)
+N = 22
+
+. matrix list e(bindata)
+
+e(bindata)[10,7]
+             c1          c2          c3          c4          c5          c6
+ r1           1           1          -9        2902           0           0
+ r2           1           2  -7.6666667   2773.6667           0           0
+ r3           1           3  -2.8888889   1373.0556           0           0
+ r4           1           4  -1.6111111  -263.05556           0           0
+ r5           1           5  -.44444444  -1877.7222           0           0
+ r6           1           6   .11111111   832.55556           0           0
+ r7           1           7   2.5555556  -1168.2222           0           0
+ r8           1           8   4.8333333  -2759.3333           0           0
+ r9           1           9   6.8888889  -2380.5556           0           0
+r10           1          10   11.666667  -1299.6667           0           0
+
+             c7
+ r1           3
+ r2           2
+ r3           2
+ r4           2
+ r5           2
+ r6           3
+ r7           2
+ r8           2
+ r9           2
+r10           2
+
+. 
+. * Test 4: With by()
+. di _n "Test 4: cbinscatter with by()"
+
+Test 4: cbinscatter with by()
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. cbinscatter price mpg, by(foreign) nquantiles(10) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+By:         foreign
+Bins:       10
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. 
+. di "N = " e(N)
+N = 74
+
+. di "num_groups = " e(num_groups)
+num_groups = 2
+
+. matrix list e(bindata)
+
+e(bindata)[20,7]
+            c1         c2         c3         c4         c5         c6
+ r1          1          1  13.333333  11636.833          0          0
+ r2          1          2       15.2     7310.6          0          0
+ r3          1          3       16.8       6591          0          0
+ r4          1          4         18       4482          0          0
+ r5          1          5       18.8     4731.4          0          0
+ r6          1          6  19.333333       4773          0          0
+ r7          1          7         21     7259.4          0          0
+ r8          1          8       22.4     4180.6          0          0
+ r9          1          9         25     4757.6          0          0
+r10          1         10       29.8     4148.8          0          0
+r11          2          1         16  11558.333          0          0
+r12          2          2         18       5809          0          0
+r13          2          3         21     6212.5          0          0
+r14          2          4         23       6262          0          0
+r15          2          5       23.5     6109.5          0          0
+r16          2          6         25  6743.6667          0          0
+r17          2          7       25.5     5372.5          0          0
+r18          2          8         29       4247          0          0
+r19          2          9         33     4168.5          0          0
+r20          2         10         38     4597.5          0          0
+
+            c7
+ r1          6
+ r2          5
+ r3          5
+ r4          5
+ r5          5
+ r6          6
+ r7          5
+ r8          5
+ r9          5
+r10          5
+r11          3
+r12          2
+r13          2
+r14          2
+r15          2
+r16          3
+r17          2
+r18          2
+r19          2
+r20          2
+
+. 
+. * Test 5: With weights
+. di _n "Test 5: cbinscatter with aweights"
+
+Test 5: cbinscatter with aweights
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. gen wt = _n
+
+. cbinscatter price mpg [aweight=wt], nquantiles(10) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Bins:       10
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. 
+. di "N = " e(N)
+N = 74
+
+. matrix list e(bindata)
+
+e(bindata)[10,7]
+            c1         c2         c3         c4         c5         c6
+ r1          1          1  13.811594  10386.123          0          0
+ r2          1          2  16.850746  8890.5299          0          0
+ r3          1          3         18  5034.0483          0          0
+ r4          1          4    18.7393  5025.0895          0          0
+ r5          1          5  20.210191  6009.8185          0          0
+ r6          1          6  22.571956  5825.0849          0          0
+ r7          1          7       24.3    4514.65          0          0
+ r8          1          8  25.182456  6699.8702          0          0
+ r9          1          9  28.172414  4173.0138          0          0
+r10          1         10  35.363934  4395.3016          0          0
+
+            c7
+ r1         11
+ r2          8
+ r3          7
+ r4          7
+ r5          9
+ r6          9
+ r7          5
+ r8          6
+ r9          7
+r10          5
+
+. 
+. * Test 6: All options combined
+. di _n "Test 6: Combined options"
+
+Test 6: Combined options
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. replace rep78 = 3 if rep78 == .
+(5 real changes made)
+
+. cbinscatter price mpg, controls(weight) absorb(rep78) by(foreign) nquantiles(
+> 8) linetype(linear) verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Controls:   weight
+Absorb:     rep78
+By:         foreign
+Bins:       8
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter HDFE iter 0: change_y=9.05e-01 change_x=9.73e-01
+cbinscatter HDFE iter 1: change_y=1.79e-17 change_x=7.19e-17
+cbinscatter HDFE converged in 2 iterations
+cbinscatter: residualization complete (0.000 sec)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. 
+. di "N = " e(N)
+N = 74
+
+. di "num_groups = " e(num_groups)
+num_groups = 2
+
+. matrix list e(bindata)
+
+e(bindata)[16,7]
+             c1          c2          c3          c4          c5          c6
+ r1           1           1  -2.0345535    819.7308           0           0
+ r2           1           2  -1.1092114  -2124.8991           0           0
+ r3           1           3  -.63657451  -1265.2641           0           0
+ r4           1           4   .08146335   -1205.798           0           0
+ r5           1           5   .41999874  -232.47211           0           0
+ r6           1           6   .75905674  -576.71704           0           0
+ r7           1           7    1.499902  -843.20229           0           0
+ r8           1           8   5.1019426   1015.4132           0           0
+ r9           2           1  -7.9472027    429.6067           0           0
+r10           2           2   -5.063199   3560.6057           0           0
+r11           2           3  -2.8840539   1852.7025           0           0
+r12           2           4  -1.7386265   1905.1468           0           0
+r13           2           5  -1.4433807   1527.1592           0           0
+r14           2           6   .43290736   1915.6326           0           0
+r15           2           7   4.0914222  -793.57711           0           0
+r16           2           8   9.0884278  -643.11104           0           0
+
+             c7
+ r1           7
+ r2           6
+ r3           7
+ r4           6
+ r5           7
+ r6           6
+ r7           7
+ r8           6
+ r9           3
+r10           3
+r11           3
+r12           2
+r13           3
+r14           3
+r15           3
+r16           2
+
+. matrix list e(coefs)
+
+e(coefs)[2,4]
+            c1          c2          c3          c4
+r1  -614.83102   167.25355           .           .
+r2   1130.1496  -132.14189           .           .
+
+. 
+. * Test 7: Discrete mode
+. di _n "Test 7: Discrete mode"
+
+Test 7: Discrete mode
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. cbinscatter price rep78 if rep78 != ., discrete verbose nograph
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: rep78
+Bins:       20
+Obs:        69
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 69 observations (5 dropped)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+(dropped 5 observations due to missing values)
+
+. 
+. di "N = " e(N)
+N = 69
+
+. matrix list e(bindata)
+
+e(bindata)[69,7]
+            c1         c2         c3         c4         c5         c6
+ r1          1          1          1     4564.5          0          0
+ r2          1          2          2   5967.625          0          0
+ r3          1          3          3  6429.2333          0          0
+ r4          1          4          4     6071.5          0          0
+ r5          1          5          5       5913          0          0
+ r6          .          .          .          .          .          .
+ r7          .          .          .          .          .          .
+ r8          .          .          .          .          .          .
+ r9          .          .          .          .          .          .
+r10          .          .          .          .          .          .
+r11          .          .          .          .          .          .
+r12          .          .          .          .          .          .
+r13          .          .          .          .          .          .
+r14          .          .          .          .          .          .
+r15          .          .          .          .          .          .
+r16          .          .          .          .          .          .
+r17          .          .          .          .          .          .
+r18          .          .          .          .          .          .
+r19          .          .          .          .          .          .
+r20          .          .          .          .          .          .
+r21          .          .          .          .          .          .
+r22          .          .          .          .          .          .
+r23          .          .          .          .          .          .
+r24          .          .          .          .          .          .
+r25          .          .          .          .          .          .
+r26          .          .          .          .          .          .
+r27          .          .          .          .          .          .
+r28          .          .          .          .          .          .
+r29          .          .          .          .          .          .
+r30          .          .          .          .          .          .
+r31          .          .          .          .          .          .
+r32          .          .          .          .          .          .
+r33          .          .          .          .          .          .
+r34          .          .          .          .          .          .
+r35          .          .          .          .          .          .
+r36          .          .          .          .          .          .
+r37          .          .          .          .          .          .
+r38          .          .          .          .          .          .
+r39          .          .          .          .          .          .
+r40          .          .          .          .          .          .
+r41          .          .          .          .          .          .
+r42          .          .          .          .          .          .
+r43          .          .          .          .          .          .
+r44          .          .          .          .          .          .
+r45          .          .          .          .          .          .
+r46          .          .          .          .          .          .
+r47          .          .          .          .          .          .
+r48          .          .          .          .          .          .
+r49          .          .          .          .          .          .
+r50          .          .          .          .          .          .
+r51          .          .          .          .          .          .
+r52          .          .          .          .          .          .
+r53          .          .          .          .          .          .
+r54          .          .          .          .          .          .
+r55          .          .          .          .          .          .
+r56          .          .          .          .          .          .
+r57          .          .          .          .          .          .
+r58          .          .          .          .          .          .
+r59          .          .          .          .          .          .
+r60          .          .          .          .          .          .
+r61          .          .          .          .          .          .
+r62          .          .          .          .          .          .
+r63          .          .          .          .          .          .
+r64          .          .          .          .          .          .
+r65          .          .          .          .          .          .
+r66          .          .          .          .          .          .
+r67          .          .          .          .          .          .
+r68          .          .          .          .          .          .
+r69          .          .          .          .          .          .
+
+            c7
+ r1          2
+ r2          8
+ r3         30
+ r4         18
+ r5         11
+ r6          .
+ r7          .
+ r8          .
+ r9          .
+r10          .
+r11          .
+r12          .
+r13          .
+r14          .
+r15          .
+r16          .
+r17          .
+r18          .
+r19          .
+r20          .
+r21          .
+r22          .
+r23          .
+r24          .
+r25          .
+r26          .
+r27          .
+r28          .
+r29          .
+r30          .
+r31          .
+r32          .
+r33          .
+r34          .
+r35          .
+r36          .
+r37          .
+r38          .
+r39          .
+r40          .
+r41          .
+r42          .
+r43          .
+r44          .
+r45          .
+r46          .
+r47          .
+r48          .
+r49          .
+r50          .
+r51          .
+r52          .
+r53          .
+r54          .
+r55          .
+r56          .
+r57          .
+r58          .
+r59          .
+r60          .
+r61          .
+r62          .
+r63          .
+r64          .
+r65          .
+r66          .
+r67          .
+r68          .
+r69          .
+
+. 
+. * Test 8: Generate graph (uncomment to view)
+. di _n "Test 8: Generate graph"
+
+Test 8: Generate graph
+
+. di "----------------------------------------"
+----------------------------------------
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. cbinscatter price mpg, nquantiles(20) linetype(linear) title("Price vs MPG") 
+> verbose
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: price
+X variable: mpg
+Bins:       20
+Obs:        74
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 74 observations (0 dropped)
+cbinscatter: bin computation complete (0.000 sec)
+cbinscatter: line fitting complete (0.000 sec)
+cbinscatter: total time 0.000 sec
+
+Timing breakdown:
+  Load:         0.0000 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0000 sec
+  Line fit:     0.0000 sec
+  Total:        0.0000 sec
+
+. graph export "benchmark/cbinscatter_test.png", replace
+file benchmark/cbinscatter_test.png written in PNG format
+
+. 
+. di _n "======================================"
+
+======================================
+
+. di "All tests completed successfully!"
+All tests completed successfully!
+
+. di "======================================"
+======================================
+
+. 
+end of do-file

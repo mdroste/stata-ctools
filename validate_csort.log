@@ -1,0 +1,730 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do validation/validate_csort.do 
+
+. /****************************************************************************
+> ***
+>  * validate_csort.do
+>  *
+>  * Comprehensive validation tests for csort vs native sort
+>  * Tests sorting functionality across various data types and scenarios
+>  *
+>  * Note: csort uses inherently stable radix sort, so we compare against
+>  * Stata's "sort, stable" for exact matches.
+>  ****************************************************************************
+> **/
+. 
+. do "validation/validate_setup.do"
+
+. /****************************************************************************
+> ***
+>  * validate_setup.do
+>  *
+>  * Setup and helper programs for ctools validation test suite
+>  * This file is included by all individual validation tests
+>  ****************************************************************************
+> **/
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. set trace off
+
+. 
+. * Load ctools from build directory
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. * Global counters
+. global TESTS_PASSED = 0
+
+. global TESTS_FAILED = 0
+
+. global TESTS_TOTAL = 0
+
+. 
+. * Helper program to compare scalars with tolerance
+. capture program drop assert_scalar_equal
+
+. program define assert_scalar_equal
+  1.     args name val1 val2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-6
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     local diff = abs(`val1' - `val2')
+  5.     * Handle exact match case (for integers like N)
+.     if `diff' == 0 | `diff' < `tol' {
+  6.         global TESTS_PASSED = $TESTS_PASSED + 1
+  7.         di as result "  PASS: `testname' (`name' diff = " %12.2e `diff' ")
+> "
+  8.     }
+  9.     else {
+ 10.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 11.         di as error "  FAIL: `testname' (`name': `val1' vs `val2', diff = 
+> " %12.2e `diff' ")"
+ 12.     }
+ 13. end
+
+. 
+. * Helper program to compare matrices
+. capture program drop assert_matrix_equal
+
+. program define assert_matrix_equal
+  1.     args mat1 mat2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-6
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     tempname diff
+  5.     matrix `diff' = `mat1' - `mat2'
+  6.     local maxdiff = 0
+  7.     local rows = rowsof(`diff')
+  8.     local cols = colsof(`diff')
+  9.     forvalues i = 1/`rows' {
+ 10.         forvalues j = 1/`cols' {
+ 11.             local d = abs(`diff'[`i', `j'])
+ 12.             if `d' > `maxdiff' local maxdiff = `d'
+ 13.         }
+ 14.     }
+ 15. 
+.     if `maxdiff' < `tol' {
+ 16.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 17.         di as result "  PASS: `testname' (max diff = " %12.2e `maxdiff' ")
+> "
+ 18.     }
+ 19.     else {
+ 20.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 21.         di as error "  FAIL: `testname' (max diff = " %12.2e `maxdiff' ")"
+ 22.     }
+ 23. end
+
+. 
+. * Helper program to compare variables
+. capture program drop assert_var_equal
+
+. program define assert_var_equal
+  1.     args var1 var2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-10
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     quietly count if abs(`var1' - `var2') > `tol'
+  5.     local ndiff = r(N)
+  6. 
+.     if `ndiff' == 0 {
+  7.         global TESTS_PASSED = $TESTS_PASSED + 1
+  8.         di as result "  PASS: `testname' (all values match)"
+  9.     }
+ 10.     else {
+ 11.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 12.         di as error "  FAIL: `testname' (`ndiff' values differ)"
+ 13.     }
+ 14. end
+
+. 
+. * Helper program to compare string variables
+. capture program drop assert_strvar_equal
+
+. program define assert_strvar_equal
+  1.     args var1 var2 testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     quietly count if `var1' != `var2'
+  4.     local ndiff = r(N)
+  5. 
+.     if `ndiff' == 0 {
+  6.         global TESTS_PASSED = $TESTS_PASSED + 1
+  7.         di as result "  PASS: `testname' (all values match)"
+  8.     }
+  9.     else {
+ 10.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 11.         di as error "  FAIL: `testname' (`ndiff' values differ)"
+ 12.     }
+ 13. end
+
+. 
+. * Helper to check if two datasets are identical
+. capture program drop assert_data_equal
+
+. program define assert_data_equal
+  1.     args file1 file2 testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     preserve
+  4.     quietly {
+  5.         use "`file1'", clear
+  6.         cf _all using "`file2'"
+  7.     }
+  8.     local rc = _rc
+  9.     restore
+ 10. 
+.     if `rc' == 0 {
+ 11.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 12.         di as result "  PASS: `testname' (datasets identical)"
+ 13.     }
+ 14.     else {
+ 15.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 16.         di as error "  FAIL: `testname' (datasets differ)"
+ 17.     }
+ 18. end
+
+. 
+. * Helper program to print section header
+. capture program drop print_section
+
+. program define print_section
+  1.     args title
+  2.     di as text ""
+  3.     di as text "{hline 70}"
+  4.     di as text "`title'"
+  5.     di as text "{hline 70}"
+  6. end
+
+. 
+. * Helper program to print test summary
+. capture program drop print_summary
+
+. program define print_summary
+  1.     args component
+  2.     di as text ""
+  3.     di as text "{hline 70}"
+  4.     di as text "SUMMARY: `component'"
+  5.     di as text "{hline 70}"
+  6.     di as text "Tests passed: " as result $TESTS_PASSED
+  7.     di as text "Tests failed: " as result $TESTS_FAILED
+  8.     di as text "Total tests:  " as result $TESTS_TOTAL
+  9.     if $TESTS_FAILED > 0 {
+ 10.         di as error "VALIDATION FAILED"
+ 11.     }
+ 12.     else {
+ 13.         di as result "ALL TESTS PASSED"
+ 14.     }
+ 15.     di as text "{hline 70}"
+ 16. end
+
+. 
+. * Create temp directory for test files
+. capture mkdir "validation/temp"
+
+. 
+. di as text ""
+
+
+. di as text "ctools validation framework loaded"
+ctools validation framework loaded
+
+. di as text ""
+
+
+. 
+end of do-file
+
+. 
+. di as text ""
+
+
+. di as text "=================================================================
+> ====="
+======================================================================
+
+. di as text "              CSORT VALIDATION TEST SUITE"
+              CSORT VALIDATION TEST SUITE
+
+. di as text "=================================================================
+> ====="
+======================================================================
+
+. 
+. /****************************************************************************
+> ***
+>  * First, test if csort works at all
+>  ****************************************************************************
+> **/
+. print_section "Preliminary: Check if csort plugin works"
+
+----------------------------------------------------------------------
+Preliminary: Check if csort plugin works
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. capture noisily csort price
+
+. local csort_works = (_rc == 0)
+
+. 
+. if !`csort_works' {
+.     di as error "  csort plugin is not functioning (rc=`=_rc')"
+.     di as error "  Skipping all csort tests"
+.     di as text ""
+.     di as text "{hline 70}"
+.     di as text "SUMMARY: csort"
+.     di as text "{hline 70}"
+.     di as text "Tests passed: 0"
+.     di as text "Tests failed: 1"
+.     di as text "Total tests:  1"
+.     di as error "VALIDATION FAILED - csort plugin not working"
+.     di as text "{hline 70}"
+.     global TESTS_PASSED = 0
+.     global TESTS_FAILED = 1
+.     global TESTS_TOTAL = 1
+.     exit 1
+. }
+
+. 
+. di as result "  csort plugin is functional"
+  csort plugin is functional
+
+. global TESTS_PASSED = $TESTS_PASSED + 1
+
+. global TESTS_TOTAL = $TESTS_TOTAL + 1
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 1: Single numeric variable sort (auto dataset)
+>  ****************************************************************************
+> **/
+. print_section "Test 1: Single numeric variable sort"
+
+----------------------------------------------------------------------
+Test 1: Single numeric variable sort
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. preserve
+
+. sort price, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort price
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Single numeric sort (price)"
+  PASS: Single numeric sort (price) (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 2: Single string variable sort
+>  ****************************************************************************
+> **/
+. print_section "Test 2: Single string variable sort"
+
+----------------------------------------------------------------------
+Test 2: Single string variable sort
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. preserve
+
+. sort make, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort make
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Single string sort (make)"
+  PASS: Single string sort (make) (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 3: Multiple variable sort
+>  ****************************************************************************
+> **/
+. print_section "Test 3: Multiple variable sort"
+
+----------------------------------------------------------------------
+Test 3: Multiple variable sort
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. preserve
+
+. sort foreign rep78 price, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort foreign rep78 price
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Multi-variable sort (foreign
+>  rep78 price)"
+  PASS: Multi-variable sort (foreign rep78 price) (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 4: Sort with missing values
+>  ****************************************************************************
+> **/
+. print_section "Test 4: Sort with missing values"
+
+----------------------------------------------------------------------
+Test 4: Sort with missing values
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. * rep78 has missing values
+. preserve
+
+. sort rep78, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort rep78
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Sort with missing values (re
+> p78)"
+  PASS: Sort with missing values (rep78) (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 5: Sort with duplicates
+>  ****************************************************************************
+> **/
+. print_section "Test 5: Sort with duplicates"
+
+----------------------------------------------------------------------
+Test 5: Sort with duplicates
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. * foreign has many duplicates (0 and 1)
+. preserve
+
+. sort foreign, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort foreign
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. * Check that all foreign=0 come before foreign=1
+. use `csort_sorted', clear
+(1978 automobile data)
+
+. gen _order = _n
+
+. quietly summarize _order if foreign == 0
+
+. local max_domestic = r(max)
+
+. quietly summarize _order if foreign == 1
+
+. local min_foreign = r(min)
+
+. 
+. if `max_domestic' < `min_foreign' {
+.     di as result "  PASS: Duplicates sorted correctly (domestic before foreig
+> n)"
+  PASS: Duplicates sorted correctly (domestic before foreign)
+.     global TESTS_PASSED = $TESTS_PASSED + 1
+. }
+
+. else {
+.     di as error "  FAIL: Duplicates not sorted correctly"
+.     global TESTS_FAILED = $TESTS_FAILED + 1
+. }
+
+. global TESTS_TOTAL = $TESTS_TOTAL + 1
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 6: Large synthetic dataset
+>  ****************************************************************************
+> **/
+. print_section "Test 6: Large synthetic dataset (10,000 obs)"
+
+----------------------------------------------------------------------
+Test 6: Large synthetic dataset (10,000 obs)
+----------------------------------------------------------------------
+
+. 
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 100)
+
+. gen value = runiform()
+
+. 
+. * Sort by group and value
+. preserve
+
+. sort group value, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort group value
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Large dataset sort (10K obs)
+> "
+  PASS: Large dataset sort (10K obs) (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 7: Negative numbers
+>  ****************************************************************************
+> **/
+. print_section "Test 7: Negative numbers"
+
+----------------------------------------------------------------------
+Test 7: Negative numbers
+----------------------------------------------------------------------
+
+. 
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = runiform() * 200 - 100  // Range -100 to 100
+
+. 
+. preserve
+
+. sort x, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort x
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Negative numbers sort"
+  PASS: Negative numbers sort (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * TEST 8: Census dataset
+>  ****************************************************************************
+> **/
+. print_section "Test 8: Census dataset"
+
+----------------------------------------------------------------------
+Test 8: Census dataset
+----------------------------------------------------------------------
+
+. 
+. sysuse census, clear
+(1980 Census data by state)
+
+. 
+. preserve
+
+. sort state, stable
+
+. tempfile stata_sorted
+
+. quietly save `stata_sorted'
+
+. restore
+
+. 
+. preserve
+
+. csort state
+
+. tempfile csort_sorted
+
+. quietly save `csort_sorted'
+
+. restore
+
+. 
+. assert_data_equal `stata_sorted' `csort_sorted' "Census state sort"
+  PASS: Census state sort (datasets identical)
+
+. 
+. /****************************************************************************
+> ***
+>  * SUMMARY
+>  ****************************************************************************
+> **/
+. print_summary "csort"
+
+----------------------------------------------------------------------
+SUMMARY: csort
+----------------------------------------------------------------------
+Tests passed: 9
+Tests failed: 0
+Total tests:  9
+ALL TESTS PASSED
+----------------------------------------------------------------------
+
+. 
+. * Return error code if any tests failed
+. if $TESTS_FAILED > 0 {
+.     exit 1
+. }
+
+. 
+end of do-file
