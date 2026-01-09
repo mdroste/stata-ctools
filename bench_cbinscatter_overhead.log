@@ -1,0 +1,151 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark/bench_cbinscatter_overhead.do 
+
+. * Benchmark cbinscatter overhead at large scale
+. * Tests total time vs plugin time to identify .ado overhead
+. 
+. clear all
+
+. set more off
+
+. 
+. cd "/Users/Mike/Documents/GitHub/stata-ctools"
+/Users/Mike/Documents/GitHub/stata-ctools
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. 
+. di "========================================"
+========================================
+
+. di "cbinscatter Overhead Benchmark"
+cbinscatter Overhead Benchmark
+
+. di "========================================"
+========================================
+
+. 
+. * Test at 25M observations
+. local N = 25000000
+
+. di "Generating `N' observations..."
+Generating 25000000 observations...
+
+. 
+. clear
+
+. set obs `N'
+Number of observations (_N) was 0, now 25,000,000.
+
+. gen x = rnormal()
+
+. gen y = 2*x + rnormal()
+
+. 
+. di _n "Test 1: No graph"
+
+Test 1: No graph
+
+. timer clear 1
+
+. timer on 1
+
+. cbinscatter y x, nquantiles(20) nograph verbose
+
+------------------------------------------------------------
+cbinscatter: C-Accelerated Binned Scatter
+------------------------------------------------------------
+Y variable: y
+X variable: x
+Bins:       20
+Obs:        25000000
+------------------------------------------------------------
+
+cbinscatter: starting computation
+cbinscatter: loaded 25000000 observations (0 dropped)
+cbinscatter: bin computation complete (0.089 sec)
+cbinscatter: line fitting complete (0.004 sec)
+cbinscatter: total time 0.294 sec
+
+Timing breakdown:
+  Load:         0.2006 sec
+  Residualize:  0.0000 sec
+  Bin comp:     0.0893 sec
+  Line fit:     0.0038 sec
+  Total:        0.2937 sec
+
+. timer off 1
+
+. timer list 1
+   1:      0.54 /        1 =       0.5380
+
+. 
+. di _n "Test 2: With graph"
+
+Test 2: With graph
+
+. timer clear 2
+
+. timer on 2
+
+. cbinscatter y x, nquantiles(20) linetype(linear)
+
+. timer off 2
+
+. timer list 2
+   2:      0.83 /        1 =       0.8260
+
+. 
+. di _n "Overhead = Total Stata time - Plugin time"
+
+Overhead = Total Stata time - Plugin time
+
+. di "If overhead is large, it's in the .ado file"
+If overhead is large, it's in the .ado file
+
+. 
+. di _n "========================================"
+
+========================================
+
+. di "Benchmark complete"
+Benchmark complete
+
+. di "========================================"
+========================================
+
+. 
+end of do-file

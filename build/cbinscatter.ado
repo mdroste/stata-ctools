@@ -49,19 +49,7 @@ program define cbinscatter, eclass sortpreserve
         [MLAbels(string)] ///
         [*]
 
-    * Mark sample - include all relevant variables
-    marksample touse
-    if "`controls'" != "" {
-        markout `touse' `controls'
-    }
-    if "`absorb'" != "" {
-        markout `touse' `absorb'
-    }
-    if "`by'" != "" {
-        markout `touse' `by'
-    }
-
-    * Parse weight
+    * Parse weight (before marksample to include weight var)
     local weight_var ""
     local weight_type = 0   // 0=none, 1=aweight, 2=fweight, 3=pweight, 4=iweight
     if "`weight'" != "" {
@@ -80,15 +68,6 @@ program define cbinscatter, eclass sortpreserve
         }
         else if "`weight'" == "iweight" {
             local weight_type = 4
-        }
-
-        markout `touse' `weight_var'
-
-        * Check for non-positive weights
-        qui count if `weight_var' <= 0 & `touse'
-        if r(N) > 0 {
-            di as error "cbinscatter: weights must be positive"
-            exit 198
         }
     }
 
@@ -132,18 +111,6 @@ program define cbinscatter, eclass sortpreserve
         exit 198
     }
 
-    * Count observations
-    qui count if `touse'
-    local nobs = r(N)
-    if `nobs' == 0 {
-        di as error "cbinscatter: no observations"
-        exit 2000
-    }
-    if `nobs' < `nquantiles' & "`discrete'" == "" {
-        di as text "(warning: fewer observations than bins, adjusting nquantiles)"
-        local nquantiles = `nobs'
-    }
-
     * Count control and absorb variables
     local num_controls = 0
     if "`controls'" != "" {
@@ -154,11 +121,31 @@ program define cbinscatter, eclass sortpreserve
         local num_absorb : word count `absorb'
     }
 
-    * Count by-groups if specified
+    * Minimal sample marking - just handle if/in, let plugin handle missing values
+    * This avoids expensive markout operations on large datasets
+    marksample touse, novarlist
+
+    * Get observation count from Stata (fast, uses existing if/in)
+    qui count if `touse'
+    local nobs = r(N)
+    if `nobs' == 0 {
+        di as error "cbinscatter: no observations"
+        exit 2000
+    }
+
+    * Count by-groups if specified (use levelsof instead of tab - faster)
     local num_by_groups = 1
     if "`by'" != "" {
-        qui tab `by' if `touse'
-        local num_by_groups = r(r)
+        * Convert by variable to numeric if string
+        capture confirm numeric variable `by'
+        if _rc != 0 {
+            tempvar by_numeric
+            qui egen `by_numeric' = group(`by') if `touse'
+            local by_orig "`by'"
+            local by "`by_numeric'"
+        }
+        qui levelsof `by' if `touse', local(bylevels)
+        local num_by_groups : word count `bylevels'
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -278,14 +265,6 @@ program define cbinscatter, eclass sortpreserve
         local plugin_varlist `plugin_varlist' `absorb'
     }
     if "`by'" != "" {
-        * Convert by variable to numeric if string
-        capture confirm numeric variable `by'
-        if _rc != 0 {
-            tempvar by_numeric
-            qui egen `by_numeric' = group(`by')
-            local by_orig "`by'"
-            local by "`by_numeric'"
-        }
         local plugin_varlist `plugin_varlist' `by'
     }
     if `weight_type' > 0 {
@@ -530,6 +509,10 @@ program define cbinscatter, eclass sortpreserve
         }
 
         * Execute graph (matching binscatter format)
+        * Preserve and drop to tiny dataset to avoid twoway overhead on large data
+        preserve
+        qui keep in 1/1
+
         twoway `scatters' `fits', ///
             graphregion(fcolor(white)) ///
             ytitle(`"`ytitle'"') ///
@@ -537,6 +520,8 @@ program define cbinscatter, eclass sortpreserve
             `legend_opt' ///
             `title_opt' ///
             `options'
+
+        restore
     }
 
     * Post e() results

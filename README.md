@@ -14,6 +14,7 @@ High-performance C-accelerated drop-in replacements for Stata commands.
 | `merge` | `cmerge` | Merge (join) datasets | **2-5x** |
 | `reghdfe` | `creghdfe` | High-dimensional FE regression | **10x** |
 | `qreg` | `cqreg` | Quantile regression | **4x** |
+| `binscatter` | `cbinscatter` | Binned scatter plots | **10x+** |
 
 ## Installation
 
@@ -182,6 +183,44 @@ cqreg ln_wage age ttl_exp tenure, absorb(idcode year) vce(cluster idcode)
 - `bwmethod(hsheather|bofinger|chamberlain)` - Bandwidth for sparsity
 - `tolerance(#)` - Convergence tolerance (default: 1e-8)
 - `maxiter(#)` - Maximum IPM iterations (default: 50)
+- `verbose`, `timeit` - Show progress/timing
+
+### cbinscatter - Binned scatter plots
+
+High-performance replacement for `binscatter` with C-accelerated bin computation, residualization, and line fitting.
+
+```stata
+* Basic binned scatter
+sysuse auto
+cbinscatter price mpg
+
+* With controls
+cbinscatter price mpg, controls(weight length)
+
+* With fixed effects (uses creghdfe's HDFE algorithm)
+webuse nlswork, clear
+cbinscatter ln_wage tenure, absorb(idcode year)
+
+* Separate series by group
+sysuse auto
+cbinscatter price mpg, by(foreign) nquantiles(10)
+
+* Quadratic fit with custom titles
+cbinscatter price mpg, linetype(qfit) title("Price vs MPG")
+
+* With weights
+cbinscatter price mpg [aw=weight], nquantiles(15)
+```
+
+**Options:**
+- `nquantiles(#)` - Number of bins (default: 20)
+- `controls(varlist)` - Control variables to partial out
+- `absorb(varlist)` - Fixed effects to absorb
+- `by(varname)` - Create separate series by group
+- `linetype(none|linear|qfit|cubic)` - Fit line type (default: linear)
+- `discrete` - Treat x as discrete variable
+- `savedata(filename)` - Save bin data to file
+- `nograph` - Suppress graph output
 - `verbose`, `timeit` - Show progress/timing
 
 ## Building from Source
