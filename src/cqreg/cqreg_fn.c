@@ -369,6 +369,277 @@ static inline void corrector_loop3(
 }
 
 /* ============================================================================
+ * SIMD-optimized scaling loop: compute q and r
+ * q[i] = 1.0 / (z[i]/x_p[i] + w[i]/s[i])
+ * r[i] = z[i] - w[i]
+ * ============================================================================ */
+#if CQREG_USE_NEON
+static void compute_scaling_neon(
+    ST_double *CQREG_RESTRICT q,
+    ST_double *CQREG_RESTRICT r,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    ST_int N)
+{
+    ST_int N2 = N - (N % 2);
+    ST_int i;
+
+    for (i = 0; i < N2; i += 2) {
+        float64x2_t z_v = vld1q_f64(&z[i]);
+        float64x2_t xp_v = vld1q_f64(&x_p[i]);
+        float64x2_t w_v = vld1q_f64(&w[i]);
+        float64x2_t s_v = vld1q_f64(&s[i]);
+
+        /* q = 1 / (z/x_p + w/s) */
+        float64x2_t zx = vdivq_f64(z_v, xp_v);
+        float64x2_t ws = vdivq_f64(w_v, s_v);
+        float64x2_t sum = vaddq_f64(zx, ws);
+        float64x2_t q_v = vdivq_f64(vdupq_n_f64(1.0), sum);
+
+        /* r = z - w */
+        float64x2_t r_v = vsubq_f64(z_v, w_v);
+
+        vst1q_f64(&q[i], q_v);
+        vst1q_f64(&r[i], r_v);
+    }
+
+    for (; i < N; i++) {
+        q[i] = 1.0 / (z[i] / x_p[i] + w[i] / s[i]);
+        r[i] = z[i] - w[i];
+    }
+}
+#endif
+
+static void compute_scaling_scalar(
+    ST_double *CQREG_RESTRICT q,
+    ST_double *CQREG_RESTRICT r,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    ST_int N)
+{
+    for (ST_int i = 0; i < N; i++) {
+        q[i] = 1.0 / (z[i] / x_p[i] + w[i] / s[i]);
+        r[i] = z[i] - w[i];
+    }
+}
+
+static inline void compute_scaling(
+    ST_double *q, ST_double *r,
+    const ST_double *z, const ST_double *x_p,
+    const ST_double *w, const ST_double *s, ST_int N)
+{
+#if CQREG_USE_NEON
+    if (N >= 64) {
+        compute_scaling_neon(q, r, z, x_p, w, s, N);
+        return;
+    }
+#endif
+    compute_scaling_scalar(q, r, z, x_p, w, s, N);
+}
+
+/* ============================================================================
+ * SIMD-optimized direction computation (fused loops)
+ * Computes dx, ds, dz, dw in a single pass
+ * ============================================================================ */
+#if CQREG_USE_NEON
+static void compute_directions_neon(
+    ST_double *CQREG_RESTRICT dx,
+    ST_double *CQREG_RESTRICT ds,
+    ST_double *CQREG_RESTRICT dz,
+    ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT q,
+    const ST_double *CQREG_RESTRICT tmp,
+    const ST_double *CQREG_RESTRICT r,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    ST_int N)
+{
+    float64x2_t one = vdupq_n_f64(1.0);
+    float64x2_t neg_one = vdupq_n_f64(-1.0);
+    ST_int N2 = N - (N % 2);
+    ST_int i;
+
+    for (i = 0; i < N2; i += 2) {
+        float64x2_t q_v = vld1q_f64(&q[i]);
+        float64x2_t tmp_v = vld1q_f64(&tmp[i]);
+        float64x2_t r_v = vld1q_f64(&r[i]);
+        float64x2_t z_v = vld1q_f64(&z[i]);
+        float64x2_t xp_v = vld1q_f64(&x_p[i]);
+        float64x2_t w_v = vld1q_f64(&w[i]);
+        float64x2_t s_v = vld1q_f64(&s[i]);
+
+        /* dx = q * (tmp - r) */
+        float64x2_t dx_v = vmulq_f64(q_v, vsubq_f64(tmp_v, r_v));
+        /* ds = -dx */
+        float64x2_t ds_v = vmulq_f64(neg_one, dx_v);
+
+        /* dz = -z * (1 + dx/x_p) */
+        float64x2_t dz_v = vmulq_f64(vnegq_f64(z_v),
+                                      vaddq_f64(one, vdivq_f64(dx_v, xp_v)));
+        /* dw = -w * (1 + ds/s) */
+        float64x2_t dw_v = vmulq_f64(vnegq_f64(w_v),
+                                      vaddq_f64(one, vdivq_f64(ds_v, s_v)));
+
+        vst1q_f64(&dx[i], dx_v);
+        vst1q_f64(&ds[i], ds_v);
+        vst1q_f64(&dz[i], dz_v);
+        vst1q_f64(&dw[i], dw_v);
+    }
+
+    for (; i < N; i++) {
+        dx[i] = q[i] * (tmp[i] - r[i]);
+        ds[i] = -dx[i];
+        dz[i] = -z[i] * (1.0 + dx[i] / x_p[i]);
+        dw[i] = -w[i] * (1.0 + ds[i] / s[i]);
+    }
+}
+#endif
+
+static void compute_directions_scalar(
+    ST_double *CQREG_RESTRICT dx,
+    ST_double *CQREG_RESTRICT ds,
+    ST_double *CQREG_RESTRICT dz,
+    ST_double *CQREG_RESTRICT dw,
+    const ST_double *CQREG_RESTRICT q,
+    const ST_double *CQREG_RESTRICT tmp,
+    const ST_double *CQREG_RESTRICT r,
+    const ST_double *CQREG_RESTRICT z,
+    const ST_double *CQREG_RESTRICT x_p,
+    const ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT s,
+    ST_int N)
+{
+    for (ST_int i = 0; i < N; i++) {
+        ST_double dx_i = q[i] * (tmp[i] - r[i]);
+        ST_double ds_i = -dx_i;
+        dx[i] = dx_i;
+        ds[i] = ds_i;
+        dz[i] = -z[i] * (1.0 + dx_i / x_p[i]);
+        dw[i] = -w[i] * (1.0 + ds_i / s[i]);
+    }
+}
+
+static inline void compute_directions(
+    ST_double *dx, ST_double *ds, ST_double *dz, ST_double *dw,
+    const ST_double *q, const ST_double *tmp, const ST_double *r,
+    const ST_double *z, const ST_double *x_p,
+    const ST_double *w, const ST_double *s, ST_int N)
+{
+#if CQREG_USE_NEON
+    if (N >= 64) {
+        compute_directions_neon(dx, ds, dz, dw, q, tmp, r, z, x_p, w, s, N);
+        return;
+    }
+#endif
+    compute_directions_scalar(dx, ds, dz, dw, q, tmp, r, z, x_p, w, s, N);
+}
+
+/* ============================================================================
+ * SIMD-optimized update loop with parallel gap reduction
+ * Updates x_p, s, z, w and computes gap = sum(z*x_p + s*w)
+ * ============================================================================ */
+#if CQREG_USE_NEON
+static ST_double update_variables_neon(
+    ST_double *CQREG_RESTRICT x_p,
+    ST_double *CQREG_RESTRICT s,
+    ST_double *CQREG_RESTRICT z,
+    ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT dx,
+    const ST_double *CQREG_RESTRICT ds,
+    const ST_double *CQREG_RESTRICT dz,
+    const ST_double *CQREG_RESTRICT dw,
+    ST_double fp, ST_double fd, ST_int N)
+{
+    float64x2_t fp_v = vdupq_n_f64(fp);
+    float64x2_t fd_v = vdupq_n_f64(fd);
+    float64x2_t gap_v = vdupq_n_f64(0.0);
+    ST_int N2 = N - (N % 2);
+    ST_int i;
+
+    for (i = 0; i < N2; i += 2) {
+        float64x2_t xp_v = vld1q_f64(&x_p[i]);
+        float64x2_t s_v = vld1q_f64(&s[i]);
+        float64x2_t z_v = vld1q_f64(&z[i]);
+        float64x2_t w_v = vld1q_f64(&w[i]);
+
+        float64x2_t dx_v = vld1q_f64(&dx[i]);
+        float64x2_t ds_v = vld1q_f64(&ds[i]);
+        float64x2_t dz_v = vld1q_f64(&dz[i]);
+        float64x2_t dw_v = vld1q_f64(&dw[i]);
+
+        /* Update */
+        xp_v = vfmaq_f64(xp_v, fp_v, dx_v);
+        s_v = vfmaq_f64(s_v, fp_v, ds_v);
+        z_v = vfmaq_f64(z_v, fd_v, dz_v);
+        w_v = vfmaq_f64(w_v, fd_v, dw_v);
+
+        vst1q_f64(&x_p[i], xp_v);
+        vst1q_f64(&s[i], s_v);
+        vst1q_f64(&z[i], z_v);
+        vst1q_f64(&w[i], w_v);
+
+        /* Accumulate gap: z*x_p + s*w */
+        gap_v = vfmaq_f64(gap_v, z_v, xp_v);
+        gap_v = vfmaq_f64(gap_v, s_v, w_v);
+    }
+
+    ST_double gap = vgetq_lane_f64(gap_v, 0) + vgetq_lane_f64(gap_v, 1);
+
+    for (; i < N; i++) {
+        x_p[i] += fp * dx[i];
+        s[i] += fp * ds[i];
+        z[i] += fd * dz[i];
+        w[i] += fd * dw[i];
+        gap += z[i] * x_p[i] + s[i] * w[i];
+    }
+
+    return gap;
+}
+#endif
+
+static ST_double update_variables_scalar(
+    ST_double *CQREG_RESTRICT x_p,
+    ST_double *CQREG_RESTRICT s,
+    ST_double *CQREG_RESTRICT z,
+    ST_double *CQREG_RESTRICT w,
+    const ST_double *CQREG_RESTRICT dx,
+    const ST_double *CQREG_RESTRICT ds,
+    const ST_double *CQREG_RESTRICT dz,
+    const ST_double *CQREG_RESTRICT dw,
+    ST_double fp, ST_double fd, ST_int N)
+{
+    ST_double gap = 0.0;
+    for (ST_int i = 0; i < N; i++) {
+        x_p[i] += fp * dx[i];
+        s[i] += fp * ds[i];
+        z[i] += fd * dz[i];
+        w[i] += fd * dw[i];
+        gap += z[i] * x_p[i] + s[i] * w[i];
+    }
+    return gap;
+}
+
+static inline ST_double update_variables(
+    ST_double *x_p, ST_double *s, ST_double *z, ST_double *w,
+    const ST_double *dx, const ST_double *ds,
+    const ST_double *dz, const ST_double *dw,
+    ST_double fp, ST_double fd, ST_int N)
+{
+#if CQREG_USE_NEON
+    if (N >= 64) {
+        return update_variables_neon(x_p, s, z, w, dx, ds, dz, dw, fp, fd, N);
+    }
+#endif
+    return update_variables_scalar(x_p, s, z, w, dx, ds, dz, dw, fp, fd, N);
+}
+
+/* ============================================================================
  * Helper: compute primal and dual step lengths in a single fused loop
  * This is 8x faster than separate compute_bound + array_min calls.
  * Optimization: ds = -dx always, so we compute ds bound from dx directly,
@@ -623,11 +894,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 #if FN_TIMING
         t_phase = ctools_timer_seconds();
 #endif
-        /* Fused loop: compute diagonal scaling q and residual r */
-        for (i = 0; i < N; i++) {
-            q[i] = 1.0 / (z[i] / x_p[i] + w[i] / s[i]);
-            r[i] = z[i] - w[i];
-        }
+        /* SIMD-optimized scaling: compute diagonal scaling q and residual r */
+        compute_scaling(q, r, z, x_p, w, s, N);
 #if FN_TIMING
         fn_time_scaling += ctools_timer_seconds() - t_phase;
         t_phase = ctools_timer_seconds();
@@ -671,17 +939,11 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         /* Compute tmp = X * dy using BLAS for vectorization */
         blas_dgemv(0, N, K, 1.0, X, N, dy, 0.0, tmp);
 
-        /* Compute dx = q .* (X*dy - r), ds = -dx */
-        for (i = 0; i < N; i++) {
-            dx[i] = q[i] * (tmp[i] - r[i]);
-            ds[i] = -dx[i];
-        }
-
-        /* Compute dz = -z .* (1 + dx./x_p), dw = -w .* (1 + ds./s) */
-        for (i = 0; i < N; i++) {
-            dz[i] = -z[i] * (1.0 + dx[i] / x_p[i]);
-            dw[i] = -w[i] * (1.0 + ds[i] / s[i]);
-        }
+        /* SIMD-optimized fused direction computation:
+         * dx = q .* (X*dy - r), ds = -dx
+         * dz = -z .* (1 + dx./x_p), dw = -w .* (1 + ds./s)
+         */
+        compute_directions(dx, ds, dz, dw, q, tmp, r, z, x_p, w, s, N);
 #if FN_TIMING
         fn_time_direction += ctools_timer_seconds() - t_phase;
         t_phase = ctools_timer_seconds();
@@ -827,15 +1089,8 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             IPM_LOG("]\n");
         }
 
-        /* Fused loop: update all primal/dual variables and compute gap */
-        gap = 0.0;
-        for (i = 0; i < N; i++) {
-            x_p[i] += fp * dx[i];
-            s[i] += fp * ds[i];
-            z[i] += fd * dz[i];
-            w[i] += fd * dw[i];
-            gap += z[i] * x_p[i] + s[i] * w[i];
-        }
+        /* SIMD-optimized update: update all primal/dual variables and compute gap */
+        gap = update_variables(x_p, s, z, w, dx, ds, dz, dw, fp, fd, N);
 #if FN_TIMING
         fn_time_update += ctools_timer_seconds() - t_phase;
 #endif
