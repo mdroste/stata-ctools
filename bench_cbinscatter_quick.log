@@ -89,7 +89,7 @@ Test 1: Basic binscatter (no weights)
 . timer off 1
 
 . timer list 1
-   1:      0.35 /        1 =       0.3510
+   1:      0.13 /        1 =       0.1260
 
 . 
 . di _n "Test 2: With weights"
@@ -105,7 +105,7 @@ Test 2: With weights
 . timer off 2
 
 . timer list 2
-   2:      0.81 /        1 =       0.8100
+   2:      0.15 /        1 =       0.1480
 
 . 
 . di _n "Test 3: With linear fit"
@@ -121,7 +121,7 @@ Test 3: With linear fit
 . timer off 3
 
 . timer list 3
-   3:      0.33 /        1 =       0.3340
+   3:      0.10 /        1 =       0.1020
 
 . 
 . di _n "Test 4: Verbose timing breakdown"
@@ -141,16 +141,16 @@ Obs:        5000000
 
 cbinscatter: starting computation
 cbinscatter: loaded 5000000 observations (0 dropped)
-cbinscatter: bin computation complete (0.256 sec)
+cbinscatter: bin computation complete (0.016 sec)
 cbinscatter: line fitting complete (0.001 sec)
-cbinscatter: total time 0.298 sec
+cbinscatter: total time 0.058 sec
 
 Timing breakdown:
-  Load:         0.0416 sec
+  Load:         0.0410 sec
   Residualize:  0.0000 sec
-  Bin comp:     0.2559 sec
+  Bin comp:     0.0165 sec
   Line fit:     0.0008 sec
-  Total:        0.2983 sec
+  Total:        0.0583 sec
 
 . 
 . di _n "========================================"

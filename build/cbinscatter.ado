@@ -373,94 +373,149 @@ program define cbinscatter, eclass sortpreserve
 
     * Create graph if not suppressed
     if "`nograph'" == "" {
-        * Prepare graph data
-        preserve
-        quietly {
-            clear
-            svmat __cbinscatter_bins, names(col)
-            rename c1 by_group
-            rename c2 bin_id
-            rename c3 x_mean
-            rename c4 y_mean
-            rename c5 x_se
-            rename c6 y_se
-            rename c7 n_obs
-            * Drop empty rows
-            drop if missing(bin_id)
+        * Default colors (same as binscatter)
+        local colorlist "navy maroon forest_green dkorange teal cranberry lavender khaki sienna emidblue emerald brown erose gold bluishgray"
+
+        * Parse user color options or use defaults
+        if "`colors'" == "" {
+            local colors "`colorlist'"
         }
 
-        * Build scatter command
-        local scatter_cmd ""
-        local line_cmd ""
+        * Get bin data from matrix
+        tempname binmat
+        matrix `binmat' = __cbinscatter_bins
+
+        * Find x range for fit lines
+        local x_min = .
+        local x_max = .
+        local nrows = rowsof(`binmat')
+        forval r = 1/`nrows' {
+            local xval = `binmat'[`r', 3]
+            if `xval' != . {
+                if `x_min' == . | `xval' < `x_min' {
+                    local x_min = `xval'
+                }
+                if `x_max' == . | `xval' > `x_max' {
+                    local x_max = `xval'
+                }
+            }
+        }
+
+        * Build scatter commands using scatteri (like binscatter)
+        local scatters ""
+        local fits ""
+        local legend_labels ""
         local legend_order ""
 
         if `actual_num_groups' == 1 {
-            * Single group - simple scatter
-            local scatter_cmd "(scatter y_mean x_mean)"
+            * Single group - build scatteri coordinate list
+            local coords ""
+            forval r = 1/`nrows' {
+                local yval = `binmat'[`r', 4]
+                local xval = `binmat'[`r', 3]
+                if `yval' != . & `xval' != . {
+                    local coords "`coords' `yval' `xval'"
+                }
+            }
 
-            * Add line fit if requested
+            * Get color for this series
+            local thiscolor : word 1 of `colors'
+
+            local scatters "(scatteri `coords', mcolor(`thiscolor') msymbol(O))"
+
+            * Add fit line if requested
             if `linetype_num' > 0 {
-                * Get fit coefficients
                 local coef_const = __cbinscatter_coefs[1, 1]
                 local coef_linear = __cbinscatter_coefs[1, 2]
 
                 if `linetype_num' == 1 {
-                    * Linear fit
-                    qui gen fitted = `coef_const' + `coef_linear' * x_mean
-                    local line_cmd "(line fitted x_mean, sort)"
+                    * Linear fit using function
+                    local fits "(function `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
                 }
                 else if `linetype_num' >= 2 {
-                    * Polynomial fit
                     local coef_quad = __cbinscatter_coefs[1, 3]
-                    qui gen fitted = `coef_const' + `coef_linear' * x_mean + `coef_quad' * x_mean^2
-                    if `linetype_num' >= 3 {
-                        local coef_cubic = __cbinscatter_coefs[1, 4]
-                        qui replace fitted = fitted + `coef_cubic' * x_mean^3
+                    if `linetype_num' == 2 {
+                        local fits "(function `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
                     }
-                    local line_cmd "(line fitted x_mean, sort)"
+                    else {
+                        local coef_cubic = __cbinscatter_coefs[1, 4]
+                        local fits "(function `coef_cubic'*x^3 + `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
+                    }
                 }
             }
+
+            * Legend off for single group
+            local legend_opt "legend(off)"
         }
         else {
             * Multiple by-groups
-            local scatter_cmd ""
-            local line_cmd ""
-            local idx = 1
+            local legend_idx = 1
 
             forval g = 1/`actual_num_groups' {
-                if `g' == 1 {
-                    local scatter_cmd "(scatter y_mean x_mean if by_group == `g')"
-                }
-                else {
-                    local scatter_cmd "`scatter_cmd' (scatter y_mean x_mean if by_group == `g')"
+                * Build coordinate list for this group
+                local coords ""
+                local grp_x_min = .
+                local grp_x_max = .
+
+                forval r = 1/`nrows' {
+                    local grpval = `binmat'[`r', 1]
+                    if `grpval' == `g' {
+                        local yval = `binmat'[`r', 4]
+                        local xval = `binmat'[`r', 3]
+                        if `yval' != . & `xval' != . {
+                            local coords "`coords' `yval' `xval'"
+                            if `grp_x_min' == . | `xval' < `grp_x_min' {
+                                local grp_x_min = `xval'
+                            }
+                            if `grp_x_max' == . | `xval' > `grp_x_max' {
+                                local grp_x_max = `xval'
+                            }
+                        }
+                    }
                 }
 
-                * Add line fit for this group if requested
-                if `linetype_num' > 0 {
+                * Get color for this series
+                local thiscolor : word `g' of `colors'
+                if "`thiscolor'" == "" {
+                    local thiscolor "navy"
+                }
+
+                local scatters "`scatters' (scatteri `coords', mcolor(`thiscolor') msymbol(O))"
+                local legend_labels `"`legend_labels' label(`legend_idx' "`by'==`g'")"'
+                local legend_order "`legend_order' `legend_idx'"
+                local legend_idx = `legend_idx' + 1
+
+                * Add fit line for this group if requested
+                if `linetype_num' > 0 & "`coords'" != "" {
                     local coef_const = __cbinscatter_coefs[`g', 1]
                     local coef_linear = __cbinscatter_coefs[`g', 2]
 
                     if `linetype_num' == 1 {
-                        qui gen fitted`g' = `coef_const' + `coef_linear' * x_mean if by_group == `g'
-                        local line_cmd "`line_cmd' (line fitted`g' x_mean if by_group == `g', sort)"
+                        local fits "`fits' (function `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
                     }
                     else if `linetype_num' >= 2 {
                         local coef_quad = __cbinscatter_coefs[`g', 3]
-                        qui gen fitted`g' = `coef_const' + `coef_linear' * x_mean + `coef_quad' * x_mean^2 if by_group == `g'
-                        if `linetype_num' >= 3 {
-                            local coef_cubic = __cbinscatter_coefs[`g', 4]
-                            qui replace fitted`g' = fitted`g' + `coef_cubic' * x_mean^3 if by_group == `g'
+                        if `linetype_num' == 2 {
+                            local fits "`fits' (function `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
                         }
-                        local line_cmd "`line_cmd' (line fitted`g' x_mean if by_group == `g', sort)"
+                        else {
+                            local coef_cubic = __cbinscatter_coefs[`g', 4]
+                            local fits "`fits' (function `coef_cubic'*x^3 + `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
+                        }
                     }
                 }
             }
+
+            * Build legend option
+            if `"`legend'"' == "" {
+                local legend_opt `"legend(`legend_labels' order(`legend_order'))"'
+            }
+            else {
+                local legend_opt `"legend(`legend')"'
+            }
         }
 
-        * Set default titles if not specified
-        if `"`title'"' == "" {
-            local title "Binned Scatter Plot"
-        }
+        * Set default titles if not specified (like binscatter)
         if `"`ytitle'"' == "" {
             local ytitle "`depvar'"
         }
@@ -468,15 +523,20 @@ program define cbinscatter, eclass sortpreserve
             local xtitle "`xvar'"
         }
 
-        * Execute graph
-        twoway `scatter_cmd' `line_cmd', ///
-            title(`"`title'"') ///
+        * Build title option only if specified
+        local title_opt ""
+        if `"`title'"' != "" {
+            local title_opt `"title(`"`title'"')"'
+        }
+
+        * Execute graph (matching binscatter format)
+        twoway `scatters' `fits', ///
+            graphregion(fcolor(white)) ///
             ytitle(`"`ytitle'"') ///
             xtitle(`"`xtitle'"') ///
-            `legend' ///
+            `legend_opt' ///
+            `title_opt' ///
             `options'
-
-        restore
     }
 
     * Post e() results

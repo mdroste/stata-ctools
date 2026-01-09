@@ -21,8 +21,9 @@
 #define STATA_MISSING 8.988465674311579e+307
 #define IS_MISSING(x) ((x) >= STATA_MISSING)
 
-/* Threshold for using quickselect vs full sort */
-#define QUICKSELECT_THRESHOLD 10000
+/* Threshold for using histogram-based binning vs full sort */
+#define HISTOGRAM_THRESHOLD 50000
+#define HISTOGRAM_BUCKETS 4096
 
 /* ========================================================================
  * Quickselect for finding k-th element
@@ -324,63 +325,103 @@ ST_retcode compute_bins_single_group(
         sort_idx[i] = i;
     }
 
-    if (weights == NULL && N >= QUICKSELECT_THRESHOLD) {
+    if (weights == NULL && N >= HISTOGRAM_THRESHOLD) {
         /*
-         * Unweighted, large N: Use quickselect O(N) to partition into bins
+         * Unweighted, large N: Use histogram-based O(N) binning
          *
-         * Strategy: Find the nq-1 quantile boundary positions using quickselect.
-         * After each quickselect, the array is partitioned such that elements
-         * at positions [boundary[q-1], boundary[q]) belong to bin q.
-         * This avoids binary search for bin assignment - just use position.
+         * Strategy:
+         * 1. Find min/max of x in one pass
+         * 2. Build histogram of x values (HISTOGRAM_BUCKETS buckets)
+         * 3. Use cumulative histogram to find bin boundaries
+         * 4. Assign bins based on histogram bucket mapping
+         *
+         * This has excellent cache behavior - all sequential access.
          */
-        ST_int *boundaries = (ST_int *)malloc((nq + 1) * sizeof(ST_int));
-        if (!boundaries) {
+        ST_int *histogram = NULL;
+        ST_int *cum_hist = NULL;
+        ST_int *bucket_to_bin = NULL;
+
+        histogram = (ST_int *)calloc(HISTOGRAM_BUCKETS, sizeof(ST_int));
+        cum_hist = (ST_int *)malloc(HISTOGRAM_BUCKETS * sizeof(ST_int));
+        bucket_to_bin = (ST_int *)malloc(HISTOGRAM_BUCKETS * sizeof(ST_int));
+
+        if (!histogram || !cum_hist || !bucket_to_bin) {
+            free(histogram);
+            free(cum_hist);
+            free(bucket_to_bin);
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
 
-        /* Find quantile boundary positions using quickselect */
-        boundaries[0] = 0;
-        boundaries[nq] = N;
-
-        ST_int prev_pos = 0;
-        for (q = 1; q < nq; q++) {
-            ST_int target_pos = (ST_int)(((int64_t)q * N) / nq);
-            if (target_pos >= N) target_pos = N - 1;
-            if (target_pos < prev_pos) target_pos = prev_pos;
-
-            /* quickselect partitions: [prev_pos, target_pos) <= x[target_pos] */
-            quickselect_indexed(x, sort_idx, prev_pos, N - 1, target_pos);
-            boundaries[q] = target_pos;
-            prev_pos = target_pos;
+        /* Pass 1: Find min/max */
+        ST_double x_min = x[0], x_max = x[0];
+        for (i = 1; i < N; i++) {
+            if (!IS_MISSING(x[i])) {
+                if (x[i] < x_min) x_min = x[i];
+                if (x[i] > x_max) x_max = x[i];
+            }
         }
 
-        /*
-         * After quickselect, sort_idx is partitioned by quantile:
-         * - sort_idx[boundaries[0]..boundaries[1]) -> bin 1
-         * - sort_idx[boundaries[1]..boundaries[2]) -> bin 2
-         * - etc.
-         *
-         * Assign bins directly from position - O(N) with no binary search
-         */
-        ST_int current_bin = 1;
-        ST_int next_boundary = boundaries[1];
+        ST_double range = x_max - x_min;
+        if (range <= 0.0) {
+            /* All values identical - put everything in bin 1 */
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+            }
+            free(histogram);
+            free(cum_hist);
+            free(bucket_to_bin);
+            goto compute_stats;
+        }
+
+        ST_double scale = (HISTOGRAM_BUCKETS - 1) / range;
+
+        /* Pass 2: Build histogram */
         for (i = 0; i < N; i++) {
-            /* Advance to next bin if we've passed the boundary */
-            while (current_bin < nq && i >= next_boundary) {
-                current_bin++;
-                next_boundary = boundaries[current_bin];
-            }
-
-            ST_int orig_idx = sort_idx[i];
-            if (IS_MISSING(x[orig_idx])) {
-                bin_ids[orig_idx] = 0;
-            } else {
-                bin_ids[orig_idx] = current_bin;
+            if (!IS_MISSING(x[i])) {
+                ST_int bucket = (ST_int)((x[i] - x_min) * scale);
+                if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
+                if (bucket < 0) bucket = 0;
+                histogram[bucket]++;
             }
         }
 
-        free(boundaries);
+        /* Compute cumulative histogram and map buckets to bins */
+        cum_hist[0] = histogram[0];
+        for (i = 1; i < HISTOGRAM_BUCKETS; i++) {
+            cum_hist[i] = cum_hist[i - 1] + histogram[i];
+        }
+
+        ST_int total_valid = cum_hist[HISTOGRAM_BUCKETS - 1];
+        ST_int obs_per_bin = (total_valid + nq - 1) / nq;  /* Ceiling division */
+
+        /* Map each histogram bucket to a quantile bin */
+        for (i = 0; i < HISTOGRAM_BUCKETS; i++) {
+            if (cum_hist[i] == 0) {
+                bucket_to_bin[i] = 1;
+            } else {
+                ST_int bin = ((cum_hist[i] - 1) * nq) / total_valid + 1;
+                if (bin > nq) bin = nq;
+                if (bin < 1) bin = 1;
+                bucket_to_bin[i] = bin;
+            }
+        }
+
+        /* Pass 3: Assign bins using bucket lookup */
+        for (i = 0; i < N; i++) {
+            if (IS_MISSING(x[i])) {
+                bin_ids[i] = 0;
+            } else {
+                ST_int bucket = (ST_int)((x[i] - x_min) * scale);
+                if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
+                if (bucket < 0) bucket = 0;
+                bin_ids[i] = bucket_to_bin[bucket];
+            }
+        }
+
+        free(histogram);
+        free(cum_hist);
+        free(bucket_to_bin);
 
     } else if (weights == NULL) {
         /*
@@ -401,9 +442,99 @@ ST_retcode compute_bins_single_group(
             }
         }
 
+    } else if (N >= HISTOGRAM_THRESHOLD) {
+        /*
+         * Weighted, large N: Use histogram-based O(N) binning
+         * Similar to unweighted but accumulate weights per bucket
+         */
+        ST_double *bucket_weights = NULL;
+        ST_double *cum_weights = NULL;
+        ST_int *bucket_to_bin = NULL;
+
+        bucket_weights = (ST_double *)calloc(HISTOGRAM_BUCKETS, sizeof(ST_double));
+        cum_weights = (ST_double *)malloc(HISTOGRAM_BUCKETS * sizeof(ST_double));
+        bucket_to_bin = (ST_int *)malloc(HISTOGRAM_BUCKETS * sizeof(ST_int));
+
+        if (!bucket_weights || !cum_weights || !bucket_to_bin) {
+            free(bucket_weights);
+            free(cum_weights);
+            free(bucket_to_bin);
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+
+        /* Pass 1: Find min/max */
+        ST_double x_min = x[0], x_max = x[0];
+        for (i = 1; i < N; i++) {
+            if (!IS_MISSING(x[i])) {
+                if (x[i] < x_min) x_min = x[i];
+                if (x[i] > x_max) x_max = x[i];
+            }
+        }
+
+        ST_double range = x_max - x_min;
+        if (range <= 0.0) {
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+            }
+            free(bucket_weights);
+            free(cum_weights);
+            free(bucket_to_bin);
+            goto compute_stats;
+        }
+
+        ST_double scale = (HISTOGRAM_BUCKETS - 1) / range;
+
+        /* Pass 2: Accumulate weights per bucket */
+        for (i = 0; i < N; i++) {
+            if (!IS_MISSING(x[i])) {
+                ST_int bucket = (ST_int)((x[i] - x_min) * scale);
+                if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
+                if (bucket < 0) bucket = 0;
+                bucket_weights[bucket] += weights[i];
+            }
+        }
+
+        /* Compute cumulative weights and map buckets to bins */
+        cum_weights[0] = bucket_weights[0];
+        for (i = 1; i < HISTOGRAM_BUCKETS; i++) {
+            cum_weights[i] = cum_weights[i - 1] + bucket_weights[i];
+        }
+
+        ST_double total_weight = cum_weights[HISTOGRAM_BUCKETS - 1];
+        ST_double weight_per_bin = total_weight / nq;
+
+        /* Map buckets to bins based on cumulative weight */
+        for (i = 0; i < HISTOGRAM_BUCKETS; i++) {
+            if (cum_weights[i] <= 0.0) {
+                bucket_to_bin[i] = 1;
+            } else {
+                ST_int bin = (ST_int)((cum_weights[i] - 0.5 * bucket_weights[i]) / weight_per_bin) + 1;
+                if (bin > nq) bin = nq;
+                if (bin < 1) bin = 1;
+                bucket_to_bin[i] = bin;
+            }
+        }
+
+        /* Pass 3: Assign bins */
+        for (i = 0; i < N; i++) {
+            if (IS_MISSING(x[i])) {
+                bin_ids[i] = 0;
+            } else {
+                ST_int bucket = (ST_int)((x[i] - x_min) * scale);
+                if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
+                if (bucket < 0) bucket = 0;
+                bin_ids[i] = bucket_to_bin[bucket];
+            }
+        }
+
+        free(bucket_weights);
+        free(cum_weights);
+        free(bucket_to_bin);
+
     } else {
         /*
-         * Weighted: Need full sort to compute cumulative weights
+         * Weighted, small N: Full sort for exact results
          */
         g_sort_values = x;
         qsort(sort_idx, N, sizeof(ST_int), compare_indices);
@@ -415,7 +546,6 @@ ST_retcode compute_bins_single_group(
             goto cleanup;
         }
 
-        /* Compute cumulative weights in sorted order */
         for (i = 0; i < N; i++) {
             ST_int orig_idx = sort_idx[i];
             if (!IS_MISSING(x[orig_idx])) {
@@ -424,7 +554,6 @@ ST_retcode compute_bins_single_group(
             cum_weight[i] = total_weight;
         }
 
-        /* Assign bins based on cumulative weight position */
         ST_double weight_per_bin = total_weight / nq;
         for (i = 0; i < N; i++) {
             ST_int orig_idx = sort_idx[i];
@@ -440,6 +569,7 @@ ST_retcode compute_bins_single_group(
         free(cum_weight);
     }
 
+compute_stats:
     /* Compute bin statistics */
     rc = compute_bin_statistics(y, x, bin_ids, weights, N, nq,
                                 config->compute_se, result);
