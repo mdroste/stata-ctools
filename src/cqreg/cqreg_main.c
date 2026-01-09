@@ -98,63 +98,16 @@ static void store_scalar(const char *name, ST_double val)
 }
 
 /* ============================================================================
- * Helper: Load a single variable with 8x unrolling (thread-safe)
- * ============================================================================ */
-
-static ST_int load_variable_unrolled(ST_double *dest, ST_int var_idx,
-                                      ST_int N, ST_int in1)
-{
-    ST_int i;
-    ST_int N8 = N - (N % 8);
-    ST_double v0, v1, v2, v3, v4, v5, v6, v7;
-
-    /* Main unrolled loop - 8 at a time for better pipelining */
-    for (i = 0; i < N8; i += 8) {
-        ST_int obs = in1 + i;
-        SF_vdata(var_idx, obs,     &v0);
-        SF_vdata(var_idx, obs + 1, &v1);
-        SF_vdata(var_idx, obs + 2, &v2);
-        SF_vdata(var_idx, obs + 3, &v3);
-        SF_vdata(var_idx, obs + 4, &v4);
-        SF_vdata(var_idx, obs + 5, &v5);
-        SF_vdata(var_idx, obs + 6, &v6);
-        SF_vdata(var_idx, obs + 7, &v7);
-
-        dest[i]     = v0;
-        dest[i + 1] = v1;
-        dest[i + 2] = v2;
-        dest[i + 3] = v3;
-        dest[i + 4] = v4;
-        dest[i + 5] = v5;
-        dest[i + 6] = v6;
-        dest[i + 7] = v7;
-    }
-
-    /* Handle remainder */
-    for (; i < N; i++) {
-        if (SF_vdata(var_idx, in1 + i, &dest[i]) != 0) {
-            return -1;
-        }
-    }
-
-    return 0;
-}
-
-/* Thread argument structure for parallel loading */
-typedef struct {
-    ST_double *dest;
-    ST_int var_idx;
-    ST_int N;
-    ST_int in1;
-    ST_int success;
-} cqreg_load_args;
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-/* ============================================================================
- * Helper: Load data from Stata with parallel loading and 8x unrolling
+ * Helper: Load data from Stata using ctools_data_load (parallel loading)
+ *
+ * This function uses the common ctools_data_load which:
+ * - Loads all variables in parallel (one thread per variable)
+ * - Uses 8x loop unrolling for throughput
+ * - Returns data in stata_data structure
+ *
+ * After loading:
+ * - state->y points to data->vars[0].data.dbl (depvar, view, not copied)
+ * - state->X is allocated as contiguous N*K array with X columns + constant
  * ============================================================================ */
 
 static ST_int load_data(cqreg_state *state,
@@ -164,79 +117,94 @@ static ST_int load_data(cqreg_state *state,
                         ST_int in1, ST_int in2)
 {
     ST_int N = in2 - in1 + 1;
-    ST_int k;
-    ST_int success = 0;
+    ST_int K = K_x + 1;  /* +1 for constant */
+    ST_int k, i;
+    size_t nvars = 1 + K_x;  /* depvar + indepvars (no constant from Stata) */
 
-#ifdef _OPENMP
-    /* Parallel loading: y and each X column loaded concurrently */
-    #pragma omp parallel
-    {
-        #pragma omp sections
-        {
-            /* Section 1: Load dependent variable y */
-            #pragma omp section
-            {
-                if (load_variable_unrolled(state->y, depvar_idx, N, in1) != 0) {
-                    #pragma omp atomic write
-                    success = -1;
-                }
-            }
+    /* Suppress unused parameter warnings - ctools_data_load uses sequential indices */
+    (void)depvar_idx;
+    (void)indepvar_idx;
 
-            /* Section 2: Load first independent variable (if exists) */
-            #pragma omp section
-            {
-                if (K_x > 0) {
-                    if (load_variable_unrolled(&state->X[0], indepvar_idx[0], N, in1) != 0) {
-                        #pragma omp atomic write
-                        success = -1;
-                    }
-                }
-            }
+    main_debug_log("load_data: N=%d, K_x=%d, nvars=%zu\n", N, K_x, nvars);
 
-            /* Section 3: Load second independent variable (if exists) */
-            #pragma omp section
-            {
-                if (K_x > 1) {
-                    if (load_variable_unrolled(&state->X[N], indepvar_idx[1], N, in1) != 0) {
-                        #pragma omp atomic write
-                        success = -1;
-                    }
-                }
-            }
-        }
+    /* Allocate stata_data structure */
+    state->data = (stata_data *)calloc(1, sizeof(stata_data));
+    if (state->data == NULL) {
+        ctools_error("cqreg", "Failed to allocate stata_data");
+        return -1;
     }
+    state->data_owned = 1;
 
-    /* Load remaining variables sequentially (rare case: K > 2) */
-    for (k = 2; k < K_x && success == 0; k++) {
-        ST_double *col = &state->X[k * N];
-        if (load_variable_unrolled(col, indepvar_idx[k], N, in1) != 0) {
-            success = -1;
-        }
-    }
-#else
-    /* Sequential fallback with 8x unrolling */
-    if (load_variable_unrolled(state->y, depvar_idx, N, in1) != 0) {
-        ctools_error("cqreg", "Failed to read y");
+    /*
+     * Call ctools_data_load to load all variables in parallel.
+     * Variables are loaded in Stata's order, so we need to ensure
+     * variables are in the expected order in the Stata dataset.
+     *
+     * Expected variable order: depvar, indepvar1, indepvar2, ...
+     * This matches how Stata passes variables to the plugin.
+     */
+    stata_retcode rc = ctools_data_load(state->data, nvars);
+    if (rc != STATA_OK) {
+        ctools_error("cqreg", "ctools_data_load failed with code %d", rc);
+        stata_data_free(state->data);
+        free(state->data);
+        state->data = NULL;
+        state->data_owned = 0;
         return -1;
     }
 
+    main_debug_log("load_data: ctools_data_load returned OK, nobs=%zu\n", state->data->nobs);
+
+    /*
+     * Set up y pointer (view into stata_data, not copied)
+     * vars[0] = depvar
+     */
+    if (state->data->vars[0].type != STATA_TYPE_DOUBLE) {
+        ctools_error("cqreg", "Dependent variable must be numeric");
+        return -1;
+    }
+    state->y = state->data->vars[0].data.dbl;
+    state->y_owned = 0;  /* y is a view, don't free separately */
+
+    /*
+     * Allocate contiguous X matrix and copy columns from stata_data.
+     * X layout: column-major, N rows x K columns
+     * Column k at offset k*N, where k=0..K_x-1 are indepvars, k=K_x is constant
+     */
+    state->X = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (state->X == NULL) {
+        ctools_error("cqreg", "Failed to allocate X matrix");
+        return -1;
+    }
+
+    /* Copy independent variable columns from stata_data */
     for (k = 0; k < K_x; k++) {
-        ST_double *col = &state->X[k * N];
-        if (load_variable_unrolled(col, indepvar_idx[k], N, in1) != 0) {
-            ctools_error("cqreg", "Failed to read X[%d]", k);
+        if (state->data->vars[k + 1].type != STATA_TYPE_DOUBLE) {
+            ctools_error("cqreg", "Independent variable %d must be numeric", k + 1);
             return -1;
         }
-    }
-#endif
+        ST_double *src = state->data->vars[k + 1].data.dbl;
+        ST_double *dst = &state->X[k * N];
 
-    if (success != 0) {
-        ctools_error("cqreg", "Failed to load data");
-        return -1;
+        /* Fast copy with 8x unrolling */
+        ST_int N8 = N - (N % 8);
+        for (i = 0; i < N8; i += 8) {
+            dst[i]     = src[i];
+            dst[i + 1] = src[i + 1];
+            dst[i + 2] = src[i + 2];
+            dst[i + 3] = src[i + 3];
+            dst[i + 4] = src[i + 4];
+            dst[i + 5] = src[i + 5];
+            dst[i + 6] = src[i + 6];
+            dst[i + 7] = src[i + 7];
+        }
+        for (; i < N; i++) {
+            dst[i] = src[i];
+        }
     }
 
     /* Add constant as last column (vectorized fill) */
     ST_double *const_col = &state->X[K_x * N];
-    ST_int i;
     ST_int N8 = N - (N % 8);
     for (i = 0; i < N8; i += 8) {
         const_col[i]     = 1.0;
@@ -251,6 +219,8 @@ static ST_int load_data(cqreg_state *state,
     for (; i < N; i++) {
         const_col[i] = 1.0;
     }
+
+    main_debug_log("load_data: X matrix populated, constant added\n");
 
     return 0;
 }
@@ -357,16 +327,19 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     }
 
     /*
-     * OPTIMIZATION: Create relaxed config for auxiliary solves.
-     * For sparsity estimation, we only need ~3 decimal places of accuracy.
-     * Using looser tolerance (1e-6 vs 1e-12) reduces iterations by 30-50%.
+     * OPTIMIZATION: Create very relaxed config for auxiliary solves.
+     * For sparsity estimation, we only need ~2-3 decimal places of accuracy
+     * since sparsity only affects standard errors (not coefficients).
+     *
+     * Using 1e-4 tolerance (vs default 1e-8) reduces iterations by ~50-60%.
+     * Also cap max iterations at 100 since we don't need high precision.
      */
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = ipm_config->maxiter;
-    aux_config.tol_primal = 1e-6;   /* Relaxed from default 1e-8 */
-    aux_config.tol_dual = 1e-6;     /* Relaxed from default 1e-8 */
-    aux_config.tol_gap = 1e-6;      /* Relaxed from default 1e-8 */
+    aux_config.maxiter = 100;       /* Cap iterations - we don't need high precision */
+    aux_config.tol_primal = 1e-4;   /* Very relaxed from default 1e-8 */
+    aux_config.tol_dual = 1e-4;     /* Very relaxed from default 1e-8 */
+    aux_config.tol_gap = 1e-4;      /* Very relaxed from default 1e-8 */
     aux_config.verbose = 0;         /* Suppress output for aux solves */
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 

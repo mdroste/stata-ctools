@@ -9,6 +9,7 @@
 #define CQREG_TYPES_H
 
 #include "stplugin.h"
+#include "../ctools_types.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -180,10 +181,17 @@ typedef struct {
     /* Quantile parameter */
     ST_double quantile;       /* Target quantile (0 < q < 1) */
 
-    /* Data (column-major layout: data[k*N + i] = obs i of var k) */
-    ST_double *y;             /* Dependent variable (N) */
-    ST_double *X;             /* Regressors (N x K), constant is last column */
+    /* Data loaded via ctools_data_load (parallel variable loading) */
+    stata_data *data;         /* Raw data from Stata (vars[0]=y, vars[1..K-1]=X cols) */
+    ST_int data_owned;        /* 1 if we own data (should call stata_data_free), 0 otherwise */
+
+    /* Data pointers (views into stata_data or separate allocations) */
+    /* Column-major layout: X[k*N + i] = obs i of var k */
+    ST_double *y;             /* Dependent variable (N) - points to data->vars[0] */
+    ST_double *X;             /* Regressors (N x K), constant is last column - contiguous copy */
     ST_double *weights;       /* Observation weights (N), NULL if unweighted */
+    ST_int y_owned;           /* 1 if y is separately allocated (HDFE), 0 if view into data */
+    ST_int X_owned;           /* 1 if X is separately allocated, 0 if view into data */
 
     /* Observation mask for HDFE singleton removal */
     ST_int *obs_mask;         /* 1 = keep, 0 = dropped (N_original) */

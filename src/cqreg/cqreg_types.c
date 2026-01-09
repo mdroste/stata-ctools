@@ -332,10 +332,18 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->num_threads = 1;
 #endif
 
-    /* Allocate data arrays */
-    state->y = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    state->X = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    if (state->y == NULL || state->X == NULL) goto cleanup;
+    /*
+     * Data arrays (y, X) are NOT allocated here.
+     * They will be set up by ctools_data_load in cqreg_main.c:
+     * - state->y points to data->vars[0].data.dbl (view, not owned)
+     * - state->X is allocated contiguously and populated from data->vars[1..K-1]
+     */
+    state->data = NULL;
+    state->data_owned = 0;
+    state->y = NULL;
+    state->X = NULL;
+    state->y_owned = 0;
+    state->X_owned = 0;
 
     /* Allocate results */
     state->beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
@@ -384,11 +392,30 @@ void cqreg_state_free(cqreg_state *state)
 {
     if (state == NULL) return;
 
-    /* Free data arrays */
-    cqreg_aligned_free(state->y);
-    cqreg_aligned_free(state->X);
+    /*
+     * Free data arrays based on ownership flags.
+     * - y_owned: If set, y was separately allocated (e.g., for HDFE).
+     *            If not set, y is a view into stata_data (don't free).
+     * - X is always a contiguous copy we allocated, so always free it.
+     */
+    if (state->y_owned && state->y != NULL) {
+        cqreg_aligned_free(state->y);
+    }
+    /* y is NOT freed if !y_owned because it points into stata_data */
+
+    /* X is always our contiguous allocation */
+    if (state->X != NULL) {
+        cqreg_aligned_free(state->X);
+    }
+
     cqreg_aligned_free(state->weights);
     cqreg_aligned_free(state->obs_mask);
+
+    /* Free stata_data if we own it */
+    if (state->data_owned && state->data != NULL) {
+        stata_data_free(state->data);
+        free(state->data);
+    }
 
     /* Free results */
     cqreg_aligned_free(state->beta);

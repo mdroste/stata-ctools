@@ -1,0 +1,360 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark/benchmark_cqreg_methods.do 
+
+. * Benchmark: cqreg fitted vs residual density methods
+. * Purpose: Compare performance of optimized sparsity estimation methods
+. 
+. clear all
+
+. set more off
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. 
+. set seed 12345
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "BENCHMARK: cqreg density estimation methods on 5 million observations"
+BENCHMARK: cqreg density estimation methods on 5 million observations
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. 
+. * Generate dataset
+. di "Generating data..."
+Generating data...
+
+. timer clear 1
+
+. timer on 1
+
+. quietly set obs 5000000
+
+. quietly gen double x = rnormal()
+
+. quietly gen double y = 2 + 3*x + rnormal()*2
+
+. timer off 1
+
+. quietly timer list 1
+
+. di "Data generation time: " %9.3f r(t1) " seconds"
+Data generation time:     0.284 seconds
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "Dataset: N = " %12.0fc _N ", Variables: y, x"
+Dataset: N =    5,000,000, Variables: y, x
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. 
+. * Benchmark qreg (reference)
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "QREG (Stata built-in, default fitted method)"
+QREG (Stata built-in, default fitted method)
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. timer clear 2
+
+. timer on 2
+
+. quietly qreg y x
+
+. timer off 2
+
+. quietly timer list 2
+
+. local qreg_time = r(t2)
+
+. di "qreg time: " %9.3f `qreg_time' " seconds"
+qreg time:     9.945 seconds
+
+. matrix qreg_b = e(b)
+
+. local qreg_se_x = sqrt(e(V)[1,1])
+
+. local qreg_se_cons = sqrt(e(V)[2,2])
+
+. 
+. * Benchmark cqreg with FITTED method (default)
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "CQREG with FITTED method (Siddiqui, default)"
+CQREG with FITTED method (Siddiqui, default)
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. timer clear 3
+
+. timer on 3
+
+. cqreg y x, verbose
+
+------------------------------------------------------------
+cqreg: C-Accelerated Quantile Regression
+------------------------------------------------------------
+Quantile:   .5
+Depvar:     y
+Indepvars:   x
+Obs:        5000000
+VCE type:   iid
+Density:    fitted
+Bandwidth:  Hall-Sheather
+------------------------------------------------------------
+
+cqreg: N=5000000, K=2, G=0, quantile=0.500
+FN Timing (N=5000000, K=2, iters=18): total=0.947s
+  init=0.025s  scaling=0.042
+> s  X'DX=0.025s  chol=0.077s
+  direction=0.143s  steplength=0.060s  corrector=
+> 0.478s  update=0.098s
+  Corrector breakdown:
+    loop1=0.140s  loop2=0.059s  
+> gemv1=0.059s  gemv2=0.012s  loop3=0.149s  step=0.058s
+cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=0.983s
+FN Timing (N=5000000, K=2, iters=47): total=4.563s
+  init=0.028s  scaling=0.115
+> s  X'DX=0.139s  chol=0.215s
+  direction=0.412s  steplength=1.112s  corrector=
+> 2.280s  update=0.263s
+  Corrector breakdown:
+    loop1=0.388s  loop2=0.180s  
+> gemv1=0.156s  gemv2=0.042s  loop3=0.403s  step=1.110s
+FN Timing (N=5000000, K=2, iters=50): total=4.842s
+  init=0.028s  scaling=0.121
+> s  X'DX=0.147s  chol=0.227s
+  direction=0.434s  steplength=1.178s  corrector=
+> 2.421s  update=0.285s
+  Corrector breakdown:
+    loop1=0.411s  loop2=0.190s  
+> gemv1=0.166s  gemv2=0.044s  loop3=0.428s  step=1.182s
+cqreg: Sparsity: 4.9780, bandwidth: 0.005682 (method: fitted)
+cqreg: Total time: 4.078s (load: 0.456, hdfe: 0.000, ipm: 0.983, vce: 2.639)
+
+Median regression                                  Number of obs =  5,000,000
+  Raw sum of deviations 7.2e+06  (about 2.00094  )
+  Min sum of deviations 4.0e+06                    Pseudo R2     =     0.4454
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+           x |   2.999924   .0011134  2694.48   0.000     2.997741    3.002106
+       _cons |   1.999082   .0011131  1795.93   0.000     1.996901    2.001264
+------------------------------------------------------------------------------
+
+Iterations: 18, converged: yes
+Total time:     4.096 seconds
+
+. timer off 3
+
+. quietly timer list 3
+
+. local cqreg_fitted_time = r(t3)
+
+. di "cqreg fitted time: " %9.3f `cqreg_fitted_time' " seconds"
+cqreg fitted time:     4.307 seconds
+
+. matrix cqreg_fitted_b = e(b)
+
+. local cqreg_fitted_se_x = sqrt(e(V)[1,1])
+
+. local cqreg_fitted_se_cons = sqrt(e(V)[2,2])
+
+. 
+. * Benchmark cqreg with RESIDUAL method
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "CQREG with RESIDUAL method (quickselect optimized)"
+CQREG with RESIDUAL method (quickselect optimized)
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. timer clear 4
+
+. timer on 4
+
+. cqreg y x, denmethod(residual) verbose
+
+------------------------------------------------------------
+cqreg: C-Accelerated Quantile Regression
+------------------------------------------------------------
+Quantile:   .5
+Depvar:     y
+Indepvars:   x
+Obs:        5000000
+VCE type:   iid
+Density:    residual
+Bandwidth:  Hall-Sheather
+------------------------------------------------------------
+
+cqreg: N=5000000, K=2, G=0, quantile=0.500
+FN Timing (N=5000000, K=2, iters=18): total=0.980s
+  init=0.022s  scaling=0.040
+> s  X'DX=0.026s  chol=0.078s
+  direction=0.162s  steplength=0.062s  corrector=
+> 0.483s  update=0.107s
+  Corrector breakdown:
+    loop1=0.141s  loop2=0.059s  
+> gemv1=0.059s  gemv2=0.012s  loop3=0.150s  step=0.063s
+cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=1.017s
+cqreg: Sparsity: 4.9803, bandwidth: 0.005682 (method: residual)
+cqreg: Total time: 1.544s (load: 0.474, hdfe: 0.000, ipm: 1.017, vce: 0.053)
+
+Median regression                                  Number of obs =  5,000,000
+  Raw sum of deviations 7.2e+06  (about 2.00094  )
+  Min sum of deviations 4.0e+06                    Pseudo R2     =     0.4454
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+           x |   2.999924   .0011139  2693.23   0.000      2.99774    3.002107
+       _cons |   1.999082   .0011136  1795.10   0.000       1.9969    2.001265
+------------------------------------------------------------------------------
+
+Iterations: 18, converged: yes
+Total time:     1.555 seconds
+
+. timer off 4
+
+. quietly timer list 4
+
+. local cqreg_residual_time = r(t4)
+
+. di "cqreg residual time: " %9.3f `cqreg_residual_time' " seconds"
+cqreg residual time:     1.600 seconds
+
+. matrix cqreg_residual_b = e(b)
+
+. local cqreg_residual_se_x = sqrt(e(V)[1,1])
+
+. local cqreg_residual_se_cons = sqrt(e(V)[2,2])
+
+. 
+. * Summary comparison
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "PERFORMANCE SUMMARY"
+PERFORMANCE SUMMARY
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. di "                           qreg      cqreg(fitted)  cqreg(residual)"
+                           qreg      cqreg(fitted)  cqreg(residual)
+
+. di "{hline 70}"
+----------------------------------------------------------------------
+
+. di "Time (seconds):        " %9.3f `qreg_time' "       " %9.3f `cqreg_fitted_
+> time' "       " %9.3f `cqreg_residual_time'
+Time (seconds):            9.945           4.307           1.600
+
+. di "Speedup vs qreg:                     " %9.2f `qreg_time'/`cqreg_fitted_ti
+> me' "x          " %9.2f `qreg_time'/`cqreg_residual_time' "x"
+Speedup vs qreg:                          2.31x               6.22x
+
+. di ""
+
+
+. di "Coefficient x:         " %12.6f qreg_b[1,1] "  " %12.6f cqreg_fitted_b[1,
+> 1] "  " %12.6f cqreg_residual_b[1,1]
+Coefficient x:             2.999924      2.999924      2.999924
+
+. di "SE(x):                 " %12.6f `qreg_se_x' "  " %12.6f `cqreg_fitted_se_
+> x' "  " %12.6f `cqreg_residual_se_x'
+SE(x):                     0.001113      0.001113      0.001114
+
+. di ""
+
+
+. di "Coefficient _cons:     " %12.6f qreg_b[1,2] "  " %12.6f cqreg_fitted_b[1,
+> 2] "  " %12.6f cqreg_residual_b[1,2]
+Coefficient _cons:         1.999082      1.999082      1.999082
+
+. di "SE(_cons):             " %12.6f `qreg_se_cons' "  " %12.6f `cqreg_fitted_
+> se_cons' "  " %12.6f `cqreg_residual_se_cons'
+SE(_cons):                 0.001113      0.001113      0.001114
+
+. di ""
+
+
+. di "SE difference from qreg:"
+SE difference from qreg:
+
+. di "  fitted vs qreg x:    " %12.6e `cqreg_fitted_se_x' - `qreg_se_x' " (" %6
+> .3f 100*(`cqreg_fitted_se_x'-`qreg_se_x')/`qreg_se_x' "%)"
+  fitted vs qreg x:     2.28180e-12 ( 0.000%)
+
+. di "  residual vs qreg x:  " %12.6e `cqreg_residual_se_x' - `qreg_se_x' " (" 
+> %6.3f 100*(`cqreg_residual_se_x'-`qreg_se_x')/`qreg_se_x' "%)"
+  residual vs qreg x:   5.15226e-07 ( 0.046%)
+
+. 
+. di _newline "{hline 78}"
+
+------------------------------------------------------------------------------
+
+. di "END BENCHMARK"
+END BENCHMARK
+
+. di "{hline 78}"
+------------------------------------------------------------------------------
+
+. 
+end of do-file
