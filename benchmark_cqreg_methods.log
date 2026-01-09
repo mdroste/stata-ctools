@@ -77,7 +77,7 @@ Generating data...
 . quietly timer list 1
 
 . di "Data generation time: " %9.3f r(t1) " seconds"
-Data generation time:     0.288 seconds
+Data generation time:     0.284 seconds
 
 . 
 . di _newline "{hline 78}"
@@ -115,7 +115,7 @@ QREG (Stata built-in, default fitted method)
 . local qreg_time = r(t2)
 
 . di "qreg time: " %9.3f `qreg_time' " seconds"
-qreg time:     9.946 seconds
+qreg time:     9.908 seconds
 
 . matrix qreg_b = e(b)
 
@@ -154,33 +154,33 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-FN Timing (N=5000000, K=2, iters=18): total=0.948s
-  init=0.024s  scaling=0.039
-> s  X'DX=0.025s  chol=0.077s
-  direction=0.151s  steplength=0.063s  corrector=
-> 0.495s  update=0.073s
+FN Timing (N=5000000, K=2, iters=18): total=0.992s
+  init=0.024s  scaling=0.042
+> s  X'DX=0.025s  chol=0.078s
+  direction=0.159s  steplength=0.065s  corrector=
+> 0.522s  update=0.078s
   Corrector breakdown:
-    loop1=0.144s  loop2=0.063s  
-> gemv1=0.059s  gemv2=0.012s  loop3=0.152s  step=0.065s
-cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=0.983s
-FN Timing (N=5000000, K=2, iters=48): total=4.619s
-  init=0.028s  scaling=0.114
-> s  X'DX=0.144s  chol=0.219s
-  direction=0.458s  steplength=1.160s  corrector=
-> 2.288s  update=0.209s
+    loop1=0.154s  loop2=0.063s  
+> gemv1=0.061s  gemv2=0.015s  loop3=0.167s  step=0.062s
+cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=1.027s
+FN Timing (N=5000000, K=2, iters=48): total=4.599s
+  init=0.028s  scaling=0.123
+> s  X'DX=0.141s  chol=0.215s
+  direction=0.427s  steplength=1.122s  corrector=
+> 2.325s  update=0.217s
   Corrector breakdown:
-    loop1=0.399s  loop2=0.177s  
-> gemv1=0.158s  gemv2=0.044s  loop3=0.399s  step=1.121s
-FN Timing (N=5000000, K=2, iters=50): total=4.851s
-  init=0.028s  scaling=0.118
-> s  X'DX=0.149s  chol=0.228s
-  direction=0.474s  steplength=1.205s  corrector=
-> 2.428s  update=0.221s
+    loop1=0.416s  loop2=0.173s  
+> gemv1=0.158s  gemv2=0.042s  loop3=0.420s  step=1.116s
+FN Timing (N=5000000, K=2, iters=50): total=4.852s
+  init=0.028s  scaling=0.128
+> s  X'DX=0.147s  chol=0.224s
+  direction=0.443s  steplength=1.187s  corrector=
+> 2.465s  update=0.230s
   Corrector breakdown:
-    loop1=0.414s  loop2=0.183s  
-> gemv1=0.168s  gemv2=0.046s  loop3=0.424s  step=1.192s
+    loop1=0.439s  loop2=0.182s  
+> gemv1=0.168s  gemv2=0.044s  loop3=0.446s  step=1.186s
 cqreg: Sparsity: 4.9780, bandwidth: 0.005682 (method: fitted)
-cqreg: Total time: 4.054s (load: 0.452, hdfe: 0.000, ipm: 0.983, vce: 2.619)
+cqreg: Total time: 4.117s (load: 0.453, hdfe: 0.000, ipm: 1.027, vce: 2.637)
 
 Median regression                                  Number of obs =  5,000,000
   Raw sum of deviations 7.2e+06  (about 2.00094  )
@@ -194,7 +194,7 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 18, converged: yes
-Total time:     4.071 seconds
+Total time:     4.133 seconds
 
 . timer off 3
 
@@ -203,7 +203,7 @@ Total time:     4.071 seconds
 . local cqreg_fitted_time = r(t3)
 
 . di "cqreg fitted time: " %9.3f `cqreg_fitted_time' " seconds"
-cqreg fitted time:     4.281 seconds
+cqreg fitted time:     4.349 seconds
 
 . matrix cqreg_fitted_b = e(b)
 
@@ -242,17 +242,17 @@ Bandwidth:  Hall-Sheather
 ------------------------------------------------------------
 
 cqreg: N=5000000, K=2, G=0, quantile=0.500
-FN Timing (N=5000000, K=2, iters=18): total=0.927s
-  init=0.021s  scaling=0.038
-> s  X'DX=0.025s  chol=0.077s
-  direction=0.150s  steplength=0.064s  corrector=
-> 0.479s  update=0.074s
+FN Timing (N=5000000, K=2, iters=18): total=1.016s
+  init=0.023s  scaling=0.047
+> s  X'DX=0.026s  chol=0.081s
+  direction=0.161s  steplength=0.072s  corrector=
+> 0.525s  update=0.082s
   Corrector breakdown:
-    loop1=0.142s  loop2=0.059s  
-> gemv1=0.059s  gemv2=0.012s  loop3=0.147s  step=0.060s
-cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=0.964s
+    loop1=0.160s  loop2=0.062s  
+> gemv1=0.061s  gemv2=0.013s  loop3=0.158s  step=0.071s
+cqreg: IPM: iterations=18, converged=1, objective=3988206.8264, time=1.053s
 cqreg: Sparsity: 4.9803, bandwidth: 0.005682 (method: residual)
-cqreg: Total time: 1.488s (load: 0.471, hdfe: 0.000, ipm: 0.964, vce: 0.053)
+cqreg: Total time: 1.609s (load: 0.503, hdfe: 0.000, ipm: 1.053, vce: 0.053)
 
 Median regression                                  Number of obs =  5,000,000
   Raw sum of deviations 7.2e+06  (about 2.00094  )
@@ -266,7 +266,7 @@ Median regression                                  Number of obs =  5,000,000
 ------------------------------------------------------------------------------
 
 Iterations: 18, converged: yes
-Total time:     1.499 seconds
+Total time:     1.621 seconds
 
 . timer off 4
 
@@ -275,7 +275,7 @@ Total time:     1.499 seconds
 . local cqreg_residual_time = r(t4)
 
 . di "cqreg residual time: " %9.3f `cqreg_residual_time' " seconds"
-cqreg residual time:     1.548 seconds
+cqreg residual time:     1.666 seconds
 
 . matrix cqreg_residual_b = e(b)
 
@@ -303,11 +303,11 @@ PERFORMANCE SUMMARY
 
 . di "Time (seconds):        " %9.3f `qreg_time' "       " %9.3f `cqreg_fitted_
 > time' "       " %9.3f `cqreg_residual_time'
-Time (seconds):            9.946           4.281           1.548
+Time (seconds):            9.908           4.349           1.666
 
 . di "Speedup vs qreg:                     " %9.2f `qreg_time'/`cqreg_fitted_ti
 > me' "x          " %9.2f `qreg_time'/`cqreg_residual_time' "x"
-Speedup vs qreg:                          2.32x               6.43x
+Speedup vs qreg:                          2.28x               5.95x
 
 . di ""
 

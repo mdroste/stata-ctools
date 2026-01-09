@@ -640,11 +640,16 @@ static inline ST_double update_variables(
 }
 
 /* ============================================================================
- * Helper: compute primal and dual step lengths in a single fused loop
- * This is 8x faster than separate compute_bound + array_min calls.
- * Optimization: ds = -dx always, so we compute ds bound from dx directly,
- * eliminating one array read per element.
+ * Helper: compute primal and dual step lengths using chunked parallel reduction
+ *
+ * Optimization strategy:
+ * 1. OpenMP parallel for with reduction(min:...) handles thread-private mins
+ * 2. 4-way unrolling for better instruction pipelining
+ * 3. Tree reduction within each 4-element group reduces comparisons
+ *
+ * ds = -dx always, so we compute ds bound from dx directly.
  * ============================================================================ */
+
 static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
                                        const ST_double *CQREG_RESTRICT x_p,
                                        const ST_double *CQREG_RESTRICT s,
@@ -657,45 +662,122 @@ static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
                                        ST_int N)
 {
     (void)ds;  /* ds = -dx, so we don't need to read it */
+
     ST_double fp_min = 1e20, fd_min = 1e20;
+    ST_int N4 = N - (N % 4);
 
 #ifdef _OPENMP
-    #pragma omp parallel reduction(min:fp_min, fd_min)
-    {
-        #pragma omp for schedule(static)
-        for (ST_int i = 0; i < N; i++) {
-            ST_double dx_i = dx[i];
+    /*
+     * OpenMP parallel for with reduction clause.
+     * Key improvement: 4-way unrolling inside the loop for better pipelining.
+     * schedule(static) gives each thread a contiguous chunk for cache locality.
+     */
+    #pragma omp parallel for schedule(static) reduction(min:fp_min, fd_min)
+    for (ST_int i = 0; i < N4; i += 4) {
+        /* Load and compute bounds for 4 elements */
+        ST_double dx_0 = dx[i];
+        ST_double bx_0 = (dx_0 < 0.0) ? -x_p[i] / dx_0 : 1e20;
+        ST_double bs_0 = (dx_0 > 0.0) ? s[i] / dx_0 : 1e20;
+        ST_double bp_0 = (bx_0 < bs_0) ? bx_0 : bs_0;
+        ST_double bz_0 = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
+        ST_double bw_0 = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
+        ST_double bd_0 = (bz_0 < bw_0) ? bz_0 : bw_0;
 
-            /* Primal bounds: ds = -dx, so bs constraint is (dx > 0 ? s/dx : 1e20) */
-            ST_double bx = (dx_i < 0.0) ? -x_p[i] / dx_i : 1e20;
-            ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;
-            ST_double bp = (bx < bs) ? bx : bs;
-            if (bp < fp_min) fp_min = bp;
+        ST_double dx_1 = dx[i+1];
+        ST_double bx_1 = (dx_1 < 0.0) ? -x_p[i+1] / dx_1 : 1e20;
+        ST_double bs_1 = (dx_1 > 0.0) ? s[i+1] / dx_1 : 1e20;
+        ST_double bp_1 = (bx_1 < bs_1) ? bx_1 : bs_1;
+        ST_double bz_1 = (dz[i+1] < 0.0) ? -z[i+1] / dz[i+1] : 1e20;
+        ST_double bw_1 = (dw[i+1] < 0.0) ? -w[i+1] / dw[i+1] : 1e20;
+        ST_double bd_1 = (bz_1 < bw_1) ? bz_1 : bw_1;
 
-            /* Dual bounds */
-            ST_double bz = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
-            ST_double bw = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
-            ST_double bd = (bz < bw) ? bz : bw;
-            if (bd < fd_min) fd_min = bd;
-        }
+        ST_double dx_2 = dx[i+2];
+        ST_double bx_2 = (dx_2 < 0.0) ? -x_p[i+2] / dx_2 : 1e20;
+        ST_double bs_2 = (dx_2 > 0.0) ? s[i+2] / dx_2 : 1e20;
+        ST_double bp_2 = (bx_2 < bs_2) ? bx_2 : bs_2;
+        ST_double bz_2 = (dz[i+2] < 0.0) ? -z[i+2] / dz[i+2] : 1e20;
+        ST_double bw_2 = (dw[i+2] < 0.0) ? -w[i+2] / dw[i+2] : 1e20;
+        ST_double bd_2 = (bz_2 < bw_2) ? bz_2 : bw_2;
+
+        ST_double dx_3 = dx[i+3];
+        ST_double bx_3 = (dx_3 < 0.0) ? -x_p[i+3] / dx_3 : 1e20;
+        ST_double bs_3 = (dx_3 > 0.0) ? s[i+3] / dx_3 : 1e20;
+        ST_double bp_3 = (bx_3 < bs_3) ? bx_3 : bs_3;
+        ST_double bz_3 = (dz[i+3] < 0.0) ? -z[i+3] / dz[i+3] : 1e20;
+        ST_double bw_3 = (dw[i+3] < 0.0) ? -w[i+3] / dw[i+3] : 1e20;
+        ST_double bd_3 = (bz_3 < bw_3) ? bz_3 : bw_3;
+
+        /* Tree reduction: find min of 4 in 3 comparisons instead of 4 */
+        ST_double bp_01 = (bp_0 < bp_1) ? bp_0 : bp_1;
+        ST_double bp_23 = (bp_2 < bp_3) ? bp_2 : bp_3;
+        ST_double bp_min4 = (bp_01 < bp_23) ? bp_01 : bp_23;
+        if (bp_min4 < fp_min) fp_min = bp_min4;
+
+        ST_double bd_01 = (bd_0 < bd_1) ? bd_0 : bd_1;
+        ST_double bd_23 = (bd_2 < bd_3) ? bd_2 : bd_3;
+        ST_double bd_min4 = (bd_01 < bd_23) ? bd_01 : bd_23;
+        if (bd_min4 < fd_min) fd_min = bd_min4;
     }
 #else
-    for (ST_int i = 0; i < N; i++) {
-        ST_double dx_i = dx[i];
+    /* Sequential version with 4-way unrolling */
+    for (ST_int i = 0; i < N4; i += 4) {
+        ST_double dx_0 = dx[i];
+        ST_double bx_0 = (dx_0 < 0.0) ? -x_p[i] / dx_0 : 1e20;
+        ST_double bs_0 = (dx_0 > 0.0) ? s[i] / dx_0 : 1e20;
+        ST_double bp_0 = (bx_0 < bs_0) ? bx_0 : bs_0;
+        ST_double bz_0 = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
+        ST_double bw_0 = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
+        ST_double bd_0 = (bz_0 < bw_0) ? bz_0 : bw_0;
 
-        /* Primal bounds: ds = -dx, so bs constraint is (dx > 0 ? s/dx : 1e20) */
+        ST_double dx_1 = dx[i+1];
+        ST_double bx_1 = (dx_1 < 0.0) ? -x_p[i+1] / dx_1 : 1e20;
+        ST_double bs_1 = (dx_1 > 0.0) ? s[i+1] / dx_1 : 1e20;
+        ST_double bp_1 = (bx_1 < bs_1) ? bx_1 : bs_1;
+        ST_double bz_1 = (dz[i+1] < 0.0) ? -z[i+1] / dz[i+1] : 1e20;
+        ST_double bw_1 = (dw[i+1] < 0.0) ? -w[i+1] / dw[i+1] : 1e20;
+        ST_double bd_1 = (bz_1 < bw_1) ? bz_1 : bw_1;
+
+        ST_double dx_2 = dx[i+2];
+        ST_double bx_2 = (dx_2 < 0.0) ? -x_p[i+2] / dx_2 : 1e20;
+        ST_double bs_2 = (dx_2 > 0.0) ? s[i+2] / dx_2 : 1e20;
+        ST_double bp_2 = (bx_2 < bs_2) ? bx_2 : bs_2;
+        ST_double bz_2 = (dz[i+2] < 0.0) ? -z[i+2] / dz[i+2] : 1e20;
+        ST_double bw_2 = (dw[i+2] < 0.0) ? -w[i+2] / dw[i+2] : 1e20;
+        ST_double bd_2 = (bz_2 < bw_2) ? bz_2 : bw_2;
+
+        ST_double dx_3 = dx[i+3];
+        ST_double bx_3 = (dx_3 < 0.0) ? -x_p[i+3] / dx_3 : 1e20;
+        ST_double bs_3 = (dx_3 > 0.0) ? s[i+3] / dx_3 : 1e20;
+        ST_double bp_3 = (bx_3 < bs_3) ? bx_3 : bs_3;
+        ST_double bz_3 = (dz[i+3] < 0.0) ? -z[i+3] / dz[i+3] : 1e20;
+        ST_double bw_3 = (dw[i+3] < 0.0) ? -w[i+3] / dw[i+3] : 1e20;
+        ST_double bd_3 = (bz_3 < bw_3) ? bz_3 : bw_3;
+
+        ST_double bp_01 = (bp_0 < bp_1) ? bp_0 : bp_1;
+        ST_double bp_23 = (bp_2 < bp_3) ? bp_2 : bp_3;
+        ST_double bp_min4 = (bp_01 < bp_23) ? bp_01 : bp_23;
+        if (bp_min4 < fp_min) fp_min = bp_min4;
+
+        ST_double bd_01 = (bd_0 < bd_1) ? bd_0 : bd_1;
+        ST_double bd_23 = (bd_2 < bd_3) ? bd_2 : bd_3;
+        ST_double bd_min4 = (bd_01 < bd_23) ? bd_01 : bd_23;
+        if (bd_min4 < fd_min) fd_min = bd_min4;
+    }
+#endif
+
+    /* Handle remainder (up to 3 elements) */
+    for (ST_int i = N4; i < N; i++) {
+        ST_double dx_i = dx[i];
         ST_double bx = (dx_i < 0.0) ? -x_p[i] / dx_i : 1e20;
-        ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;  /* ds < 0 when dx > 0 */
+        ST_double bs = (dx_i > 0.0) ? s[i] / dx_i : 1e20;
         ST_double bp = (bx < bs) ? bx : bs;
         if (bp < fp_min) fp_min = bp;
 
-        /* Dual bounds */
         ST_double bz = (dz[i] < 0.0) ? -z[i] / dz[i] : 1e20;
         ST_double bw = (dw[i] < 0.0) ? -w[i] / dw[i] : 1e20;
         ST_double bd = (bz < bw) ? bz : bw;
         if (bd < fd_min) fd_min = bd;
     }
-#endif
 
     /* Apply damping and cap at 1 */
     *fp_out = (IPM_BETA * fp_min > 1.0) ? 1.0 : IPM_BETA * fp_min;
