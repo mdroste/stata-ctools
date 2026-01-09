@@ -69,6 +69,7 @@ void cleanup_state(void)
         for (g = 0; g < g_state->G; g++) {
             if (g_state->factors[g].levels != NULL) free(g_state->factors[g].levels);
             if (g_state->factors[g].counts != NULL) free(g_state->factors[g].counts);
+            if (g_state->factors[g].weighted_counts != NULL) free(g_state->factors[g].weighted_counts);
             if (g_state->factors[g].means != NULL) free(g_state->factors[g].means);
         }
         free(g_state->factors);

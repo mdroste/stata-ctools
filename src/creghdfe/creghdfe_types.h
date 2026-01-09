@@ -43,7 +43,8 @@ typedef struct {
     ST_int has_intercept;
     ST_int num_slopes;
     ST_int *levels;
-    ST_double *counts;
+    ST_double *counts;           /* Unweighted counts per level */
+    ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
     ST_double *means;
 } FE_Factor;
 
@@ -59,7 +60,9 @@ typedef struct {
     ST_int in1;
     ST_int in2;
     ST_int has_weights;
+    ST_int weight_type;          /* 0=none, 1=aweight, 2=fweight, 3=pweight */
     ST_double *weights;
+    ST_double sum_weights;       /* Sum of weights (for fweight df calculation) */
     FE_Factor *factors;
     ST_int maxiter;
     ST_double tolerance;

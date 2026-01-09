@@ -126,6 +126,54 @@ void compute_xtx_xty(
 }
 
 /* ========================================================================
+ * Compute weighted X'WX and X'Wy - BLAS-like implementation
+ * W = diag(weights), so X'WX = sum_i (w_i * x_i * x_i')
+ * ======================================================================== */
+
+void compute_xtx_xty_weighted(
+    const ST_double *data,     /* N x K matrix in column-major order */
+    const ST_double *weights,  /* N x 1 weight vector */
+    ST_int N,
+    ST_int K,                  /* K includes y as first column */
+    ST_double *xtx,            /* Output: (K-1) x (K-1) */
+    ST_double *xty             /* Output: (K-1) x 1 */
+)
+{
+    ST_int i, j, k;
+    ST_int K_x = K - 1;  /* Number of X columns (excluding y) */
+    const ST_double *y = &data[0];  /* Column 0 is y */
+
+    /* Initialize output */
+    memset(xtx, 0, K_x * K_x * sizeof(ST_double));
+    memset(xty, 0, K_x * sizeof(ST_double));
+
+    /* Compute X'WX and X'Wy where W = diag(weights) */
+    for (i = 0; i < N; i++) {
+        ST_double w = weights[i];
+        ST_double yi = y[i];
+
+        for (j = 0; j < K_x; j++) {
+            ST_double xj = data[(j + 1) * N + i];
+            ST_double wxj = w * xj;
+
+            /* X'Wy: accumulate w * x_j * y */
+            xty[j] += wxj * yi;
+
+            /* Diagonal of X'WX */
+            xtx[j * K_x + j] += wxj * xj;
+
+            /* Off-diagonal (upper triangle, then copy to lower) */
+            for (k = j + 1; k < K_x; k++) {
+                ST_double xk = data[(k + 1) * N + i];
+                ST_double val = wxj * xk;
+                xtx[j * K_x + k] += val;
+                xtx[k * K_x + j] += val;  /* Symmetric */
+            }
+        }
+    }
+}
+
+/* ========================================================================
  * Cholesky decomposition: A = L * L' (in-place, returns L in lower triangle)
  * ======================================================================== */
 

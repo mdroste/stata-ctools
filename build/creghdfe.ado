@@ -1,4 +1,4 @@
-*! version 1.1.0 06Jan2026
+*! version 1.2.0 08Jan2026
 *! creghdfe: C-accelerated high-dimensional fixed effects regression
 *! Part of the ctools suite
 *!
@@ -17,12 +17,48 @@
 program define creghdfe, eclass
     version 14.0
 
-    syntax varlist(min=2 fv) [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
         TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name)]
 
     * Mark sample - include absorb and cluster variables
     marksample touse
     markout `touse' `absorb'
+
+    * Parse weights
+    local weight_var ""
+    local weight_type = 0   // 0=none, 1=aweight, 2=fweight, 3=pweight
+    if "`weight'" != "" {
+        * Extract weight variable from expression (remove leading =)
+        local weight_var "`exp'"
+        local weight_var = subinstr("`weight_var'", "=", "", .)
+        local weight_var = trim("`weight_var'")
+
+        if "`weight'" == "aweight" {
+            local weight_type = 1
+        }
+        else if "`weight'" == "fweight" {
+            local weight_type = 2
+            * fweight must be positive integer
+            capture confirm numeric variable `weight_var'
+            if _rc != 0 {
+                di as error "creghdfe: fweight variable must be numeric"
+                exit 198
+            }
+        }
+        else if "`weight'" == "pweight" {
+            local weight_type = 3
+        }
+
+        * Mark out missing weights
+        markout `touse' `weight_var'
+
+        * Check for non-positive weights
+        qui count if `weight_var' <= 0 & `touse'
+        if r(N) > 0 {
+            di as error "creghdfe: weights must be positive"
+            exit 198
+        }
+    }
 
     * Parse variable list
     gettoken depvar indepvars : varlist
@@ -34,6 +70,12 @@ program define creghdfe, eclass
     local clustervar ""
     local clustervar_orig ""
     local clustervar_is_temp = 0
+
+    * pweight forces robust VCE (unless clustering)
+    if `weight_type' == 3 {
+        local vcetype = 1
+    }
+
     if `"`vce'"' != "" {
         local vce_lower = lower(trim(`"`vce'"'))
         if substr("`vce_lower'", 1, 2) == "cl" {
@@ -181,6 +223,8 @@ program define creghdfe, eclass
     scalar __creghdfe_compute_dof = 1
     scalar __creghdfe_df_a_nested = 0
     scalar __creghdfe_compute_resid = `compute_resid'
+    scalar __creghdfe_has_weights = (`weight_type' > 0)
+    scalar __creghdfe_weight_type = `weight_type'
 
     * Display info if verbose
     if "`verbose'" != "" {
@@ -193,6 +237,10 @@ program define creghdfe, eclass
         di as text "Absorb:     " as result "`absorb'"
         di as text "Obs:        " as result `nobs'
         di as text "VCE type:   " as result cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster(`clustervar')"))
+        if `weight_type' > 0 {
+            local wtype_str = cond(`weight_type'==1, "aweight", cond(`weight_type'==2, "fweight", "pweight"))
+            di as text "Weights:    " as result "[`wtype_str'=`weight_var']"
+        }
         di as text "{hline 60}"
         di ""
     }
@@ -201,15 +249,19 @@ program define creghdfe, eclass
     timer clear 99
     timer on 99
 
-    * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [resid_var]
+    * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [resid_var]
     local plugin_varlist `varlist' `absorb'
     if `vcetype' == 2 {
         local plugin_varlist `plugin_varlist' `clustervar'
     }
+    * Add weight variable to plugin varlist if using weights
+    if `weight_type' > 0 {
+        local plugin_varlist `plugin_varlist' `weight_var'
+    }
     * Add residual variable to the plugin varlist if computing residuals
     if `compute_resid' {
-        * Position in varlist = K + G + (1 if cluster) + 1
-        local resid_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + 1
+        * Position in varlist = K + G + (1 if cluster) + (1 if weights) + 1
+        local resid_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + (`weight_type' > 0) + 1
         local plugin_varlist `plugin_varlist' `resid_varname'
         scalar __creghdfe_resid_var_idx = `resid_var_pos'
     }
@@ -233,6 +285,7 @@ program define creghdfe, eclass
         capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
         capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
         capture scalar drop __creghdfe_resid_var_idx
+        capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
         capture matrix drop __creghdfe_V
         di as error "Error in regression (rc=`reg_rc')"
         exit `reg_rc'
@@ -517,6 +570,7 @@ program define creghdfe, eclass
     capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
     capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
     capture scalar drop __creghdfe_resid_var_idx
+    capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
     capture scalar drop __creghdfe_N __creghdfe_num_singletons __creghdfe_K_keep
     capture scalar drop __creghdfe_df_a __creghdfe_mobility_groups
     capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within

@@ -75,7 +75,8 @@ static void fn_timing_reset(void) {
     fn_corr_loop1 = fn_corr_loop2 = fn_corr_gemv1 = fn_corr_gemv2 = fn_corr_loop3 = fn_corr_step = 0.0;
 }
 
-static void fn_timing_report(ST_int N, ST_int K) {
+static void fn_timing_report(ST_int N, ST_int K, ST_int verbose) {
+    if (!verbose) return;  /* Only report timing in verbose mode */
     double total = fn_time_init + fn_time_scaling + fn_time_xtdx + fn_time_cholesky +
                    fn_time_direction + fn_time_steplength + fn_time_corrector + fn_time_update;
     char buf[1024];
@@ -93,7 +94,7 @@ static void fn_timing_report(ST_int N, ST_int K) {
 }
 #else
 #define fn_timing_reset()
-#define fn_timing_report(N, K)
+#define fn_timing_report(N, K, verbose)
 #endif
 
 /* Debug logging */
@@ -1218,7 +1219,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     memcpy(ipm->beta, beta, K * sizeof(ST_double));
 
 #if FN_TIMING
-    fn_timing_report(N, K);
+    fn_timing_report(N, K, ipm->config.verbose);
 #endif
 
     /* No cleanup needed - all arrays are pre-allocated in IPM state */

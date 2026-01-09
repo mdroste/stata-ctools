@@ -15,7 +15,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebSearch",
       "WebFetch(domain:rdrr.io)",
-      "WebFetch(domain:www.stata.com)"
+      "WebFetch(domain:www.stata.com)",
+      "WebFetch(domain:www.rdocumentation.org)"
     ]
   }
 }

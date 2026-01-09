@@ -917,6 +917,13 @@ static int compare_resid_pair(const void *a, const void *b)
     return (diff < 0) ? -1 : ((diff > 0) ? 1 : 0);
 }
 
+/* Comparison function for qsort - sort doubles ascending */
+static int compare_double(const void *a, const void *b)
+{
+    ST_double diff = *(const ST_double *)a - *(const ST_double *)b;
+    return (diff < 0) ? -1 : ((diff > 0) ? 1 : 0);
+}
+
 /*
  * Solve QR on a subsample and return beta.
  * Uses the smoothed IPM on the subsample.
@@ -1008,19 +1015,27 @@ static ST_int check_optimality(
         return -1;
     }
 
-    /* Compute residuals and subgradient for all observations */
+    /* Compute residuals for all observations and gather stats */
+    ST_double sum_r2 = 0.0;
     for (i = 0; i < N; i++) {
         ST_double yhat = 0.0;
         for (j = 0; j < K; j++) {
             yhat += X[j * N + i] * beta[j];
         }
         r[i] = y[i] - yhat;
+        sum_r2 += r[i] * r[i];
+    }
 
-        /* Subgradient: g_i = q - I(r_i < 0) */
-        ST_double tol = 1e-8 * (fabs(y[i]) + 1.0);
-        if (r[i] > tol) {
+    /* Compute residual scale for tolerance */
+    ST_double sigma_r = sqrt(sum_r2 / N);
+    ST_double zero_tol = 1e-6 * sigma_r;  /* Tolerance for "zero" residual */
+    if (zero_tol < 1e-12) zero_tol = 1e-12;
+
+    /* Compute subgradient */
+    for (i = 0; i < N; i++) {
+        if (r[i] > zero_tol) {
             g[i] = q;  /* Positive residual */
-        } else if (r[i] < -tol) {
+        } else if (r[i] < -zero_tol) {
             g[i] = q - 1.0;  /* Negative residual */
         } else {
             g[i] = 0.0;  /* At kink - will adjust later */
@@ -1055,44 +1070,71 @@ static ST_int check_optimality(
     ST_double dual_tol = 1e-6 * X_scale;
 
     if (Xg_norm > dual_tol) {
-        /* Dual constraint violated - find observations whose sign might be wrong
-         * or near-zero observations that should be in active set */
+        /* Dual constraint violated - find ALL observations that could fix it.
+         * Be aggressive: add any observation not in active set that either:
+         * 1. Has a different sign than predicted (clear violation)
+         * 2. Has uncertain prediction (predicted_sign == 0)
+         * 3. Has small residual (near boundary)
+         * 4. If still no violations, add batch of smallest |r| observations
+         */
+
+        /* Threshold for "small residual" - observations near the quantile boundary */
+        ST_double boundary_tol = 0.1 * sigma_r;
 
         for (i = 0; i < N; i++) {
-            ST_double tol = 1e-6 * (fabs(y[i]) + 1.0);
-
             /* Check observations not in active set */
             if (!in_active_set[i]) {
-                /* Near-zero residual - should be in active set */
-                if (fabs(r[i]) < tol * 100) {  /* Wider tolerance for boundary obs */
+                /* Near-zero residual - near the quantile boundary */
+                if (fabs(r[i]) < boundary_tol) {
+                    violations[(*n_violations)++] = i;
+                }
+                /* Uncertain prediction - could go either way */
+                else if (predicted_sign[i] == 0) {
                     violations[(*n_violations)++] = i;
                 }
                 /* Sign changed from prediction */
-                else if (predicted_sign[i] > 0 && r[i] < -tol) {
+                else if (predicted_sign[i] > 0 && r[i] < -zero_tol) {
                     violations[(*n_violations)++] = i;
                 }
-                else if (predicted_sign[i] < 0 && r[i] > tol) {
+                else if (predicted_sign[i] < 0 && r[i] > zero_tol) {
                     violations[(*n_violations)++] = i;
                 }
             }
         }
 
-        /* If no violations found but X'g ≠ 0, add obs with smallest |residual| not in active set */
+        /* If still no violations found, add a batch of observations
+         * with smallest |residual| to make progress */
         if (*n_violations == 0) {
-            /* Find obs with smallest non-zero |residual| not in active set */
-            ST_double min_abs_r = 1e30;
-            ST_int min_idx = -1;
-            for (i = 0; i < N; i++) {
-                if (!in_active_set[i]) {
-                    ST_double abs_r = fabs(r[i]);
-                    if (abs_r < min_abs_r) {
-                        min_abs_r = abs_r;
-                        min_idx = i;
+            /* Add up to 10% more observations or at least 10 */
+            ST_int batch_size = N / 10;
+            if (batch_size < 10) batch_size = 10;
+            if (batch_size > N / 2) batch_size = N / 2;
+
+            /* Find observations with smallest |r| not in active set */
+            for (ST_int added = 0; added < batch_size; added++) {
+                ST_double min_abs_r = 1e30;
+                ST_int min_idx = -1;
+                for (i = 0; i < N; i++) {
+                    if (!in_active_set[i]) {
+                        /* Check if already added as violation */
+                        ST_int already_added = 0;
+                        for (ST_int v = 0; v < *n_violations; v++) {
+                            if (violations[v] == i) {
+                                already_added = 1;
+                                break;
+                            }
+                        }
+                        if (!already_added && fabs(r[i]) < min_abs_r) {
+                            min_abs_r = fabs(r[i]);
+                            min_idx = i;
+                        }
                     }
                 }
-            }
-            if (min_idx >= 0) {
-                violations[(*n_violations)++] = min_idx;
+                if (min_idx >= 0) {
+                    violations[(*n_violations)++] = min_idx;
+                } else {
+                    break;  /* No more observations to add */
+                }
             }
         }
     }
@@ -1123,14 +1165,32 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
     }
 
     /* Step 1: Initial subsample size
-     * For smoothed IPM, we need a larger subsample than exact LP methods.
-     * Use m = max(N^0.7, 10*K) to ensure good coverage.
+     * Per Chernozhukov, Fernández-Val, Melly (2020), use:
+     *   m = (n * (log(K) + 1))^(2/3)
+     * This is the optimal rate for the preprocessing algorithm.
+     * We add a safety factor of 1.5 since we use smoothed IPM (not exact LP).
+     *
+     * IMPORTANT: For quantiles far from 0.5, OLS predictions are less accurate.
+     * Increase subsample size based on distance from median.
+     * At extreme quantiles (0.1 or 0.9), use 3x the base size.
      */
-    ST_int m_init = (ST_int)(pow((double)N, 0.7) + 0.5);
+    ST_double log_term = log((ST_double)K) + 1.0;
+    ST_double m_raw = pow((ST_double)N * log_term, 2.0/3.0);
 
-    /* Ensure reasonable bounds */
+    /* Quantile adjustment factor: increases subsample for non-median quantiles */
+    ST_double q_dist = fabs(q - 0.5);  /* Distance from median */
+    ST_double q_factor = 1.5 + 3.0 * q_dist;  /* 1.5 at median, 3.0 at extreme */
+
+    ST_int m_init = (ST_int)(q_factor * m_raw + 0.5);
+
+    /* Ensure reasonable bounds:
+     * - At least 10*K to have enough obs for stable regression
+     * - At least 100 for numerical stability
+     * - Cap at 80% of N to get meaningful speedup (otherwise just solve directly)
+     */
     if (m_init < 10 * K) m_init = 10 * K;
-    if (m_init > N / 2) m_init = N / 2;  /* Cap at 50% to get speedup */
+    if (m_init < 100) m_init = 100;
+    if (m_init > (ST_int)(0.8 * N)) m_init = N;  /* Fall through to full solve */
     if (m_init > N) m_init = N;
 
     if (ipm->config.verbose) {
@@ -1191,28 +1251,68 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
         return -1;
     }
 
-    /* Compute OLS residuals and record their signs */
+    /* Compute OLS residuals.
+     * Key insight from Chernozhukov et al.: The quantile regression hyperplane
+     * will have approximately (1-q)*N observations with positive residuals.
+     * OLS gives the conditional mean, so we need to adjust predictions.
+     *
+     * Strategy: Sort OLS residuals and use ranks to predict QR signs.
+     * The top (1-q)*N by OLS residual rank should have positive QR residuals.
+     */
+
+    /* First pass: compute residuals and gather stats */
+    ST_double *ols_resid = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double sum_r2 = 0.0;
     for (i = 0; i < N; i++) {
         ST_double yhat = 0.0;
         for (j = 0; j < K; j++) {
             yhat += X[j * N + i] * beta[j];
         }
         ST_double r = y[i] - yhat;
+        ols_resid[i] = r;
         resid_order[i].idx = i;
         resid_order[i].abs_resid = fabs(r);
+        sum_r2 += r * r;
+    }
 
-        /* Record predicted sign from OLS residuals */
-        ST_double tol = 1e-6 * (fabs(y[i]) + 1.0);
-        if (r > tol) {
-            predicted_sign[i] = 1;  /* Positive */
-        } else if (r < -tol) {
-            predicted_sign[i] = -1; /* Negative */
+    /* Compute scale for uncertainty band */
+    ST_double sigma_r = sqrt(sum_r2 / N);
+    ST_double sign_tol = 0.05 * sigma_r;  /* 5% of std dev is "uncertain" */
+    if (sign_tol < 1e-10) sign_tol = 1e-10;
+
+    /* Find q-th quantile of OLS residuals using selection algorithm.
+     * We need the value at rank q*N to determine the cutoff. */
+    ST_double *resid_copy = (ST_double *)malloc(N * sizeof(ST_double));
+    memcpy(resid_copy, ols_resid, N * sizeof(ST_double));
+
+    /* Sort to find q-th quantile */
+    qsort(resid_copy, N, sizeof(ST_double), compare_double);
+
+    /* Find the qth quantile cutoff in OLS residuals.
+     * Observations below this should have negative QR residuals,
+     * observations above should have positive QR residuals. */
+    ST_int q_rank = (ST_int)(q * N);
+    if (q_rank >= N) q_rank = N - 1;
+    ST_double q_cutoff = resid_copy[q_rank];
+
+    /* Record predicted signs based on OLS residual relative to cutoff */
+    for (i = 0; i < N; i++) {
+        ST_double r = ols_resid[i];
+        ST_double dist_from_cutoff = r - q_cutoff;
+
+        if (dist_from_cutoff > sign_tol) {
+            predicted_sign[i] = 1;  /* Predicted positive */
+        } else if (dist_from_cutoff < -sign_tol) {
+            predicted_sign[i] = -1; /* Predicted negative */
         } else {
-            predicted_sign[i] = 0;  /* Uncertain - near zero */
+            predicted_sign[i] = 0;  /* Uncertain - near cutoff */
         }
     }
 
-    /* Sort by absolute residual (ascending) */
+    free(resid_copy);
+    free(ols_resid);
+
+    /* Sort by absolute residual (ascending) for active set selection */
     qsort(resid_order, N, sizeof(resid_pair), compare_resid_pair);
 
     /* Step 4: Initialize active set with m_init smallest |residual| observations */

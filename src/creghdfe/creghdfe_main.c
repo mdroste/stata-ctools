@@ -90,6 +90,15 @@ ST_retcode do_full_regression(int argc, char *argv[])
     SF_scal_use("__creghdfe_vce_type", &val); vcetype = (ST_int)val;
     SF_scal_use("__creghdfe_df_a_nested", &val); df_a_nested = (ST_int)val;
 
+    /* Read weight parameters */
+    ST_int has_weights = 0, weight_type = 0;
+    if (SF_scal_use("__creghdfe_has_weights", &val) == 0) {
+        has_weights = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_weight_type", &val) == 0) {
+        weight_type = (ST_int)val;
+    }
+
     compute_dof = 0;
     if (SF_scal_use("__creghdfe_compute_dof", &val) == 0) {
         compute_dof = (ST_int)val;
@@ -153,7 +162,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
     stdevs = (ST_double *)malloc(K * sizeof(ST_double));
     tss = (ST_double *)malloc(K * sizeof(ST_double));
 
-    if (!factors || !hash_tables || !mask || !data || !means || !stdevs || !tss) {
+    /* Allocate weight array if using weights */
+    ST_double *weights = NULL;
+    if (has_weights) {
+        weights = (ST_double *)malloc(N_orig * sizeof(ST_double));
+    }
+
+    if (!factors || !hash_tables || !mask || !data || !means || !stdevs || !tss ||
+        (has_weights && !weights)) {
         if (factors) free(factors);
         if (hash_tables) free(hash_tables);
         if (mask) free(mask);
@@ -161,6 +177,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         if (means) free(means);
         if (stdevs) free(stdevs);
         if (tss) free(tss);
+        if (weights) free(weights);
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -202,6 +219,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 }
                 free(factors); free(hash_tables); free(mask);
                 free(data); free(means); free(stdevs); free(tss);
+                if (weights) free(weights);
                 return 198;
             }
             data[k * N_orig + idx] = val;
@@ -218,9 +236,28 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 }
                 free(factors); free(hash_tables); free(mask);
                 free(data); free(means); free(stdevs); free(tss);
+                if (weights) free(weights);
                 return 198;
             }
             factors[g].levels[idx] = hash_insert_or_get(hash_tables[g], (ST_int)val);
+        }
+
+        /* Read weight variable if using weights */
+        /* Weight var position: K + G + (1 if cluster) + 1 */
+        if (has_weights) {
+            ST_int weight_var_idx = K + G + (vcetype == 2 ? 1 : 0) + 1;
+            if (SF_vdata(weight_var_idx, obs, &val)) {
+                for (i = 0; i < G; i++) {
+                    if (factors[i].levels) free(factors[i].levels);
+                    if (factors[i].counts) free(factors[i].counts);
+                    if (hash_tables[i]) hash_destroy(hash_tables[i]);
+                }
+                free(factors); free(hash_tables); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                free(weights);
+                return 198;
+            }
+            weights[idx] = val;
         }
 
         idx++;
@@ -243,10 +280,36 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
             free(factors); free(hash_tables); free(mask);
             free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
             return 1;
         }
         for (i = 0; i < N_orig; i++) {
             factors[g].counts[factors[g].levels[i] - 1]++;
+        }
+    }
+
+    /* Compute weighted counts per FE level if using weights */
+    ST_double *weighted_counts_orig[10] = {NULL};  /* Max 10 FE groups */
+    if (has_weights) {
+        for (g = 0; g < G; g++) {
+            weighted_counts_orig[g] = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
+            if (!weighted_counts_orig[g]) {
+                for (i = 0; i < g; i++) {
+                    if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
+                }
+                for (i = 0; i < G; i++) {
+                    if (factors[i].levels) free(factors[i].levels);
+                    if (factors[i].counts) free(factors[i].counts);
+                    if (hash_tables[i]) hash_destroy(hash_tables[i]);
+                }
+                free(factors); free(hash_tables); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                free(weights);
+                return 1;
+            }
+            for (i = 0; i < N_orig; i++) {
+                weighted_counts_orig[g][factors[g].levels[i] - 1] += weights[i];
+            }
         }
     }
 
@@ -395,6 +458,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
     g_state->factors_initialized = 1;
     g_state->df_a = df_a;
     g_state->mobility_groups = mobility_groups;
+    g_state->has_weights = has_weights;
+    g_state->weight_type = weight_type;
+    g_state->weights = NULL;  /* Will be set after compaction */
+    g_state->sum_weights = 0.0;
 
     /* Allocate and copy compacted factors to global state */
     g_state->factors = (FE_Factor *)calloc(G, sizeof(FE_Factor));
@@ -416,8 +483,15 @@ ST_retcode do_full_regression(int argc, char *argv[])
         g_state->factors[g].levels = (ST_int *)malloc(N * sizeof(ST_int));
         g_state->factors[g].counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
         g_state->factors[g].means = (ST_double *)malloc(factors[g].num_levels * sizeof(ST_double));
+        g_state->factors[g].weighted_counts = NULL;
 
-        if (!g_state->factors[g].levels || !g_state->factors[g].counts || !g_state->factors[g].means) {
+        /* Allocate weighted_counts if using weights */
+        if (has_weights) {
+            g_state->factors[g].weighted_counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
+        }
+
+        if (!g_state->factors[g].levels || !g_state->factors[g].counts || !g_state->factors[g].means ||
+            (has_weights && !g_state->factors[g].weighted_counts)) {
             cleanup_state();
             for (i = 0; i < G; i++) {
                 if (factors[i].levels) free(factors[i].levels);
@@ -426,6 +500,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
             free(factors); free(hash_tables); free(mask);
             free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
+            for (i = 0; i < G; i++) {
+                if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
+            }
             return 1;
         }
 
@@ -442,6 +520,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
                     }
                     g_state->factors[g].levels[idx] = remap[old_level];
                     g_state->factors[g].counts[remap[old_level] - 1] += 1.0;
+                    /* Accumulate weighted counts if using weights */
+                    if (has_weights) {
+                        g_state->factors[g].weighted_counts[remap[old_level] - 1] += weights[i];
+                    }
                     idx++;
                 }
             }
@@ -510,6 +592,46 @@ ST_retcode do_full_regression(int argc, char *argv[])
     data = data_compact;
     free(means);
     means = means_compact;
+
+    /* Compact weights and assign to g_state */
+    if (has_weights) {
+        ST_double *weights_compact = (ST_double *)malloc(N * sizeof(ST_double));
+        if (!weights_compact) {
+            cleanup_state();
+            for (g = 0; g < G; g++) {
+                if (factors[g].levels) free(factors[g].levels);
+                if (factors[g].counts) free(factors[g].counts);
+                if (hash_tables[g]) hash_destroy(hash_tables[g]);
+            }
+            free(factors); free(hash_tables); free(mask);
+            free(data); free(stdevs); free(tss);
+            free(weights);
+            for (g = 0; g < G; g++) {
+                if (weighted_counts_orig[g]) free(weighted_counts_orig[g]);
+            }
+            return 1;
+        }
+
+        /* Copy weights for non-singleton observations */
+        ST_double sum_w = 0.0;
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                weights_compact[idx] = weights[i];
+                sum_w += weights[i];
+                idx++;
+            }
+        }
+
+        free(weights);
+        g_state->weights = weights_compact;
+        g_state->sum_weights = sum_w;
+
+        /* Free original weighted counts */
+        for (g = 0; g < G; g++) {
+            if (weighted_counts_orig[g]) free(weighted_counts_orig[g]);
+        }
+    }
 
     /* ================================================================
      * STEP 6: Compute TSS and stdevs on compacted data
@@ -757,9 +879,18 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    /* Compute X'X and X'y on non-collinear data */
-    compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
-    tss_within = fast_dot(data_keep, data_keep, N);
+    /* Compute X'X and X'y on non-collinear data (weighted if using weights) */
+    if (has_weights) {
+        compute_xtx_xty_weighted(data_keep, g_state->weights, N, K_keep + 1, xtx_keep, xty_keep);
+        /* Weighted TSS_within = sum(w_i * y_i^2) */
+        tss_within = 0.0;
+        for (idx = 0; idx < N; idx++) {
+            tss_within += g_state->weights[idx] * data_keep[idx] * data_keep[idx];
+        }
+    } else {
+        compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
+        tss_within = fast_dot(data_keep, data_keep, N);
+    }
 
     t_ols = get_time_sec();
 
@@ -1078,11 +1209,13 @@ ST_retcode do_full_regression(int argc, char *argv[])
         compute_vce_unadjusted(inv_xx_keep, rss, df_r, K_with_cons, V_keep);
     } else if (vcetype == 1 || vcetype == 2) {
         if (resid) {
+            /* Pass weights for weighted VCE (NULL if no weights) */
+            ST_double *vce_weights = has_weights ? g_state->weights : NULL;
             if (vcetype == 1) {
-                compute_vce_robust(data_with_cons, resid, inv_xx_keep, N, K_with_cons, df_a, V_keep);
+                compute_vce_robust(data_with_cons, resid, inv_xx_keep, vce_weights, N, K_with_cons, df_a, V_keep);
             } else {
                 ST_int df_m_cluster = K_keep;
-                compute_vce_cluster(data_with_cons, resid, inv_xx_keep, cluster_ids, N, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
+                compute_vce_cluster(data_with_cons, resid, inv_xx_keep, vce_weights, cluster_ids, N, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
             }
         }
     }

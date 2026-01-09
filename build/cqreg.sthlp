@@ -45,6 +45,7 @@
 {syntab:Optimization}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-8)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(50)}{p_end}
+{synopt:{opt nopreprocess(#)}}disable preprocessing algorithm; default is {cmd:nopreprocess(0)}{p_end}
 {synoptline}
 
 
@@ -139,6 +140,15 @@ The default is {cmd:tolerance(1e-8)}.
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default
 is {cmd:maxiter(50)}.
 
+{phang}
+{opt nopreprocess(#)} controls the preprocessing algorithm from Chernozhukov,
+Fernández-Val, and Melly (2020). This option is {bf:experimental}. The default
+value of 0 disables preprocessing, using the direct Frisch-Newton solver which
+is fast and reliable for all dataset sizes. Set to -1 to enable preprocessing
+(experimental), which attempts to speed up estimation by solving on a subsample
+first. The preprocessing implementation is still under development and may be
+slow or unstable for some datasets.
+
 
 {marker examples}{...}
 {title:Examples}
@@ -227,6 +237,14 @@ convergence, which is significantly faster than the simplex method used by
 native {cmd:qreg} for large datasets.
 
 {pstd}
+An experimental preprocessing algorithm based on Chernozhukov, Fernández-Val,
+and Melly (2020) is available via the {opt nopreprocess(-1)} option. This algorithm
+exploits the fact that most observations will have residuals with a predictable
+sign, allowing the QR problem to be solved on a smaller subsample first. However,
+the current implementation has performance issues and is disabled by default.
+The direct Frisch-Newton solver is recommended for all use cases.
+
+{pstd}
 Standard errors are computed using kernel density estimation for the sparsity
 function f(0) = density at the conditional quantile. The IID variance formula is:
 
@@ -243,6 +261,10 @@ solver with symmetric Kaczmarz transformations before applying the IPM solver.
 
 {phang}
 Koenker, R. 2005. {it:Quantile Regression}. Cambridge University Press.
+
+{phang}
+Chernozhukov, V., I. Fernández-Val, and B. Melly. 2020. Fast algorithms for
+the quantile regression process. {it:Empirical Economics} 62: 7-33.
 
 {phang}
 Portnoy, S., and R. Koenker. 1997. The Gaussian hare and the Laplacian tortoise:

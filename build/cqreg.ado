@@ -18,6 +18,9 @@
 *!   verbose            - Display progress information
 *!   tolerance(#)       - Convergence tolerance (default: 1e-8)
 *!   maxiter(#)         - Maximum iterations (default: 200)
+*!   nopreprocess(#)    - Controls preprocessing algorithm (experimental)
+*!                        Default: 0 (preprocessing disabled)
+*!                        Set to -1 to enable preprocessing (experimental, may be slow)
 
 program define cqreg, eclass
     version 14.0

@@ -30,11 +30,13 @@ void compute_vce_unadjusted(
  * Compute robust VCE (HC1): V = D * M * D * dof_adj
  * where D = (X'X)^(-1), M = X'WX with W = diag(e^2), and X includes constant
  * This matches reghdfe.mata lines 3929-3930
+ * For weighted regression: residuals are scaled by sqrt(weights)
  */
 void compute_vce_robust(
     const ST_double *data,    /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,   /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,  /* K_with_cons x K_with_cons inverse (X vars + constant) */
+    const ST_double *weights, /* N x 1 weights (NULL for unweighted) */
     ST_int N,
     ST_int K_with_cons,       /* Number of X vars + constant (excludes y) */
     ST_int df_a,              /* Degrees of freedom absorbed by FEs */
@@ -47,11 +49,13 @@ void compute_vce_robust(
  * where D = (X'X)^(-1), M = sum_c (X_c'e_c)(e_c'X_c), X includes constant
  * dof_adj = (N-1)/(N - nested_adj - df_m - df_a) * M/(M-1)
  * This matches reghdfe.mata lines 4021, 4026, 4031
+ * For weighted regression: residuals are scaled by sqrt(weights)
  */
 void compute_vce_cluster(
     const ST_double *data,      /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,     /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,    /* K_with_cons x K_with_cons inverse (X vars + constant) */
+    const ST_double *weights,   /* N x 1 weights (NULL for unweighted) */
     const ST_int *cluster_ids,  /* N x 1 cluster IDs (0-indexed) */
     ST_int N,
     ST_int K_with_cons,         /* Number of X vars + constant (excludes y) */

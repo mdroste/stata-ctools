@@ -55,20 +55,26 @@ void project_one_fe_threaded(const ST_double * RESTRICT y,
     ST_int i, level;
     const ST_int num_levels = f->num_levels;
     const ST_int * RESTRICT levels = f->levels;
-    const ST_double * RESTRICT counts = f->counts;
+
+    /* Use weighted_counts when weights are present, otherwise use unweighted counts */
+    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
+        ? f->weighted_counts : f->counts;
 
     memset(means, 0, num_levels * sizeof(ST_double));
 
     if (weights == NULL) {
+        /* Unweighted: accumulate y values */
         for (i = 0; i < N; i++) {
             means[levels[i] - 1] += y[i];
         }
     } else {
+        /* Weighted: accumulate y * weight values */
         for (i = 0; i < N; i++) {
             means[levels[i] - 1] += y[i] * weights[i];
         }
     }
 
+    /* Divide by counts (weighted or unweighted as appropriate) */
     #pragma omp simd
     for (level = 0; level < num_levels; level++) {
         if (counts[level] > 0) {

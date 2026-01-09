@@ -41,6 +41,7 @@ void compute_vce_robust(
     const ST_double *data,    /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,   /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,  /* K_with_cons x K_with_cons inverse (X vars + constant) */
+    const ST_double *weights, /* N x 1 weights (NULL for unweighted) */
     ST_int N,
     ST_int K_with_cons,       /* Number of X vars + constant (excludes y) */
     ST_int df_a,              /* Degrees of freedom absorbed by FEs */
@@ -50,7 +51,7 @@ void compute_vce_robust(
     ST_int i, j, k, idx;
     ST_double *XeeX = NULL;  /* X'WX = sum_i (e_i^2 * x_i * x_i') including constant */
     ST_double *temp = NULL;
-    ST_double e_i, xi_j, xi_k;
+    ST_double xi_j, xi_k;
 
     /* df_m is K_with_cons - 1 (X vars only, not constant) for consistency with reghdfe */
     ST_int df_m = K_with_cons - 1;
@@ -68,15 +69,20 @@ void compute_vce_robust(
 
     /* Compute X'WX = sum_i (e_i^2 * x_i * x_i') where x_i includes constant
      * data layout: column 0 = y, columns 1..K_keep = X vars, column K_with_cons = constant
-     * So X columns in data are at indices 1 to K_with_cons (inclusive) */
+     * So X columns in data are at indices 1 to K_with_cons (inclusive)
+     * For weighted regression: e_adj = e * sqrt(w), so e_adj^2 = e^2 * w */
     for (idx = 0; idx < N; idx++) {
-        e_i = resid[idx] * resid[idx];
+        /* For weighted: multiply by weight (e^2 * w in the sandwich) */
+        ST_double e_sq = resid[idx] * resid[idx];
+        if (weights != NULL) {
+            e_sq *= weights[idx];
+        }
         for (j = 0; j < K_with_cons; j++) {
             /* X vars are at data columns 1 to K_keep, constant at column K_with_cons */
             xi_j = data[(j + 1) * N + idx];
             for (k = 0; k < K_with_cons; k++) {
                 xi_k = data[(k + 1) * N + idx];
-                XeeX[j * K_with_cons + k] += e_i * xi_j * xi_k;
+                XeeX[j * K_with_cons + k] += e_sq * xi_j * xi_k;
             }
         }
     }
@@ -119,6 +125,7 @@ void compute_vce_cluster(
     const ST_double *data,      /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,     /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,    /* K_with_cons x K_with_cons inverse (X vars + constant) */
+    const ST_double *weights,   /* N x 1 weights (NULL for unweighted) */
     const ST_int *cluster_ids,  /* N x 1 cluster IDs (0-indexed) */
     ST_int N,
     ST_int K_with_cons,         /* Number of X vars + constant (excludes y) */
@@ -160,11 +167,17 @@ void compute_vce_cluster(
     /* Accumulate e'X for each cluster (including constant column)
      * data layout: column 0 = y, columns 1..K_keep = X vars, column K_with_cons = constant
      * Matches reghdfe.mata line 3956: w = sol.resid :* w (unweighted: w = resid)
-     * and meat computation at lines 4000-4014 */
+     * and meat computation at lines 4000-4014
+     * For weighted regression: e_adj = e * sqrt(w) */
     for (idx = 0; idx < N; idx++) {
         c = cluster_ids[idx];
+        /* For weighted: use e * sqrt(w) in the cluster sums */
+        ST_double e_adj = resid[idx];
+        if (weights != NULL) {
+            e_adj *= sqrt(weights[idx]);
+        }
         for (k = 0; k < K_with_cons; k++) {
-            all_ecX[c * K_with_cons + k] += resid[idx] * data[(k + 1) * N + idx];
+            all_ecX[c * K_with_cons + k] += e_adj * data[(k + 1) * N + idx];
         }
     }
 
