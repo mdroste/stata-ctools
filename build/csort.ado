@@ -1,11 +1,16 @@
-*! version 1.1.0 05Jan2026
+*! version 1.2.0 10Jan2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
+*!
+*! Supports multiple sort algorithms:
+*!   algorithm(lsd)     - LSD radix sort (default) - best for fixed-width keys
+*!   algorithm(msd)     - MSD radix sort - best for variable-length strings
+*!   algorithm(timsort) - Timsort - best for partially sorted data
 
 program define csort
     version 14.0
 
-    syntax varlist [if] [in], [Verbose TIMEit]
+    syntax varlist [if] [in], [Verbose TIMEit ALGorithm(string)]
 
     * Mark sample
     marksample touse, novarlist
@@ -93,14 +98,40 @@ program define csort
         }
     }
 
+    * Parse algorithm option
+    local alg_code ""
+    if "`algorithm'" != "" {
+        local algorithm = lower("`algorithm'")
+        if "`algorithm'" == "lsd" | "`algorithm'" == "0" {
+            local alg_code "alg=lsd"
+        }
+        else if "`algorithm'" == "msd" | "`algorithm'" == "1" {
+            local alg_code "alg=msd"
+        }
+        else if "`algorithm'" == "timsort" | "`algorithm'" == "tim" | "`algorithm'" == "2" {
+            local alg_code "alg=timsort"
+        }
+        else {
+            di as error "csort: invalid algorithm '`algorithm''"
+            di as error "Valid options: lsd (default), msd, timsort"
+            exit 198
+        }
+    }
+
     if ("`verbose'" != "") {
         di as text "csort: Sorting on variables: `varlist'"
         di as text "       All variables: `allvars'"
         di as text "       Sort key indices: `var_indices'"
+        if "`alg_code'" != "" {
+            di as text "       Algorithm: `algorithm'"
+        }
+        else {
+            di as text "       Algorithm: lsd (default)"
+        }
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices'"
+    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code'"
 
     * Display timing if requested
     if ("`timeit'" != "") {

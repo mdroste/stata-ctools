@@ -1,34 +1,25 @@
 /*
     cmerge_impl.c
-    C-Accelerated Merge for Stata - Full Native Implementation
+    Optimized C-Accelerated Merge for Stata
 
-    High-performance drop-in replacement for Stata's merge command.
-    Performs the entire merge operation in C without falling back to Stata.
+    High-performance merge with MINIMAL data transfer:
+    - Only loads key variables + keepusing variables into C
+    - Master non-key variables are STREAMED (read-permute-write) without loading
+    - Memory usage: O(nobs * (nkeys + nkeepusing)) instead of O(nobs * all_vars)
 
     Architecture (Two-Phase Plugin Call):
     Phase 1 - "load_using":
-        - Called when using dataset is current in Stata
-        - Loads using data into C memory
-        - Sorts using data on key variables (if needed)
-        - Stores in static buffer for phase 2
+        - Load ONLY key + keepusing variables from using dataset
+        - Sort using data on key variables
+        - Store in static cache for phase 2
 
     Phase 2 - "execute":
-        - Called when master dataset is current in Stata
-        - Loads master data into C memory
-        - Sorts master data on key variables (if needed)
-        - Performs sorted merge join in C
-        - Stores merged result back to Stata
+        - Load ONLY master key variables + _orig_row index
+        - Perform sorted merge join to produce output row mapping
+        - Write _merge and keepusing variables directly
+        - STREAM master non-key variables (parallel gather-scatter)
 
-    Merge Types:
-    - 1:1: Each key value appears at most once in each dataset
-    - m:1: Key may appear multiple times in master, once in using
-    - 1:m: Key appears once in master, may appear multiple times in using
-    - m:m: Key may appear multiple times in both (not recommended)
-
-    Thread Safety:
-    - Parallel data loading per variable
-    - Parallel merge output construction by variable
-    - Single-threaded merge join (inherently sequential)
+    Merge Types: 1:1, m:1, 1:m, m:m - all supported with streaming
 */
 
 #include <stdlib.h>
@@ -37,9 +28,14 @@
 #include <stdint.h>
 #include <pthread.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_timer.h"
+#include "ctools_threads.h"
 #include "cmerge_impl.h"
 
 /* ============================================================================
@@ -47,7 +43,7 @@
  * ============================================================================ */
 
 #define CMERGE_MAX_KEYVARS 32
-#define CMERGE_MAX_VARNAME 128
+#define CMERGE_MAX_VARS 1024
 
 /* Merge type codes */
 typedef enum {
@@ -59,64 +55,64 @@ typedef enum {
 
 /* Merge result codes (matches Stata's _merge values) */
 typedef enum {
-    MERGE_RESULT_MASTER_ONLY = 1,   /* master only */
-    MERGE_RESULT_USING_ONLY = 2,    /* using only */
-    MERGE_RESULT_BOTH = 3           /* matched */
+    MERGE_RESULT_MASTER_ONLY = 1,
+    MERGE_RESULT_USING_ONLY = 2,
+    MERGE_RESULT_BOTH = 3
 } cmerge_result_t;
 
-/* Timing uses ctools_timer.h */
 #define cmerge_get_time_ms() ctools_timer_ms()
 
 /* ============================================================================
- * Static buffer for using dataset (persists between plugin calls)
+ * Output row specification - minimal per-row data
  * ============================================================================ */
 
-static stata_data g_using_data;
-static int g_using_loaded = 0;
-static int g_using_nkeys = 0;
-static int g_using_key_indices[CMERGE_MAX_KEYVARS];
-static char g_using_varnames[256][CMERGE_MAX_VARNAME];  /* Variable names */
-static size_t g_using_nvars_saved = 0;
+typedef struct {
+    int64_t master_sorted_row;  /* Row in SORTED master (-1 if using-only) */
+    int64_t using_sorted_row;   /* Row in SORTED using (-1 if master-only) */
+    int8_t merge_result;        /* 1, 2, or 3 */
+} cmerge_output_spec_t;
 
-/* Permutation arrays to track original row indices after sorting */
-static size_t *g_using_sorted_to_original = NULL;  /* Maps sorted idx -> original idx */
-static size_t g_using_perm_size = 0;
+/* ============================================================================
+ * Using data cache (persists between plugin calls)
+ * ============================================================================ */
+
+typedef struct {
+    stata_data keys;            /* Key variables only */
+    stata_data keepusing;       /* Keepusing variables only */
+    size_t nobs;
+    int nkeys;
+    int n_keepusing;
+    int loaded;
+} cmerge_using_cache_t;
+
+static cmerge_using_cache_t g_using_cache = {0};
 
 /* ============================================================================
  * Key comparison functions
  * ============================================================================ */
 
-/*
-    Compare two rows by their key variables.
-    Returns: -1 if row_a < row_b, 0 if equal, 1 if row_a > row_b
-*/
 static int cmerge_compare_keys(stata_data *data_a, size_t row_a,
                                 stata_data *data_b, size_t row_b,
-                                int *key_indices_a, int *key_indices_b,
                                 int nkeys)
 {
     for (int k = 0; k < nkeys; k++) {
-        int idx_a = key_indices_a[k];
-        int idx_b = key_indices_b[k];
-        stata_variable *var_a = &data_a->vars[idx_a];
-        stata_variable *var_b = &data_b->vars[idx_b];
+        stata_variable *var_a = &data_a->vars[k];
+        stata_variable *var_b = &data_b->vars[k];
 
         if (var_a->type == STATA_TYPE_DOUBLE) {
             double val_a = var_a->data.dbl[row_a];
             double val_b = var_b->data.dbl[row_b];
 
-            /* Handle missing values - they sort high */
             int miss_a = SF_is_missing(val_a);
             int miss_b = SF_is_missing(val_b);
 
-            if (miss_a && miss_b) continue;  /* Both missing = equal */
-            if (miss_a) return 1;            /* Missing sorts high */
+            if (miss_a && miss_b) continue;
+            if (miss_a) return 1;
             if (miss_b) return -1;
 
             if (val_a < val_b) return -1;
             if (val_a > val_b) return 1;
         } else {
-            /* String comparison */
             char *str_a = var_a->data.str[row_a];
             char *str_b = var_b->data.str[row_b];
 
@@ -127,251 +123,195 @@ static int cmerge_compare_keys(stata_data *data_a, size_t row_a,
             if (cmp != 0) return (cmp < 0) ? -1 : 1;
         }
     }
-    return 0;  /* All keys equal */
-}
-
-/*
-    Compare a row's keys within single dataset
-*/
-static int cmerge_compare_keys_internal(stata_data *data,
-                                         size_t row_a, size_t row_b,
-                                         int *key_indices, int nkeys)
-{
-    return cmerge_compare_keys(data, row_a, data, row_b,
-                               key_indices, key_indices, nkeys);
-}
-
-/* ============================================================================
- * Merge output row tracking
- * ============================================================================ */
-
-typedef struct {
-    size_t master_row;     /* Index in master (after sorting), or SIZE_MAX if none */
-    size_t using_row;      /* Index in using (after sorting), or SIZE_MAX if none */
-    int merge_result;      /* _merge value */
-    size_t order_key;      /* For preserve_order: original row position */
-} cmerge_output_row_t;
-
-/*
-    Compare two output rows by order_key for qsort
-*/
-static int compare_output_rows_by_order(const void *a, const void *b)
-{
-    const cmerge_output_row_t *row_a = (const cmerge_output_row_t *)a;
-    const cmerge_output_row_t *row_b = (const cmerge_output_row_t *)b;
-
-    if (row_a->order_key < row_b->order_key) return -1;
-    if (row_a->order_key > row_b->order_key) return 1;
     return 0;
 }
 
-/*
-    Create a permutation array mapping sorted indices to original indices.
-    Must be called BEFORE sorting. Returns array of original indices.
-*/
-static size_t *create_identity_perm(size_t n)
+static int cmerge_compare_keys_same(stata_data *data, size_t row_a, size_t row_b, int nkeys)
 {
-    size_t *perm = malloc(n * sizeof(size_t));
-    if (!perm) return NULL;
-    for (size_t i = 0; i < n; i++) {
-        perm[i] = i;
-    }
-    return perm;
+    return cmerge_compare_keys(data, row_a, data, row_b, nkeys);
 }
 
 /* ============================================================================
- * Sorted merge join algorithm
+ * Sorted merge join - produces output specifications
  * ============================================================================ */
 
-/*
-    Perform sorted merge join.
-    Both datasets must be sorted on their key variables.
-
-    Returns: Number of output rows, or -1 on error
-*/
-static int64_t cmerge_sorted_merge_join(
-    stata_data *master, int *master_key_indices,
-    stata_data *using_data, int *using_key_indices,
+static int64_t cmerge_sorted_join(
+    stata_data *master_keys, stata_data *using_keys,
     int nkeys, cmerge_type_t merge_type,
-    cmerge_output_row_t **output_rows)
+    cmerge_output_spec_t **output_specs_out)
 {
-    size_t m_nobs = master->nobs;
-    size_t u_nobs = using_data->nobs;
+    size_t m_nobs = master_keys->nobs;
+    size_t u_nobs = using_keys->nobs;
 
-    /* Estimate output size - for m:m could be larger */
-    size_t est_output = m_nobs + u_nobs;
-    size_t output_capacity = est_output;
-    size_t output_count = 0;
+    /* Initial allocation estimate */
+    size_t capacity;
+    switch (merge_type) {
+        case MERGE_1_1:
+            capacity = (m_nobs > u_nobs ? m_nobs : u_nobs) + (m_nobs < u_nobs ? m_nobs : u_nobs) / 4;
+            break;
+        case MERGE_M_1:
+            capacity = m_nobs + u_nobs / 4;
+            break;
+        case MERGE_1_M:
+            capacity = u_nobs + m_nobs / 4;
+            break;
+        case MERGE_M_M:
+        default:
+            capacity = m_nobs + u_nobs;
+            break;
+    }
+    if (capacity < 1024) capacity = 1024;
 
-    cmerge_output_row_t *out = malloc(output_capacity * sizeof(cmerge_output_row_t));
-    if (!out) return -1;
+    cmerge_output_spec_t *specs = malloc(capacity * sizeof(cmerge_output_spec_t));
+    if (!specs) return -1;
 
+    size_t count = 0;
     size_t m_idx = 0;
     size_t u_idx = 0;
 
     while (m_idx < m_nobs || u_idx < u_nobs) {
-        /* Grow output array if needed */
-        if (output_count >= output_capacity) {
-            output_capacity *= 2;
-            cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-            if (!new_out) {
-                free(out);
-                return -1;
-            }
-            out = new_out;
+        /* Grow if needed */
+        if (count >= capacity) {
+            capacity *= 2;
+            cmerge_output_spec_t *new_specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+            if (!new_specs) { free(specs); return -1; }
+            specs = new_specs;
         }
 
         if (m_idx >= m_nobs) {
-            /* Master exhausted, output remaining using rows */
-            out[output_count].master_row = SIZE_MAX;
-            out[output_count].using_row = u_idx;
-            out[output_count].merge_result = MERGE_RESULT_USING_ONLY;
-            output_count++;
+            /* Master exhausted - remaining using rows */
+            specs[count].master_sorted_row = -1;
+            specs[count].using_sorted_row = (int64_t)u_idx;
+            specs[count].merge_result = MERGE_RESULT_USING_ONLY;
+            count++;
             u_idx++;
         }
         else if (u_idx >= u_nobs) {
-            /* Using exhausted, output remaining master rows */
-            out[output_count].master_row = m_idx;
-            out[output_count].using_row = SIZE_MAX;
-            out[output_count].merge_result = MERGE_RESULT_MASTER_ONLY;
-            output_count++;
+            /* Using exhausted - remaining master rows */
+            specs[count].master_sorted_row = (int64_t)m_idx;
+            specs[count].using_sorted_row = -1;
+            specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
+            count++;
             m_idx++;
         }
         else {
-            /* Compare keys */
-            int cmp = cmerge_compare_keys(master, m_idx,
-                                          using_data, u_idx,
-                                          master_key_indices,
-                                          using_key_indices,
-                                          nkeys);
+            int cmp = cmerge_compare_keys(master_keys, m_idx, using_keys, u_idx, nkeys);
 
             if (cmp < 0) {
-                /* Master key < Using key: master only */
-                out[output_count].master_row = m_idx;
-                out[output_count].using_row = SIZE_MAX;
-                out[output_count].merge_result = MERGE_RESULT_MASTER_ONLY;
-                    output_count++;
+                /* Master only */
+                specs[count].master_sorted_row = (int64_t)m_idx;
+                specs[count].using_sorted_row = -1;
+                specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
+                count++;
                 m_idx++;
             }
             else if (cmp > 0) {
-                /* Master key > Using key: using only */
-                out[output_count].master_row = SIZE_MAX;
-                out[output_count].using_row = u_idx;
-                out[output_count].merge_result = MERGE_RESULT_USING_ONLY;
-                    output_count++;
+                /* Using only */
+                specs[count].master_sorted_row = -1;
+                specs[count].using_sorted_row = (int64_t)u_idx;
+                specs[count].merge_result = MERGE_RESULT_USING_ONLY;
+                count++;
                 u_idx++;
             }
             else {
-                /* Keys match - handle based on merge type */
+                /* Keys match - count groups */
                 size_t m_start = m_idx;
                 size_t u_start = u_idx;
 
-                /* Count matching rows in master */
                 size_t m_count = 1;
                 while (m_idx + m_count < m_nobs &&
-                       cmerge_compare_keys_internal(master, m_start,
-                                                    m_idx + m_count,
-                                                    master_key_indices,
-                                                    nkeys) == 0) {
+                       cmerge_compare_keys_same(master_keys, m_start, m_idx + m_count, nkeys) == 0) {
                     m_count++;
                 }
 
-                /* Count matching rows in using */
                 size_t u_count = 1;
                 while (u_idx + u_count < u_nobs &&
-                       cmerge_compare_keys_internal(using_data, u_start,
-                                                    u_idx + u_count,
-                                                    using_key_indices,
-                                                    nkeys) == 0) {
+                       cmerge_compare_keys_same(using_keys, u_start, u_idx + u_count, nkeys) == 0) {
                     u_count++;
                 }
 
                 /* Generate output based on merge type */
                 switch (merge_type) {
                     case MERGE_1_1:
-                        /* 1:1 - should have exactly one match each */
-                        out[output_count].master_row = m_start;
-                        out[output_count].using_row = u_start;
-                        out[output_count].merge_result = MERGE_RESULT_BOTH;
-                        output_count++;
+                        if (count >= capacity) {
+                            capacity *= 2;
+                            specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                            if (!specs) return -1;
+                        }
+                        specs[count].master_sorted_row = (int64_t)m_start;
+                        specs[count].using_sorted_row = (int64_t)u_start;
+                        specs[count].merge_result = MERGE_RESULT_BOTH;
+                        count++;
                         break;
 
                     case MERGE_M_1:
-                        /* m:1 - multiple master rows map to one using row */
+                        /* Multiple master rows map to one using row */
                         for (size_t i = 0; i < m_count; i++) {
-                            if (output_count >= output_capacity) {
-                                output_capacity *= 2;
-                                cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-                                if (!new_out) { free(out); return -1; }
-                                out = new_out;
+                            if (count >= capacity) {
+                                capacity *= 2;
+                                specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                                if (!specs) return -1;
                             }
-                            out[output_count].master_row = m_start + i;
-                            out[output_count].using_row = u_start;
-                            out[output_count].merge_result = MERGE_RESULT_BOTH;
-                            output_count++;
+                            specs[count].master_sorted_row = (int64_t)(m_start + i);
+                            specs[count].using_sorted_row = (int64_t)u_start;
+                            specs[count].merge_result = MERGE_RESULT_BOTH;
+                            count++;
                         }
                         break;
 
                     case MERGE_1_M:
-                        /* 1:m - one master row maps to multiple using rows */
+                        /* One master row maps to multiple using rows */
                         for (size_t i = 0; i < u_count; i++) {
-                            if (output_count >= output_capacity) {
-                                output_capacity *= 2;
-                                cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-                                if (!new_out) { free(out); return -1; }
-                                out = new_out;
+                            if (count >= capacity) {
+                                capacity *= 2;
+                                specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                                if (!specs) return -1;
                             }
-                            out[output_count].master_row = m_start;
-                            out[output_count].using_row = u_start + i;
-                            out[output_count].merge_result = MERGE_RESULT_BOTH;
-                                output_count++;
+                            specs[count].master_sorted_row = (int64_t)m_start;
+                            specs[count].using_sorted_row = (int64_t)(u_start + i);
+                            specs[count].merge_result = MERGE_RESULT_BOTH;
+                            count++;
                         }
                         break;
 
                     case MERGE_M_M:
-                        /* m:m - sequential pairing within groups (Stata behavior)
-                           First master matches first using, second to second, etc.
-                           Extra rows on either side become unmatched. */
+                        /* Sequential pairing within groups */
                         {
                             size_t pairs = (m_count < u_count) ? m_count : u_count;
-                            /* Output matched pairs */
                             for (size_t i = 0; i < pairs; i++) {
-                                if (output_count >= output_capacity) {
-                                    output_capacity *= 2;
-                                    cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-                                    if (!new_out) { free(out); return -1; }
-                                    out = new_out;
+                                if (count >= capacity) {
+                                    capacity *= 2;
+                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                                    if (!specs) return -1;
                                 }
-                                out[output_count].master_row = m_start + i;
-                                out[output_count].using_row = u_start + i;
-                                out[output_count].merge_result = MERGE_RESULT_BOTH;
-                                    output_count++;
+                                specs[count].master_sorted_row = (int64_t)(m_start + i);
+                                specs[count].using_sorted_row = (int64_t)(u_start + i);
+                                specs[count].merge_result = MERGE_RESULT_BOTH;
+                                count++;
                             }
-                            /* Output excess master rows as master-only */
+                            /* Excess master rows */
                             for (size_t i = pairs; i < m_count; i++) {
-                                if (output_count >= output_capacity) {
-                                    output_capacity *= 2;
-                                    cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-                                    if (!new_out) { free(out); return -1; }
-                                    out = new_out;
+                                if (count >= capacity) {
+                                    capacity *= 2;
+                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                                    if (!specs) return -1;
                                 }
-                                out[output_count].master_row = m_start + i;
-                                out[output_count].using_row = SIZE_MAX;
-                                out[output_count].merge_result = MERGE_RESULT_MASTER_ONLY;
-                                    output_count++;
+                                specs[count].master_sorted_row = (int64_t)(m_start + i);
+                                specs[count].using_sorted_row = -1;
+                                specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
+                                count++;
                             }
-                            /* Output excess using rows as using-only */
+                            /* Excess using rows */
                             for (size_t i = pairs; i < u_count; i++) {
-                                if (output_count >= output_capacity) {
-                                    output_capacity *= 2;
-                                    cmerge_output_row_t *new_out = realloc(out, output_capacity * sizeof(cmerge_output_row_t));
-                                    if (!new_out) { free(out); return -1; }
-                                    out = new_out;
+                                if (count >= capacity) {
+                                    capacity *= 2;
+                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
+                                    if (!specs) return -1;
                                 }
-                                out[output_count].master_row = SIZE_MAX;
-                                out[output_count].using_row = u_start + i;
-                                out[output_count].merge_result = MERGE_RESULT_USING_ONLY;
-                                                    output_count++;
+                                specs[count].master_sorted_row = -1;
+                                specs[count].using_sorted_row = (int64_t)(u_start + i);
+                                specs[count].merge_result = MERGE_RESULT_USING_ONLY;
+                                count++;
                             }
                         }
                         break;
@@ -383,300 +323,322 @@ static int64_t cmerge_sorted_merge_join(
         }
     }
 
-    *output_rows = out;
-    return (int64_t)output_count;
+    *output_specs_out = specs;
+    return (int64_t)count;
 }
 
 /* ============================================================================
- * Parallel output variable construction
+ * Streaming thread for master non-key variables
  * ============================================================================ */
 
 typedef struct {
-    cmerge_output_row_t *output_rows;
+    int stata_var_idx;              /* 1-based Stata variable index */
+    int64_t *master_orig_rows;      /* master_orig_rows[i] = original row for output i */
     size_t output_nobs;
-    stata_data *source;       /* Master or using data */
-    int source_var_idx;       /* Variable index in source */
-    int is_master;            /* 1 if from master, 0 if from using */
-    stata_variable *out_var;  /* Output variable to populate */
-    /* Alternative source for fallback (used for key vars and overlapping vars) */
-    stata_data *alt_source;   /* Alternative data source (using for master vars) */
-    int alt_var_idx;          /* Variable index in alternative source */
-    int has_fallback;         /* 1 if alt_source should be used for using-only rows */
-} construct_var_args_t;
+    int is_key;                     /* Is this a key variable? */
+    int key_idx;                    /* If key, which key (0-based in cache) */
+    cmerge_output_spec_t *specs;    /* For using key fallback */
+    int success;
+} stream_var_args_t;
 
-static void *construct_var_thread(void *arg)
+static void *stream_master_var_thread(void *arg)
 {
-    construct_var_args_t *args = (construct_var_args_t *)arg;
-    cmerge_output_row_t *rows = args->output_rows;
-    size_t nobs = args->output_nobs;
-    stata_variable *src_var = &args->source->vars[args->source_var_idx];
-    stata_variable *out = args->out_var;
+    stream_var_args_t *a = (stream_var_args_t *)arg;
+    size_t output_nobs = a->output_nobs;
+    ST_int var_idx = (ST_int)a->stata_var_idx;
+    int64_t *src_rows = a->master_orig_rows;
+    int is_string = SF_var_is_string(var_idx);
 
-    out->type = src_var->type;
-    out->nobs = nobs;
-    out->str_maxlen = src_var->str_maxlen;
+    a->success = 0;
 
-    /* For master variables with a fallback (key vars or overlapping vars),
-       we need to pull from using data when master_row is SIZE_MAX */
-    int has_fallback = args->has_fallback;
-    stata_variable *alt_var = NULL;
-    if (has_fallback && args->alt_source) {
-        alt_var = &args->alt_source->vars[args->alt_var_idx];
-    }
+    if (is_string) {
+        char **buf = malloc(output_nobs * sizeof(char *));
+        if (!buf) return (void *)1;
 
-    if (src_var->type == STATA_TYPE_DOUBLE) {
-        out->data.dbl = malloc(nobs * sizeof(double));
-        if (!out->data.dbl) return NULL;
+        char strbuf[2048];
 
-        double missing = SV_missval;
-        double *src_data = src_var->data.dbl;
-        double *alt_data = (has_fallback && alt_var) ? alt_var->data.dbl : NULL;
-        double *dst_data = out->data.dbl;
-        int is_master = args->is_master;
-
-        for (size_t i = 0; i < nobs; i++) {
-            size_t master_row = rows[i].master_row;
-            size_t using_row = rows[i].using_row;
-
-            if (is_master) {
-                /* Master variable: use master if available, else fallback to using */
-                if (master_row != SIZE_MAX) {
-                    dst_data[i] = src_data[master_row];
-                } else if (alt_data && using_row != SIZE_MAX) {
-                    dst_data[i] = alt_data[using_row];
+        /* GATHER from original master positions */
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (src_rows[i] >= 0) {
+                SF_sdata(var_idx, (ST_int)(src_rows[i] + 1), strbuf);
+                buf[i] = strdup(strbuf);
+            } else if (a->is_key && g_using_cache.loaded) {
+                /* Using-only row with key fallback */
+                int64_t using_row = a->specs[i].using_sorted_row;
+                if (using_row >= 0 && a->key_idx >= 0) {
+                    char *s = g_using_cache.keys.vars[a->key_idx].data.str[using_row];
+                    buf[i] = strdup(s ? s : "");
                 } else {
-                    dst_data[i] = missing;
+                    buf[i] = strdup("");
                 }
             } else {
-                /* Using variable: use using data */
-                dst_data[i] = (using_row == SIZE_MAX) ? missing : src_data[using_row];
+                buf[i] = strdup("");
+            }
+            if (!buf[i]) {
+                for (size_t k = 0; k < i; k++) free(buf[k]);
+                free(buf);
+                return (void *)1;
             }
         }
+
+        /* SCATTER to output positions */
+        for (size_t i = 0; i < output_nobs; i++) {
+            SF_sstore(var_idx, (ST_int)(i + 1), buf[i]);
+            free(buf[i]);
+        }
+        free(buf);
+
     } else {
-        out->data.str = malloc(nobs * sizeof(char *));
-        if (!out->data.str) return NULL;
+        double *buf = malloc(output_nobs * sizeof(double));
+        if (!buf) return (void *)1;
 
-        char **src_data = src_var->data.str;
-        char **alt_data = (has_fallback && alt_var) ? alt_var->data.str : NULL;
-        char **dst_data = out->data.str;
-        int is_master = args->is_master;
-
-        for (size_t i = 0; i < nobs; i++) {
-            size_t master_row = rows[i].master_row;
-            size_t using_row = rows[i].using_row;
-
-            if (is_master) {
-                /* Master variable: use master if available, else fallback to using */
-                if (master_row != SIZE_MAX) {
-                    char *s = src_data[master_row];
-                    dst_data[i] = strdup(s ? s : "");
-                } else if (alt_data && using_row != SIZE_MAX) {
-                    char *s = alt_data[using_row];
-                    dst_data[i] = strdup(s ? s : "");
+        /* GATHER from original master positions */
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (src_rows[i] >= 0) {
+                SF_vdata(var_idx, (ST_int)(src_rows[i] + 1), &buf[i]);
+            } else if (a->is_key && g_using_cache.loaded) {
+                /* Using-only row with key fallback */
+                int64_t using_row = a->specs[i].using_sorted_row;
+                if (using_row >= 0 && a->key_idx >= 0) {
+                    buf[i] = g_using_cache.keys.vars[a->key_idx].data.dbl[using_row];
                 } else {
-                    dst_data[i] = strdup("");
+                    buf[i] = SV_missval;
                 }
             } else {
-                /* Using variable: use using data */
-                if (using_row == SIZE_MAX) {
-                    dst_data[i] = strdup("");
-                } else {
-                    char *s = src_data[using_row];
-                    dst_data[i] = strdup(s ? s : "");
-                }
+                buf[i] = SV_missval;
             }
         }
+
+        /* SCATTER to output positions (unrolled) */
+        size_t i_end = output_nobs - (output_nobs % 8);
+        for (size_t i = 0; i < i_end; i += 8) {
+            SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
+            SF_vstore(var_idx, (ST_int)(i + 2), buf[i + 1]);
+            SF_vstore(var_idx, (ST_int)(i + 3), buf[i + 2]);
+            SF_vstore(var_idx, (ST_int)(i + 4), buf[i + 3]);
+            SF_vstore(var_idx, (ST_int)(i + 5), buf[i + 4]);
+            SF_vstore(var_idx, (ST_int)(i + 6), buf[i + 5]);
+            SF_vstore(var_idx, (ST_int)(i + 7), buf[i + 6]);
+            SF_vstore(var_idx, (ST_int)(i + 8), buf[i + 7]);
+        }
+        for (size_t i = i_end; i < output_nobs; i++) {
+            SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
+        }
+
+        free(buf);
     }
 
-    return arg;  /* Success */
+    a->success = 1;
+    return NULL;
 }
 
 /* ============================================================================
- * Phase 1: Load using dataset
+ * Phase 1: Load using dataset (keys + keepusing only)
  * ============================================================================ */
 
 static ST_retcode cmerge_load_using(const char *args)
 {
     char msg[256];
     ST_retcode rc;
-    double t_start, t_end;
 
-    /* Parse args: "nkeys key1 key2 ... [sorted] [verbose]" */
+    /* Parse: "load_using <nkeys> <key_idx1>...<key_idxN> n_keepusing <count>
+              keepusing_indices <idx1>...<idxM> [verbose]" */
     char args_copy[4096];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
     int nkeys = 0;
-    int sorted = 0;
+    int key_indices[CMERGE_MAX_KEYVARS];
+    int n_keepusing = 0;
+    int keepusing_indices[CMERGE_MAX_VARS];
     int verbose = 0;
-    int arg_idx = 0;
 
     char *token = strtok(args_copy, " ");
+    int arg_idx = 0;
+    int in_keepusing_indices = 0;
+    int keepusing_idx = 0;
+
     while (token != NULL) {
         if (arg_idx == 0) {
             nkeys = atoi(token);
             if (nkeys > CMERGE_MAX_KEYVARS) nkeys = CMERGE_MAX_KEYVARS;
         }
         else if (arg_idx <= nkeys) {
-            /* Key variable index (1-based from Stata, convert to 0-based) */
-            g_using_key_indices[arg_idx - 1] = atoi(token) - 1;
+            key_indices[arg_idx - 1] = atoi(token);
         }
-        else if (strcmp(token, "sorted") == 0) {
-            sorted = 1;
+        else if (strcmp(token, "n_keepusing") == 0) {
+            token = strtok(NULL, " ");
+            if (token) n_keepusing = atoi(token);
+        }
+        else if (strcmp(token, "keepusing_indices") == 0) {
+            in_keepusing_indices = 1;
+            keepusing_idx = 0;
+        }
+        else if (in_keepusing_indices && keepusing_idx < n_keepusing) {
+            keepusing_indices[keepusing_idx++] = atoi(token);
         }
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
         }
-        /* Ignore other options (mergetype, keep_excludes_using) - no longer used */
         arg_idx++;
         token = strtok(NULL, " ");
     }
 
-    g_using_nkeys = nkeys;
-
-    /* Free any previously loaded using data */
-    if (g_using_loaded) {
-        stata_data_free(&g_using_data);
-        g_using_loaded = 0;
+    /* Free any previous cache */
+    if (g_using_cache.loaded) {
+        stata_data_free(&g_using_cache.keys);
+        stata_data_free(&g_using_cache.keepusing);
+        g_using_cache.loaded = 0;
     }
 
-    /* Load using data from Stata */
+    double t_start = cmerge_get_time_ms();
+
+    /* Load ONLY key variables */
     if (verbose) {
-        SF_display("cmerge: Loading using dataset into C...\n");
-    }
-    t_start = cmerge_get_time_ms();
-
-    size_t nvars = SF_nvars();
-    g_using_nvars_saved = nvars;
-
-    /* Save variable names for later use */
-    for (size_t v = 0; v < nvars && v < 256; v++) {
-        /* Get variable name via macro - variable names are 1-indexed */
-        /* We'll use a simple approach: store the index, .ado passes names */
-        g_using_varnames[v][0] = '\0';
+        SF_display("cmerge: Loading using keys...\n");
     }
 
-    stata_data_init(&g_using_data);
-    rc = ctools_data_load(&g_using_data, nvars);
-
+    rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
     if (rc != STATA_OK) {
-        SF_error("cmerge: Failed to load using dataset\n");
+        SF_error("cmerge: Failed to load using keys\n");
         return 459;
     }
 
-    t_end = cmerge_get_time_ms();
+    /* Load ONLY keepusing variables */
+    if (n_keepusing > 0) {
+        if (verbose) {
+            SF_display("cmerge: Loading keepusing variables...\n");
+        }
+        rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+        if (rc != STATA_OK) {
+            stata_data_free(&g_using_cache.keys);
+            SF_error("cmerge: Failed to load keepusing variables\n");
+            return 459;
+        }
+    } else {
+        stata_data_init(&g_using_cache.keepusing);
+    }
+
+    g_using_cache.nobs = g_using_cache.keys.nobs;
+    g_using_cache.nkeys = nkeys;
+    g_using_cache.n_keepusing = n_keepusing;
+
+    double t_load = cmerge_get_time_ms() - t_start;
+
+    /* Sort using data on keys */
+    if (verbose) {
+        SF_display("cmerge: Sorting using data...\n");
+    }
+    double t_sort_start = cmerge_get_time_ms();
+
+    int *sort_vars = malloc(nkeys * sizeof(int));
+    for (int i = 0; i < nkeys; i++) {
+        sort_vars[i] = i + 1;  /* 1-based within keys structure */
+    }
+
+    /* Allocate permutation array to capture ordering before it's applied */
+    size_t nobs = g_using_cache.nobs;
+    size_t *perm = malloc(nobs * sizeof(size_t));
+    if (!perm) {
+        free(sort_vars);
+        stata_data_free(&g_using_cache.keys);
+        stata_data_free(&g_using_cache.keepusing);
+        SF_error("cmerge: Memory allocation failed for permutation\n");
+        return 920;
+    }
+
+    /* Use _with_perm version to get permutation BEFORE it's reset to identity */
+    rc = ctools_sort_radix_lsd_with_perm(&g_using_cache.keys, sort_vars, nkeys, perm);
+    if (rc != STATA_OK) {
+        free(perm);
+        free(sort_vars);
+        stata_data_free(&g_using_cache.keys);
+        stata_data_free(&g_using_cache.keepusing);
+        SF_error("cmerge: Failed to sort using data\n");
+        return 459;
+    }
+
+    /* Apply same permutation to keepusing
+       perm[sorted_idx] = original_idx, so:
+       new_data[sorted_idx] = old_data[perm[sorted_idx]] */
+    if (n_keepusing > 0) {
+        for (int v = 0; v < n_keepusing; v++) {
+            stata_variable *var = &g_using_cache.keepusing.vars[v];
+            if (var->type == STATA_TYPE_DOUBLE) {
+                double *new_data = malloc(nobs * sizeof(double));
+                for (size_t i = 0; i < nobs; i++) {
+                    new_data[i] = var->data.dbl[perm[i]];
+                }
+                free(var->data.dbl);
+                var->data.dbl = new_data;
+            } else {
+                char **new_data = malloc(nobs * sizeof(char *));
+                for (size_t i = 0; i < nobs; i++) {
+                    new_data[i] = var->data.str[perm[i]];
+                }
+                free(var->data.str);
+                var->data.str = new_data;
+            }
+        }
+    }
+
+    free(perm);
+    free(sort_vars);
+
+    double t_sort = cmerge_get_time_ms() - t_sort_start;
+    double t_total = cmerge_get_time_ms() - t_start;
+
+    g_using_cache.loaded = 1;
 
     if (verbose) {
-        snprintf(msg, sizeof(msg), "  Loaded %zu obs, %zu vars in %.1f ms\n",
-                 g_using_data.nobs, g_using_data.nvars, t_end - t_start);
+        snprintf(msg, sizeof(msg),
+                 "  Loaded %zu obs (%d keys, %d keepusing) in %.1f ms, sorted in %.1f ms\n",
+                 g_using_cache.nobs, nkeys, n_keepusing, t_load, t_sort);
         SF_display(msg);
     }
 
-    /* Sort if needed for sorted merge join */
-    if (!sorted && g_using_data.nobs > 1) {
-        if (verbose) {
-            SF_display("cmerge: Sorting using dataset...\n");
-        }
-        t_start = cmerge_get_time_ms();
-
-        /* Convert 0-based to 1-based for sort function */
-        int *sort_vars = malloc(nkeys * sizeof(int));
-        for (int i = 0; i < nkeys; i++) {
-            sort_vars[i] = g_using_key_indices[i] + 1;
-        }
-
-        /* Allocate permutation array to track original indices */
-        if (g_using_sorted_to_original != NULL) {
-            free(g_using_sorted_to_original);
-        }
-        g_using_sorted_to_original = malloc(g_using_data.nobs * sizeof(size_t));
-        g_using_perm_size = g_using_data.nobs;
-
-        if (g_using_sorted_to_original == NULL) {
-            SF_error("cmerge: Failed to allocate permutation array\n");
-            free(sort_vars);
-            stata_data_free(&g_using_data);
-            return 920;
-        }
-
-        rc = ctools_sort_radix_lsd_with_perm(&g_using_data, sort_vars, nkeys,
-                                              g_using_sorted_to_original);
-        free(sort_vars);
-
-        if (rc != STATA_OK) {
-            SF_error("cmerge: Failed to sort using dataset\n");
-            free(g_using_sorted_to_original);
-            g_using_sorted_to_original = NULL;
-            stata_data_free(&g_using_data);
-            return 459;
-        }
-
-        t_end = cmerge_get_time_ms();
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", t_end - t_start);
-            SF_display(msg);
-        }
-    } else {
-        /* Data is already sorted - create identity permutation */
-        if (g_using_sorted_to_original != NULL) {
-            free(g_using_sorted_to_original);
-        }
-        g_using_sorted_to_original = create_identity_perm(g_using_data.nobs);
-        g_using_perm_size = g_using_data.nobs;
-    }
-
-    g_using_loaded = 1;
-
-    /* Return using nobs and nvars via scalars */
-    SF_scal_save("_cmerge_using_nobs", (double)g_using_data.nobs);
-    SF_scal_save("_cmerge_using_nvars", (double)g_using_data.nvars);
+    SF_scal_save("_cmerge_using_nobs", (double)g_using_cache.nobs);
 
     return 0;
 }
 
 /* ============================================================================
- * Phase 2: Execute merge
+ * Phase 2: Execute merge with streaming
  * ============================================================================ */
 
 static ST_retcode cmerge_execute(const char *args)
 {
     char msg[512];
     ST_retcode rc;
-    double t_start, t_end, t_total_start;
+    double t_start, t_total_start;
 
     t_total_start = cmerge_get_time_ms();
 
-    /* Check that using data is loaded */
-    if (!g_using_loaded) {
+    if (!g_using_cache.loaded) {
         SF_error("cmerge: Using data not loaded. Call load_using first.\n");
         return 459;
     }
 
-    /* Parse args: "merge_type nkeys key1 key2 ... [sorted] [verbose] [nogenerate] [master_nobs N] [master_nvars N]" */
-    char args_copy[4096];
+    /* Parse arguments */
+    char args_copy[8192];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
     cmerge_type_t merge_type = MERGE_1_1;
     int nkeys = 0;
     int master_key_indices[CMERGE_MAX_KEYVARS];
-    int sorted = 0;
+    int orig_row_idx = 0;
+    size_t master_nobs = 0;
+    size_t master_nvars = 0;
+    int n_keepusing = 0;
+    int keepusing_placeholder_indices[CMERGE_MAX_VARS];
+    int merge_var_idx = 0;
+    int preserve_order = 0;
     int verbose = 0;
-    int nogenerate = 0;
-    size_t actual_master_nobs = 0;  /* If set, use this instead of SF_nobs() for master */
-    size_t actual_master_nvars = 0; /* Original master nvars before placeholders added */
-
-    /* Overlap mapping: master vars that also exist in using (non-key)
-       Allows fallback to using data for using-only rows */
-    #define MAX_OVERLAP_VARS 256
-    int overlap_master_idx[MAX_OVERLAP_VARS];  /* Master var indices */
-    int overlap_using_idx[MAX_OVERLAP_VARS];   /* Corresponding using var indices */
-    int overlap_count = 0;
-
-    /* Order preservation flag: 1 = preserve master order (default), 0 = sort by keys */
-    int preserve_order = 1;
 
     int arg_idx = 0;
+    int in_keepusing_placeholders = 0;
+    int keepusing_idx = 0;
 
     char *token = strtok(args_copy, " ");
     while (token != NULL) {
@@ -688,452 +650,380 @@ static ST_retcode cmerge_execute(const char *args)
             if (nkeys > CMERGE_MAX_KEYVARS) nkeys = CMERGE_MAX_KEYVARS;
         }
         else if (arg_idx >= 2 && arg_idx < 2 + nkeys) {
-            master_key_indices[arg_idx - 2] = atoi(token) - 1;  /* 0-based */
+            master_key_indices[arg_idx - 2] = atoi(token);
         }
-        else if (strcmp(token, "sorted") == 0) {
-            sorted = 1;
+        else if (strcmp(token, "orig_row_idx") == 0) {
+            token = strtok(NULL, " ");
+            if (token) orig_row_idx = atoi(token);
+        }
+        else if (strcmp(token, "master_nobs") == 0) {
+            token = strtok(NULL, " ");
+            if (token) master_nobs = (size_t)atol(token);
+        }
+        else if (strcmp(token, "master_nvars") == 0) {
+            token = strtok(NULL, " ");
+            if (token) master_nvars = (size_t)atol(token);
+        }
+        else if (strcmp(token, "n_keepusing") == 0) {
+            token = strtok(NULL, " ");
+            if (token) n_keepusing = atoi(token);
+        }
+        else if (strcmp(token, "keepusing_placeholders") == 0) {
+            in_keepusing_placeholders = 1;
+            keepusing_idx = 0;
+        }
+        else if (in_keepusing_placeholders && keepusing_idx < n_keepusing) {
+            keepusing_placeholder_indices[keepusing_idx++] = atoi(token);
+        }
+        else if (strcmp(token, "merge_var_idx") == 0) {
+            token = strtok(NULL, " ");
+            if (token) merge_var_idx = atoi(token);
+            in_keepusing_placeholders = 0;  /* End of keepusing list */
+        }
+        else if (strcmp(token, "preserve_order") == 0) {
+            token = strtok(NULL, " ");
+            if (token) preserve_order = atoi(token);
         }
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
         }
-        else if (strcmp(token, "nogenerate") == 0) {
-            nogenerate = 1;
-        }
-        else if (strcmp(token, "master_nobs") == 0) {
-            /* Next token is the actual master nobs */
-            token = strtok(NULL, " ");
-            if (token) {
-                actual_master_nobs = (size_t)atol(token);
-            }
-        }
-        else if (strcmp(token, "master_nvars") == 0) {
-            /* Next token is the original master nvars (before placeholders) */
-            token = strtok(NULL, " ");
-            if (token) {
-                actual_master_nvars = (size_t)atol(token);
-            }
-        }
-        else if (strcmp(token, "overlap_map") == 0) {
-            /* Parse overlap mapping: count followed by m:u pairs */
-            token = strtok(NULL, " ");
-            if (token) {
-                overlap_count = atoi(token);
-                if (overlap_count > MAX_OVERLAP_VARS) overlap_count = MAX_OVERLAP_VARS;
-                for (int i = 0; i < overlap_count; i++) {
-                    token = strtok(NULL, " ");
-                    if (token) {
-                        /* Parse "m:u" format */
-                        char *colon = strchr(token, ':');
-                        if (colon) {
-                            *colon = '\0';
-                            overlap_master_idx[i] = atoi(token);
-                            overlap_using_idx[i] = atoi(colon + 1);
-                        }
-                    }
-                }
-            }
-        }
-        else if (strcmp(token, "preserve_order") == 0) {
-            /* Next token is 0 or 1 */
-            token = strtok(NULL, " ");
-            if (token) {
-                preserve_order = atoi(token);
-            }
-        }
-        /* Ignore other options (keep_excludes_using) - no longer used */
         arg_idx++;
         token = strtok(NULL, " ");
     }
 
-    /* Load master data */
-    if (verbose) {
-        SF_display("cmerge: Loading master dataset...\n");
-    }
+    /* ===================================================================
+     * Step 1: Load ONLY master keys + _orig_row
+     * =================================================================== */
+
+    if (verbose) SF_display("cmerge: Loading master keys only...\n");
     t_start = cmerge_get_time_ms();
 
-    stata_data master;
-    stata_data_init(&master);
-    size_t master_nvars = SF_nvars();
+    int n_to_load = nkeys + 1;  /* keys + _orig_row */
+    int *load_indices = malloc(n_to_load * sizeof(int));
+    for (int i = 0; i < nkeys; i++) {
+        load_indices[i] = master_key_indices[i];
+    }
+    load_indices[nkeys] = orig_row_idx;
 
-    rc = ctools_data_load(&master, master_nvars);
+    stata_data master_minimal;
+    rc = ctools_data_load_selective(&master_minimal, load_indices, n_to_load, 1, master_nobs);
+    free(load_indices);
+
     if (rc != STATA_OK) {
-        SF_error("cmerge: Failed to load master dataset\n");
-        return 459;
+        SF_error("cmerge: Failed to load master keys\n");
+        return rc;
     }
 
-    /* If actual_master_nobs is set, we've expanded the dataset for output
-       and need to truncate to the actual master data */
-    if (actual_master_nobs > 0 && actual_master_nobs < master.nobs) {
-        master.nobs = actual_master_nobs;
-        /* Also need to truncate each variable's data */
-        for (size_t v = 0; v < master.nvars; v++) {
-            master.vars[v].nobs = actual_master_nobs;
-        }
-    }
-
-    t_end = cmerge_get_time_ms();
-    double time_load_master = t_end - t_start;
-
+    double t_load = cmerge_get_time_ms() - t_start;
     if (verbose) {
-        snprintf(msg, sizeof(msg), "  Loaded %zu obs, %zu vars in %.1f ms\n",
-                 master.nobs, master.nvars, time_load_master);
+        snprintf(msg, sizeof(msg), "  Loaded %zu obs, %d vars in %.1f ms\n",
+                 master_minimal.nobs, n_to_load, t_load);
         SF_display(msg);
     }
 
-    double time_sort_master = 0;
-    double time_merge = 0;
-    cmerge_output_row_t *output_rows = NULL;
-    int64_t output_nobs = 0;
-    size_t n_master_only = 0, n_using_only = 0, n_matched = 0;
+    /* ===================================================================
+     * Step 2: Sort master keys
+     * =================================================================== */
 
-    /* Permutation array to track original master row indices after sorting */
-    size_t *master_sorted_to_original = NULL;
-
-    /* Sort master if needed for sorted merge join */
-    if (!sorted && master.nobs > 1) {
-        if (verbose) {
-            SF_display("cmerge: Sorting master dataset...\n");
-        }
-        t_start = cmerge_get_time_ms();
-
-        int *sort_vars = malloc(nkeys * sizeof(int));
-        for (int i = 0; i < nkeys; i++) {
-            sort_vars[i] = master_key_indices[i] + 1;
-        }
-
-        /* Allocate permutation array if we need to preserve order */
-        if (preserve_order) {
-            master_sorted_to_original = malloc(master.nobs * sizeof(size_t));
-            if (master_sorted_to_original == NULL) {
-                SF_error("cmerge: Failed to allocate master permutation array\n");
-                free(sort_vars);
-                stata_data_free(&master);
-                return 920;
-            }
-        }
-
-        rc = ctools_sort_radix_lsd_with_perm(&master, sort_vars, nkeys,
-                                              master_sorted_to_original);
-        free(sort_vars);
-
-        if (rc != STATA_OK) {
-            SF_error("cmerge: Failed to sort master dataset\n");
-            free(master_sorted_to_original);
-            stata_data_free(&master);
-            return 459;
-        }
-
-        t_end = cmerge_get_time_ms();
-        time_sort_master = t_end - t_start;
-
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", time_sort_master);
-            SF_display(msg);
-        }
-    } else if (preserve_order) {
-        /* Data is already sorted - create identity permutation */
-        master_sorted_to_original = create_identity_perm(master.nobs);
-    }
-
-    /* Perform sorted merge join */
-    if (verbose) {
-        SF_display("cmerge: Performing sorted merge join...\n");
-    }
+    if (verbose) SF_display("cmerge: Sorting master keys...\n");
     t_start = cmerge_get_time_ms();
 
-    output_nobs = cmerge_sorted_merge_join(
-        &master, master_key_indices,
-        &g_using_data, g_using_key_indices,
-        nkeys, merge_type,
-        &output_rows);
+    int *sort_vars = malloc(nkeys * sizeof(int));
+    for (int i = 0; i < nkeys; i++) {
+        sort_vars[i] = i + 1;  /* 1-based within master_minimal */
+    }
 
-    if (output_nobs < 0) {
-        SF_error("cmerge: Merge join failed (out of memory)\n");
-        stata_data_free(&master);
+    rc = ctools_sort_radix_lsd(&master_minimal, sort_vars, nkeys);
+    free(sort_vars);
+
+    if (rc != STATA_OK) {
+        stata_data_free(&master_minimal);
+        return rc;
+    }
+
+    double t_sort = cmerge_get_time_ms() - t_start;
+    if (verbose) {
+        snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", t_sort);
+        SF_display(msg);
+    }
+
+    /* ===================================================================
+     * Step 3: Perform sorted merge join
+     * =================================================================== */
+
+    if (verbose) SF_display("cmerge: Performing merge join...\n");
+    t_start = cmerge_get_time_ms();
+
+    cmerge_output_spec_t *output_specs = NULL;
+    int64_t output_nobs_signed = cmerge_sorted_join(
+        &master_minimal, &g_using_cache.keys,
+        nkeys, merge_type, &output_specs);
+
+    if (output_nobs_signed < 0) {
+        stata_data_free(&master_minimal);
+        SF_error("cmerge: Merge join failed\n");
         return 920;
     }
 
-    t_end = cmerge_get_time_ms();
-    time_merge = t_end - t_start;
+    size_t output_nobs = (size_t)output_nobs_signed;
 
+    double t_merge = cmerge_get_time_ms() - t_start;
     if (verbose) {
-        snprintf(msg, sizeof(msg), "  Merge produced %lld rows in %.1f ms\n",
-                 (long long)output_nobs, time_merge);
+        snprintf(msg, sizeof(msg), "  Merge produced %zu rows in %.1f ms\n",
+                 output_nobs, t_merge);
         SF_display(msg);
     }
 
-    /* Count merge results for reporting */
-    for (int64_t i = 0; i < output_nobs; i++) {
-        switch (output_rows[i].merge_result) {
+    /* ===================================================================
+     * Step 4: Build master_orig_row mapping
+     * =================================================================== */
+
+    int64_t *master_orig_rows = malloc(output_nobs * sizeof(int64_t));
+    if (!master_orig_rows) {
+        free(output_specs);
+        stata_data_free(&master_minimal);
+        return 920;
+    }
+
+    /* _orig_row is the last variable in master_minimal */
+    double *orig_row_data = master_minimal.vars[nkeys].data.dbl;
+
+    for (size_t i = 0; i < output_nobs; i++) {
+        if (output_specs[i].master_sorted_row >= 0) {
+            size_t sorted_idx = (size_t)output_specs[i].master_sorted_row;
+            master_orig_rows[i] = (int64_t)orig_row_data[sorted_idx] - 1;  /* 0-based */
+        } else {
+            master_orig_rows[i] = -1;  /* Using-only */
+        }
+    }
+
+    /* ===================================================================
+     * Step 5: Apply preserve_order if requested
+     * =================================================================== */
+
+    if (preserve_order && output_nobs > 0) {
+        if (verbose) SF_display("cmerge: Restoring original order...\n");
+
+        /* Compute order keys */
+        size_t *order_keys = malloc(output_nobs * sizeof(size_t));
+        size_t *indices = malloc(output_nobs * sizeof(size_t));
+        for (size_t i = 0; i < output_nobs; i++) {
+            indices[i] = i;
+            if (master_orig_rows[i] >= 0) {
+                order_keys[i] = (size_t)master_orig_rows[i];
+            } else {
+                order_keys[i] = master_nobs + (size_t)output_specs[i].using_sorted_row;
+            }
+        }
+
+        /* Simple insertion sort for order restoration (stable) */
+        for (size_t i = 1; i < output_nobs; i++) {
+            size_t key = order_keys[i];
+            size_t idx = indices[i];
+            cmerge_output_spec_t spec = output_specs[i];
+            int64_t orig_row = master_orig_rows[i];
+
+            size_t j = i;
+            while (j > 0 && order_keys[j - 1] > key) {
+                order_keys[j] = order_keys[j - 1];
+                indices[j] = indices[j - 1];
+                output_specs[j] = output_specs[j - 1];
+                master_orig_rows[j] = master_orig_rows[j - 1];
+                j--;
+            }
+            order_keys[j] = key;
+            indices[j] = idx;
+            output_specs[j] = spec;
+            master_orig_rows[j] = orig_row;
+        }
+
+        free(order_keys);
+        free(indices);
+    }
+
+    /* Count merge results */
+    size_t n_master_only = 0, n_using_only = 0, n_matched = 0;
+    for (size_t i = 0; i < output_nobs; i++) {
+        switch (output_specs[i].merge_result) {
             case MERGE_RESULT_MASTER_ONLY: n_master_only++; break;
             case MERGE_RESULT_USING_ONLY: n_using_only++; break;
             case MERGE_RESULT_BOTH: n_matched++; break;
         }
     }
 
-    /* Restore original order if requested
-       Output order should match Stata's merge:
-       - Master-only and matched rows appear in original master order
-       - Using-only rows are appended at the end (in original using order) */
-    if (preserve_order && output_nobs > 0) {
-        if (verbose) {
-            SF_display("cmerge: Restoring original row order...\n");
-        }
-        t_start = cmerge_get_time_ms();
+    /* ===================================================================
+     * Step 6: Write output to Stata
+     * =================================================================== */
 
-        /* Compute order_key for each output row:
-           - master_row != SIZE_MAX: order_key = original master index
-           - master_row == SIZE_MAX (using-only): order_key = master.nobs + original using index */
-        for (int64_t i = 0; i < output_nobs; i++) {
-            size_t master_row = output_rows[i].master_row;
-            size_t using_row = output_rows[i].using_row;
-
-            if (master_row != SIZE_MAX) {
-                /* Master-only or matched: use original master position */
-                output_rows[i].order_key = master_sorted_to_original[master_row];
-            } else {
-                /* Using-only: append after all master rows, in original using order */
-                output_rows[i].order_key = master.nobs + g_using_sorted_to_original[using_row];
-            }
-        }
-
-        /* Sort output rows by order_key */
-        qsort(output_rows, (size_t)output_nobs, sizeof(cmerge_output_row_t),
-              compare_output_rows_by_order);
-
-        t_end = cmerge_get_time_ms();
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "  Restored order in %.1f ms\n", t_end - t_start);
-            SF_display(msg);
-        }
-    }
-
-    /* Build output dataset */
-    if (verbose) {
-        SF_display("cmerge: Building output dataset...\n");
-    }
+    if (verbose) SF_display("cmerge: Writing output...\n");
     t_start = cmerge_get_time_ms();
 
-    /* Determine which using variables to add (non-key) */
-    int *using_nonkey_vars = malloc(g_using_data.nvars * sizeof(int));
-    size_t n_using_nonkey = 0;
+    /* 6a: Write _merge variable */
+    if (merge_var_idx > 0) {
+        for (size_t i = 0; i < output_nobs; i++) {
+            SF_vstore(merge_var_idx, (ST_int)(i + 1),
+                      (double)output_specs[i].merge_result);
+        }
+    }
 
-    for (size_t v = 0; v < g_using_data.nvars; v++) {
-        int is_key = 0;
-        for (int k = 0; k < g_using_nkeys; k++) {
-            if ((size_t)g_using_key_indices[k] == v) {
-                is_key = 1;
+    /* 6b: Write keepusing variables from cache
+       For shared variables (dest_idx <= master_nvars): only write for using-only rows
+       For new variables (dest_idx > master_nvars): write for all rows with using data */
+    for (int kv = 0; kv < n_keepusing; kv++) {
+        stata_variable *src = &g_using_cache.keepusing.vars[kv];
+        ST_int dest_idx = (ST_int)keepusing_placeholder_indices[kv];
+        int is_shared = (dest_idx <= (ST_int)master_nvars);
+
+        if (src->type == STATA_TYPE_DOUBLE) {
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t using_row = output_specs[i].using_sorted_row;
+                int64_t master_row = output_specs[i].master_sorted_row;
+
+                /* For shared vars: only write for using-only rows (no master data)
+                   For new vars: write for all rows with using data */
+                if (is_shared && master_row >= 0) {
+                    /* Shared var + has master data: skip (preserve master value) */
+                    continue;
+                }
+
+                double val = (using_row >= 0) ? src->data.dbl[using_row] : SV_missval;
+                SF_vstore(dest_idx, (ST_int)(i + 1), val);
+            }
+        } else {
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t using_row = output_specs[i].using_sorted_row;
+                int64_t master_row = output_specs[i].master_sorted_row;
+
+                if (is_shared && master_row >= 0) {
+                    continue;
+                }
+
+                const char *val = (using_row >= 0 && src->data.str[using_row]) ?
+                                   src->data.str[using_row] : "";
+                SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
+            }
+        }
+    }
+
+    double t_write_keepusing = cmerge_get_time_ms() - t_start;
+
+    /* 6c: Stream master variables (parallel) */
+    if (verbose) SF_display("cmerge: Streaming master variables...\n");
+    t_start = cmerge_get_time_ms();
+
+    /* Determine which variables to stream:
+       - All master vars from 1 to master_nvars
+       - Exclude _orig_row (which is at position orig_row_idx)
+       - Exclude shared variables (handled by keepusing write) */
+    size_t n_stream_vars = 0;
+    stream_var_args_t *stream_args = malloc(master_nvars * sizeof(stream_var_args_t));
+
+    for (size_t v = 1; v <= master_nvars; v++) {
+        if ((int)v == orig_row_idx) continue;  /* Skip _orig_row */
+
+        /* Check if this variable is a shared keepusing variable
+           (will be handled by the keepusing write, not streaming) */
+        int is_shared_keepusing = 0;
+        for (int kv = 0; kv < n_keepusing; kv++) {
+            if (keepusing_placeholder_indices[kv] == (int)v) {
+                is_shared_keepusing = 1;
                 break;
             }
         }
-        if (!is_key) {
-            using_nonkey_vars[n_using_nonkey++] = (int)v;
-        }
-    }
+        if (is_shared_keepusing) continue;  /* Skip - handled by keepusing */
 
-    /* Use actual_master_nvars if provided, otherwise use loaded master_nvars
-       actual_master_nvars is the count of REAL master variables, before
-       placeholder variables were added by the .ado file */
-    size_t real_master_nvars = (actual_master_nvars > 0) ? actual_master_nvars : master_nvars;
+        stream_args[n_stream_vars].stata_var_idx = (int)v;
+        stream_args[n_stream_vars].master_orig_rows = master_orig_rows;
+        stream_args[n_stream_vars].output_nobs = output_nobs;
+        stream_args[n_stream_vars].specs = output_specs;
+        stream_args[n_stream_vars].success = 0;
 
-    /* Total output variables = real master vars + using non-key vars + _merge
-       This should match the Stata varlist size (real_master_nvars + n_using_nonkey + 1) */
-    size_t output_nvars = real_master_nvars + n_using_nonkey;
-    if (!nogenerate) {
-        output_nvars++;  /* For _merge */
-    }
-
-    /* Allocate output data structure */
-    stata_data output;
-    stata_data_init(&output);
-    output.nobs = (size_t)output_nobs;
-    output.nvars = output_nvars;
-    output.vars = calloc(output_nvars, sizeof(stata_variable));
-
-    if (!output.vars) {
-        free(output_rows);
-        free(using_nonkey_vars);
-        stata_data_free(&master);
-        return 920;
-    }
-
-    /* Parallel construction of output variables */
-    size_t n_threads = real_master_nvars + n_using_nonkey;
-    pthread_t *threads = malloc(n_threads * sizeof(pthread_t));
-    construct_var_args_t *thread_args = malloc(n_threads * sizeof(construct_var_args_t));
-
-    if (!threads || !thread_args) {
-        free(threads);
-        free(thread_args);
-        free(output_rows);
-        free(using_nonkey_vars);
-        stata_data_free(&master);
-        stata_data_free(&output);
-        return 920;
-    }
-
-    size_t thread_idx = 0;
-
-    /* Master variables (only the real ones, not placeholder vars) */
-    for (size_t v = 0; v < real_master_nvars; v++) {
-        thread_args[thread_idx].output_rows = output_rows;
-        thread_args[thread_idx].output_nobs = (size_t)output_nobs;
-        thread_args[thread_idx].source = &master;
-        thread_args[thread_idx].source_var_idx = (int)v;
-        thread_args[thread_idx].is_master = 1;
-        thread_args[thread_idx].out_var = &output.vars[thread_idx];
-
-        /* Check if this variable has a fallback (key var or overlapping var) */
-        thread_args[thread_idx].has_fallback = 0;
-        thread_args[thread_idx].alt_source = NULL;
-        thread_args[thread_idx].alt_var_idx = 0;
-
-        /* First check if it's a key variable */
+        /* Check if this is a key variable */
+        stream_args[n_stream_vars].is_key = 0;
+        stream_args[n_stream_vars].key_idx = -1;
         for (int k = 0; k < nkeys; k++) {
             if (master_key_indices[k] == (int)v) {
-                /* This is a key variable - set up using data as fallback */
-                thread_args[thread_idx].has_fallback = 1;
-                thread_args[thread_idx].alt_source = &g_using_data;
-                thread_args[thread_idx].alt_var_idx = g_using_key_indices[k];
+                stream_args[n_stream_vars].is_key = 1;
+                stream_args[n_stream_vars].key_idx = k;
                 break;
             }
         }
 
-        /* If not a key, check if it's an overlapping variable */
-        if (!thread_args[thread_idx].has_fallback) {
-            for (int o = 0; o < overlap_count; o++) {
-                if (overlap_master_idx[o] == (int)v) {
-                    /* This master var also exists in using - set up fallback */
-                    thread_args[thread_idx].has_fallback = 1;
-                    thread_args[thread_idx].alt_source = &g_using_data;
-                    thread_args[thread_idx].alt_var_idx = overlap_using_idx[o];
-                    break;
-                }
-            }
+        n_stream_vars++;
+    }
+
+    /* Execute streaming in parallel */
+    if (n_stream_vars >= 2) {
+        ctools_thread_pool pool;
+        if (ctools_pool_init(&pool, n_stream_vars, stream_args, sizeof(stream_var_args_t)) != 0) {
+            free(stream_args);
+            free(output_specs);
+            free(master_orig_rows);
+            stata_data_free(&master_minimal);
+            return 920;
         }
-
-        pthread_create(&threads[thread_idx], NULL, construct_var_thread, &thread_args[thread_idx]);
-        thread_idx++;
-    }
-
-    /* Using non-key variables */
-    for (size_t i = 0; i < n_using_nonkey; i++) {
-        int v = using_nonkey_vars[i];
-        thread_args[thread_idx].output_rows = output_rows;
-        thread_args[thread_idx].output_nobs = (size_t)output_nobs;
-        thread_args[thread_idx].source = &g_using_data;
-        thread_args[thread_idx].source_var_idx = v;
-        thread_args[thread_idx].is_master = 0;
-        thread_args[thread_idx].out_var = &output.vars[thread_idx];
-        thread_args[thread_idx].has_fallback = 0;
-        thread_args[thread_idx].alt_source = NULL;
-        thread_args[thread_idx].alt_var_idx = 0;
-
-        pthread_create(&threads[thread_idx], NULL, construct_var_thread, &thread_args[thread_idx]);
-        thread_idx++;
-    }
-
-    /* Wait for all threads */
-    for (size_t t = 0; t < n_threads; t++) {
-        pthread_join(threads[t], NULL);
-    }
-
-    free(threads);
-    free(thread_args);
-
-    /* Construct _merge variable if requested */
-    if (!nogenerate) {
-        stata_variable *merge_var = &output.vars[output_nvars - 1];
-        merge_var->type = STATA_TYPE_DOUBLE;
-        merge_var->nobs = (size_t)output_nobs;
-        merge_var->data.dbl = malloc((size_t)output_nobs * sizeof(double));
-
-        if (merge_var->data.dbl) {
-            for (int64_t i = 0; i < output_nobs; i++) {
-                merge_var->data.dbl[i] = (double)output_rows[i].merge_result;
-            }
+        ctools_pool_run(&pool, stream_master_var_thread);
+        ctools_pool_free(&pool);
+    } else {
+        for (size_t v = 0; v < n_stream_vars; v++) {
+            stream_master_var_thread(&stream_args[v]);
         }
     }
 
-    t_end = cmerge_get_time_ms();
-    double time_build = t_end - t_start;
+    free(stream_args);
+
+    double t_stream = cmerge_get_time_ms() - t_start;
 
     if (verbose) {
-        snprintf(msg, sizeof(msg), "  Built output in %.1f ms\n", time_build);
+        snprintf(msg, sizeof(msg),
+                 "  Wrote keepusing in %.1f ms, streamed %zu master vars in %.1f ms\n",
+                 t_write_keepusing, n_stream_vars, t_stream);
         SF_display(msg);
     }
 
-    /* Store output back to Stata
-       NOTE: The .ado has already expanded the dataset to accommodate
-       the maximum possible output size (master + using). We write all
-       output rows, and the .ado will trim excess afterward. */
-    if (verbose) {
-        SF_display("cmerge: Storing results to Stata...\n");
-    }
-    t_start = cmerge_get_time_ms();
+    /* ===================================================================
+     * Cleanup and return
+     * =================================================================== */
 
-    rc = ctools_data_store(&output, 1);
+    free(output_specs);
+    free(master_orig_rows);
+    stata_data_free(&master_minimal);
 
-    t_end = cmerge_get_time_ms();
-    double time_store = t_end - t_start;
+    /* Free using cache */
+    stata_data_free(&g_using_cache.keys);
+    stata_data_free(&g_using_cache.keepusing);
+    g_using_cache.loaded = 0;
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  Stored %zu obs in %.1f ms\n",
-                 output.nobs, time_store);
-        SF_display(msg);
-    }
-
-    /* Save merge counts to scalars */
+    /* Save results */
+    SF_scal_save("_cmerge_N", (double)output_nobs);
     SF_scal_save("_cmerge_N_1", (double)n_master_only);
     SF_scal_save("_cmerge_N_2", (double)n_using_only);
     SF_scal_save("_cmerge_N_3", (double)n_matched);
-    SF_scal_save("_cmerge_N", (double)output_nobs);
 
-    double total_time = cmerge_get_time_ms() - t_total_start;
-    SF_scal_save("_cmerge_time", total_time / 1000.0);
+    double t_total = cmerge_get_time_ms() - t_total_start;
+    SF_scal_save("_cmerge_time", t_total / 1000.0);
 
     if (verbose) {
-        snprintf(msg, sizeof(msg), "\nTotal C time: %.1f ms\n", total_time);
+        snprintf(msg, sizeof(msg), "\nTotal C time: %.1f ms\n", t_total);
         SF_display(msg);
-        snprintf(msg, sizeof(msg), "  Load master: %.1f ms, Sort master: %.1f ms\n",
-                 time_load_master, time_sort_master);
-        SF_display(msg);
-        snprintf(msg, sizeof(msg), "  Merge: %.1f ms, Build: %.1f ms, Store: %.1f ms\n",
-                 time_merge, time_build, time_store);
+        snprintf(msg, sizeof(msg), "  Load: %.1f ms, Sort: %.1f ms, Merge: %.1f ms\n",
+                 t_load, t_sort, t_merge);
         SF_display(msg);
     }
 
-    /* Cleanup */
-    free(output_rows);
-    free(using_nonkey_vars);
-    free(master_sorted_to_original);
-    stata_data_free(&master);
-    stata_data_free(&output);
-
-    /* Free using data and permutation after merge */
-    stata_data_free(&g_using_data);
-    free(g_using_sorted_to_original);
-    g_using_sorted_to_original = NULL;
-    g_using_perm_size = 0;
-    g_using_loaded = 0;
-
-    return rc;
+    return STATA_OK;
 }
 
 /* ============================================================================
- * Clear cached using data (for cleanup/error handling)
+ * Clear cached using data
  * ============================================================================ */
 
 static ST_retcode cmerge_clear(void)
 {
-    if (g_using_loaded) {
-        stata_data_free(&g_using_data);
-        g_using_loaded = 0;
-    }
-    if (g_using_sorted_to_original != NULL) {
-        free(g_using_sorted_to_original);
-        g_using_sorted_to_original = NULL;
-        g_using_perm_size = 0;
+    if (g_using_cache.loaded) {
+        stata_data_free(&g_using_cache.keys);
+        stata_data_free(&g_using_cache.keepusing);
+        g_using_cache.loaded = 0;
     }
     return 0;
 }
@@ -1146,19 +1036,16 @@ ST_retcode cmerge_main(const char *args)
 {
     if (args == NULL || strlen(args) == 0) {
         SF_error("cmerge: no arguments specified\n");
-        SF_error("Usage: plugin call ctools_plugin, \"cmerge <phase> <args>\"\n");
-        SF_error("  Phases: load_using, execute, clear\n");
         return 198;
     }
 
-    /* Parse phase from first argument */
-    char args_copy[4096];
+    char args_copy[8192];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
     char *phase = strtok(args_copy, " ");
     const char *rest = args + strlen(phase);
-    while (*rest == ' ') rest++;  /* Skip spaces */
+    while (*rest == ' ') rest++;
 
     if (strcmp(phase, "load_using") == 0) {
         return cmerge_load_using(rest);
@@ -1173,7 +1060,6 @@ ST_retcode cmerge_main(const char *args)
         char msg[256];
         snprintf(msg, sizeof(msg), "cmerge: unknown phase '%s'\n", phase);
         SF_error(msg);
-        SF_error("Valid phases: load_using, execute, clear\n");
         return 198;
     }
 }

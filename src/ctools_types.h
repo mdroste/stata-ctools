@@ -92,8 +92,22 @@ void stata_data_free(stata_data *data);
 // Load all variables from Stata into C memory
 stata_retcode ctools_data_load(stata_data *data, size_t nvars);
 
+// Load only specified variables from Stata into C memory
+// var_indices: array of 1-based Stata variable indices to load
+// nvars: number of variables to load
+// obs_start, obs_end: observation range (1-based, inclusive), 0 means use SF_in1/SF_in2
+stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
+                                          size_t nvars, size_t obs_start, size_t obs_end);
+
 // Write all variables from C memory back to Stata
 stata_retcode ctools_data_store(stata_data *data, size_t obs1);
+
+// Write specific output variable values to Stata using a source row mapping
+// For each output row i, reads from source_rows[i] (0-based, -1 = missing)
+// var_idx: 1-based Stata variable index
+// Handles both numeric and string variables
+stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
+                                          size_t output_nobs, size_t obs1);
 
 // Sort data using parallel LSD radix sort
 stata_retcode ctools_sort_radix_lsd(stata_data *data, int *sort_vars, size_t nsort);
@@ -103,5 +117,36 @@ stata_retcode ctools_sort_radix_lsd(stata_data *data, int *sort_vars, size_t nso
 // perm_out must be pre-allocated with at least data->nobs elements
 stata_retcode ctools_sort_radix_lsd_with_perm(stata_data *data, int *sort_vars,
                                                size_t nsort, size_t *perm_out);
+
+// Sort data using parallel MSD radix sort
+// MSD (Most Significant Digit) radix sort is optimized for variable-length strings
+// where it can short-circuit on unique prefixes. Best for:
+// - Variable-length strings with common prefixes
+// - Data with low entropy in high-order bits/characters
+stata_retcode ctools_sort_radix_msd(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Timsort
+// Timsort is an adaptive, stable, hybrid sort that combines merge sort and
+// insertion sort. Best for:
+// - Partially sorted data (panel data, time series)
+// - Data with natural runs
+// - When O(N) best case for nearly-sorted data is desired
+stata_retcode ctools_sort_timsort(stata_data *data, int *sort_vars, size_t nsort);
+
+/* ---------------------------------------------------------------------------
+   Sort Algorithm Selection
+   --------------------------------------------------------------------------- */
+
+// Sort algorithm enumeration
+typedef enum {
+    SORT_ALG_LSD = 0,    // LSD radix sort (default) - best for fixed-width keys
+    SORT_ALG_MSD = 1,    // MSD radix sort - best for variable-length strings
+    SORT_ALG_TIMSORT = 2 // Timsort - best for partially sorted data
+} sort_algorithm_t;
+
+// Sort data using specified algorithm
+// Wrapper function that dispatches to the appropriate sort implementation
+stata_retcode ctools_sort(stata_data *data, int *sort_vars, size_t nsort,
+                          sort_algorithm_t algorithm);
 
 #endif /* CTOOLS_TYPES_H */

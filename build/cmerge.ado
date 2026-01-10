@@ -1,29 +1,18 @@
-*! version 2.1.0 05Jan2026
-*! cmerge: C-accelerated merge for Stata datasets
+*! version 3.0.0 10Jan2026
+*! cmerge: Optimized C-accelerated merge for Stata datasets
 *! Part of the ctools suite
 *!
 *! Description:
-*!   High-performance drop-in replacement for Stata's merge command using a
-*!   C plugin with parallel data loading, radix sort, and parallel merge.
-*!   All merge operations are performed entirely in C for maximum speed.
+*!   High-performance merge with MINIMAL data transfer:
+*!   - Only loads key + keepusing variables into C memory
+*!   - Master non-key variables are STREAMED (never fully loaded)
+*!   - Memory: O(nobs * (nkeys + nkeepusing)) instead of O(nobs * all_vars)
 *!
 *! Syntax:
 *!   cmerge 1:1 varlist using filename [, options]
 *!   cmerge m:1 varlist using filename [, options]
 *!   cmerge 1:m varlist using filename [, options]
 *!   cmerge m:m varlist using filename [, options]
-*!
-*! Options:
-*!   keep(match|master|using|1 2 3)  - Which observations to keep
-*!   assert(match|master|using|1 2 3) - Assert merge results
-*!   generate(varname)               - Name for _merge variable (default: _merge)
-*!   nogenerate                      - Do not create _merge variable
-*!   keepusing(varlist)              - Variables to keep from using dataset
-*!   sorted                          - Assert data is already sorted
-*!   force                           - Force string/numeric mismatches
-*!   noreport                        - Do not display merge result table
-*!   verbose                         - Display timing and progress info
-*!   nolabel                         - Do not copy value labels from using
 
 program define cmerge, rclass
     version 14.0
@@ -66,7 +55,7 @@ program define cmerge, rclass
         TIMEit ///
         UPDATE ///
         REPLACE ///
-        PRESERVE_order(integer 1) ///
+        PRESERVE_order(integer 0) ///
         ]
 
     * Validate key variables exist in master
@@ -96,7 +85,6 @@ program define cmerge, rclass
     * Validate using file exists
     capture confirm file `"`using'"'
     if _rc {
-        * Try adding .dta extension
         capture confirm file `"`using'.dta"'
         if _rc {
             di as error `"file `using' not found"'
@@ -117,42 +105,19 @@ program define cmerge, rclass
         }
     }
 
-    * Check if master is already sorted on key variables
-    local master_sorted = 0
-    if "`sorted'" != "" {
-        local master_sorted = 1
-    }
-    else {
-        * Check sortedby characteristic
-        local sortedby : sortedby
-        if "`sortedby'" != "" {
-            local is_sorted = 1
-            local i = 1
-            foreach var of local keyvars {
-                local sorted_var : word `i' of `sortedby'
-                if "`sorted_var'" != "`var'" {
-                    local is_sorted = 0
-                    continue, break
-                }
-                local ++i
-            }
-            if `is_sorted' {
-                local master_sorted = 1
-            }
-        }
-    }
-
-    * Store master dataset info
+    * Store master dataset info BEFORE any modifications
     local master_nobs = _N
     local master_nvars = c(k)
+    qui ds
+    local master_varlist "`r(varlist)'"
 
     if `master_nobs' == 0 {
         di as error "cmerge: no observations in master dataset"
         exit 2000
     }
 
-    * Get key variable indices (1-based for plugin)
-    local keyvar_indices ""
+    * Get master key variable indices (1-based)
+    local master_key_indices ""
     foreach var of local keyvars {
         local idx = 0
         local pos = 1
@@ -168,30 +133,28 @@ program define cmerge, rclass
             di as error "cmerge: key variable `var' not found"
             exit 111
         }
-        local keyvar_indices "`keyvar_indices' `idx'"
+        local master_key_indices "`master_key_indices' `idx'"
     }
 
     * Display header if verbose
     if "`verbose'" != "" {
         di as text ""
         di as text "{hline 60}"
-        di as text "cmerge: C-Accelerated Merge (Full Native)"
+        di as text "cmerge: Optimized C-Accelerated Merge"
         di as text "{hline 60}"
         di as text "Merge type:  " as result "`merge_type'"
         di as text "Key vars:    " as result "`keyvars'"
         di as text "Using file:  " as result `"`using'"'
         di as text "Master obs:  " as result `master_nobs'
         di as text "Master vars: " as result `master_nvars'
-        di as text "Sorted:      " as result cond(`master_sorted', "yes", "no")
         di as text "{hline 60}"
         di ""
     }
 
-    * Record start time
     timer clear 99
     timer on 99
 
-    * Load the platform-appropriate ctools plugin if not already loaded
+    * Load the platform-appropriate ctools plugin
     capture program list ctools_plugin
     if _rc != 0 {
         local __os = c(os)
@@ -248,17 +211,16 @@ program define cmerge, rclass
     }
 
     * =========================================================================
-    * Phase 1: Load using dataset into C plugin memory
+    * Phase 1: Load using dataset - ONLY key + keepusing vars
     * =========================================================================
 
     if "`verbose'" != "" {
-        di as text "Phase 1: Loading using dataset into C..."
+        di as text "Phase 1: Loading using dataset (keys + keepusing only)..."
     }
 
-    * Preserve master dataset
     preserve
 
-    * Load using dataset into Stata
+    * Load using dataset
     qui use `"`using'"', clear
 
     * Check key variables exist in using
@@ -294,301 +256,211 @@ program define cmerge, rclass
         local ++i
     }
 
-    * Get using dataset info
-    local using_nobs = _N
-    local using_nvars = c(k)
+    * Build list of variables to keep: keys + keepusing
+    local using_keep_vars "`keyvars'"
+    local keepusing_count = 0
+    local keepusing_names ""
+    local keepusing_types ""
 
-    if "`verbose'" != "" {
-        di as text "  Using dataset: " as result `using_nobs' as text " obs, " as result `using_nvars' as text " vars"
-    }
+    if "`keepusing'" != "" {
+        foreach var of local keepusing {
+            capture confirm variable `var'
+            if _rc {
+                di as error "cmerge: keepusing variable `var' not found in using dataset"
+                restore
+                exit 111
+            }
+            local using_keep_vars "`using_keep_vars' `var'"
+            local keepusing_names "`keepusing_names' `var'"
+            local ++keepusing_count
 
-    * Check if using is sorted on key variables
-    local using_sorted = 0
-    if "`sorted'" != "" {
-        local using_sorted = 1
+            * Capture type for placeholder creation
+            capture confirm string variable `var'
+            if _rc == 0 {
+                local vtype : type `var'
+                local keepusing_types "`keepusing_types' `vtype'"
+            }
+            else {
+                local keepusing_types "`keepusing_types' double"
+            }
+        }
     }
     else {
-        local sortedby : sortedby
-        if "`sortedby'" != "" {
-            local is_sorted = 1
-            local i = 1
-            foreach var of local keyvars {
-                local sorted_var : word `i' of `sortedby'
-                if "`sorted_var'" != "`var'" {
-                    local is_sorted = 0
-                    continue, break
-                }
-                local ++i
-            }
-            if `is_sorted' {
-                local using_sorted = 1
-            }
-        }
-    }
-
-    * Get using key variable indices (1-based)
-    local using_keyvar_indices ""
-    foreach var of local keyvars {
-        local idx = 0
-        local pos = 1
+        * No keepusing specified - get all non-key variables from using
+        * Include variables that exist in master (shared vars) - they'll be
+        * written only for using-only rows to avoid overwriting master values
         qui ds
-        foreach v in `r(varlist)' {
-            if "`v'" == "`var'" {
-                local idx = `pos'
-                continue, break
-            }
-            local ++pos
-        }
-        local using_keyvar_indices "`using_keyvar_indices' `idx'"
-    }
-
-    * Handle keepusing option - keep only key vars and requested vars
-    if "`keepusing'" != "" {
-        local keepvars "`keyvars' `keepusing'"
-        qui keep `keepvars'
-
-        * Recalculate using key indices after keep
-        local using_keyvar_indices ""
-        foreach var of local keyvars {
-            local idx = 0
-            local pos = 1
-            qui ds
-            foreach v in `r(varlist)' {
-                if "`v'" == "`var'" {
-                    local idx = `pos'
-                    continue, break
+        local all_using_vars `r(varlist)'
+        foreach var of local all_using_vars {
+            local is_key = 0
+            foreach k of local keyvars {
+                if "`var'" == "`k'" {
+                    local is_key = 1
                 }
-                local ++pos
             }
-            local using_keyvar_indices "`using_keyvar_indices' `idx'"
-        }
-    }
+            if !`is_key' {
+                local keepusing_names "`keepusing_names' `var'"
+                local ++keepusing_count
 
-    * Check if keep option excludes using-only rows (allows hash merge optimization)
-    * Hash merge can only be used when we don't need to include using-only rows
-    * This is the case when keep(1 3), keep(match master), or similar is specified
-    local keep_excludes_using = 0
-    if "`keep'" != "" {
-        local keep_excludes_using = 1
-        foreach k of local keep {
-            if "`k'" == "using" | "`k'" == "2" {
-                local keep_excludes_using = 0
+                capture confirm string variable `var'
+                if _rc == 0 {
+                    local vtype : type `var'
+                    local keepusing_types "`keepusing_types' `vtype'"
+                }
+                else {
+                    local keepusing_types "`keepusing_types' double"
+                }
             }
         }
+        local using_keep_vars "`keyvars' `keepusing_names'"
     }
 
-    * Build plugin command for load_using
-    local plugin_args "load_using `nkeys' `using_keyvar_indices'"
-    if `using_sorted' {
-        local plugin_args "`plugin_args' sorted"
-    }
+    * Keep ONLY the necessary variables
+    qui keep `using_keep_vars'
+
+    local using_nobs = _N
+
     if "`verbose'" != "" {
-        local plugin_args "`plugin_args' verbose"
-    }
-    * Pass merge type so plugin can skip sorting for m:1/1:1 (hash-based lookup)
-    local plugin_args "`plugin_args' mergetype `merge_code'"
-    * Pass keep_excludes_using flag so plugin knows if hash merge will be used
-    if `keep_excludes_using' {
-        local plugin_args "`plugin_args' keep_excludes_using"
+        di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `nkeys' as text " keys + " as result `keepusing_count' as text " keepusing vars"
     }
 
-    * Get all variables in using dataset for plugin call
+    * Get variable indices in the reduced using dataset
+    local using_key_indices ""
+    local using_keepusing_indices ""
+    local pos = 1
     qui ds
-    local using_allvars `r(varlist)'
-
-    * Build list of non-key using variable names and types (in order)
-    * These will be used to create correctly-typed placeholder variables
-    local using_nonkey_varnames ""
-    local using_nonkey_vartypes ""
-    foreach v of local using_allvars {
+    foreach v in `r(varlist)' {
         local is_key = 0
         foreach k of local keyvars {
             if "`v'" == "`k'" {
+                local using_key_indices "`using_key_indices' `pos'"
                 local is_key = 1
             }
         }
         if !`is_key' {
-            local using_nonkey_varnames "`using_nonkey_varnames' `v'"
-            * Determine variable type
-            capture confirm string variable `v'
-            if _rc == 0 {
-                * It's a string - get the storage type
-                local vtype : type `v'
-                local using_nonkey_vartypes "`using_nonkey_vartypes' `vtype'"
-            }
-            else {
-                local using_nonkey_vartypes "`using_nonkey_vartypes' double"
-            }
+            local using_keepusing_indices "`using_keepusing_indices' `pos'"
         }
+        local ++pos
     }
 
-    * Call plugin to load using data into C memory
-    * IMPORTANT: Must pass varlist to plugin so it can access the data
-    capture noisily plugin call ctools_plugin `using_allvars', "cmerge `plugin_args'"
+    * Build plugin command for load_using
+    local plugin_args "load_using `nkeys' `using_key_indices'"
+    local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
+    if `keepusing_count' > 0 {
+        local plugin_args "`plugin_args' keepusing_indices `using_keepusing_indices'"
+    }
+    if "`verbose'" != "" {
+        local plugin_args "`plugin_args' verbose"
+    }
+
+    * Call plugin Phase 1 with reduced varlist
+    qui ds
+    capture noisily plugin call ctools_plugin `r(varlist)', "cmerge `plugin_args'"
     local plugin_rc = _rc
 
     if `plugin_rc' {
-        di as error "cmerge: failed to load using data into C plugin (error `plugin_rc')"
+        di as error "cmerge: failed to load using data (error `plugin_rc')"
         restore
         exit `plugin_rc'
     }
 
     * =========================================================================
-    * Phase 2: Restore master and execute merge in C
+    * Phase 2: Execute merge with streaming
     * =========================================================================
 
     if "`verbose'" != "" {
         di as text ""
-        di as text "Phase 2: Executing merge in C..."
+        di as text "Phase 2: Executing merge with streaming..."
     }
 
     restore
 
-    * We need to prepare Stata's dataset to receive the output
-    * The plugin will resize and populate it
+    * Generate original row index BEFORE any modifications
+    gen long _cmerge_orig_row = _n
+    local orig_row_idx = c(k)
 
-    * Get the number of non-key variables from using
-    local using_nonkey_nvars = `using_nvars' - `nkeys'
-    if "`keepusing'" != "" {
-        local keepusing_count : word count `keepusing'
-        local using_nonkey_nvars = `keepusing_count'
-    }
+    * Create placeholder variables for keepusing (with correct types)
+    local keepusing_placeholder_indices ""
+    local placeholder_num = 1
+    foreach vtype of local keepusing_types {
+        local vname : word `placeholder_num' of `keepusing_names'
 
-    * Calculate expected output variables
-    local output_nvars = `master_nvars' + `using_nonkey_nvars'
-    if "`nogenerate'" == "" {
-        local ++output_nvars
-    }
-
-    * Add placeholder variables for using non-key vars and _merge
-    * These will be overwritten by the plugin
-    * Create placeholders with correct types matching using variables
-    local v = 1
-    foreach vtype of local using_nonkey_vartypes {
-        if substr("`vtype'", 1, 3) == "str" {
-            * String variable - create with correct length
-            capture gen `vtype' __using_temp`v' = ""
+        * Check if variable already exists in master (overlapping var)
+        capture confirm variable `vname'
+        if _rc != 0 {
+            * Variable doesn't exist - create placeholder
+            if substr("`vtype'", 1, 3) == "str" {
+                qui gen `vtype' `vname' = ""
+            }
+            else {
+                qui gen double `vname' = .
+            }
         }
-        else {
-            * Numeric variable
-            capture gen double __using_temp`v' = .
+        * Get current index (whether new or existing)
+        local new_idx = 0
+        local pos = 1
+        qui ds
+        foreach v in `r(varlist)' {
+            if "`v'" == "`vname'" {
+                local new_idx = `pos'
+            }
+            local ++pos
         }
-        local ++v
-    }
-    if "`nogenerate'" == "" {
-        capture gen byte `generate' = .
+        local keepusing_placeholder_indices "`keepusing_placeholder_indices' `new_idx'"
+        local ++placeholder_num
     }
 
-    * For merges that may include using-only rows, expand dataset to accommodate
-    * Maximum output size = master_nobs + using_nobs (if all using rows are unmatched)
-    * Always expand - the C plugin produces all rows, keep() filtering happens after
-    local expanded = 0
-    local max_output_nobs = `master_nobs' + `using_nobs'
-    if `max_output_nobs' > `master_nobs' {
-        qui set obs `max_output_nobs'
-        local expanded = 1
+    * Create _merge variable
+    local merge_var_idx = 0
+    if "`nogenerate'" == "" {
+        qui gen byte `generate' = .
+        local merge_var_idx = c(k)
+    }
+
+    * Expand dataset to maximum possible output size
+    local max_output = `master_nobs' + `using_nobs'
+    if `max_output' > _N {
+        qui set obs `max_output'
     }
 
     * Build plugin command for execute
-    * Pass original master_nobs and master_nvars so plugin knows real data sizes
-    local plugin_args "execute `merge_code' `nkeys' `keyvar_indices'"
-    if `master_sorted' {
-        local plugin_args "`plugin_args' sorted"
+    local plugin_args "execute `merge_code' `nkeys' `master_key_indices'"
+    local plugin_args "`plugin_args' orig_row_idx `orig_row_idx'"
+    local plugin_args "`plugin_args' master_nobs `master_nobs'"
+    local plugin_args "`plugin_args' master_nvars `master_nvars'"
+    local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
+    if `keepusing_count' > 0 {
+        local plugin_args "`plugin_args' keepusing_placeholders `keepusing_placeholder_indices'"
     }
+    if "`nogenerate'" == "" {
+        local plugin_args "`plugin_args' merge_var_idx `merge_var_idx'"
+    }
+    local plugin_args "`plugin_args' preserve_order `preserve_order'"
     if "`verbose'" != "" {
         local plugin_args "`plugin_args' verbose"
     }
-    if "`nogenerate'" != "" {
-        local plugin_args "`plugin_args' nogenerate"
-    }
-    if `keep_excludes_using' {
-        local plugin_args "`plugin_args' keep_excludes_using"
-    }
-    * Pass original master_nobs if we expanded
-    if `expanded' {
-        local plugin_args "`plugin_args' master_nobs `master_nobs'"
-    }
-    * Always pass original master_nvars (before adding placeholders)
-    local plugin_args "`plugin_args' master_nvars `master_nvars'"
-    * Pass preserve_order flag (default 1 = preserve original master order)
-    local plugin_args "`plugin_args' preserve_order `preserve_order'"
 
-    * Get all variables in master dataset for plugin call
+    * Call plugin Phase 2
     qui ds
-    local master_allvars `r(varlist)'
-
-    * Build overlap mapping: which master vars also exist in using (non-key)?
-    * Format: "overlap_map count m1:u1 m2:u2 ..." where indices are 0-based
-    local overlap_count = 0
-    local overlap_pairs ""
-    local m_idx = 0
-    foreach mvar of local master_allvars {
-        * Skip placeholder variables
-        if strpos("`mvar'", "__using_temp") == 0 & "`mvar'" != "`generate'" {
-            * Check if this master var exists in using (non-key)
-            local u_idx = 0
-            foreach uvar of local using_allvars {
-                if "`mvar'" == "`uvar'" {
-                    * Check it's not a key variable
-                    local is_key = 0
-                    foreach k of local keyvars {
-                        if "`mvar'" == "`k'" {
-                            local is_key = 1
-                        }
-                    }
-                    if !`is_key' {
-                        * Found an overlap - add to mapping
-                        local overlap_pairs "`overlap_pairs' `m_idx':`u_idx'"
-                        local ++overlap_count
-                    }
-                }
-                local ++u_idx
-            }
-        }
-        local ++m_idx
-    }
-    if `overlap_count' > 0 {
-        local plugin_args "`plugin_args' overlap_map `overlap_count' `overlap_pairs'"
-    }
-
-    * Call plugin to execute merge
-    * IMPORTANT: Must pass varlist to plugin so it can access the data
-    capture noisily plugin call ctools_plugin `master_allvars', "cmerge `plugin_args'"
+    capture noisily plugin call ctools_plugin `r(varlist)', "cmerge `plugin_args'"
     local plugin_rc = _rc
+
     if `plugin_rc' {
         di as error "cmerge: C plugin merge failed (error `plugin_rc')"
-        * Cleanup temp vars
-        capture drop __using_temp*
+        capture drop _cmerge_orig_row
         exit `plugin_rc'
     }
 
-    * Get merge results from scalars saved by plugin
+    * Get merge results from scalars
     local merge_master = scalar(_cmerge_N_1)
     local merge_using = scalar(_cmerge_N_2)
     local merge_matched = scalar(_cmerge_N_3)
     local total_obs = scalar(_cmerge_N)
 
-    * Rename placeholder variables to actual using variable names
-    local v = 1
-    foreach varname of local using_nonkey_varnames {
-        * Check if variable already exists in master (skip if so)
-        capture confirm variable `varname'
-        if _rc != 0 {
-            * Variable doesn't exist, rename placeholder to this name
-            capture rename __using_temp`v' `varname'
-        }
-        else {
-            * Variable exists in master, just drop the placeholder
-            * (master values are kept, like native merge behavior)
-            capture drop __using_temp`v'
-        }
-        local ++v
-    }
-    * Drop any remaining placeholders (shouldn't happen but just in case)
-    capture drop __using_temp*
+    * Drop temporary row index variable
+    capture drop _cmerge_orig_row
 
-    * Trim excess observations if we over-expanded
-    * (happens when some using rows matched and weren't added as using-only)
+    * Trim excess observations
     if `total_obs' < _N {
         qui keep in 1/`total_obs'
     }
@@ -661,7 +533,7 @@ program define cmerge, rclass
     quietly timer list 99
     local elapsed = r(t99)
 
-    * Display merge table if not suppressed
+    * Display merge table
     if "`noreport'" == "" {
         di as text ""
         di as text "    Result" _col(33) "Number of obs"
@@ -678,7 +550,7 @@ program define cmerge, rclass
         di as text "    {hline 41}"
     }
 
-    * Display timing if requested
+    * Display timing
     if "`timeit'" != "" | "`verbose'" != "" {
         di as text ""
         di as text "Total time: " as result %9.3f `elapsed' as text " seconds"

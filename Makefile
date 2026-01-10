@@ -67,7 +67,9 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_error.c \
               $(SRC_DIR)/ctools_threads.c \
               $(SRC_DIR)/ctools_data_io.c \
-              $(SRC_DIR)/ctools_sort_radix_lsd.c
+              $(SRC_DIR)/ctools_sort_radix_lsd.c \
+              $(SRC_DIR)/ctools_sort_radix_msd.c \
+              $(SRC_DIR)/ctools_sort_timsort.c
 
 # csort module
 CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c

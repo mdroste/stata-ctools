@@ -21,6 +21,37 @@
 /* Debug flag - set to 1 to enable debug output */
 #define CSORT_DEBUG 0
 
+/*
+    Parse algorithm option from argument string.
+    Looks for "alg=X" where X is:
+      0 or "lsd" -> SORT_ALG_LSD (default)
+      1 or "msd" -> SORT_ALG_MSD
+      2 or "timsort" -> SORT_ALG_TIMSORT
+*/
+static sort_algorithm_t parse_algorithm(const char *args)
+{
+    const char *p;
+
+    /* Look for "alg=" in the arguments */
+    p = strstr(args, "alg=");
+    if (p == NULL) {
+        return SORT_ALG_LSD;  /* Default */
+    }
+
+    p += 4;  /* Skip "alg=" */
+
+    /* Check for numeric or string algorithm specifier */
+    if (*p == '0' || strncmp(p, "lsd", 3) == 0) {
+        return SORT_ALG_LSD;
+    } else if (*p == '1' || strncmp(p, "msd", 3) == 0) {
+        return SORT_ALG_MSD;
+    } else if (*p == '2' || strncmp(p, "timsort", 7) == 0) {
+        return SORT_ALG_TIMSORT;
+    }
+
+    return SORT_ALG_LSD;  /* Default for unrecognized */
+}
+
 /* Parse the sort variable indices from the argument string */
 static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 {
@@ -80,6 +111,7 @@ ST_retcode csort_main(const char *args)
     size_t obs1, nvars;
     double t_start, t_end;
     char msg[256];
+    sort_algorithm_t algorithm;
 
     /* Initialize timer */
     timer.load_time = 0.0;
@@ -107,6 +139,9 @@ ST_retcode csort_main(const char *args)
         free(sort_vars);
         return 198;
     }
+
+    /* Parse algorithm option */
+    algorithm = parse_algorithm(args);
 
     /* Get observation range and variable count from Stata */
     obs1 = SF_in1();
@@ -173,7 +208,19 @@ ST_retcode csort_main(const char *args)
 
     timer.sort_time = ctools_timer_seconds();
 
-    rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+    /* Call the selected sort algorithm */
+    switch (algorithm) {
+        case SORT_ALG_MSD:
+            rc = ctools_sort_radix_msd(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_TIMSORT:
+            rc = ctools_sort_timsort(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_LSD:
+        default:
+            rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+            break;
+    }
 
     timer.sort_time = ctools_timer_seconds() - timer.sort_time;
 
