@@ -25,10 +25,18 @@
 #include <float.h>
 #include <errno.h>
 #include <pthread.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <unistd.h>
+
+/* Platform-specific includes for memory-mapped files */
+#ifdef _WIN32
+    #include <windows.h>
+    #include <io.h>
+    #define CIMPORT_WINDOWS 1
+#else
+    #include <sys/mman.h>
+    #include <sys/stat.h>
+    #include <fcntl.h>
+    #include <unistd.h>
+#endif
 
 #include "stplugin.h"
 #include "ctools_timer.h"
@@ -160,6 +168,10 @@ typedef struct {
     double time_parse;
     double time_type_infer;
     double time_cache;
+#ifdef CIMPORT_WINDOWS
+    HANDLE file_handle;
+    HANDLE mapping_handle;
+#endif
 } CImportContext;
 
 /* Global cached context */
@@ -713,8 +725,77 @@ static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo
 }
 
 /* ============================================================================
- * Memory-Mapped File I/O
+ * Memory-Mapped File I/O (Cross-Platform)
  * ============================================================================ */
+
+#ifdef CIMPORT_WINDOWS
+
+static int cimport_mmap_file(CImportContext *ctx, const char *filename) {
+    /* Open file */
+    ctx->file_handle = CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ,
+                                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (ctx->file_handle == INVALID_HANDLE_VALUE) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot open file: error %lu", GetLastError());
+        return -1;
+    }
+
+    /* Get file size */
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(ctx->file_handle, &file_size)) {
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot get file size: error %lu", GetLastError());
+        return -1;
+    }
+
+    ctx->file_size = (size_t)file_size.QuadPart;
+    if (ctx->file_size == 0) {
+        CloseHandle(ctx->file_handle);
+        strcpy(ctx->error_message, "File is empty");
+        return -1;
+    }
+
+    /* Create file mapping */
+    ctx->mapping_handle = CreateFileMappingA(ctx->file_handle, NULL, PAGE_READONLY,
+                                              0, 0, NULL);
+    if (ctx->mapping_handle == NULL) {
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot create file mapping: error %lu", GetLastError());
+        return -1;
+    }
+
+    /* Map view of file */
+    ctx->file_data = (char *)MapViewOfFile(ctx->mapping_handle, FILE_MAP_READ,
+                                            0, 0, ctx->file_size);
+    if (ctx->file_data == NULL) {
+        CloseHandle(ctx->mapping_handle);
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot map file: error %lu", GetLastError());
+        return -1;
+    }
+
+    return 0;
+}
+
+static void cimport_munmap_file(CImportContext *ctx) {
+    if (ctx->file_data) {
+        UnmapViewOfFile(ctx->file_data);
+        ctx->file_data = NULL;
+    }
+    if (ctx->mapping_handle) {
+        CloseHandle(ctx->mapping_handle);
+        ctx->mapping_handle = NULL;
+    }
+    if (ctx->file_handle) {
+        CloseHandle(ctx->file_handle);
+        ctx->file_handle = NULL;
+    }
+}
+
+#else /* Unix/POSIX */
 
 static int cimport_mmap_file(CImportContext *ctx, const char *filename) {
     int fd = open(filename, O_RDONLY);
@@ -749,7 +830,11 @@ static int cimport_mmap_file(CImportContext *ctx, const char *filename) {
         return -1;
     }
 
+#ifdef __linux__
     madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL | MADV_WILLNEED);
+#elif defined(__APPLE__)
+    madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL);
+#endif
 
     return 0;
 }
@@ -760,6 +845,8 @@ static void cimport_munmap_file(CImportContext *ctx) {
         ctx->file_data = NULL;
     }
 }
+
+#endif /* CIMPORT_WINDOWS */
 
 /* ============================================================================
  * Variable Name Sanitization

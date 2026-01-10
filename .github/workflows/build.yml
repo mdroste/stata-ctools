@@ -80,7 +80,7 @@ jobs:
   # macOS Intel (x86_64) Build
   # ===========================================================================
   build-macos-intel:
-    runs-on: macos-13  # Intel runner
+    runs-on: macos-15-large  # Intel runner (x86_64)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -124,6 +124,7 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-make
             mingw-w64-x86_64-openmp
+            mingw-w64-x86_64-winpthreads-git
 
       - name: Build Windows plugin
         shell: msys2 {0}

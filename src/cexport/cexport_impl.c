@@ -30,9 +30,12 @@
 #include <stdbool.h>
 #include <math.h>
 #include <pthread.h>
+#include <errno.h>
+
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
-#include <errno.h>
+#endif
 
 #include "stplugin.h"
 #include "ctools_types.h"
