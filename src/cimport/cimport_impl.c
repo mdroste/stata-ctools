@@ -1228,7 +1228,13 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         return NULL;
     }
 
+#ifdef CIMPORT_WINDOWS
+    SYSTEM_INFO sysinfo;
+    GetSystemInfo(&sysinfo);
+    int cpu_count = (int)sysinfo.dwNumberOfProcessors;
+#else
     int cpu_count = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
     if (cpu_count <= 0) cpu_count = 4;
     if (cpu_count > CIMPORT_MAX_THREADS) cpu_count = CIMPORT_MAX_THREADS;
     ctx->num_threads = cpu_count;
