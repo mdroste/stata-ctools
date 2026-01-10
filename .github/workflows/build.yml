@@ -1,0 +1,230 @@
+name: Build Plugins
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'src/**'
+      - 'Makefile'
+      - '.github/workflows/build.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/**'
+      - 'Makefile'
+  workflow_dispatch:  # Allow manual triggering
+  release:
+    types: [created]
+
+jobs:
+  # ===========================================================================
+  # Linux x64 Build
+  # ===========================================================================
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc make libgomp1
+
+      - name: Build Linux plugin
+        run: make linux
+
+      - name: Verify build
+        run: |
+          ls -la build/
+          file build/ctools_linux.plugin
+
+      - name: Upload Linux plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_linux
+          path: build/ctools_linux.plugin
+          if-no-files-found: error
+
+  # ===========================================================================
+  # macOS Apple Silicon (ARM64) Build
+  # ===========================================================================
+  build-macos-arm:
+    runs-on: macos-14  # M1 runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install OpenMP (libomp)
+        run: |
+          brew install libomp
+          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> $GITHUB_ENV
+
+      - name: Build macOS ARM plugin
+        run: make macos-arm
+
+      - name: Verify build
+        run: |
+          ls -la build/
+          file build/ctools_mac_arm.plugin
+          otool -L build/ctools_mac_arm.plugin || true
+
+      - name: Upload macOS ARM plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_mac_arm
+          path: build/ctools_mac_arm.plugin
+          if-no-files-found: error
+
+  # ===========================================================================
+  # macOS Intel (x86_64) Build
+  # ===========================================================================
+  build-macos-intel:
+    runs-on: macos-13  # Intel runner
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install OpenMP (libomp)
+        run: |
+          brew install libomp
+          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> $GITHUB_ENV
+
+      - name: Build macOS Intel plugin
+        run: make macos-intel
+
+      - name: Verify build
+        run: |
+          ls -la build/
+          file build/ctools_mac_x86.plugin
+          otool -L build/ctools_mac_x86.plugin || true
+
+      - name: Upload macOS Intel plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_mac_x86
+          path: build/ctools_mac_x86.plugin
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Windows x64 Build
+  # ===========================================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-openmp
+
+      - name: Build Windows plugin
+        shell: msys2 {0}
+        run: |
+          # Set compiler flags for Windows with OpenMP
+          export CC=gcc
+          export CFLAGS="-O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing"
+          export LDFLAGS="-static -fopenmp -static-libgcc"
+
+          # Build manually since Makefile detection might not work in MSYS2
+          mkdir -p build
+
+          # Get all source files
+          SOURCES=$(find src -name "*.c" | tr '\n' ' ')
+          INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe"
+
+          echo "Compiling with OpenMP support..."
+          gcc $CFLAGS $INCLUDES -o build/ctools_windows.plugin $SOURCES $LDFLAGS
+
+          echo "Build complete!"
+          ls -la build/
+
+      - name: Verify build
+        shell: msys2 {0}
+        run: |
+          file build/ctools_windows.plugin
+          # Check for OpenMP symbols
+          nm build/ctools_windows.plugin | grep -i omp | head -5 || echo "OpenMP symbols check complete"
+
+      - name: Upload Windows plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools_windows
+          path: build/ctools_windows.plugin
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Combine all artifacts into single release package
+  # ===========================================================================
+  package:
+    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: plugins
+
+      - name: Organize plugins
+        run: |
+          mkdir -p release/build
+
+          # Move plugins to build directory
+          cp plugins/ctools_linux/ctools_linux.plugin release/build/
+          cp plugins/ctools_mac_arm/ctools_mac_arm.plugin release/build/
+          cp plugins/ctools_mac_x86/ctools_mac_x86.plugin release/build/
+          cp plugins/ctools_windows/ctools_windows.plugin release/build/
+
+          # Copy ado and help files
+          cp build/*.ado release/build/ 2>/dev/null || true
+          cp build/*.sthlp release/build/ 2>/dev/null || true
+
+          echo "Release package contents:"
+          ls -la release/build/
+
+      - name: Upload combined package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctools-all-platforms
+          path: release/
+          if-no-files-found: error
+
+  # ===========================================================================
+  # Create GitHub Release (only on release events)
+  # ===========================================================================
+  release:
+    if: github.event_name == 'release'
+    needs: [package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: ctools-all-platforms
+          path: release
+
+      - name: Create release archive
+        run: |
+          cd release
+          zip -r ../ctools-${{ github.event.release.tag_name }}.zip build/
+          cd ..
+          ls -la *.zip
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ctools-${{ github.event.release.tag_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1168,3 +1168,67 @@ stata_retcode ctools_sort_radix_lsd(stata_data *data, int *sort_vars, size_t nso
 
     return STATA_OK;
 }
+
+/*
+    Sort data using LSD radix sort and optionally return permutation.
+
+    Same as ctools_sort_radix_lsd, but if perm_out is non-NULL, copies
+    the permutation (sorted_idx -> original_idx) before applying it.
+
+    @param data       [in/out] stata_data structure to sort
+    @param sort_vars  [in] Array of 1-based variable indices specifying sort keys
+    @param nsort      [in] Number of sort key variables
+    @param perm_out   [out] If non-NULL, receives permutation before it's applied.
+                      Must be pre-allocated with at least data->nobs elements.
+                      perm_out[sorted_idx] = original_idx
+
+    @return STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_radix_lsd_with_perm(stata_data *data, int *sort_vars,
+                                               size_t nsort, size_t *perm_out)
+{
+    int k;
+    int var_idx;
+    stata_retcode rc;
+
+    if (data == NULL || sort_vars == NULL || data->nobs == 0 || nsort == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    /*
+        For stable LSD radix sort with multiple keys:
+        Sort from the LAST (least significant) key to the FIRST (most significant).
+    */
+    for (k = (int)nsort - 1; k >= 0; k--) {
+        var_idx = sort_vars[k] - 1;  /* Convert to 0-based index */
+
+        if (var_idx < 0 || var_idx >= (int)data->nvars) {
+            return STATA_ERR_INVALID_INPUT;
+        }
+
+        if (data->vars[var_idx].type == STATA_TYPE_DOUBLE) {
+            rc = sort_by_numeric_var(data, var_idx);
+        } else {
+            rc = sort_by_string_var(data, var_idx);
+        }
+
+        if (rc != STATA_OK) {
+            return rc;
+        }
+    }
+
+    /* If caller wants the permutation, copy it before apply_permutation resets it */
+    if (perm_out != NULL) {
+        for (size_t i = 0; i < data->nobs; i++) {
+            perm_out[i] = data->sort_order[i];
+        }
+    }
+
+    /* Apply the permutation to all variables so data is physically sorted */
+    rc = apply_permutation_to_all_vars(data);
+    if (rc != STATA_OK) {
+        return rc;
+    }
+
+    return STATA_OK;
+}

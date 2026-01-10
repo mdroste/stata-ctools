@@ -16,7 +16,7 @@ di as text "              CSORT VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 /*******************************************************************************
- * First, test if csort works at all
+ * Preliminary: Check if csort plugin works
  ******************************************************************************/
 print_section "Preliminary: Check if csort plugin works"
 
@@ -27,18 +27,10 @@ local csort_works = (_rc == 0)
 if !`csort_works' {
     di as error "  csort plugin is not functioning (rc=`=_rc')"
     di as error "  Skipping all csort tests"
-    di as text ""
-    di as text "{hline 70}"
-    di as text "SUMMARY: csort"
-    di as text "{hline 70}"
-    di as text "Tests passed: 0"
-    di as text "Tests failed: 1"
-    di as text "Total tests:  1"
-    di as error "VALIDATION FAILED - csort plugin not working"
-    di as text "{hline 70}"
     global TESTS_PASSED = 0
     global TESTS_FAILED = 1
     global TESTS_TOTAL = 1
+    print_summary "csort"
     exit 1
 }
 
@@ -47,127 +39,78 @@ global TESTS_PASSED = $TESTS_PASSED + 1
 global TESTS_TOTAL = $TESTS_TOTAL + 1
 
 /*******************************************************************************
- * TEST 1: Single numeric variable sort (auto dataset)
+ * Auto dataset tests
  ******************************************************************************/
-print_section "Test 1: Single numeric variable sort"
+print_section "Auto dataset"
 
 sysuse auto, clear
-preserve
-sort price, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
 
-preserve
-csort price
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
-
-assert_data_equal `stata_sorted' `csort_sorted' "Single numeric sort (price)"
-
-/*******************************************************************************
- * TEST 2: Single string variable sort
- ******************************************************************************/
-print_section "Test 2: Single string variable sort"
+* Single numeric variable
+benchmark_sort price, testname("single numeric (price)")
 
 sysuse auto, clear
-preserve
-sort make, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
-
-preserve
-csort make
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
-
-assert_data_equal `stata_sorted' `csort_sorted' "Single string sort (make)"
-
-/*******************************************************************************
- * TEST 3: Multiple variable sort
- ******************************************************************************/
-print_section "Test 3: Multiple variable sort"
+benchmark_sort weight, testname("single numeric (weight)")
 
 sysuse auto, clear
-preserve
-sort foreign rep78 price, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
+benchmark_sort mpg, testname("single numeric (mpg)")
 
-preserve
-csort foreign rep78 price
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
+* Single string variable
+sysuse auto, clear
+benchmark_sort make, testname("single string (make)")
 
-assert_data_equal `stata_sorted' `csort_sorted' "Multi-variable sort (foreign rep78 price)"
+* Categorical variable with duplicates
+sysuse auto, clear
+benchmark_sort foreign, testname("binary with duplicates (foreign)")
 
-/*******************************************************************************
- * TEST 4: Sort with missing values
- ******************************************************************************/
-print_section "Test 4: Sort with missing values"
+* Variable with missing values
+sysuse auto, clear
+benchmark_sort rep78, testname("with missing values (rep78)")
+
+* Multi-variable sorts
+sysuse auto, clear
+benchmark_sort foreign price, testname("two vars (foreign price)")
 
 sysuse auto, clear
-* rep78 has missing values
-preserve
-sort rep78, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
-
-preserve
-csort rep78
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
-
-assert_data_equal `stata_sorted' `csort_sorted' "Sort with missing values (rep78)"
-
-/*******************************************************************************
- * TEST 5: Sort with duplicates
- ******************************************************************************/
-print_section "Test 5: Sort with duplicates"
+benchmark_sort foreign rep78 price, testname("three vars (foreign rep78 price)")
 
 sysuse auto, clear
-* foreign has many duplicates (0 and 1)
-preserve
-sort foreign, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
-
-preserve
-csort foreign
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
-
-* Check that all foreign=0 come before foreign=1
-use `csort_sorted', clear
-gen _order = _n
-quietly summarize _order if foreign == 0
-local max_domestic = r(max)
-quietly summarize _order if foreign == 1
-local min_foreign = r(min)
-
-if `max_domestic' < `min_foreign' {
-    di as result "  PASS: Duplicates sorted correctly (domestic before foreign)"
-    global TESTS_PASSED = $TESTS_PASSED + 1
-}
-else {
-    di as error "  FAIL: Duplicates not sorted correctly"
-    global TESTS_FAILED = $TESTS_FAILED + 1
-}
-global TESTS_TOTAL = $TESTS_TOTAL + 1
+benchmark_sort make price, testname("string + numeric (make price)")
 
 /*******************************************************************************
- * TEST 6: Large synthetic dataset
+ * Census dataset tests
  ******************************************************************************/
-print_section "Test 6: Large synthetic dataset (10,000 obs)"
+print_section "Census dataset"
+
+sysuse census, clear
+benchmark_sort state, testname("state name")
+
+sysuse census, clear
+benchmark_sort region, testname("region code")
+
+sysuse census, clear
+benchmark_sort pop, testname("population")
+
+sysuse census, clear
+benchmark_sort region state, testname("region state")
+
+sysuse census, clear
+benchmark_sort region pop, testname("region pop")
+
+/*******************************************************************************
+ * Synthetic data tests
+ ******************************************************************************/
+print_section "Synthetic data"
+
+* Large dataset
+clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen value = runiform()
+gen str20 label = "item" + string(runiformint(1, 500))
+
+benchmark_sort value, testname("10K random floats")
 
 clear
 set seed 12345
@@ -175,65 +118,128 @@ set obs 10000
 gen id = _n
 gen group = runiformint(1, 100)
 gen value = runiform()
+gen str20 label = "item" + string(runiformint(1, 500))
 
-* Sort by group and value
-preserve
-sort group value, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
-
-preserve
-csort group value
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
-
-assert_data_equal `stata_sorted' `csort_sorted' "Large dataset sort (10K obs)"
-
-/*******************************************************************************
- * TEST 7: Negative numbers
- ******************************************************************************/
-print_section "Test 7: Negative numbers"
+benchmark_sort group, testname("10K random ints")
 
 clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen value = runiform()
+gen str20 label = "item" + string(runiformint(1, 500))
+
+benchmark_sort label, testname("10K random strings")
+
+clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen value = runiform()
+gen str20 label = "item" + string(runiformint(1, 500))
+
+benchmark_sort group value, testname("10K group + value")
+
+* Negative numbers
+clear
 set obs 1000
-gen x = runiform() * 200 - 100  // Range -100 to 100
+gen x = runiform() * 200 - 100
 
-preserve
-sort x, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
+benchmark_sort x, testname("negative numbers")
 
-preserve
-csort x
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
+* All same values (degenerate case)
+clear
+set obs 1000
+gen x = 5
 
-assert_data_equal `stata_sorted' `csort_sorted' "Negative numbers sort"
+benchmark_sort x, testname("all same values")
+
+* Already sorted
+clear
+set obs 1000
+gen x = _n
+
+benchmark_sort x, testname("already sorted")
+
+* Reverse sorted
+clear
+set obs 1000
+gen x = 1000 - _n
+
+benchmark_sort x, testname("reverse sorted")
+
+* Integer edge cases
+clear
+set obs 100
+gen long x = runiformint(-2147483647, 2147483646)
+
+benchmark_sort x, testname("extreme integers")
+
+* Float precision
+clear
+set obs 100
+gen double x = runiform() * 1e-10
+
+benchmark_sort x, testname("small floats")
 
 /*******************************************************************************
- * TEST 8: Census dataset
+ * Edge cases
  ******************************************************************************/
-print_section "Test 8: Census dataset"
+print_section "Edge cases"
 
-sysuse census, clear
+* Empty string handling
+clear
+set obs 100
+gen str10 x = ""
+replace x = "test" if _n > 50
 
-preserve
-sort state, stable
-tempfile stata_sorted
-quietly save `stata_sorted'
-restore
+benchmark_sort x, testname("empty strings")
 
-preserve
-csort state
-tempfile csort_sorted
-quietly save `csort_sorted'
-restore
+* Very long strings
+clear
+set obs 100
+gen str200 x = "a" * runiformint(1, 200)
 
-assert_data_equal `stata_sorted' `csort_sorted' "Census state sort"
+benchmark_sort x, testname("variable length strings")
+
+* Single observation
+clear
+set obs 1
+gen x = 42
+
+benchmark_sort x, testname("single observation")
+
+* Two observations
+clear
+set obs 2
+gen x = 2 - _n
+
+benchmark_sort x, testname("two observations")
+
+/*******************************************************************************
+ * Larger scale tests
+ ******************************************************************************/
+print_section "Larger scale tests"
+
+clear
+set seed 54321
+set obs 50000
+gen id = _n
+gen group = runiformint(1, 500)
+gen value = rnormal()
+
+benchmark_sort value, testname("50K random normal")
+
+clear
+set seed 54321
+set obs 50000
+gen id = _n
+gen group = runiformint(1, 500)
+gen value = rnormal()
+
+benchmark_sort group id, testname("50K group + id")
 
 /*******************************************************************************
  * SUMMARY

@@ -55,7 +55,7 @@ typedef struct {
     - vars[0..nvars-1]: array of stata_variable, one per Stata variable
     - sort_order[0..nobs-1]: permutation array (0-based), used internally by sort
 
-    Lifecycle operation example with sorting:
+    Lifecycle operation example with sorting (see ctools_data_io.c):
     1. ctools_data_load: populates vars[], sort_order = identity
     2. ctools_sort_radix_lsd: sorts data, applies permutation to all vars[]
     3. ctools_data_store: writes vars[] to Stata (sequential)
@@ -97,5 +97,11 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1);
 
 // Sort data using parallel LSD radix sort
 stata_retcode ctools_sort_radix_lsd(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data and return permutation mapping (sorted_idx -> original_idx)
+// If perm_out is non-NULL, fills it with the permutation before applying
+// perm_out must be pre-allocated with at least data->nobs elements
+stata_retcode ctools_sort_radix_lsd_with_perm(stata_data *data, int *sort_vars,
+                                               size_t nsort, size_t *perm_out);
 
 #endif /* CTOOLS_TYPES_H */

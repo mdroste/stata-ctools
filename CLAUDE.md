@@ -32,7 +32,7 @@ The Stata ctools program calls should automatically detect a user's OS/architect
 src/                    # C source files
   stplugin.c/h          # Stata Plugin Interface (DO NOT MODIFY)
   ctools_plugin.c       # Main dispatcher
-  ctools_data_load.c    # Parallel data loading (8x unrolled)
+  ctools_data_io.c      # Parallel data load/store
   ctools_sort_radix_lsd.c  # Parallel LSD radix sort
   csort/                # Sort command
   cmerge/               # Merge command
@@ -40,6 +40,8 @@ src/                    # C source files
   cexport/              # CSV export
   creghdfe/             # HDFE regression
   cqreg/                # Quantile regression
+  cbinscatter/          # Binned scatter plots
+  civreghdfe/           # IV regression with HDFE
 build/                  # Compiled plugins, .ado, .sthlp files
 benchmark/              # Stata .do files for testing
 ```
@@ -54,20 +56,8 @@ benchmark/              # Stata .do files for testing
 | `cexport` | `export delimited` | Parallel CSV export |
 | `creghdfe` | `reghdfe` | HDFE regression with CG solver |
 | `cqreg` | `qreg` | Quantile regression with IPM solver |
-
-### Debug Flags for cqreg
-
-In `cqreg_fn.c`:
-- `FN_TIMING 1` - Prints detailed timing breakdown per IPM phase
-- `IPM_DEBUG 0` - Verbose iteration logging (generates large output)
-
-In `cqreg_main.c`:
-- `MAIN_DEBUG 0` - Entry/exit logging for main functions
-
-In `cqreg_vce.c`:
-- `VCE_DEBUG 0` - VCE computation logging
-
-Set to 1 to enable, 0 to disable. Rebuild after changing.
+| `cbinscatter` | `binscatter` | Binned scatter plots with histogram binning |
+| `civreghdfe` | `ivreghdfe` | IV/2SLS regression with HDFE |
 
 ### Performance Notes
 

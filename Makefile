@@ -66,8 +66,7 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_timer.c \
               $(SRC_DIR)/ctools_error.c \
               $(SRC_DIR)/ctools_threads.c \
-              $(SRC_DIR)/ctools_data_load.c \
-              $(SRC_DIR)/ctools_data_store.c \
+              $(SRC_DIR)/ctools_data_io.c \
               $(SRC_DIR)/ctools_sort_radix_lsd.c
 
 # csort module
@@ -111,8 +110,11 @@ CBINSCATTER_SRCS = $(SRC_DIR)/cbinscatter/cbinscatter_impl.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_resid.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_fit.c
 
+# civreghdfe module
+CIVREGHDFE_SRCS = $(SRC_DIR)/civreghdfe/civreghdfe_impl.c
+
 # All sources
-SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS)
+SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS)
 
 # Headers (for dependency tracking)
 CORE_HEADERS = $(SRC_DIR)/stplugin.h \
@@ -155,10 +157,12 @@ CBINSCATTER_HEADERS = $(SRC_DIR)/cbinscatter/cbinscatter_types.h \
                       $(SRC_DIR)/cbinscatter/cbinscatter_fit.h \
                       $(SRC_DIR)/cbinscatter/cbinscatter_impl.h
 
-HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS) $(CQREG_HEADERS) $(CBINSCATTER_HEADERS)
+CIVREGHDFE_HEADERS = $(SRC_DIR)/civreghdfe/civreghdfe_impl.h
+
+HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS) $(CQREG_HEADERS) $(CBINSCATTER_HEADERS) $(CIVREGHDFE_HEADERS)
 
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe
 
 # ------------------------------------------------------------------------------
 # Output Configuration

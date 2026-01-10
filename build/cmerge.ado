@@ -66,6 +66,7 @@ program define cmerge, rclass
         TIMEit ///
         UPDATE ///
         REPLACE ///
+        PRESERVE_order(integer 1) ///
         ]
 
     * Validate key variables exist in master
@@ -509,10 +510,46 @@ program define cmerge, rclass
     }
     * Always pass original master_nvars (before adding placeholders)
     local plugin_args "`plugin_args' master_nvars `master_nvars'"
+    * Pass preserve_order flag (default 1 = preserve original master order)
+    local plugin_args "`plugin_args' preserve_order `preserve_order'"
 
     * Get all variables in master dataset for plugin call
     qui ds
     local master_allvars `r(varlist)'
+
+    * Build overlap mapping: which master vars also exist in using (non-key)?
+    * Format: "overlap_map count m1:u1 m2:u2 ..." where indices are 0-based
+    local overlap_count = 0
+    local overlap_pairs ""
+    local m_idx = 0
+    foreach mvar of local master_allvars {
+        * Skip placeholder variables
+        if strpos("`mvar'", "__using_temp") == 0 & "`mvar'" != "`generate'" {
+            * Check if this master var exists in using (non-key)
+            local u_idx = 0
+            foreach uvar of local using_allvars {
+                if "`mvar'" == "`uvar'" {
+                    * Check it's not a key variable
+                    local is_key = 0
+                    foreach k of local keyvars {
+                        if "`mvar'" == "`k'" {
+                            local is_key = 1
+                        }
+                    }
+                    if !`is_key' {
+                        * Found an overlap - add to mapping
+                        local overlap_pairs "`overlap_pairs' `m_idx':`u_idx'"
+                        local ++overlap_count
+                    }
+                }
+                local ++u_idx
+            }
+        }
+        local ++m_idx
+    }
+    if `overlap_count' > 0 {
+        local plugin_args "`plugin_args' overlap_map `overlap_count' `overlap_pairs'"
+    }
 
     * Call plugin to execute merge
     * IMPORTANT: Must pass varlist to plugin so it can access the data

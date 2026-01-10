@@ -276,6 +276,9 @@ end
 * Create temp directory for test files
 capture mkdir "validation/temp"
 
+* Load benchmark helper programs
+do "validation/benchmark_helpers.do"
+
 di as text ""
 di as text "ctools validation framework loaded"
 di as text ""

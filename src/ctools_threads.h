@@ -122,7 +122,7 @@ int ctools_parallel_run(ctools_thread_func func, void *args,
     } while (0)
 
 // Thread argument structure for variable I/O operations
-// Used by ctools_data_load and ctools_data_store for parallel processing
+// Used by ctools_data_io for parallel load/store processing
 typedef struct {
     stata_variable *var;        /* Variable structure (in/out) */
     int var_idx;                /* 1-based Stata variable index */

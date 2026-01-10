@@ -8,18 +8,22 @@
     Supported commands:
     - csort: High-performance radix sort
     - creghdfe: C-accelerated reghdfe (high-dimensional fixed effects regression)
+    - civreghdfe: C-accelerated ivreghdfe (IV with high-dimensional fixed effects)
     - cimport: High-performance CSV import (replaces import delimited)
     - cexport: High-performance CSV export (replaces export delimited)
     - cmerge: C-accelerated merge (replaces merge)
     - cqreg: C-accelerated quantile regression (replaces qreg)
+    - cbinscatter: C-accelerated binned scatter plots
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
         plugin call ctools_plugin ..., "creghdfe <args>"
+        plugin call ctools_plugin ..., "civreghdfe <args>"
         plugin call ctools_plugin ..., "cimport <args>"
         plugin call ctools_plugin ..., "cexport <args>"
         plugin call ctools_plugin ..., "cmerge <args>"
         plugin call ctools_plugin ..., "cqreg <args>"
+        plugin call ctools_plugin ..., "cbinscatter <args>"
 */
 
 #include <stdlib.h>
@@ -29,6 +33,7 @@
 #include "stplugin.h"
 #include "csort_impl.h"
 #include "creghdfe_impl.h"
+#include "civreghdfe_impl.h"
 #include "cimport_impl.h"
 #include "cexport_impl.h"
 #include "cmerge_impl.h"
@@ -100,6 +105,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cbinscatter") == 0) {
         rc = cbinscatter_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "civreghdfe") == 0) {
+        rc = civreghdfe_main(cmd_args);
     }
     else {
         char msg[256];

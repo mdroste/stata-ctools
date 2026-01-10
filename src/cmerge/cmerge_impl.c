@@ -78,6 +78,10 @@ static int g_using_key_indices[CMERGE_MAX_KEYVARS];
 static char g_using_varnames[256][CMERGE_MAX_VARNAME];  /* Variable names */
 static size_t g_using_nvars_saved = 0;
 
+/* Permutation arrays to track original row indices after sorting */
+static size_t *g_using_sorted_to_original = NULL;  /* Maps sorted idx -> original idx */
+static size_t g_using_perm_size = 0;
+
 /* ============================================================================
  * Key comparison functions
  * ============================================================================ */
@@ -145,7 +149,35 @@ typedef struct {
     size_t master_row;     /* Index in master (after sorting), or SIZE_MAX if none */
     size_t using_row;      /* Index in using (after sorting), or SIZE_MAX if none */
     int merge_result;      /* _merge value */
+    size_t order_key;      /* For preserve_order: original row position */
 } cmerge_output_row_t;
+
+/*
+    Compare two output rows by order_key for qsort
+*/
+static int compare_output_rows_by_order(const void *a, const void *b)
+{
+    const cmerge_output_row_t *row_a = (const cmerge_output_row_t *)a;
+    const cmerge_output_row_t *row_b = (const cmerge_output_row_t *)b;
+
+    if (row_a->order_key < row_b->order_key) return -1;
+    if (row_a->order_key > row_b->order_key) return 1;
+    return 0;
+}
+
+/*
+    Create a permutation array mapping sorted indices to original indices.
+    Must be called BEFORE sorting. Returns array of original indices.
+*/
+static size_t *create_identity_perm(size_t n)
+{
+    size_t *perm = malloc(n * sizeof(size_t));
+    if (!perm) return NULL;
+    for (size_t i = 0; i < n; i++) {
+        perm[i] = i;
+    }
+    return perm;
+}
 
 /* ============================================================================
  * Sorted merge join algorithm
@@ -366,10 +398,10 @@ typedef struct {
     int source_var_idx;       /* Variable index in source */
     int is_master;            /* 1 if from master, 0 if from using */
     stata_variable *out_var;  /* Output variable to populate */
-    /* Additional fields for key variables */
-    stata_data *alt_source;   /* Alternative data source (using for key vars) */
+    /* Alternative source for fallback (used for key vars and overlapping vars) */
+    stata_data *alt_source;   /* Alternative data source (using for master vars) */
     int alt_var_idx;          /* Variable index in alternative source */
-    int is_key_var;           /* 1 if this is a key variable */
+    int has_fallback;         /* 1 if alt_source should be used for using-only rows */
 } construct_var_args_t;
 
 static void *construct_var_thread(void *arg)
@@ -384,10 +416,11 @@ static void *construct_var_thread(void *arg)
     out->nobs = nobs;
     out->str_maxlen = src_var->str_maxlen;
 
-    /* For key variables, we need to pull from using data when master_row is SIZE_MAX */
-    int is_key = args->is_key_var;
+    /* For master variables with a fallback (key vars or overlapping vars),
+       we need to pull from using data when master_row is SIZE_MAX */
+    int has_fallback = args->has_fallback;
     stata_variable *alt_var = NULL;
-    if (is_key && args->alt_source) {
+    if (has_fallback && args->alt_source) {
         alt_var = &args->alt_source->vars[args->alt_var_idx];
     }
 
@@ -397,7 +430,7 @@ static void *construct_var_thread(void *arg)
 
         double missing = SV_missval;
         double *src_data = src_var->data.dbl;
-        double *alt_data = (is_key && alt_var) ? alt_var->data.dbl : NULL;
+        double *alt_data = (has_fallback && alt_var) ? alt_var->data.dbl : NULL;
         double *dst_data = out->data.dbl;
         int is_master = args->is_master;
 
@@ -405,8 +438,8 @@ static void *construct_var_thread(void *arg)
             size_t master_row = rows[i].master_row;
             size_t using_row = rows[i].using_row;
 
-            if (is_key) {
-                /* Key variable: use master if available, else using */
+            if (is_master) {
+                /* Master variable: use master if available, else fallback to using */
                 if (master_row != SIZE_MAX) {
                     dst_data[i] = src_data[master_row];
                 } else if (alt_data && using_row != SIZE_MAX) {
@@ -415,9 +448,8 @@ static void *construct_var_thread(void *arg)
                     dst_data[i] = missing;
                 }
             } else {
-                /* Non-key variable: use designated source */
-                size_t src_row = is_master ? master_row : using_row;
-                dst_data[i] = (src_row == SIZE_MAX) ? missing : src_data[src_row];
+                /* Using variable: use using data */
+                dst_data[i] = (using_row == SIZE_MAX) ? missing : src_data[using_row];
             }
         }
     } else {
@@ -425,7 +457,7 @@ static void *construct_var_thread(void *arg)
         if (!out->data.str) return NULL;
 
         char **src_data = src_var->data.str;
-        char **alt_data = (is_key && alt_var) ? alt_var->data.str : NULL;
+        char **alt_data = (has_fallback && alt_var) ? alt_var->data.str : NULL;
         char **dst_data = out->data.str;
         int is_master = args->is_master;
 
@@ -433,8 +465,8 @@ static void *construct_var_thread(void *arg)
             size_t master_row = rows[i].master_row;
             size_t using_row = rows[i].using_row;
 
-            if (is_key) {
-                /* Key variable: use master if available, else using */
+            if (is_master) {
+                /* Master variable: use master if available, else fallback to using */
                 if (master_row != SIZE_MAX) {
                     char *s = src_data[master_row];
                     dst_data[i] = strdup(s ? s : "");
@@ -445,12 +477,11 @@ static void *construct_var_thread(void *arg)
                     dst_data[i] = strdup("");
                 }
             } else {
-                /* Non-key variable: use designated source */
-                size_t src_row = is_master ? master_row : using_row;
-                if (src_row == SIZE_MAX) {
+                /* Using variable: use using data */
+                if (using_row == SIZE_MAX) {
                     dst_data[i] = strdup("");
                 } else {
-                    char *s = src_data[src_row];
+                    char *s = src_data[using_row];
                     dst_data[i] = strdup(s ? s : "");
                 }
             }
@@ -554,11 +585,28 @@ static ST_retcode cmerge_load_using(const char *args)
             sort_vars[i] = g_using_key_indices[i] + 1;
         }
 
-        rc = ctools_sort_radix_lsd(&g_using_data, sort_vars, nkeys);
+        /* Allocate permutation array to track original indices */
+        if (g_using_sorted_to_original != NULL) {
+            free(g_using_sorted_to_original);
+        }
+        g_using_sorted_to_original = malloc(g_using_data.nobs * sizeof(size_t));
+        g_using_perm_size = g_using_data.nobs;
+
+        if (g_using_sorted_to_original == NULL) {
+            SF_error("cmerge: Failed to allocate permutation array\n");
+            free(sort_vars);
+            stata_data_free(&g_using_data);
+            return 920;
+        }
+
+        rc = ctools_sort_radix_lsd_with_perm(&g_using_data, sort_vars, nkeys,
+                                              g_using_sorted_to_original);
         free(sort_vars);
 
         if (rc != STATA_OK) {
             SF_error("cmerge: Failed to sort using dataset\n");
+            free(g_using_sorted_to_original);
+            g_using_sorted_to_original = NULL;
             stata_data_free(&g_using_data);
             return 459;
         }
@@ -568,6 +616,13 @@ static ST_retcode cmerge_load_using(const char *args)
             snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", t_end - t_start);
             SF_display(msg);
         }
+    } else {
+        /* Data is already sorted - create identity permutation */
+        if (g_using_sorted_to_original != NULL) {
+            free(g_using_sorted_to_original);
+        }
+        g_using_sorted_to_original = create_identity_perm(g_using_data.nobs);
+        g_using_perm_size = g_using_data.nobs;
     }
 
     g_using_loaded = 1;
@@ -610,6 +665,17 @@ static ST_retcode cmerge_execute(const char *args)
     int nogenerate = 0;
     size_t actual_master_nobs = 0;  /* If set, use this instead of SF_nobs() for master */
     size_t actual_master_nvars = 0; /* Original master nvars before placeholders added */
+
+    /* Overlap mapping: master vars that also exist in using (non-key)
+       Allows fallback to using data for using-only rows */
+    #define MAX_OVERLAP_VARS 256
+    int overlap_master_idx[MAX_OVERLAP_VARS];  /* Master var indices */
+    int overlap_using_idx[MAX_OVERLAP_VARS];   /* Corresponding using var indices */
+    int overlap_count = 0;
+
+    /* Order preservation flag: 1 = preserve master order (default), 0 = sort by keys */
+    int preserve_order = 1;
+
     int arg_idx = 0;
 
     char *token = strtok(args_copy, " ");
@@ -645,6 +711,33 @@ static ST_retcode cmerge_execute(const char *args)
             token = strtok(NULL, " ");
             if (token) {
                 actual_master_nvars = (size_t)atol(token);
+            }
+        }
+        else if (strcmp(token, "overlap_map") == 0) {
+            /* Parse overlap mapping: count followed by m:u pairs */
+            token = strtok(NULL, " ");
+            if (token) {
+                overlap_count = atoi(token);
+                if (overlap_count > MAX_OVERLAP_VARS) overlap_count = MAX_OVERLAP_VARS;
+                for (int i = 0; i < overlap_count; i++) {
+                    token = strtok(NULL, " ");
+                    if (token) {
+                        /* Parse "m:u" format */
+                        char *colon = strchr(token, ':');
+                        if (colon) {
+                            *colon = '\0';
+                            overlap_master_idx[i] = atoi(token);
+                            overlap_using_idx[i] = atoi(colon + 1);
+                        }
+                    }
+                }
+            }
+        }
+        else if (strcmp(token, "preserve_order") == 0) {
+            /* Next token is 0 or 1 */
+            token = strtok(NULL, " ");
+            if (token) {
+                preserve_order = atoi(token);
             }
         }
         /* Ignore other options (keep_excludes_using) - no longer used */
@@ -693,6 +786,9 @@ static ST_retcode cmerge_execute(const char *args)
     int64_t output_nobs = 0;
     size_t n_master_only = 0, n_using_only = 0, n_matched = 0;
 
+    /* Permutation array to track original master row indices after sorting */
+    size_t *master_sorted_to_original = NULL;
+
     /* Sort master if needed for sorted merge join */
     if (!sorted && master.nobs > 1) {
         if (verbose) {
@@ -705,11 +801,24 @@ static ST_retcode cmerge_execute(const char *args)
             sort_vars[i] = master_key_indices[i] + 1;
         }
 
-        rc = ctools_sort_radix_lsd(&master, sort_vars, nkeys);
+        /* Allocate permutation array if we need to preserve order */
+        if (preserve_order) {
+            master_sorted_to_original = malloc(master.nobs * sizeof(size_t));
+            if (master_sorted_to_original == NULL) {
+                SF_error("cmerge: Failed to allocate master permutation array\n");
+                free(sort_vars);
+                stata_data_free(&master);
+                return 920;
+            }
+        }
+
+        rc = ctools_sort_radix_lsd_with_perm(&master, sort_vars, nkeys,
+                                              master_sorted_to_original);
         free(sort_vars);
 
         if (rc != STATA_OK) {
             SF_error("cmerge: Failed to sort master dataset\n");
+            free(master_sorted_to_original);
             stata_data_free(&master);
             return 459;
         }
@@ -721,6 +830,9 @@ static ST_retcode cmerge_execute(const char *args)
             snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", time_sort_master);
             SF_display(msg);
         }
+    } else if (preserve_order) {
+        /* Data is already sorted - create identity permutation */
+        master_sorted_to_original = create_identity_perm(master.nobs);
     }
 
     /* Perform sorted merge join */
@@ -759,7 +871,42 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
 
-    /* Note: Output order is sorted by key variables, matching Stata's merge behavior */
+    /* Restore original order if requested
+       Output order should match Stata's merge:
+       - Master-only and matched rows appear in original master order
+       - Using-only rows are appended at the end (in original using order) */
+    if (preserve_order && output_nobs > 0) {
+        if (verbose) {
+            SF_display("cmerge: Restoring original row order...\n");
+        }
+        t_start = cmerge_get_time_ms();
+
+        /* Compute order_key for each output row:
+           - master_row != SIZE_MAX: order_key = original master index
+           - master_row == SIZE_MAX (using-only): order_key = master.nobs + original using index */
+        for (int64_t i = 0; i < output_nobs; i++) {
+            size_t master_row = output_rows[i].master_row;
+            size_t using_row = output_rows[i].using_row;
+
+            if (master_row != SIZE_MAX) {
+                /* Master-only or matched: use original master position */
+                output_rows[i].order_key = master_sorted_to_original[master_row];
+            } else {
+                /* Using-only: append after all master rows, in original using order */
+                output_rows[i].order_key = master.nobs + g_using_sorted_to_original[using_row];
+            }
+        }
+
+        /* Sort output rows by order_key */
+        qsort(output_rows, (size_t)output_nobs, sizeof(cmerge_output_row_t),
+              compare_output_rows_by_order);
+
+        t_end = cmerge_get_time_ms();
+        if (verbose) {
+            snprintf(msg, sizeof(msg), "  Restored order in %.1f ms\n", t_end - t_start);
+            SF_display(msg);
+        }
+    }
 
     /* Build output dataset */
     if (verbose) {
@@ -836,17 +983,32 @@ static ST_retcode cmerge_execute(const char *args)
         thread_args[thread_idx].is_master = 1;
         thread_args[thread_idx].out_var = &output.vars[thread_idx];
 
-        /* Check if this is a key variable - if so, provide using data for fallback */
-        thread_args[thread_idx].is_key_var = 0;
+        /* Check if this variable has a fallback (key var or overlapping var) */
+        thread_args[thread_idx].has_fallback = 0;
         thread_args[thread_idx].alt_source = NULL;
         thread_args[thread_idx].alt_var_idx = 0;
+
+        /* First check if it's a key variable */
         for (int k = 0; k < nkeys; k++) {
             if (master_key_indices[k] == (int)v) {
-                /* This is a key variable - set up using data as alternative source */
-                thread_args[thread_idx].is_key_var = 1;
+                /* This is a key variable - set up using data as fallback */
+                thread_args[thread_idx].has_fallback = 1;
                 thread_args[thread_idx].alt_source = &g_using_data;
                 thread_args[thread_idx].alt_var_idx = g_using_key_indices[k];
                 break;
+            }
+        }
+
+        /* If not a key, check if it's an overlapping variable */
+        if (!thread_args[thread_idx].has_fallback) {
+            for (int o = 0; o < overlap_count; o++) {
+                if (overlap_master_idx[o] == (int)v) {
+                    /* This master var also exists in using - set up fallback */
+                    thread_args[thread_idx].has_fallback = 1;
+                    thread_args[thread_idx].alt_source = &g_using_data;
+                    thread_args[thread_idx].alt_var_idx = overlap_using_idx[o];
+                    break;
+                }
             }
         }
 
@@ -863,7 +1025,7 @@ static ST_retcode cmerge_execute(const char *args)
         thread_args[thread_idx].source_var_idx = v;
         thread_args[thread_idx].is_master = 0;
         thread_args[thread_idx].out_var = &output.vars[thread_idx];
-        thread_args[thread_idx].is_key_var = 0;
+        thread_args[thread_idx].has_fallback = 0;
         thread_args[thread_idx].alt_source = NULL;
         thread_args[thread_idx].alt_var_idx = 0;
 
@@ -944,11 +1106,15 @@ static ST_retcode cmerge_execute(const char *args)
     /* Cleanup */
     free(output_rows);
     free(using_nonkey_vars);
+    free(master_sorted_to_original);
     stata_data_free(&master);
     stata_data_free(&output);
 
-    /* Free using data after merge */
+    /* Free using data and permutation after merge */
     stata_data_free(&g_using_data);
+    free(g_using_sorted_to_original);
+    g_using_sorted_to_original = NULL;
+    g_using_perm_size = 0;
     g_using_loaded = 0;
 
     return rc;
@@ -963,6 +1129,11 @@ static ST_retcode cmerge_clear(void)
     if (g_using_loaded) {
         stata_data_free(&g_using_data);
         g_using_loaded = 0;
+    }
+    if (g_using_sorted_to_original != NULL) {
+        free(g_using_sorted_to_original);
+        g_using_sorted_to_original = NULL;
+        g_using_perm_size = 0;
     }
     return 0;
 }
