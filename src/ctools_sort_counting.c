@@ -40,27 +40,16 @@
 /* Minimum observations to use parallel counting sort */
 #define COUNTING_PARALLEL_THRESHOLD 50000
 
-/* Prefetch distance */
-#define COUNTING_PREFETCH_DISTANCE 16
-
 /* Maximum threads */
 #define COUNTING_MAX_THREADS 16
 
-/* Restrict keyword */
-#ifdef __GNUC__
-#define COUNTING_RESTRICT __restrict__
-#else
-#define COUNTING_RESTRICT
-#endif
+/* Use PREFETCH_DISTANCE from ctools_config.h */
+#define COUNTING_PREFETCH_DISTANCE PREFETCH_DISTANCE
 
-/* Prefetch macros */
-#if defined(__GNUC__) || defined(__clang__)
-#define COUNTING_PREFETCH(addr) __builtin_prefetch(addr, 0, 1)
-#define COUNTING_PREFETCH_W(addr) __builtin_prefetch(addr, 1, 1)
-#else
-#define COUNTING_PREFETCH(addr) ((void)0)
-#define COUNTING_PREFETCH_W(addr) ((void)0)
-#endif
+/* Use centralized macros from ctools_config.h */
+#define COUNTING_RESTRICT CTOOLS_RESTRICT
+#define COUNTING_PREFETCH(addr) CTOOLS_PREFETCH(addr)
+#define COUNTING_PREFETCH_W(addr) CTOOLS_PREFETCH_W(addr)
 
 /* ============================================================================
    Utility Functions

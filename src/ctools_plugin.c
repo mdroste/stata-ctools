@@ -58,11 +58,14 @@ STDLL stata_call(int argc, char *argv[])
     char *space_pos;
     ST_retcode rc;
 
+
     /* Check for arguments */
     if (argc < 1 || argv[0] == NULL || strlen(argv[0]) == 0) {
         SF_error("ctools: no command specified\n");
         return 198;
     }
+
+
 
     /* Make a copy of the command string to parse */
     cmd_str = strdup(argv[0]);
@@ -70,6 +73,7 @@ STDLL stata_call(int argc, char *argv[])
         SF_error("ctools: memory allocation failed\n");
         return 920;
     }
+
 
     /* Find the first space to separate command from args */
     space_pos = strchr(cmd_str, ' ');
@@ -83,6 +87,7 @@ STDLL stata_call(int argc, char *argv[])
         cmd_name = cmd_str;
         cmd_args = "";
     }
+
 
     /* Dispatch to appropriate command handler */
     if (strcmp(cmd_name, "csort") == 0) {

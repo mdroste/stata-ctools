@@ -639,40 +639,6 @@ static inline bool cimport_field_looks_numeric(const char *src, int len) {
     return false;
 }
 
-/* Unused function - kept for potential future use
-static CImportColumnType cimport_infer_field_type_fast(const char *file_base, CImportFieldRef *field, char quote) {
-    const char *src = file_base + field->offset;
-    int len = field->length;
-
-    while (len > 0 && (*src == ' ' || *src == '\t' || *src == quote)) {
-        src++;
-        len--;
-    }
-    while (len > 0 && (src[len-1] == ' ' || src[len-1] == '\t' || src[len-1] == quote ||
-                       src[len-1] == '\r' || src[len-1] == '\n')) {
-        len--;
-    }
-
-    if (len == 0) return CIMPORT_COL_UNKNOWN;
-
-    if (len == 1 && *src == '.') return CIMPORT_COL_NUMERIC;
-    if (len == 2 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'A' || src[1] == 'a')) {
-        return CIMPORT_COL_NUMERIC;
-    }
-    if (len == 3 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'a' || src[1] == 'A') &&
-        (src[2] == 'N' || src[2] == 'n')) {
-        return CIMPORT_COL_NUMERIC;
-    }
-
-    double val;
-    if (cimport_fast_parse_double(src, len, &val)) {
-        return CIMPORT_COL_NUMERIC;
-    }
-
-    return CIMPORT_COL_STRING;
-}
-*/
-
 static inline bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,
                                                  double *out_value, bool *out_is_integer) {
     const char *src = file_base + field->offset;
@@ -1065,7 +1031,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 static void cimport_build_column_cache(CImportContext *ctx);
 static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has_header, bool verbose);
 static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has_header, bool verbose);
-static ST_retcode cimport_do_writedta(const char *filename, const char *output_path, char delimiter, bool has_header, bool verbose);
 
 /* ============================================================================
  * Parallel Chunk Parsing
@@ -1782,24 +1747,6 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 }
 
 /* ============================================================================
- * WRITEDTA Mode (placeholder - full implementation would be lengthy)
- * ============================================================================ */
-
-static ST_retcode cimport_do_writedta(const char *filename, const char *output_path,
-                                       char delimiter, bool has_header, bool verbose) {
-    /* Suppress unused parameter warnings */
-    (void)filename;
-    (void)output_path;
-    (void)delimiter;
-    (void)has_header;
-    (void)verbose;
-
-    /* For now, just display error that this mode is not yet implemented */
-    cimport_display_error("writedta mode not yet implemented in cimport. Use standard mode.\n");
-    return 198;
-}
-
-/* ============================================================================
  * Plugin Entry Point
  * ============================================================================ */
 
@@ -1809,7 +1756,7 @@ ST_retcode cimport_main(const char *args) {
         return 198;
     }
 
-    /* Parse arguments: mode filename [delimiter] [noheader] [verbose] [output=path] */
+    /* Parse arguments: mode filename [delimiter] [noheader] [verbose] */
     char args_copy[4096];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
@@ -1819,7 +1766,6 @@ ST_retcode cimport_main(const char *args) {
     char delimiter = ',';
     bool has_header = true;
     bool verbose = false;
-    char *output_path = NULL;
 
     char *token = strtok(args_copy, " ");
     int arg_idx = 0;
@@ -1834,8 +1780,6 @@ ST_retcode cimport_main(const char *args) {
                 has_header = false;
             } else if (strcmp(token, "verbose") == 0) {
                 verbose = true;
-            } else if (strncmp(token, "output=", 7) == 0) {
-                output_path = token + 7;
             } else if (strlen(token) == 1) {
                 delimiter = token[0];
             } else if (strlen(token) == 3 && token[0] == '"' && token[2] == '"') {
@@ -1855,14 +1799,8 @@ ST_retcode cimport_main(const char *args) {
         return cimport_do_scan(filename, delimiter, has_header, verbose);
     } else if (strcmp(mode, "load") == 0) {
         return cimport_do_load(filename, delimiter, has_header, verbose);
-    } else if (strcmp(mode, "writedta") == 0) {
-        if (!output_path) {
-            cimport_display_error("cimport: writedta mode requires output=<path> argument\n");
-            return 198;
-        }
-        return cimport_do_writedta(filename, output_path, delimiter, has_header, verbose);
     } else {
-        cimport_display_error("cimport: invalid mode. Use 'scan', 'load', or 'writedta'\n");
+        cimport_display_error("cimport: invalid mode. Use 'scan' or 'load'\n");
         return 198;
     }
 }

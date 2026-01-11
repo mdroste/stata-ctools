@@ -33,6 +33,8 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_threads.h"
+#include "ctools_config.h"
+#include "ctools_spi.h"
 
 /* SIMD and prefetch intrinsics - platform-specific */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -58,14 +60,8 @@
 /* Maximum string buffer size for Stata string variables */
 #define STATA_STR_MAXLEN 2045
 
-/* Cache line size for alignment */
-#define CACHE_LINE_SIZE 64
-
 /* Threshold for non-temporal stores (bypass cache for very large writes) */
 #define NONTEMPORAL_THRESHOLD 1000000
-
-/* Prefetch distance in elements */
-#define PREFETCH_DISTANCE 16
 
 /* ===========================================================================
    Memory Allocation Utilities
@@ -168,39 +164,6 @@ static void arena_free(string_arena *arena)
 }
 
 /* ===========================================================================
-   Batched SPI Access Macros
-   =========================================================================== */
-
-/*
-    Batch read 8 numeric values from Stata.
-    Reduces function call overhead through macro expansion.
-*/
-#define SF_VDATA_BATCH8(var, obs_base, out) do { \
-    SF_vdata((var), (ST_int)(obs_base),     &(out)[0]); \
-    SF_vdata((var), (ST_int)((obs_base) + 1), &(out)[1]); \
-    SF_vdata((var), (ST_int)((obs_base) + 2), &(out)[2]); \
-    SF_vdata((var), (ST_int)((obs_base) + 3), &(out)[3]); \
-    SF_vdata((var), (ST_int)((obs_base) + 4), &(out)[4]); \
-    SF_vdata((var), (ST_int)((obs_base) + 5), &(out)[5]); \
-    SF_vdata((var), (ST_int)((obs_base) + 6), &(out)[6]); \
-    SF_vdata((var), (ST_int)((obs_base) + 7), &(out)[7]); \
-} while(0)
-
-/*
-    Batch write 8 numeric values to Stata.
-*/
-#define SF_VSTORE_BATCH8(var, obs_base, in) do { \
-    SF_vstore((var), (ST_int)(obs_base),     (in)[0]); \
-    SF_vstore((var), (ST_int)((obs_base) + 1), (in)[1]); \
-    SF_vstore((var), (ST_int)((obs_base) + 2), (in)[2]); \
-    SF_vstore((var), (ST_int)((obs_base) + 3), (in)[3]); \
-    SF_vstore((var), (ST_int)((obs_base) + 4), (in)[4]); \
-    SF_vstore((var), (ST_int)((obs_base) + 5), (in)[5]); \
-    SF_vstore((var), (ST_int)((obs_base) + 6), (in)[6]); \
-    SF_vstore((var), (ST_int)((obs_base) + 7), (in)[7]); \
-} while(0)
-
-/* ===========================================================================
    SIMD-Accelerated Utilities
    =========================================================================== */
 
@@ -257,30 +220,62 @@ static void init_identity_permutation(size_t *arr, size_t n)
     Copy 8 doubles from local buffer to destination array.
     Uses SIMD when available for improved throughput.
 */
-static inline void copy_doubles_8(double *dst, const double *src)
+static inline void copy_doubles_8(double * restrict dst, const double * restrict src)
 {
 #if defined(CTOOLS_AVX2) || defined(CTOOLS_X86)
-    /* AVX: Copy 4 doubles at a time */
     #ifdef __AVX__
     _mm256_storeu_pd(&dst[0], _mm256_loadu_pd(&src[0]));
     _mm256_storeu_pd(&dst[4], _mm256_loadu_pd(&src[4]));
     #else
-    /* SSE2: Copy 2 doubles at a time */
     _mm_storeu_pd(&dst[0], _mm_loadu_pd(&src[0]));
     _mm_storeu_pd(&dst[2], _mm_loadu_pd(&src[2]));
     _mm_storeu_pd(&dst[4], _mm_loadu_pd(&src[4]));
     _mm_storeu_pd(&dst[6], _mm_loadu_pd(&src[6]));
     #endif
 #elif defined(CTOOLS_ARM64)
-    /* NEON: Copy 2 doubles at a time */
     vst1q_f64(&dst[0], vld1q_f64(&src[0]));
     vst1q_f64(&dst[2], vld1q_f64(&src[2]));
     vst1q_f64(&dst[4], vld1q_f64(&src[4]));
     vst1q_f64(&dst[6], vld1q_f64(&src[6]));
 #else
-    /* Scalar fallback */
     dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
     dst[4] = src[4]; dst[5] = src[5]; dst[6] = src[6]; dst[7] = src[7];
+#endif
+}
+
+/*
+    Copy 16 doubles using SIMD (aggressive unrolling).
+*/
+static inline void copy_doubles_16(double * restrict dst, const double * restrict src)
+{
+#if defined(CTOOLS_AVX2) || defined(CTOOLS_X86)
+    #ifdef __AVX__
+    _mm256_storeu_pd(&dst[0], _mm256_loadu_pd(&src[0]));
+    _mm256_storeu_pd(&dst[4], _mm256_loadu_pd(&src[4]));
+    _mm256_storeu_pd(&dst[8], _mm256_loadu_pd(&src[8]));
+    _mm256_storeu_pd(&dst[12], _mm256_loadu_pd(&src[12]));
+    #else
+    _mm_storeu_pd(&dst[0], _mm_loadu_pd(&src[0]));
+    _mm_storeu_pd(&dst[2], _mm_loadu_pd(&src[2]));
+    _mm_storeu_pd(&dst[4], _mm_loadu_pd(&src[4]));
+    _mm_storeu_pd(&dst[6], _mm_loadu_pd(&src[6]));
+    _mm_storeu_pd(&dst[8], _mm_loadu_pd(&src[8]));
+    _mm_storeu_pd(&dst[10], _mm_loadu_pd(&src[10]));
+    _mm_storeu_pd(&dst[12], _mm_loadu_pd(&src[12]));
+    _mm_storeu_pd(&dst[14], _mm_loadu_pd(&src[14]));
+    #endif
+#elif defined(CTOOLS_ARM64)
+    vst1q_f64(&dst[0], vld1q_f64(&src[0]));
+    vst1q_f64(&dst[2], vld1q_f64(&src[2]));
+    vst1q_f64(&dst[4], vld1q_f64(&src[4]));
+    vst1q_f64(&dst[6], vld1q_f64(&src[6]));
+    vst1q_f64(&dst[8], vld1q_f64(&src[8]));
+    vst1q_f64(&dst[10], vld1q_f64(&src[10]));
+    vst1q_f64(&dst[12], vld1q_f64(&src[12]));
+    vst1q_f64(&dst[14], vld1q_f64(&src[14]));
+#else
+    copy_doubles_8(dst, src);
+    copy_doubles_8(dst + 8, src + 8);
 #endif
 }
 
@@ -288,23 +283,41 @@ static inline void copy_doubles_8(double *dst, const double *src)
     Non-temporal store for 8 doubles (bypasses cache).
     Use for large writes that won't be read again soon.
 */
-static inline void stream_doubles_8(double *dst, const double *src)
+static inline void stream_doubles_8(double * restrict dst, const double * restrict src)
 {
 #if defined(CTOOLS_X86) && defined(__SSE2__)
-    /* SSE2 streaming stores */
     _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
     _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
     _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
     _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
 #elif defined(CTOOLS_ARM64)
-    /* ARM doesn't have direct non-temporal stores, use regular NEON */
     vst1q_f64(&dst[0], vld1q_f64(&src[0]));
     vst1q_f64(&dst[2], vld1q_f64(&src[2]));
     vst1q_f64(&dst[4], vld1q_f64(&src[4]));
     vst1q_f64(&dst[6], vld1q_f64(&src[6]));
 #else
-    /* Scalar fallback */
     copy_doubles_8(dst, src);
+#endif
+}
+
+/*
+    Non-temporal store for 16 doubles (bypasses cache).
+*/
+static inline void stream_doubles_16(double * restrict dst, const double * restrict src)
+{
+#if defined(CTOOLS_X86) && defined(__SSE2__)
+    _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
+    _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
+    _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
+    _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
+    _mm_stream_pd(&dst[8], _mm_loadu_pd(&src[8]));
+    _mm_stream_pd(&dst[10], _mm_loadu_pd(&src[10]));
+    _mm_stream_pd(&dst[12], _mm_loadu_pd(&src[12]));
+    _mm_stream_pd(&dst[14], _mm_loadu_pd(&src[14]));
+#elif defined(CTOOLS_ARM64)
+    copy_doubles_16(dst, src);
+#else
+    copy_doubles_16(dst, src);
 #endif
 }
 
@@ -387,27 +400,53 @@ static void *load_variable_thread(void *arg)
             return (void *)1;  /* Signal failure */
         }
 
-        double *dbl_ptr = args->var->data.dbl;
-        size_t i_end = nobs - (nobs % 8);
+        double * restrict dbl_ptr = args->var->data.dbl;
 
-        /* Local buffer for batched loads - helps with register allocation */
-        double v[8];
+        /*
+         * Aggressive optimization strategy:
+         * - 16x unrolling for better instruction-level parallelism
+         * - Double buffering for software pipelining (overlap load/store)
+         * - Branch-free prefetch by splitting into prefetch and non-prefetch regions
+         * - Use restrict to help compiler optimize
+         */
 
-        /* Main loop: batch 8 SPI reads, then batch 8 memory writes */
-        for (i = 0; i < i_end; i += 8) {
-            /* Prefetch destination memory ahead (2 cache lines = 16 doubles) */
-            if (i + PREFETCH_DISTANCE < nobs) {
-                _mm_prefetch((const char *)&dbl_ptr[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+        /* Double buffers for software pipelining */
+        double v0[16], v1[16];
+
+        /* Calculate loop bounds - separate prefetch region from tail */
+        size_t i_end_16 = nobs - (nobs % 16);
+        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
+
+        /* Phase 1: Main loop with prefetching (bulk of iterations) */
+        i = 0;
+        if (prefetch_end > 0) {
+            /* Prime the pipeline: load first batch */
+            SF_VDATA_BATCH16(var_idx, obs1, v0);
+
+            for (; i < prefetch_end; i += 16) {
+                /* Prefetch 2 cache lines ahead (32 doubles = 256 bytes) */
+                _mm_prefetch((const char *)&dbl_ptr[i + 32], _MM_HINT_T0);
+                _mm_prefetch((const char *)&dbl_ptr[i + 40], _MM_HINT_T0);
+
+                /* Load next batch into v1 while we still have v0 */
+                SF_VDATA_BATCH16(var_idx, i + 16 + obs1, v1);
+
+                /* Store previous batch */
+                copy_doubles_16(&dbl_ptr[i], v0);
+
+                /* Swap buffers */
+                double *tmp = (double *)memcpy(v0, v1, sizeof(v0));
+                (void)tmp;
             }
-
-            /* Batch read from Stata into local buffer */
-            SF_VDATA_BATCH8(var_idx, i + obs1, v);
-
-            /* Batch write to destination using SIMD copy */
-            copy_doubles_8(&dbl_ptr[i], v);
         }
 
-        /* Handle remaining elements */
+        /* Phase 2: Remaining 16-element blocks without prefetch */
+        for (; i < i_end_16; i += 16) {
+            SF_VDATA_BATCH16(var_idx, i + obs1, v0);
+            copy_doubles_16(&dbl_ptr[i], v0);
+        }
+
+        /* Phase 3: Handle remaining elements (< 16) */
         for (; i < nobs; i++) {
             SF_vdata(var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
         }
@@ -523,6 +562,9 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         free(thread_args);
     }
 
+    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    __sync_synchronize();
+
     return STATA_OK;
 }
 
@@ -534,10 +576,11 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
     Thread function: Store a single variable from C memory to Stata.
 
     Writes all observations for one variable using SF_vstore (numeric) or
-    SF_sstore (string). Optimizations include:
-    - 8x unrolled loop with batched SPI writes
-    - Prefetching source data ahead of consumption
-    - Local buffer for improved register allocation
+    SF_sstore (string). Aggressive optimizations include:
+    - 16x unrolled loop with batched SPI writes
+    - Software pipelining with double buffering
+    - Branch-free prefetch regions
+    - restrict keyword for aliasing optimization
 
     @param arg  Pointer to ctools_var_io_args with input/output parameters
     @return     NULL on success (for ctools_threads compatibility)
@@ -551,43 +594,68 @@ static void *store_variable_thread(void *arg)
     ST_int var_idx = (ST_int)args->var_idx;
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
-        /* Numeric variable - optimized store with prefetching */
-        double *dbl_data = args->var->data.dbl;
-        size_t i_end = nobs - (nobs % 8);
+        /* Numeric variable - aggressive optimization */
+        const double * restrict dbl_data = args->var->data.dbl;
 
-        /* Local buffer for batched reads from source */
-        double v[8];
+        /* Double buffers for software pipelining */
+        double v0[16], v1[16];
 
-        /* Main loop: prefetch source, batch read, batch write */
-        for (i = 0; i < i_end; i += 8) {
-            /* Prefetch source data ahead (2 cache lines = 16 doubles) */
-            if (i + PREFETCH_DISTANCE < nobs) {
-                _mm_prefetch((const char *)&dbl_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+        /* Calculate loop bounds */
+        size_t i_end_16 = nobs - (nobs % 16);
+        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
+
+        /* Phase 1: Main loop with prefetching and pipelining */
+        i = 0;
+        if (prefetch_end > 0) {
+            /* Prime the pipeline */
+            copy_doubles_16(v0, &dbl_data[0]);
+
+            for (; i < prefetch_end; i += 16) {
+                /* Prefetch source data ahead */
+                _mm_prefetch((const char *)&dbl_data[i + 32], _MM_HINT_T0);
+                _mm_prefetch((const char *)&dbl_data[i + 40], _MM_HINT_T0);
+
+                /* Load next batch while writing current */
+                copy_doubles_16(v1, &dbl_data[i + 16]);
+
+                /* Write current batch to Stata */
+                SF_VSTORE_BATCH16(var_idx, i + obs1, v0);
+
+                /* Swap buffers */
+                double *tmp = (double *)memcpy(v0, v1, sizeof(v0));
+                (void)tmp;
             }
-
-            /* Batch read from source into local buffer using SIMD */
-            copy_doubles_8(v, &dbl_data[i]);
-
-            /* Batch write to Stata */
-            SF_VSTORE_BATCH8(var_idx, i + obs1, v);
         }
 
-        /* Handle remaining elements */
+        /* Phase 2: Remaining 16-element blocks without prefetch */
+        for (; i < i_end_16; i += 16) {
+            copy_doubles_16(v0, &dbl_data[i]);
+            SF_VSTORE_BATCH16(var_idx, i + obs1, v0);
+        }
+
+        /* Phase 3: Handle remaining elements */
         for (; i < nobs; i++) {
             SF_vstore(var_idx, (ST_int)(i + obs1), dbl_data[i]);
         }
+
     } else {
-        /* String variable - sequential store with prefetching */
-        char **str_data = args->var->data.str;
-        for (i = 0; i < nobs; i++) {
-            /* Prefetch pointer and string data ahead */
-            if (i + PREFETCH_DISTANCE < nobs) {
-                _mm_prefetch((const char *)&str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-                /* Also prefetch the string content if pointer is available */
-                if (str_data[i + PREFETCH_DISTANCE / 2] != NULL) {
-                    _mm_prefetch(str_data[i + PREFETCH_DISTANCE / 2], _MM_HINT_T0);
-                }
-            }
+        /* String variable - optimized with prefetching */
+        char * const * restrict str_data = args->var->data.str;
+
+        /* Calculate prefetch region */
+        size_t prefetch_end = (nobs > PREFETCH_DISTANCE) ? (nobs - PREFETCH_DISTANCE) : 0;
+
+        /* Phase 1: Main loop with prefetching */
+        for (i = 0; i < prefetch_end; i++) {
+            /* Prefetch pointer array and string content ahead */
+            _mm_prefetch((const char *)&str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+            _mm_prefetch(str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+
+            SF_sstore(var_idx, (ST_int)(i + obs1), str_data[i]);
+        }
+
+        /* Phase 2: Tail without prefetch */
+        for (; i < nobs; i++) {
             SF_sstore(var_idx, (ST_int)(i + obs1), str_data[i]);
         }
     }
@@ -668,6 +736,10 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
     }
 
     free(thread_args);
+
+    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    __sync_synchronize();
+
     return STATA_OK;
 }
 
@@ -782,6 +854,9 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
         }
         free(thread_args);
     }
+
+    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    __sync_synchronize();
 
     return STATA_OK;
 }

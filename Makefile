@@ -128,7 +128,9 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_timer.h \
                $(SRC_DIR)/ctools_error.h \
                $(SRC_DIR)/ctools_threads.h \
-               $(SRC_DIR)/ctools_config.h
+               $(SRC_DIR)/ctools_config.h \
+               $(SRC_DIR)/ctools_args.h \
+               $(SRC_DIR)/ctools_spi.h
 
 CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h
 
@@ -586,6 +588,34 @@ endif
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
 	@echo "----------------------------------------------------------------------"
+
+# ------------------------------------------------------------------------------
+# Debug build with AddressSanitizer
+# ------------------------------------------------------------------------------
+ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer -g -O1
+TSAN_FLAGS = -fsanitize=thread -fno-omit-frame-pointer -g -O1
+
+debug-asan: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+	@echo ""
+	@echo "----------------------------------------------------------------------"
+	@echo "  Debug build with AddressSanitizer"
+	@echo "----------------------------------------------------------------------"
+	$(CC_MAC) $(MAC_BASE_FLAGS) $(ASAN_FLAGS) -arch arm64 \
+		-Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include \
+		-o $(PLUGIN_MAC_ARM) $(SOURCES) \
+		-bundle -arch arm64 -L$(LIBOMP_PREFIX)/lib -lomp -framework Accelerate
+	@echo "    Output: $(PLUGIN_MAC_ARM) (with ASan)"
+
+debug-tsan: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+	@echo ""
+	@echo "----------------------------------------------------------------------"
+	@echo "  Debug build with ThreadSanitizer"
+	@echo "----------------------------------------------------------------------"
+	$(CC_MAC) $(MAC_BASE_FLAGS) $(TSAN_FLAGS) -arch arm64 \
+		-Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include \
+		-o $(PLUGIN_MAC_ARM) $(SOURCES) \
+		-bundle -arch arm64 -L$(LIBOMP_PREFIX)/lib -lomp -framework Accelerate
+	@echo "    Output: $(PLUGIN_MAC_ARM) (with TSan)"
 
 # ------------------------------------------------------------------------------
 # Clean

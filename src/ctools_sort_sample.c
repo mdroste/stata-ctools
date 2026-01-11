@@ -37,27 +37,16 @@
 /* Minimum observations to use sample sort (otherwise use radix) */
 #define SAMPLE_SORT_THRESHOLD 50000
 
-/* Prefetch distance for memory access optimization */
-#define SAMPLE_PREFETCH_DISTANCE 16
-
 /* Maximum threads to use */
 #define SAMPLE_MAX_THREADS 16
 
-/* Restrict keyword for compiler optimization */
-#ifdef __GNUC__
-#define SAMPLE_RESTRICT __restrict__
-#else
-#define SAMPLE_RESTRICT
-#endif
+/* Use PREFETCH_DISTANCE from ctools_config.h */
+#define SAMPLE_PREFETCH_DISTANCE PREFETCH_DISTANCE
 
-/* Prefetch macro */
-#if defined(__GNUC__) || defined(__clang__)
-#define SAMPLE_PREFETCH(addr) __builtin_prefetch(addr, 0, 1)
-#define SAMPLE_PREFETCH_W(addr) __builtin_prefetch(addr, 1, 1)
-#else
-#define SAMPLE_PREFETCH(addr) ((void)0)
-#define SAMPLE_PREFETCH_W(addr) ((void)0)
-#endif
+/* Use centralized macros from ctools_config.h */
+#define SAMPLE_RESTRICT CTOOLS_RESTRICT
+#define SAMPLE_PREFETCH(addr) CTOOLS_PREFETCH(addr)
+#define SAMPLE_PREFETCH_W(addr) CTOOLS_PREFETCH_W(addr)
 
 /* ============================================================================
    Utility Functions

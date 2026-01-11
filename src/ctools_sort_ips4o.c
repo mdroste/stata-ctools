@@ -42,22 +42,14 @@
 #define IPS4O_PREFETCH_DISTANCE 16       /* Larger prefetch distance */
 
 /* ============================================================================
-   Compiler Hints
+   Compiler Hints - Use centralized macros from ctools_config.h
    ============================================================================ */
 
-#if defined(__GNUC__) || defined(__clang__)
-    #define IPS4O_LIKELY(x)   __builtin_expect(!!(x), 1)
-    #define IPS4O_UNLIKELY(x) __builtin_expect(!!(x), 0)
-    #define IPS4O_PREFETCH(addr) __builtin_prefetch((addr), 0, 3)
-    #define IPS4O_RESTRICT __restrict__
-    #define IPS4O_INLINE __attribute__((always_inline)) inline
-#else
-    #define IPS4O_LIKELY(x)   (x)
-    #define IPS4O_UNLIKELY(x) (x)
-    #define IPS4O_PREFETCH(addr) ((void)0)
-    #define IPS4O_RESTRICT
-    #define IPS4O_INLINE inline
-#endif
+#define IPS4O_LIKELY(x)   CTOOLS_LIKELY(x)
+#define IPS4O_UNLIKELY(x) CTOOLS_UNLIKELY(x)
+#define IPS4O_PREFETCH(addr) CTOOLS_PREFETCH(addr)
+#define IPS4O_RESTRICT CTOOLS_RESTRICT
+#define IPS4O_INLINE CTOOLS_INLINE
 
 /* ============================================================================
    Utility Functions

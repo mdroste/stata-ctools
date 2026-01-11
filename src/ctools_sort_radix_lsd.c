@@ -477,7 +477,7 @@ static void *string_histogram_thread(void *arg)
     for (i = args->start; i < args->end; i++) {
         idx = args->order[i];
         len = args->str_lengths[idx];
-        if (args->char_pos < len) {
+        if (args->char_pos < len && args->strings[idx] != NULL) {
             byte_val = (unsigned char)args->strings[idx][args->char_pos];
         } else {
             byte_val = 0;
@@ -502,7 +502,7 @@ static void *string_scatter_thread(void *arg)
     for (i = args->start; i < args->end; i++) {
         idx = args->order[i];
         len = args->str_lengths[idx];
-        if (args->char_pos < len) {
+        if (args->char_pos < len && args->strings[idx] != NULL) {
             byte_val = (unsigned char)args->strings[idx][args->char_pos];
         } else {
             byte_val = 0;
@@ -733,7 +733,7 @@ static int radix_sort_pass_string(size_t *order,
     for (i = 0; i < nobs; i++) {
         idx = order[i];
         len = str_lengths[idx];
-        if (char_pos < len) {
+        if (char_pos < len && strings[idx] != NULL) {
             byte_val = (unsigned char)strings[idx][char_pos];
         } else {
             byte_val = 0;
@@ -762,7 +762,7 @@ static int radix_sort_pass_string(size_t *order,
     for (i = 0; i < nobs; i++) {
         idx = order[i];
         len = str_lengths[idx];
-        if (char_pos < len) {
+        if (char_pos < len && strings[idx] != NULL) {
             byte_val = (unsigned char)strings[idx][char_pos];
         } else {
             byte_val = 0;
@@ -894,6 +894,11 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 
     str_data = data->vars[var_idx].data.str;
 
+    /* Safety check for NULL string data array */
+    if (str_data == NULL) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
     /* Optimization 2: Pre-cache all string lengths */
     str_lengths = (size_t *)malloc(data->nobs * sizeof(size_t));
     if (str_lengths == NULL) {
@@ -901,7 +906,12 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
     }
 
     for (i = 0; i < data->nobs; i++) {
-        len = strlen(str_data[i]);
+        /* Handle NULL string pointers gracefully */
+        if (str_data[i] == NULL) {
+            len = 0;
+        } else {
+            len = strlen(str_data[i]);
+        }
         str_lengths[i] = len;
         if (len > max_len) {
             max_len = len;

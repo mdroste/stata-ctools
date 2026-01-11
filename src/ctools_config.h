@@ -63,4 +63,39 @@
 */
 #define PREFETCH_DISTANCE 16
 
+/*
+    Unified prefetch macros for all ctools modules.
+    CTOOLS_PREFETCH(addr)   - Prefetch for reading
+    CTOOLS_PREFETCH_W(addr) - Prefetch for writing
+*/
+#if defined(__GNUC__) || defined(__clang__)
+    #define CTOOLS_PREFETCH(addr)   __builtin_prefetch((addr), 0, 1)
+    #define CTOOLS_PREFETCH_W(addr) __builtin_prefetch((addr), 1, 1)
+    #define CTOOLS_LIKELY(x)        __builtin_expect(!!(x), 1)
+    #define CTOOLS_UNLIKELY(x)      __builtin_expect(!!(x), 0)
+#else
+    #define CTOOLS_PREFETCH(addr)   ((void)0)
+    #define CTOOLS_PREFETCH_W(addr) ((void)0)
+    #define CTOOLS_LIKELY(x)        (x)
+    #define CTOOLS_UNLIKELY(x)      (x)
+#endif
+
+/* Restrict keyword for aliasing hints */
+#ifdef __GNUC__
+    #define CTOOLS_RESTRICT __restrict__
+#elif defined(_MSC_VER)
+    #define CTOOLS_RESTRICT __restrict
+#else
+    #define CTOOLS_RESTRICT
+#endif
+
+/* Always inline hint */
+#if defined(__GNUC__) || defined(__clang__)
+    #define CTOOLS_INLINE __attribute__((always_inline)) inline
+#elif defined(_MSC_VER)
+    #define CTOOLS_INLINE __forceinline
+#else
+    #define CTOOLS_INLINE inline
+#endif
+
 #endif /* CTOOLS_CONFIG_H */

@@ -221,20 +221,30 @@ static int cmerge_compare_keys_same(stata_data *data, size_t row_a, size_t row_b
    Returns the first index where the key differs from key at start_idx.
    Assumes data is sorted on keys.
 
+   @param data       Sorted data to search
+   @param start_idx  Starting index of the group
+   @param nobs       Total number of observations (exclusive upper bound)
+   @param nkeys      Number of key variables
+   @param all_numeric True if all keys are numeric (for fast path)
+
+   @return Index of first non-matching element, or nobs if all remaining match
+
    OPTIMIZATION: Uses linear scan for first few elements (cache-friendly),
    then switches to binary search if group is larger. */
 static size_t cmerge_find_group_end_hybrid(stata_data *data, size_t start_idx,
-                                            size_t max_idx, int nkeys,
+                                            size_t nobs, int nkeys,
                                             int all_numeric)
 {
-    if (start_idx >= max_idx) return start_idx + 1;
+    /* If start_idx is at or past the last valid index, return nobs */
+    if (start_idx + 1 >= nobs) return nobs;
 
-    /* Phase 1: Linear scan for first GROUP_SEARCH_LINEAR_THRESHOLD elements */
-    size_t linear_end = start_idx + GROUP_SEARCH_LINEAR_THRESHOLD;
-    if (linear_end > max_idx) linear_end = max_idx;
+    /* Phase 1: Linear scan for first GROUP_SEARCH_LINEAR_THRESHOLD elements
+       Note: nobs is exclusive upper bound, so valid indices are 0..nobs-1 */
+    size_t linear_end = start_idx + 1 + GROUP_SEARCH_LINEAR_THRESHOLD;
+    if (linear_end > nobs) linear_end = nobs;
 
     size_t pos = start_idx + 1;
-    while (pos <= linear_end) {
+    while (pos < linear_end) {  /* Use < not <= since nobs is exclusive */
         int cmp;
         if (all_numeric) {
             cmp = cmerge_compare_keys_numeric_same(data, start_idx, pos, nkeys);
@@ -247,12 +257,14 @@ static size_t cmerge_find_group_end_hybrid(stata_data *data, size_t start_idx,
         pos++;
     }
 
-    /* If we reached here and pos > max_idx, entire remaining data matches */
-    if (pos > max_idx) return max_idx + 1;
+    /* If we've scanned all remaining data, return nobs */
+    if (pos >= nobs) return nobs;
 
-    /* Phase 2: Binary search for larger groups */
+    /* Phase 2: Binary search for larger groups
+       Binary search for the first index where key differs from start_idx's key.
+       lo = first unchecked index, hi = nobs (exclusive upper bound) */
     size_t lo = pos;
-    size_t hi = max_idx;
+    size_t hi = nobs;
 
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -265,13 +277,13 @@ static size_t cmerge_find_group_end_hybrid(stata_data *data, size_t start_idx,
         }
 
         if (cmp == 0) {
-            lo = mid + 1;
+            lo = mid + 1;  /* Key matches, search right half */
         } else {
-            hi = mid;
+            hi = mid;      /* Key differs, search left half */
         }
     }
 
-    return lo;
+    return lo;  /* lo is now the first index where key differs, or nobs if all match */
 }
 
 static int64_t cmerge_sorted_join(
@@ -738,6 +750,7 @@ static ST_retcode cmerge_load_using(const char *args)
     char msg[256];
     ST_retcode rc;
 
+
     /* Parse: "load_using <nkeys> <key_idx1>...<key_idxN> n_keepusing <count>
               keepusing_indices <idx1>...<idxM> [verbose]" */
     char args_copy[4096];
@@ -908,26 +921,31 @@ static ST_retcode cmerge_execute(const char *args)
     ST_retcode rc;
     double t_start, t_total_start;
 
+
     t_total_start = cmerge_get_time_ms();
+
 
     if (!g_using_cache.loaded) {
         SF_error("cmerge: Using data not loaded. Call load_using first.\n");
         return 459;
     }
 
-    /* Parse arguments */
-    char args_copy[8192];
+
+
+    /* Parse arguments - use static buffer to avoid stack issues */
+    static char args_copy[8192];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
+
     cmerge_type_t merge_type = MERGE_1_1;
     int nkeys = 0;
-    int master_key_indices[CMERGE_MAX_KEYVARS];
+    static int master_key_indices[CMERGE_MAX_KEYVARS];
     int orig_row_idx = 0;
     size_t master_nobs = 0;
     size_t master_nvars = 0;
     int n_keepusing = 0;
-    int keepusing_placeholder_indices[CMERGE_MAX_VARS];
+    static int keepusing_placeholder_indices[CMERGE_MAX_VARS];
     int merge_var_idx = 0;
     int preserve_order = 0;
     int verbose = 0;
@@ -987,23 +1005,43 @@ static ST_retcode cmerge_execute(const char *args)
         token = strtok(NULL, " ");
     }
 
+
     /* ===================================================================
      * Step 1: Load ONLY master keys + _orig_row
      * =================================================================== */
 
-    if (verbose) SF_display("cmerge: Loading master keys only...\n");
+
+    if (verbose) {
+        snprintf(msg, sizeof(msg), "cmerge: Loading master keys only...\n");
+        SF_display(msg);
+    }
+
+
     t_start = cmerge_get_time_ms();
+
 
     int n_to_load = nkeys + 1;  /* keys + _orig_row */
     int *load_indices = malloc(n_to_load * sizeof(int));
+
+
+    if (!load_indices) {
+        SF_error("cmerge: Failed to allocate load_indices\n");
+        return 920;
+    }
+
     for (int i = 0; i < nkeys; i++) {
         load_indices[i] = master_key_indices[i];
     }
     load_indices[nkeys] = orig_row_idx;
 
+
     stata_data master_minimal;
     rc = ctools_data_load_selective(&master_minimal, load_indices, n_to_load, 1, master_nobs);
+
+
+
     free(load_indices);
+
 
     if (rc != STATA_OK) {
         SF_error("cmerge: Failed to load master keys\n");
@@ -1011,11 +1049,14 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     double t_load = cmerge_get_time_ms() - t_start;
+
+
     if (verbose) {
         snprintf(msg, sizeof(msg), "  Loaded %zu obs, %d vars in %.1f ms\n",
                  master_minimal.nobs, n_to_load, t_load);
         SF_display(msg);
     }
+
 
     /* ===================================================================
      * Step 2: Sort master keys
@@ -1024,12 +1065,27 @@ static ST_retcode cmerge_execute(const char *args)
     if (verbose) SF_display("cmerge: Sorting master keys...\n");
     t_start = cmerge_get_time_ms();
 
+
     int *sort_vars = malloc(nkeys * sizeof(int));
+
+
+    if (!sort_vars) {
+        stata_data_free(&master_minimal);
+        SF_error("cmerge: Failed to allocate sort_vars\n");
+        return 920;
+    }
+
+
     for (int i = 0; i < nkeys; i++) {
         sort_vars[i] = i + 1;  /* 1-based within master_minimal */
     }
 
+
     rc = ctools_sort_radix_lsd(&master_minimal, sort_vars, nkeys);
+
+
+    /* Validate master data after sort */
+
     free(sort_vars);
 
     if (rc != STATA_OK) {
@@ -1037,11 +1093,15 @@ static ST_retcode cmerge_execute(const char *args)
         return rc;
     }
 
+
     double t_sort = cmerge_get_time_ms() - t_start;
+
+
     if (verbose) {
         snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", t_sort);
         SF_display(msg);
     }
+
 
     /* ===================================================================
      * Step 3: Perform sorted merge join
@@ -1050,10 +1110,12 @@ static ST_retcode cmerge_execute(const char *args)
     if (verbose) SF_display("cmerge: Performing merge join...\n");
     t_start = cmerge_get_time_ms();
 
+
     cmerge_output_spec_t *output_specs = NULL;
     int64_t output_nobs_signed = cmerge_sorted_join(
         &master_minimal, &g_using_cache.keys,
         nkeys, merge_type, &output_specs);
+
 
     if (output_nobs_signed < 0) {
         stata_data_free(&master_minimal);
@@ -1063,6 +1125,7 @@ static ST_retcode cmerge_execute(const char *args)
 
     size_t output_nobs = (size_t)output_nobs_signed;
 
+
     double t_merge = cmerge_get_time_ms() - t_start;
     if (verbose) {
         snprintf(msg, sizeof(msg), "  Merge produced %zu rows in %.1f ms\n",
@@ -1070,11 +1133,14 @@ static ST_retcode cmerge_execute(const char *args)
         SF_display(msg);
     }
 
+
     /* ===================================================================
      * Step 4: Build master_orig_row mapping
      * =================================================================== */
 
+
     int64_t *master_orig_rows = malloc(output_nobs * sizeof(int64_t));
+
     if (!master_orig_rows) {
         free(output_specs);
         stata_data_free(&master_minimal);
@@ -1396,16 +1462,22 @@ static ST_retcode cmerge_clear(void)
 
 ST_retcode cmerge_main(const char *args)
 {
+
     if (args == NULL || strlen(args) == 0) {
         SF_error("cmerge: no arguments specified\n");
         return 198;
     }
 
-    char args_copy[8192];
+
+    /* Use static buffer to avoid potential stack issues */
+    static char args_copy[8192];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
+
     char *phase = strtok(args_copy, " ");
+
+
     const char *rest = args + strlen(phase);
     while (*rest == ' ') rest++;
 

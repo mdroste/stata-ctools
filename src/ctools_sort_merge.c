@@ -41,27 +41,16 @@
 /* Threshold for insertion sort in block sort */
 #define MERGE_INSERTION_THRESHOLD 32
 
-/* Prefetch distance */
-#define MERGE_PREFETCH_DISTANCE 16
-
 /* Maximum threads */
 #define MERGE_MAX_THREADS 16
 
-/* Restrict keyword */
-#ifdef __GNUC__
-#define MERGE_RESTRICT __restrict__
-#else
-#define MERGE_RESTRICT
-#endif
+/* Use PREFETCH_DISTANCE from ctools_config.h */
+#define MERGE_PREFETCH_DISTANCE PREFETCH_DISTANCE
 
-/* Prefetch macros */
-#if defined(__GNUC__) || defined(__clang__)
-#define MERGE_PREFETCH(addr) __builtin_prefetch(addr, 0, 1)
-#define MERGE_PREFETCH_W(addr) __builtin_prefetch(addr, 1, 1)
-#else
-#define MERGE_PREFETCH(addr) ((void)0)
-#define MERGE_PREFETCH_W(addr) ((void)0)
-#endif
+/* Use centralized macros from ctools_config.h */
+#define MERGE_RESTRICT CTOOLS_RESTRICT
+#define MERGE_PREFETCH(addr) CTOOLS_PREFETCH(addr)
+#define MERGE_PREFETCH_W(addr) CTOOLS_PREFETCH_W(addr)
 
 /* ============================================================================
    Utility Functions
