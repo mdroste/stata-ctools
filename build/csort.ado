@@ -1,11 +1,15 @@
-*! version 1.2.0 10Jan2026
+*! version 1.4.0 10Jan2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!
 *! Supports multiple sort algorithms:
-*!   algorithm(lsd)     - LSD radix sort (default) - best for fixed-width keys
-*!   algorithm(msd)     - MSD radix sort - best for variable-length strings
-*!   algorithm(timsort) - Timsort - best for partially sorted data
+*!   algorithm(lsd)      - LSD radix sort (default) - best for fixed-width keys
+*!   algorithm(msd)      - MSD radix sort - best for variable-length strings
+*!   algorithm(timsort)  - Timsort - best for partially sorted data
+*!   algorithm(sample)   - Sample sort - best for large datasets with many cores
+*!   algorithm(counting) - Counting sort - best for integer data with small range
+*!   algorithm(merge)    - Parallel merge sort - stable, predictable O(n log n)
+*!   algorithm(ips4o)    - IPS4o - in-place parallel super scalar samplesort
 
 program define csort
     version 14.0
@@ -111,9 +115,21 @@ program define csort
         else if "`algorithm'" == "timsort" | "`algorithm'" == "tim" | "`algorithm'" == "2" {
             local alg_code "alg=timsort"
         }
+        else if "`algorithm'" == "sample" | "`algorithm'" == "3" {
+            local alg_code "alg=sample"
+        }
+        else if "`algorithm'" == "counting" | "`algorithm'" == "count" | "`algorithm'" == "4" {
+            local alg_code "alg=counting"
+        }
+        else if "`algorithm'" == "merge" | "`algorithm'" == "5" {
+            local alg_code "alg=merge"
+        }
+        else if "`algorithm'" == "ips4o" | "`algorithm'" == "6" {
+            local alg_code "alg=ips4o"
+        }
         else {
             di as error "csort: invalid algorithm '`algorithm''"
-            di as error "Valid options: lsd (default), msd, timsort"
+            di as error "Valid options: lsd (default), msd, timsort, sample, counting, merge, ips4o"
             exit 198
         }
     }
@@ -133,13 +149,13 @@ program define csort
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
     plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code'"
 
-    * Display timing if requested
-    if ("`timeit'" != "") {
-        di as text _n "Timing breakdown:"
-        di as text "  Load:  " as result %8.4f _csort_time_load " sec"
-        di as text "  Sort:  " as result %8.4f _csort_time_sort " sec"
-        di as text "  Store: " as result %8.4f _csort_time_store " sec"
-        di as text "  Total: " as result %8.4f _csort_time_total " sec"
+    * Display timing if requested (verbose or timeit)
+    if ("`verbose'" != "" | "`timeit'" != "") {
+        di as text _n "csort timing breakdown:"
+        di as text "  Data load:  " as result %8.4f _csort_time_load " sec"
+        di as text "  Sort:       " as result %8.4f _csort_time_sort " sec"
+        di as text "  Data store: " as result %8.4f _csort_time_store " sec"
+        di as text "  Total:      " as result %8.4f _csort_time_total " sec"
     }
 
     * Set sort order in Stata (use stable to match csort's stable radix sort)

@@ -1,0 +1,350 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/benchmark_counting_sort.do 
+
+. * Counting Sort Performance Benchmark
+. * Tests on integer data with small range (ideal for counting sort)
+. clear all
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. di "======================================================================"
+======================================================================
+
+. di "Counting Sort Performance (Integer Data with Small Range)"
+Counting Sort Performance (Integer Data with Small Range)
+
+. di "======================================================================"
+======================================================================
+
+. 
+. * Test 1: Year-like data (range ~50)
+. di _n "=== Test 1: Year-like data (values 1970-2020) ==="
+
+=== Test 1: Year-like data (values 1970-2020) ===
+
+. local sizes 100000 500000 1000000 2000000 5000000 10000000
+
+. 
+. foreach n of local sizes {
+  2.     di _n "N = " %12.0fc `n'
+  3.     di "------------------------------------------------------------------
+> ----"
+  4. 
+.     clear
+  5.     set seed 12345
+  6.     set obs `n'
+  7.     gen int year = 1970 + int(runiform() * 51)  /* Range: 1970-2020 */
+  8. 
+.     * Counting sort
+.     preserve
+  9.     timer clear 1
+ 10.     timer on 1
+ 11.     quietly csort year, algorithm(counting)
+ 12.     timer off 1
+ 13.     quietly timer list 1
+ 14.     local t_counting = r(t1)
+ 15.     di "  Counting:   " %8.4f r(t1) "s"
+ 16.     restore
+ 17. 
+.     * LSD Radix
+.     preserve
+ 18.     timer clear 1
+ 19.     timer on 1
+ 20.     quietly csort year, algorithm(lsd)
+ 21.     timer off 1
+ 22.     quietly timer list 1
+ 23.     local t_lsd = r(t1)
+ 24.     di "  LSD Radix:  " %8.4f r(t1) "s"
+ 25.     restore
+ 26. 
+.     * IPS4o
+.     preserve
+ 27.     timer clear 1
+ 28.     timer on 1
+ 29.     quietly csort year, algorithm(ips4o)
+ 30.     timer off 1
+ 31.     quietly timer list 1
+ 32.     local t_ips4o = r(t1)
+ 33.     di "  IPS4o:      " %8.4f r(t1) "s"
+ 34.     restore
+ 35. 
+.     * Stata
+.     preserve
+ 36.     timer clear 1
+ 37.     timer on 1
+ 38.     quietly sort year
+ 39.     timer off 1
+ 40.     quietly timer list 1
+ 41.     local t_stata = r(t1)
+ 42.     di "  Stata:      " %8.4f r(t1) "s"
+ 43.     restore
+ 44. 
+.     di "  -> Counting is " %4.2f (`t_stata' / `t_counting') "x faster than St
+> ata"
+ 45.     di "  -> Counting vs LSD: " %4.2f (`t_lsd' / `t_counting') "x"
+ 46. }
+
+N =      100,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 100,000.
+  Counting:     0.0040s
+  LSD Radix:    0.0040s
+  IPS4o:        0.0040s
+  Stata:        0.0040s
+  -> Counting is 1.00x faster than Stata
+  -> Counting vs LSD: 1.00x
+
+N =      500,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 500,000.
+  Counting:     0.0100s
+  LSD Radix:    0.0110s
+  IPS4o:        0.0170s
+  Stata:        0.0150s
+  -> Counting is 1.50x faster than Stata
+  -> Counting vs LSD: 1.10x
+
+N =    1,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 1,000,000.
+  Counting:     0.0190s
+  LSD Radix:    0.0220s
+  IPS4o:        0.0340s
+  Stata:        0.0330s
+  -> Counting is 1.74x faster than Stata
+  -> Counting vs LSD: 1.16x
+
+N =    2,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 2,000,000.
+  Counting:     0.0390s
+  LSD Radix:    0.0400s
+  IPS4o:        0.0780s
+  Stata:        0.1000s
+  -> Counting is 2.56x faster than Stata
+  -> Counting vs LSD: 1.03x
+
+N =    5,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 5,000,000.
+  Counting:     0.1040s
+  LSD Radix:    0.1180s
+  IPS4o:        0.3340s
+  Stata:        0.4820s
+  -> Counting is 4.63x faster than Stata
+  -> Counting vs LSD: 1.13x
+
+N =   10,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 10,000,000.
+  Counting:     0.2090s
+  LSD Radix:    0.2420s
+  IPS4o:        0.8660s
+  Stata:        1.2630s
+  -> Counting is 6.04x faster than Stata
+  -> Counting vs LSD: 1.16x
+
+. 
+. * Test 2: State codes (range ~50)
+. di _n _n "=== Test 2: State codes (values 1-50) ==="
+
+
+=== Test 2: State codes (values 1-50) ===
+
+. local sizes 1000000 5000000 10000000
+
+. 
+. foreach n of local sizes {
+  2.     di _n "N = " %12.0fc `n'
+  3.     di "------------------------------------------------------------------
+> ----"
+  4. 
+.     clear
+  5.     set seed 12345
+  6.     set obs `n'
+  7.     gen int state = 1 + int(runiform() * 50)  /* Range: 1-50 */
+  8. 
+.     * Counting sort
+.     preserve
+  9.     timer clear 1
+ 10.     timer on 1
+ 11.     quietly csort state, algorithm(counting)
+ 12.     timer off 1
+ 13.     quietly timer list 1
+ 14.     local t_counting = r(t1)
+ 15.     di "  Counting:   " %8.4f r(t1) "s"
+ 16.     restore
+ 17. 
+.     * Stata
+.     preserve
+ 18.     timer clear 1
+ 19.     timer on 1
+ 20.     quietly sort state
+ 21.     timer off 1
+ 22.     quietly timer list 1
+ 23.     local t_stata = r(t1)
+ 24.     di "  Stata:      " %8.4f r(t1) "s"
+ 25.     restore
+ 26. 
+.     di "  -> Counting is " %4.2f (`t_stata' / `t_counting') "x faster than St
+> ata"
+ 27. }
+
+N =    1,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 1,000,000.
+  Counting:     0.0190s
+  Stata:        0.0330s
+  -> Counting is 1.74x faster than Stata
+
+N =    5,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 5,000,000.
+  Counting:     0.1000s
+  Stata:        0.4700s
+  -> Counting is 4.70x faster than Stata
+
+N =   10,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 10,000,000.
+  Counting:     0.2050s
+  Stata:        1.2540s
+  -> Counting is 6.12x faster than Stata
+
+. 
+. * Test 3: Larger range (categorical with 10000 categories)
+. di _n _n "=== Test 3: Large categorical (10000 categories) ==="
+
+
+=== Test 3: Large categorical (10000 categories) ===
+
+. local sizes 1000000 5000000 10000000
+
+. 
+. foreach n of local sizes {
+  2.     di _n "N = " %12.0fc `n'
+  3.     di "------------------------------------------------------------------
+> ----"
+  4. 
+.     clear
+  5.     set seed 12345
+  6.     set obs `n'
+  7.     gen int category = int(runiform() * 10000)  /* Range: 0-9999 */
+  8. 
+.     * Counting sort
+.     preserve
+  9.     timer clear 1
+ 10.     timer on 1
+ 11.     quietly csort category, algorithm(counting)
+ 12.     timer off 1
+ 13.     quietly timer list 1
+ 14.     local t_counting = r(t1)
+ 15.     di "  Counting:   " %8.4f r(t1) "s"
+ 16.     restore
+ 17. 
+.     * LSD Radix
+.     preserve
+ 18.     timer clear 1
+ 19.     timer on 1
+ 20.     quietly csort category, algorithm(lsd)
+ 21.     timer off 1
+ 22.     quietly timer list 1
+ 23.     local t_lsd = r(t1)
+ 24.     di "  LSD Radix:  " %8.4f r(t1) "s"
+ 25.     restore
+ 26. 
+.     * Stata
+.     preserve
+ 27.     timer clear 1
+ 28.     timer on 1
+ 29.     quietly sort category
+ 30.     timer off 1
+ 31.     quietly timer list 1
+ 32.     local t_stata = r(t1)
+ 33.     di "  Stata:      " %8.4f r(t1) "s"
+ 34.     restore
+ 35. 
+.     di "  -> Counting is " %4.2f (`t_stata' / `t_counting') "x faster than St
+> ata"
+ 36.     di "  -> Counting vs LSD: " %4.2f (`t_lsd' / `t_counting') "x"
+ 37. }
+
+N =    1,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 1,000,000.
+  Counting:     0.0200s
+  LSD Radix:    0.0220s
+  Stata:        0.0340s
+  -> Counting is 1.70x faster than Stata
+  -> Counting vs LSD: 1.10x
+
+N =    5,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 5,000,000.
+  Counting:     0.1020s
+  LSD Radix:    0.1230s
+  Stata:        0.4510s
+  -> Counting is 4.42x faster than Stata
+  -> Counting vs LSD: 1.21x
+
+N =   10,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 10,000,000.
+  Counting:     0.2050s
+  LSD Radix:    0.2550s
+  Stata:        1.2890s
+  -> Counting is 6.29x faster than Stata
+  -> Counting vs LSD: 1.24x
+
+. 
+. di _n "======================================================================
+> "
+
+======================================================================
+
+. di "Benchmark complete"
+Benchmark complete
+
+. di "======================================================================"
+======================================================================
+
+. 
+end of do-file

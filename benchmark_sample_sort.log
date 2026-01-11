@@ -1,0 +1,198 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/benchmark_sample_sort.do 
+
+. * Sample Sort Performance Benchmark
+. clear all
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. di "======================================================================"
+======================================================================
+
+. di "Sample Sort Performance Comparison (Optimized)"
+Sample Sort Performance Comparison (Optimized)
+
+. di "======================================================================"
+======================================================================
+
+. 
+. local sizes 100000 500000 1000000 2000000 5000000 10000000
+
+. 
+. foreach n of local sizes {
+  2.     di _n "N = " %12.0fc `n'
+  3.     di "------------------------------------------------------------------
+> ----"
+  4. 
+.     clear
+  5.     set seed 12345
+  6.     set obs `n'
+  7.     gen double value = rnormal()
+  8. 
+.     * Sample Sort
+.     preserve
+  9.     timer clear 1
+ 10.     timer on 1
+ 11.     quietly csort value, algorithm(sample)
+ 12.     timer off 1
+ 13.     quietly timer list 1
+ 14.     local t_sample = r(t1)
+ 15.     di "  Sample:     " %8.4f r(t1) "s"
+ 16.     restore
+ 17. 
+.     * LSD Radix
+.     preserve
+ 18.     timer clear 1
+ 19.     timer on 1
+ 20.     quietly csort value, algorithm(lsd)
+ 21.     timer off 1
+ 22.     quietly timer list 1
+ 23.     local t_lsd = r(t1)
+ 24.     di "  LSD Radix:  " %8.4f r(t1) "s"
+ 25.     restore
+ 26. 
+.     * IPS4o
+.     preserve
+ 27.     timer clear 1
+ 28.     timer on 1
+ 29.     quietly csort value, algorithm(ips4o)
+ 30.     timer off 1
+ 31.     quietly timer list 1
+ 32.     local t_ips4o = r(t1)
+ 33.     di "  IPS4o:      " %8.4f r(t1) "s"
+ 34.     restore
+ 35. 
+.     * Stata
+.     preserve
+ 36.     timer clear 1
+ 37.     timer on 1
+ 38.     quietly sort value
+ 39.     timer off 1
+ 40.     quietly timer list 1
+ 41.     local t_stata = r(t1)
+ 42.     di "  Stata:      " %8.4f r(t1) "s"
+ 43.     restore
+ 44. 
+.     di "  -> Sample is " %4.2f (`t_stata' / `t_sample') "x faster than Stata"
+ 45.     di "  -> Sample vs LSD: " %4.2f (`t_lsd' / `t_sample') "x"
+ 46.     di "  -> Sample vs IPS4o: " %4.2f (`t_ips4o' / `t_sample') "x"
+ 47. }
+
+N =      100,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 100,000.
+  Sample:       0.0050s
+  LSD Radix:    0.0040s
+  IPS4o:        0.0030s
+  Stata:        0.0050s
+  -> Sample is 1.00x faster than Stata
+  -> Sample vs LSD: 0.80x
+  -> Sample vs IPS4o: 0.60x
+
+N =      500,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 500,000.
+  Sample:       0.0130s
+  LSD Radix:    0.0120s
+  IPS4o:        0.0120s
+  Stata:        0.0210s
+  -> Sample is 1.62x faster than Stata
+  -> Sample vs LSD: 0.92x
+  -> Sample vs IPS4o: 0.92x
+
+N =    1,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 1,000,000.
+  Sample:       0.0250s
+  LSD Radix:    0.0240s
+  IPS4o:        0.0210s
+  Stata:        0.0390s
+  -> Sample is 1.56x faster than Stata
+  -> Sample vs LSD: 0.96x
+  -> Sample vs IPS4o: 0.84x
+
+N =    2,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 2,000,000.
+  Sample:       0.0570s
+  LSD Radix:    0.0540s
+  IPS4o:        0.0450s
+  Stata:        0.1100s
+  -> Sample is 1.93x faster than Stata
+  -> Sample vs LSD: 0.95x
+  -> Sample vs IPS4o: 0.79x
+
+N =    5,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 5,000,000.
+  Sample:       0.1550s
+  LSD Radix:    0.1620s
+  IPS4o:        0.1210s
+  Stata:        0.5180s
+  -> Sample is 3.34x faster than Stata
+  -> Sample vs LSD: 1.05x
+  -> Sample vs IPS4o: 0.78x
+
+N =   10,000,000
+----------------------------------------------------------------------
+Number of observations (_N) was 0, now 10,000,000.
+  Sample:       0.3240s
+  LSD Radix:    0.3390s
+  IPS4o:        0.2410s
+  Stata:        1.3600s
+  -> Sample is 4.20x faster than Stata
+  -> Sample vs LSD: 1.05x
+  -> Sample vs IPS4o: 0.74x
+
+. 
+. di _n "======================================================================
+> "
+
+======================================================================
+
+. di "Benchmark complete"
+Benchmark complete
+
+. di "======================================================================"
+======================================================================
+
+. 
+end of do-file

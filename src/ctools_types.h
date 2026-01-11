@@ -133,15 +133,56 @@ stata_retcode ctools_sort_radix_msd(stata_data *data, int *sort_vars, size_t nso
 // - When O(N) best case for nearly-sorted data is desired
 stata_retcode ctools_sort_timsort(stata_data *data, int *sort_vars, size_t nsort);
 
+// Sort data using Parallel Sample Sort
+// Sample sort is the gold standard for parallel sorting. It achieves near-linear
+// speedup by ensuring each processor handles ~n/p elements. Best for:
+// - Large datasets (millions of observations)
+// - High core counts (8+ cores)
+// - Random or semi-random data distribution
+stata_retcode ctools_sort_sample(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Parallel Counting Sort
+// Counting sort is optimal for integer data with a small range of values. Best for:
+// - Integer data with range < 1,000,000
+// - Categorical variables (year, state codes, etc.)
+// Returns STATA_ERR_UNSUPPORTED_TYPE if data is not suitable
+stata_retcode ctools_sort_counting(stata_data *data, int *sort_vars, size_t nsort);
+
+// Check if counting sort is suitable for a variable
+// Returns 1 if suitable (integer data with small range), 0 otherwise
+int ctools_counting_sort_suitable(stata_data *data, int var_idx);
+
+// Sort data using Parallel Merge Sort
+// A stable, predictable O(n log n) parallel algorithm. Best for:
+// - When stable sort is required
+// - When predictable performance is needed
+// - General-purpose parallel sorting
+stata_retcode ctools_sort_merge(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using IPS4o (In-place Parallel Super Scalar Samplesort)
+// A highly efficient parallel sorting algorithm combining:
+// - In-place sorting with minimal auxiliary memory
+// - Branchless bucket classification for superscalar performance
+// - Block-based data movement for cache efficiency
+// Best for:
+// - Large datasets where memory efficiency matters
+// - High core counts with good cache utilization
+// - General-purpose high-performance sorting
+stata_retcode ctools_sort_ips4o(stata_data *data, int *sort_vars, size_t nsort);
+
 /* ---------------------------------------------------------------------------
    Sort Algorithm Selection
    --------------------------------------------------------------------------- */
 
 // Sort algorithm enumeration
 typedef enum {
-    SORT_ALG_LSD = 0,    // LSD radix sort (default) - best for fixed-width keys
-    SORT_ALG_MSD = 1,    // MSD radix sort - best for variable-length strings
-    SORT_ALG_TIMSORT = 2 // Timsort - best for partially sorted data
+    SORT_ALG_LSD = 0,      // LSD radix sort (default) - best for fixed-width keys
+    SORT_ALG_MSD = 1,      // MSD radix sort - best for variable-length strings
+    SORT_ALG_TIMSORT = 2,  // Timsort - best for partially sorted data
+    SORT_ALG_SAMPLE = 3,   // Sample sort - best for large datasets with many cores
+    SORT_ALG_COUNTING = 4, // Counting sort - best for integer data with small range
+    SORT_ALG_MERGE = 5,    // Parallel merge sort - stable, predictable O(n log n)
+    SORT_ALG_IPS4O = 6     // IPS4o - in-place parallel super scalar samplesort
 } sort_algorithm_t;
 
 // Sort data using specified algorithm

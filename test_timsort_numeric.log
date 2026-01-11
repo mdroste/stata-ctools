@@ -1,0 +1,102 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/test_timsort_numeric.do 
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. di "Testing timsort with numerics..."
+Testing timsort with numerics...
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. di "Running csort price with timsort..."
+Running csort price with timsort...
+
+. csort price, algorithm(timsort)
+csort: Starting data load, nvars=13 algorithm=2
+csort debug: nobs=74 nvars=13 nsort=1
+csort debug: sort_vars = [2 ]
+csort debug: First 5 make values (before sort):
+  [0] AMC Concord
+  [1] AMC Pacer
+  [2] AMC Spirit
+  [3] Buick Century
+  [4] Buick Electra
+csort debug: Initial sort_order (first 10): 0 1 2 3 4 5 6 7 8 9 
+ctools_sort_timsort: entering
+ctools_sort_timsort: nobs=74 nvars=13 nsort=1
+ctools_sort_timsort: k=0 var_idx=1
+ctools_sort_timsort: var type=0
+ctools_sort_timsort: calling timsort_by_numeric_var
+ctools_sort_timsort: sort returned 0
+ctools_sort_timsort: calling timsort_apply_permutation
+ctools_sort_timsort: done
+csort debug: Final sort_order (first 10): 0 1 2 3 4 5 6 7 8 9 
+csort debug: First 5 make values (after sort):
+  [0] Merc. Zephyr
+  [1] Chev. Chevette
+  [2] Chev. Monza
+  [3] Toyota Corolla
+  [4] Subaru
+
+. di "Sort complete!"
+Sort complete!
+
+. list price in 1/10
+
+     +-------+
+     | price |
+     |-------|
+  1. | 3,291 |
+  2. | 3,299 |
+  3. | 3,667 |
+  4. | 3,748 |
+  5. | 3,798 |
+     |-------|
+  6. | 3,799 |
+  7. | 3,829 |
+  8. | 3,895 |
+  9. | 3,955 |
+ 10. | 3,984 |
+     +-------+
+
+. 
+end of do-file

@@ -25,6 +25,47 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do bench_fn_sizes.do 
-file bench_fn_sizes.do not found
-r(601);
+. do /tmp/test_msd_string.do 
+
+. adopath + "build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. cap program drop ctools_plugin
+
+. program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+
+. 
+. di "Testing MSD with strings..."
+Testing MSD with strings...
+
+. sysuse auto, clear
+(1978 automobile data)
+
+. di "Running csort make with MSD..."
+Running csort make with MSD...
+
+. csort make, algorithm(msd)
+
+. di "Sort complete!"
+Sort complete!
+
+. list make in 1/5
+
+     +-------------+
+     | make        |
+     |-------------|
+  1. | AMC Concord |
+  2. | AMC Pacer   |
+  3. | AMC Spirit  |
+  4. | Audi 5000   |
+  5. | Audi Fox    |
+     +-------------+
+
+. 
+end of do-file

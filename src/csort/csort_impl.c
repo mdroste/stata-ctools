@@ -24,9 +24,13 @@
 /*
     Parse algorithm option from argument string.
     Looks for "alg=X" where X is:
-      0 or "lsd" -> SORT_ALG_LSD (default)
-      1 or "msd" -> SORT_ALG_MSD
-      2 or "timsort" -> SORT_ALG_TIMSORT
+      0 or "lsd"      -> SORT_ALG_LSD (default)
+      1 or "msd"      -> SORT_ALG_MSD
+      2 or "timsort"  -> SORT_ALG_TIMSORT
+      3 or "sample"   -> SORT_ALG_SAMPLE
+      4 or "counting" -> SORT_ALG_COUNTING
+      5 or "merge"    -> SORT_ALG_MERGE
+      6 or "ips4o"    -> SORT_ALG_IPS4O
 */
 static sort_algorithm_t parse_algorithm(const char *args)
 {
@@ -47,15 +51,26 @@ static sort_algorithm_t parse_algorithm(const char *args)
         return SORT_ALG_MSD;
     } else if (*p == '2' || strncmp(p, "timsort", 7) == 0) {
         return SORT_ALG_TIMSORT;
+    } else if (*p == '3' || strncmp(p, "sample", 6) == 0) {
+        return SORT_ALG_SAMPLE;
+    } else if (*p == '4' || strncmp(p, "counting", 8) == 0) {
+        return SORT_ALG_COUNTING;
+    } else if (*p == '5' || strncmp(p, "merge", 5) == 0) {
+        return SORT_ALG_MERGE;
+    } else if (*p == '6' || strncmp(p, "ips4o", 5) == 0) {
+        return SORT_ALG_IPS4O;
     }
 
     return SORT_ALG_LSD;  /* Default for unrecognized */
 }
 
-/* Parse the sort variable indices from the argument string */
+/* Parse the sort variable indices from the argument string.
+   Only parse numbers that appear before "alg=" to avoid picking up
+   numbers from algorithm names like "ips4o". */
 static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 {
     const char *p;
+    const char *alg_start;
     char *endptr;
     size_t count = 0;
     size_t capacity = 16;
@@ -67,11 +82,24 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
         return -1;
     }
 
+    /* Find where options start (at "alg=") to stop parsing numbers there */
+    alg_start = strstr(args, "alg=");
+
     p = args;
     while (*p != '\0') {
+        /* Stop if we've reached the algorithm option */
+        if (alg_start != NULL && p >= alg_start) {
+            break;
+        }
+
         /* Skip whitespace */
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '\0') break;
+
+        /* Stop if we've reached the algorithm option after skipping spaces */
+        if (alg_start != NULL && p >= alg_start) {
+            break;
+        }
 
         /* Parse integer */
         val = strtol(p, &endptr, 10);
@@ -156,6 +184,14 @@ ST_retcode csort_main(const char *args)
     /* ================================================================
        PHASE 1: Load data from Stata to C
        ================================================================ */
+#if CSORT_DEBUG
+    {
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "csort: Starting data load, nvars=%zu algorithm=%d\n",
+                 nvars, algorithm);
+        SF_display(dbg);
+    }
+#endif
     timer.load_time = ctools_timer_seconds();
 
     rc = ctools_data_load(&data, nvars);
@@ -215,6 +251,22 @@ ST_retcode csort_main(const char *args)
             break;
         case SORT_ALG_TIMSORT:
             rc = ctools_sort_timsort(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_SAMPLE:
+            rc = ctools_sort_sample(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_COUNTING:
+            rc = ctools_sort_counting(&data, sort_vars, nsort);
+            /* If counting sort not suitable, fall back to LSD radix */
+            if (rc == STATA_ERR_UNSUPPORTED_TYPE) {
+                rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+            }
+            break;
+        case SORT_ALG_MERGE:
+            rc = ctools_sort_merge(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_IPS4O:
+            rc = ctools_sort_ips4o(&data, sort_vars, nsort);
             break;
         case SORT_ALG_LSD:
         default:

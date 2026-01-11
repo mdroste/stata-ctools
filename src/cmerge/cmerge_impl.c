@@ -72,6 +72,24 @@ typedef struct {
     int8_t merge_result;        /* 1, 2, or 3 */
 } cmerge_output_spec_t;
 
+/* Order pair for preserve_order sorting */
+typedef struct {
+    size_t order_key;
+    size_t orig_idx;
+} cmerge_order_pair_t;
+
+/* Comparison function for qsort - makes sort stable by comparing orig_idx on ties */
+static int cmerge_compare_order_pairs(const void *a, const void *b) {
+    const cmerge_order_pair_t *pa = (const cmerge_order_pair_t *)a;
+    const cmerge_order_pair_t *pb = (const cmerge_order_pair_t *)b;
+    if (pa->order_key < pb->order_key) return -1;
+    if (pa->order_key > pb->order_key) return 1;
+    /* Stable sort: preserve original order for equal keys */
+    if (pa->orig_idx < pb->orig_idx) return -1;
+    if (pa->orig_idx > pb->orig_idx) return 1;
+    return 0;
+}
+
 /* ============================================================================
  * Using data cache (persists between plugin calls)
  * ============================================================================ */
@@ -88,9 +106,69 @@ typedef struct {
 static cmerge_using_cache_t g_using_cache = {0};
 
 /* ============================================================================
- * Key comparison functions
+ * Key comparison functions - with specialized numeric fast path
  * ============================================================================ */
 
+/* Check if all keys are numeric (for fast path selection) */
+static int cmerge_all_keys_numeric(stata_data *data, int nkeys)
+{
+    for (int k = 0; k < nkeys; k++) {
+        if (data->vars[k].type != STATA_TYPE_DOUBLE) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Fast path: compare all-numeric keys without type checking in loop */
+static inline int cmerge_compare_keys_numeric(stata_data *data_a, size_t row_a,
+                                               stata_data *data_b, size_t row_b,
+                                               int nkeys)
+{
+    for (int k = 0; k < nkeys; k++) {
+        double val_a = data_a->vars[k].data.dbl[row_a];
+        double val_b = data_b->vars[k].data.dbl[row_b];
+
+        /* Branchless missing value handling for common case (no missing) */
+        int miss_a = SF_is_missing(val_a);
+        int miss_b = SF_is_missing(val_b);
+
+        if (miss_a | miss_b) {
+            if (miss_a && miss_b) continue;
+            return miss_a ? 1 : -1;
+        }
+
+        /* Use subtraction for branchless comparison when possible */
+        if (val_a < val_b) return -1;
+        if (val_a > val_b) return 1;
+    }
+    return 0;
+}
+
+/* Fast path: compare same-dataset numeric keys */
+static inline int cmerge_compare_keys_numeric_same(stata_data *data, size_t row_a,
+                                                    size_t row_b, int nkeys)
+{
+    for (int k = 0; k < nkeys; k++) {
+        double *col = data->vars[k].data.dbl;
+        double val_a = col[row_a];
+        double val_b = col[row_b];
+
+        int miss_a = SF_is_missing(val_a);
+        int miss_b = SF_is_missing(val_b);
+
+        if (miss_a | miss_b) {
+            if (miss_a && miss_b) continue;
+            return miss_a ? 1 : -1;
+        }
+
+        if (val_a < val_b) return -1;
+        if (val_a > val_b) return 1;
+    }
+    return 0;
+}
+
+/* General path: handles mixed string/numeric keys */
 static int cmerge_compare_keys(stata_data *data_a, size_t row_a,
                                 stata_data *data_b, size_t row_b,
                                 int nkeys)
@@ -132,8 +210,69 @@ static int cmerge_compare_keys_same(stata_data *data, size_t row_a, size_t row_b
 }
 
 /* ============================================================================
- * Sorted merge join - produces output specifications
+ * Hybrid linear/binary search for match group boundaries (optimization)
  * ============================================================================ */
+
+/* Threshold for switching from linear to binary search.
+   For small groups, linear scan is faster due to branch prediction and cache locality. */
+#define GROUP_SEARCH_LINEAR_THRESHOLD 8
+
+/* Find the end of a matching group using hybrid linear/binary search.
+   Returns the first index where the key differs from key at start_idx.
+   Assumes data is sorted on keys.
+
+   OPTIMIZATION: Uses linear scan for first few elements (cache-friendly),
+   then switches to binary search if group is larger. */
+static size_t cmerge_find_group_end_hybrid(stata_data *data, size_t start_idx,
+                                            size_t max_idx, int nkeys,
+                                            int all_numeric)
+{
+    if (start_idx >= max_idx) return start_idx + 1;
+
+    /* Phase 1: Linear scan for first GROUP_SEARCH_LINEAR_THRESHOLD elements */
+    size_t linear_end = start_idx + GROUP_SEARCH_LINEAR_THRESHOLD;
+    if (linear_end > max_idx) linear_end = max_idx;
+
+    size_t pos = start_idx + 1;
+    while (pos <= linear_end) {
+        int cmp;
+        if (all_numeric) {
+            cmp = cmerge_compare_keys_numeric_same(data, start_idx, pos, nkeys);
+        } else {
+            cmp = cmerge_compare_keys_same(data, start_idx, pos, nkeys);
+        }
+        if (cmp != 0) {
+            return pos;  /* Found boundary within linear scan */
+        }
+        pos++;
+    }
+
+    /* If we reached here and pos > max_idx, entire remaining data matches */
+    if (pos > max_idx) return max_idx + 1;
+
+    /* Phase 2: Binary search for larger groups */
+    size_t lo = pos;
+    size_t hi = max_idx;
+
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        int cmp;
+
+        if (all_numeric) {
+            cmp = cmerge_compare_keys_numeric_same(data, start_idx, mid, nkeys);
+        } else {
+            cmp = cmerge_compare_keys_same(data, start_idx, mid, nkeys);
+        }
+
+        if (cmp == 0) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    return lo;
+}
 
 static int64_t cmerge_sorted_join(
     stata_data *master_keys, stata_data *using_keys,
@@ -143,24 +282,37 @@ static int64_t cmerge_sorted_join(
     size_t m_nobs = master_keys->nobs;
     size_t u_nobs = using_keys->nobs;
 
-    /* Initial allocation estimate */
+    /* Determine if we can use the numeric fast path */
+    int master_numeric = cmerge_all_keys_numeric(master_keys, nkeys);
+    int using_numeric = cmerge_all_keys_numeric(using_keys, nkeys);
+    int all_numeric = master_numeric && using_numeric;
+
+    /* OPTIMIZATION 1: Better initial capacity estimation
+       Based on merge type and dataset sizes to minimize reallocations */
     size_t capacity;
     switch (merge_type) {
         case MERGE_1_1:
-            capacity = (m_nobs > u_nobs ? m_nobs : u_nobs) + (m_nobs < u_nobs ? m_nobs : u_nobs) / 4;
+            /* Max possible: all unique = m + u, typical: max(m,u) */
+            capacity = m_nobs + u_nobs;
             break;
         case MERGE_M_1:
-            capacity = m_nobs + u_nobs / 4;
+            /* Output = master rows (each gets one using match or none) */
+            capacity = m_nobs + u_nobs;
             break;
         case MERGE_1_M:
-            capacity = u_nobs + m_nobs / 4;
+            /* Output can expand: each master can match multiple using */
+            capacity = m_nobs + u_nobs + u_nobs / 2;
             break;
         case MERGE_M_M:
         default:
-            capacity = m_nobs + u_nobs;
+            /* Worst case: cross product, typical: sum + some expansion */
+            capacity = m_nobs + u_nobs + (m_nobs < u_nobs ? m_nobs : u_nobs);
             break;
     }
-    if (capacity < 1024) capacity = 1024;
+    /* Round up to power of 2 for better realloc behavior */
+    size_t pow2 = 1024;
+    while (pow2 < capacity) pow2 *= 2;
+    capacity = pow2;
 
     cmerge_output_spec_t *specs = malloc(capacity * sizeof(cmerge_output_spec_t));
     if (!specs) return -1;
@@ -169,36 +321,54 @@ static int64_t cmerge_sorted_join(
     size_t m_idx = 0;
     size_t u_idx = 0;
 
-    while (m_idx < m_nobs || u_idx < u_nobs) {
-        /* Grow if needed */
-        if (count >= capacity) {
-            capacity *= 2;
-            cmerge_output_spec_t *new_specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-            if (!new_specs) { free(specs); return -1; }
-            specs = new_specs;
-        }
+    /* Macro to ensure capacity - reduces code duplication */
+    #define ENSURE_CAPACITY(needed) \
+        do { \
+            if (count + (needed) > capacity) { \
+                while (capacity < count + (needed)) capacity *= 2; \
+                cmerge_output_spec_t *new_specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t)); \
+                if (!new_specs) { free(specs); return -1; } \
+                specs = new_specs; \
+            } \
+        } while (0)
 
+    while (m_idx < m_nobs || u_idx < u_nobs) {
         if (m_idx >= m_nobs) {
-            /* Master exhausted - remaining using rows */
-            specs[count].master_sorted_row = -1;
-            specs[count].using_sorted_row = (int64_t)u_idx;
-            specs[count].merge_result = MERGE_RESULT_USING_ONLY;
-            count++;
-            u_idx++;
+            /* Master exhausted - bulk add remaining using rows */
+            size_t remaining = u_nobs - u_idx;
+            ENSURE_CAPACITY(remaining);
+            for (size_t i = 0; i < remaining; i++) {
+                specs[count].master_sorted_row = -1;
+                specs[count].using_sorted_row = (int64_t)(u_idx + i);
+                specs[count].merge_result = MERGE_RESULT_USING_ONLY;
+                count++;
+            }
+            u_idx = u_nobs;
         }
         else if (u_idx >= u_nobs) {
-            /* Using exhausted - remaining master rows */
-            specs[count].master_sorted_row = (int64_t)m_idx;
-            specs[count].using_sorted_row = -1;
-            specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
-            count++;
-            m_idx++;
+            /* Using exhausted - bulk add remaining master rows */
+            size_t remaining = m_nobs - m_idx;
+            ENSURE_CAPACITY(remaining);
+            for (size_t i = 0; i < remaining; i++) {
+                specs[count].master_sorted_row = (int64_t)(m_idx + i);
+                specs[count].using_sorted_row = -1;
+                specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
+                count++;
+            }
+            m_idx = m_nobs;
         }
         else {
-            int cmp = cmerge_compare_keys(master_keys, m_idx, using_keys, u_idx, nkeys);
+            /* OPTIMIZATION 2: Use specialized numeric comparator when possible */
+            int cmp;
+            if (all_numeric) {
+                cmp = cmerge_compare_keys_numeric(master_keys, m_idx, using_keys, u_idx, nkeys);
+            } else {
+                cmp = cmerge_compare_keys(master_keys, m_idx, using_keys, u_idx, nkeys);
+            }
 
             if (cmp < 0) {
                 /* Master only */
+                ENSURE_CAPACITY(1);
                 specs[count].master_sorted_row = (int64_t)m_idx;
                 specs[count].using_sorted_row = -1;
                 specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
@@ -207,6 +377,7 @@ static int64_t cmerge_sorted_join(
             }
             else if (cmp > 0) {
                 /* Using only */
+                ENSURE_CAPACITY(1);
                 specs[count].master_sorted_row = -1;
                 specs[count].using_sorted_row = (int64_t)u_idx;
                 specs[count].merge_result = MERGE_RESULT_USING_ONLY;
@@ -214,30 +385,42 @@ static int64_t cmerge_sorted_join(
                 u_idx++;
             }
             else {
-                /* Keys match - count groups */
+                /* Keys match - find group boundaries */
                 size_t m_start = m_idx;
                 size_t u_start = u_idx;
 
-                size_t m_count = 1;
-                while (m_idx + m_count < m_nobs &&
-                       cmerge_compare_keys_same(master_keys, m_start, m_idx + m_count, nkeys) == 0) {
-                    m_count++;
-                }
+                /* OPTIMIZATION 3: Use binary search for group boundaries
+                   instead of linear scan when groups might be large */
+                size_t m_end = cmerge_find_group_end_hybrid(master_keys, m_start,
+                                                            m_nobs, nkeys, master_numeric);
+                size_t u_end = cmerge_find_group_end_hybrid(using_keys, u_start,
+                                                            u_nobs, nkeys, using_numeric);
 
-                size_t u_count = 1;
-                while (u_idx + u_count < u_nobs &&
-                       cmerge_compare_keys_same(using_keys, u_start, u_idx + u_count, nkeys) == 0) {
-                    u_count++;
+                size_t m_count = m_end - m_start;
+                size_t u_count = u_end - u_start;
+
+                /* Pre-calculate output size for this group */
+                size_t group_output;
+                switch (merge_type) {
+                    case MERGE_1_1:
+                        group_output = 1;
+                        break;
+                    case MERGE_M_1:
+                        group_output = m_count;
+                        break;
+                    case MERGE_1_M:
+                        group_output = u_count;
+                        break;
+                    case MERGE_M_M:
+                    default:
+                        group_output = (m_count > u_count ? m_count : u_count);
+                        break;
                 }
+                ENSURE_CAPACITY(group_output);
 
                 /* Generate output based on merge type */
                 switch (merge_type) {
                     case MERGE_1_1:
-                        if (count >= capacity) {
-                            capacity *= 2;
-                            specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                            if (!specs) return -1;
-                        }
                         specs[count].master_sorted_row = (int64_t)m_start;
                         specs[count].using_sorted_row = (int64_t)u_start;
                         specs[count].merge_result = MERGE_RESULT_BOTH;
@@ -247,11 +430,6 @@ static int64_t cmerge_sorted_join(
                     case MERGE_M_1:
                         /* Multiple master rows map to one using row */
                         for (size_t i = 0; i < m_count; i++) {
-                            if (count >= capacity) {
-                                capacity *= 2;
-                                specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                                if (!specs) return -1;
-                            }
                             specs[count].master_sorted_row = (int64_t)(m_start + i);
                             specs[count].using_sorted_row = (int64_t)u_start;
                             specs[count].merge_result = MERGE_RESULT_BOTH;
@@ -262,11 +440,6 @@ static int64_t cmerge_sorted_join(
                     case MERGE_1_M:
                         /* One master row maps to multiple using rows */
                         for (size_t i = 0; i < u_count; i++) {
-                            if (count >= capacity) {
-                                capacity *= 2;
-                                specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                                if (!specs) return -1;
-                            }
                             specs[count].master_sorted_row = (int64_t)m_start;
                             specs[count].using_sorted_row = (int64_t)(u_start + i);
                             specs[count].merge_result = MERGE_RESULT_BOTH;
@@ -279,11 +452,6 @@ static int64_t cmerge_sorted_join(
                         {
                             size_t pairs = (m_count < u_count) ? m_count : u_count;
                             for (size_t i = 0; i < pairs; i++) {
-                                if (count >= capacity) {
-                                    capacity *= 2;
-                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                                    if (!specs) return -1;
-                                }
                                 specs[count].master_sorted_row = (int64_t)(m_start + i);
                                 specs[count].using_sorted_row = (int64_t)(u_start + i);
                                 specs[count].merge_result = MERGE_RESULT_BOTH;
@@ -291,11 +459,6 @@ static int64_t cmerge_sorted_join(
                             }
                             /* Excess master rows */
                             for (size_t i = pairs; i < m_count; i++) {
-                                if (count >= capacity) {
-                                    capacity *= 2;
-                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                                    if (!specs) return -1;
-                                }
                                 specs[count].master_sorted_row = (int64_t)(m_start + i);
                                 specs[count].using_sorted_row = -1;
                                 specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
@@ -303,11 +466,6 @@ static int64_t cmerge_sorted_join(
                             }
                             /* Excess using rows */
                             for (size_t i = pairs; i < u_count; i++) {
-                                if (count >= capacity) {
-                                    capacity *= 2;
-                                    specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t));
-                                    if (!specs) return -1;
-                                }
                                 specs[count].master_sorted_row = -1;
                                 specs[count].using_sorted_row = (int64_t)(u_start + i);
                                 specs[count].merge_result = MERGE_RESULT_USING_ONLY;
@@ -317,11 +475,13 @@ static int64_t cmerge_sorted_join(
                         break;
                 }
 
-                m_idx = m_start + m_count;
-                u_idx = u_start + u_count;
+                m_idx = m_end;
+                u_idx = u_end;
             }
         }
     }
+
+    #undef ENSURE_CAPACITY
 
     *output_specs_out = specs;
     return (int64_t)count;
@@ -341,6 +501,9 @@ typedef struct {
     int success;
 } stream_var_args_t;
 
+/* Prefetch distance for software prefetching - 8 cache lines ahead */
+#define STREAM_PREFETCH_DISTANCE 64
+
 static void *stream_master_var_thread(void *arg)
 {
     stream_var_args_t *a = (stream_var_args_t *)arg;
@@ -359,11 +522,11 @@ static void *stream_master_var_thread(void *arg)
 
         /* GATHER from original master positions */
         for (size_t i = 0; i < output_nobs; i++) {
-            if (src_rows[i] >= 0) {
-                SF_sdata(var_idx, (ST_int)(src_rows[i] + 1), strbuf);
+            int64_t row = src_rows[i];
+            if (row >= 0) {
+                SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
                 buf[i] = strdup(strbuf);
             } else if (a->is_key && g_using_cache.loaded) {
-                /* Using-only row with key fallback */
                 int64_t using_row = a->specs[i].using_sorted_row;
                 if (using_row >= 0 && a->key_idx >= 0) {
                     char *s = g_using_cache.keys.vars[a->key_idx].data.str[using_row];
@@ -380,9 +543,22 @@ static void *stream_master_var_thread(void *arg)
                 return (void *)1;
             }
         }
+        size_t str_end8 = output_nobs - (output_nobs % 8);
 
-        /* SCATTER to output positions */
-        for (size_t i = 0; i < output_nobs; i++) {
+        /* SCATTER to output positions - 8x unrolled */
+        for (size_t i = 0; i < str_end8; i += 8) {
+            SF_sstore(var_idx, (ST_int)(i + 1), buf[i]);
+            SF_sstore(var_idx, (ST_int)(i + 2), buf[i + 1]);
+            SF_sstore(var_idx, (ST_int)(i + 3), buf[i + 2]);
+            SF_sstore(var_idx, (ST_int)(i + 4), buf[i + 3]);
+            SF_sstore(var_idx, (ST_int)(i + 5), buf[i + 4]);
+            SF_sstore(var_idx, (ST_int)(i + 6), buf[i + 5]);
+            SF_sstore(var_idx, (ST_int)(i + 7), buf[i + 6]);
+            SF_sstore(var_idx, (ST_int)(i + 8), buf[i + 7]);
+            free(buf[i]); free(buf[i+1]); free(buf[i+2]); free(buf[i+3]);
+            free(buf[i+4]); free(buf[i+5]); free(buf[i+6]); free(buf[i+7]);
+        }
+        for (size_t i = str_end8; i < output_nobs; i++) {
             SF_sstore(var_idx, (ST_int)(i + 1), buf[i]);
             free(buf[i]);
         }
@@ -392,12 +568,66 @@ static void *stream_master_var_thread(void *arg)
         double *buf = malloc(output_nobs * sizeof(double));
         if (!buf) return (void *)1;
 
-        /* GATHER from original master positions */
-        for (size_t i = 0; i < output_nobs; i++) {
+        /* GATHER from original master positions - 8x unrolled with prefetching */
+        size_t i_end8 = output_nobs - (output_nobs % 8);
+        for (size_t i = 0; i < i_end8; i += 8) {
+            /* Prefetch future source row indices */
+            if (i + STREAM_PREFETCH_DISTANCE < output_nobs) {
+                __builtin_prefetch(&src_rows[i + STREAM_PREFETCH_DISTANCE], 0, 0);
+            }
+
+            /* Read 8 source row indices at once for better cache usage */
+            int64_t r0 = src_rows[i], r1 = src_rows[i+1];
+            int64_t r2 = src_rows[i+2], r3 = src_rows[i+3];
+            int64_t r4 = src_rows[i+4], r5 = src_rows[i+5];
+            int64_t r6 = src_rows[i+6], r7 = src_rows[i+7];
+
+            /* Handle each row - branch-reduced pattern */
+            if (r0 >= 0) SF_vdata(var_idx, (ST_int)(r0 + 1), &buf[i]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i].using_sorted_row];
+            else buf[i] = SV_missval;
+
+            if (r1 >= 0) SF_vdata(var_idx, (ST_int)(r1 + 1), &buf[i+1]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+1].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+1] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+1].using_sorted_row];
+            else buf[i+1] = SV_missval;
+
+            if (r2 >= 0) SF_vdata(var_idx, (ST_int)(r2 + 1), &buf[i+2]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+2].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+2] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+2].using_sorted_row];
+            else buf[i+2] = SV_missval;
+
+            if (r3 >= 0) SF_vdata(var_idx, (ST_int)(r3 + 1), &buf[i+3]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+3].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+3] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+3].using_sorted_row];
+            else buf[i+3] = SV_missval;
+
+            if (r4 >= 0) SF_vdata(var_idx, (ST_int)(r4 + 1), &buf[i+4]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+4].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+4] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+4].using_sorted_row];
+            else buf[i+4] = SV_missval;
+
+            if (r5 >= 0) SF_vdata(var_idx, (ST_int)(r5 + 1), &buf[i+5]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+5].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+5] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+5].using_sorted_row];
+            else buf[i+5] = SV_missval;
+
+            if (r6 >= 0) SF_vdata(var_idx, (ST_int)(r6 + 1), &buf[i+6]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+6].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+6] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+6].using_sorted_row];
+            else buf[i+6] = SV_missval;
+
+            if (r7 >= 0) SF_vdata(var_idx, (ST_int)(r7 + 1), &buf[i+7]);
+            else if (a->is_key && g_using_cache.loaded && a->specs[i+7].using_sorted_row >= 0 && a->key_idx >= 0)
+                buf[i+7] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+7].using_sorted_row];
+            else buf[i+7] = SV_missval;
+        }
+        /* Handle remainder */
+        for (size_t i = i_end8; i < output_nobs; i++) {
             if (src_rows[i] >= 0) {
                 SF_vdata(var_idx, (ST_int)(src_rows[i] + 1), &buf[i]);
             } else if (a->is_key && g_using_cache.loaded) {
-                /* Using-only row with key fallback */
                 int64_t using_row = a->specs[i].using_sorted_row;
                 if (using_row >= 0 && a->key_idx >= 0) {
                     buf[i] = g_using_cache.keys.vars[a->key_idx].data.dbl[using_row];
@@ -409,9 +639,9 @@ static void *stream_master_var_thread(void *arg)
             }
         }
 
-        /* SCATTER to output positions (unrolled) */
-        size_t i_end = output_nobs - (output_nobs % 8);
-        for (size_t i = 0; i < i_end; i += 8) {
+        /* SCATTER with 16-way unrolling for better cache utilization */
+        size_t i_end16 = output_nobs - (output_nobs % 16);
+        for (size_t i = 0; i < i_end16; i += 16) {
             SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
             SF_vstore(var_idx, (ST_int)(i + 2), buf[i + 1]);
             SF_vstore(var_idx, (ST_int)(i + 3), buf[i + 2]);
@@ -420,12 +650,79 @@ static void *stream_master_var_thread(void *arg)
             SF_vstore(var_idx, (ST_int)(i + 6), buf[i + 5]);
             SF_vstore(var_idx, (ST_int)(i + 7), buf[i + 6]);
             SF_vstore(var_idx, (ST_int)(i + 8), buf[i + 7]);
+            SF_vstore(var_idx, (ST_int)(i + 9), buf[i + 8]);
+            SF_vstore(var_idx, (ST_int)(i + 10), buf[i + 9]);
+            SF_vstore(var_idx, (ST_int)(i + 11), buf[i + 10]);
+            SF_vstore(var_idx, (ST_int)(i + 12), buf[i + 11]);
+            SF_vstore(var_idx, (ST_int)(i + 13), buf[i + 12]);
+            SF_vstore(var_idx, (ST_int)(i + 14), buf[i + 13]);
+            SF_vstore(var_idx, (ST_int)(i + 15), buf[i + 14]);
+            SF_vstore(var_idx, (ST_int)(i + 16), buf[i + 15]);
         }
-        for (size_t i = i_end; i < output_nobs; i++) {
+        for (size_t i = i_end16; i < output_nobs; i++) {
             SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
         }
 
         free(buf);
+    }
+
+    a->success = 1;
+    return NULL;
+}
+
+/* ============================================================================
+ * OPTIMIZATION 5: Parallel thread for keepusing variable writes
+ * ============================================================================ */
+
+typedef struct {
+    int keepusing_idx;              /* Index in keepusing array */
+    ST_int dest_idx;                /* Destination Stata variable index */
+    int is_shared;                  /* Is this a shared variable? */
+    size_t master_nvars;            /* For determining shared status */
+    cmerge_output_spec_t *specs;    /* Output specifications */
+    size_t output_nobs;             /* Number of output observations */
+    int success;                    /* Thread result */
+} keepusing_write_args_t;
+
+static void *write_keepusing_var_thread(void *arg)
+{
+    keepusing_write_args_t *a = (keepusing_write_args_t *)arg;
+    size_t output_nobs = a->output_nobs;
+    ST_int dest_idx = a->dest_idx;
+    int is_shared = a->is_shared;
+    cmerge_output_spec_t *specs = a->specs;
+    stata_variable *src = &g_using_cache.keepusing.vars[a->keepusing_idx];
+
+    a->success = 0;
+
+    if (src->type == STATA_TYPE_DOUBLE) {
+        /* Numeric keepusing variable */
+        for (size_t i = 0; i < output_nobs; i++) {
+            int64_t using_row = specs[i].using_sorted_row;
+            int64_t master_row = specs[i].master_sorted_row;
+
+            /* For shared vars: only write for using-only rows */
+            if (is_shared && master_row >= 0) {
+                continue;
+            }
+
+            double val = (using_row >= 0) ? src->data.dbl[using_row] : SV_missval;
+            SF_vstore(dest_idx, (ST_int)(i + 1), val);
+        }
+    } else {
+        /* String keepusing variable */
+        for (size_t i = 0; i < output_nobs; i++) {
+            int64_t using_row = specs[i].using_sorted_row;
+            int64_t master_row = specs[i].master_sorted_row;
+
+            if (is_shared && master_row >= 0) {
+                continue;
+            }
+
+            const char *val = (using_row >= 0 && src->data.str[using_row]) ?
+                               src->data.str[using_row] : "";
+            SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
+        }
     }
 
     a->success = 1;
@@ -586,7 +883,6 @@ static ST_retcode cmerge_load_using(const char *args)
     free(sort_vars);
 
     double t_sort = cmerge_get_time_ms() - t_sort_start;
-    double t_total = cmerge_get_time_ms() - t_start;
 
     g_using_cache.loaded = 1;
 
@@ -799,56 +1095,96 @@ static ST_retcode cmerge_execute(const char *args)
 
     /* ===================================================================
      * Step 5: Apply preserve_order if requested
+     * Uses qsort O(n log n) - stable and well-tested
      * =================================================================== */
 
     if (preserve_order && output_nobs > 0) {
         if (verbose) SF_display("cmerge: Restoring original order...\n");
+        double t_reorder = cmerge_get_time_ms();
 
-        /* Compute order keys */
-        size_t *order_keys = malloc(output_nobs * sizeof(size_t));
-        size_t *indices = malloc(output_nobs * sizeof(size_t));
+        /* Create (order_key, original_index) pairs for sorting */
+        cmerge_order_pair_t *pairs = malloc(output_nobs * sizeof(cmerge_order_pair_t));
+        if (!pairs) {
+            free(output_specs);
+            free(master_orig_rows);
+            stata_data_free(&master_minimal);
+            return 920;
+        }
+
         for (size_t i = 0; i < output_nobs; i++) {
-            indices[i] = i;
+            pairs[i].orig_idx = i;
             if (master_orig_rows[i] >= 0) {
-                order_keys[i] = (size_t)master_orig_rows[i];
+                pairs[i].order_key = (size_t)master_orig_rows[i];
             } else {
-                order_keys[i] = master_nobs + (size_t)output_specs[i].using_sorted_row;
+                pairs[i].order_key = master_nobs + (size_t)output_specs[i].using_sorted_row;
             }
         }
 
-        /* Simple insertion sort for order restoration (stable) */
-        for (size_t i = 1; i < output_nobs; i++) {
-            size_t key = order_keys[i];
-            size_t idx = indices[i];
-            cmerge_output_spec_t spec = output_specs[i];
-            int64_t orig_row = master_orig_rows[i];
+        qsort(pairs, output_nobs, sizeof(cmerge_order_pair_t), cmerge_compare_order_pairs);
 
-            size_t j = i;
-            while (j > 0 && order_keys[j - 1] > key) {
-                order_keys[j] = order_keys[j - 1];
-                indices[j] = indices[j - 1];
-                output_specs[j] = output_specs[j - 1];
-                master_orig_rows[j] = master_orig_rows[j - 1];
-                j--;
-            }
-            order_keys[j] = key;
-            indices[j] = idx;
-            output_specs[j] = spec;
-            master_orig_rows[j] = orig_row;
+        /* Apply permutation to output_specs and master_orig_rows */
+        cmerge_output_spec_t *new_specs = malloc(output_nobs * sizeof(cmerge_output_spec_t));
+        int64_t *new_orig_rows = malloc(output_nobs * sizeof(int64_t));
+        if (!new_specs || !new_orig_rows) {
+            free(pairs);
+            if (new_specs) free(new_specs);
+            if (new_orig_rows) free(new_orig_rows);
+            free(output_specs);
+            free(master_orig_rows);
+            stata_data_free(&master_minimal);
+            return 920;
         }
 
-        free(order_keys);
-        free(indices);
+        for (size_t i = 0; i < output_nobs; i++) {
+            size_t src_idx = pairs[i].orig_idx;
+            new_specs[i] = output_specs[src_idx];
+            new_orig_rows[i] = master_orig_rows[src_idx];
+        }
+
+        /* Swap in the new sorted arrays */
+        free(output_specs);
+        free(master_orig_rows);
+        output_specs = new_specs;
+        master_orig_rows = new_orig_rows;
+
+        free(pairs);
+
+        if (verbose) {
+            snprintf(msg, sizeof(msg), "  Reordered in %.1f ms\n",
+                     cmerge_get_time_ms() - t_reorder);
+            SF_display(msg);
+        }
     }
 
-    /* Count merge results */
+    /* Count merge results - unrolled for better performance */
     size_t n_master_only = 0, n_using_only = 0, n_matched = 0;
-    for (size_t i = 0; i < output_nobs; i++) {
-        switch (output_specs[i].merge_result) {
-            case MERGE_RESULT_MASTER_ONLY: n_master_only++; break;
-            case MERGE_RESULT_USING_ONLY: n_using_only++; break;
-            case MERGE_RESULT_BOTH: n_matched++; break;
-        }
+    size_t cnt_end8 = output_nobs - (output_nobs % 8);
+
+    /* Main loop - 8x unrolling */
+    for (size_t i = 0; i < cnt_end8; i += 8) {
+        /* Branchless counting using comparison */
+        int8_t m0 = output_specs[i].merge_result;
+        int8_t m1 = output_specs[i + 1].merge_result;
+        int8_t m2 = output_specs[i + 2].merge_result;
+        int8_t m3 = output_specs[i + 3].merge_result;
+        int8_t m4 = output_specs[i + 4].merge_result;
+        int8_t m5 = output_specs[i + 5].merge_result;
+        int8_t m6 = output_specs[i + 6].merge_result;
+        int8_t m7 = output_specs[i + 7].merge_result;
+
+        n_master_only += (m0 == 1) + (m1 == 1) + (m2 == 1) + (m3 == 1) +
+                         (m4 == 1) + (m5 == 1) + (m6 == 1) + (m7 == 1);
+        n_using_only += (m0 == 2) + (m1 == 2) + (m2 == 2) + (m3 == 2) +
+                        (m4 == 2) + (m5 == 2) + (m6 == 2) + (m7 == 2);
+        n_matched += (m0 == 3) + (m1 == 3) + (m2 == 3) + (m3 == 3) +
+                     (m4 == 3) + (m5 == 3) + (m6 == 3) + (m7 == 3);
+    }
+    /* Handle remainder */
+    for (size_t i = cnt_end8; i < output_nobs; i++) {
+        int8_t m = output_specs[i].merge_result;
+        n_master_only += (m == 1);
+        n_using_only += (m == 2);
+        n_matched += (m == 3);
     }
 
     /* ===================================================================
@@ -858,51 +1194,77 @@ static ST_retcode cmerge_execute(const char *args)
     if (verbose) SF_display("cmerge: Writing output...\n");
     t_start = cmerge_get_time_ms();
 
-    /* 6a: Write _merge variable */
+    /* 6a: Write _merge variable - 16x unrolled for better cache performance */
     if (merge_var_idx > 0) {
-        for (size_t i = 0; i < output_nobs; i++) {
-            SF_vstore(merge_var_idx, (ST_int)(i + 1),
-                      (double)output_specs[i].merge_result);
+        ST_int mvar = (ST_int)merge_var_idx;
+        size_t merge_end16 = output_nobs - (output_nobs % 16);
+
+        /* Main loop - 16x unrolling (128 bytes = 2 cache lines of merge results) */
+        for (size_t i = 0; i < merge_end16; i += 16) {
+            SF_vstore(mvar, (ST_int)(i + 1),  (double)output_specs[i].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 2),  (double)output_specs[i + 1].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 3),  (double)output_specs[i + 2].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 4),  (double)output_specs[i + 3].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 5),  (double)output_specs[i + 4].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 6),  (double)output_specs[i + 5].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 7),  (double)output_specs[i + 6].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 8),  (double)output_specs[i + 7].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 9),  (double)output_specs[i + 8].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 10), (double)output_specs[i + 9].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 11), (double)output_specs[i + 10].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 12), (double)output_specs[i + 11].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 13), (double)output_specs[i + 12].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 14), (double)output_specs[i + 13].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 15), (double)output_specs[i + 14].merge_result);
+            SF_vstore(mvar, (ST_int)(i + 16), (double)output_specs[i + 15].merge_result);
+        }
+        /* Handle remainder */
+        for (size_t i = merge_end16; i < output_nobs; i++) {
+            SF_vstore(mvar, (ST_int)(i + 1), (double)output_specs[i].merge_result);
         }
     }
 
-    /* 6b: Write keepusing variables from cache
+    /* 6b: Write keepusing variables from cache (PARALLELIZED)
        For shared variables (dest_idx <= master_nvars): only write for using-only rows
        For new variables (dest_idx > master_nvars): write for all rows with using data */
-    for (int kv = 0; kv < n_keepusing; kv++) {
-        stata_variable *src = &g_using_cache.keepusing.vars[kv];
-        ST_int dest_idx = (ST_int)keepusing_placeholder_indices[kv];
-        int is_shared = (dest_idx <= (ST_int)master_nvars);
+    if (n_keepusing > 0) {
+        keepusing_write_args_t *ku_args = malloc(n_keepusing * sizeof(keepusing_write_args_t));
+        if (!ku_args) {
+            free(output_specs);
+            free(master_orig_rows);
+            return 920;
+        }
 
-        if (src->type == STATA_TYPE_DOUBLE) {
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t using_row = output_specs[i].using_sorted_row;
-                int64_t master_row = output_specs[i].master_sorted_row;
+        /* Set up thread arguments */
+        for (int kv = 0; kv < n_keepusing; kv++) {
+            ku_args[kv].keepusing_idx = kv;
+            ku_args[kv].dest_idx = (ST_int)keepusing_placeholder_indices[kv];
+            ku_args[kv].is_shared = (ku_args[kv].dest_idx <= (ST_int)master_nvars);
+            ku_args[kv].master_nvars = master_nvars;
+            ku_args[kv].specs = output_specs;
+            ku_args[kv].output_nobs = output_nobs;
+            ku_args[kv].success = 0;
+        }
 
-                /* For shared vars: only write for using-only rows (no master data)
-                   For new vars: write for all rows with using data */
-                if (is_shared && master_row >= 0) {
-                    /* Shared var + has master data: skip (preserve master value) */
-                    continue;
+        /* Execute in parallel if multiple keepusing vars, otherwise sequential */
+        if (n_keepusing >= 2) {
+            ctools_thread_pool ku_pool;
+            if (ctools_pool_init(&ku_pool, n_keepusing, ku_args, sizeof(keepusing_write_args_t)) != 0) {
+                /* Fall back to sequential */
+                for (int kv = 0; kv < n_keepusing; kv++) {
+                    write_keepusing_var_thread(&ku_args[kv]);
                 }
-
-                double val = (using_row >= 0) ? src->data.dbl[using_row] : SV_missval;
-                SF_vstore(dest_idx, (ST_int)(i + 1), val);
+            } else {
+                ctools_pool_launch(&ku_pool, write_keepusing_var_thread);
+                ctools_pool_join(&ku_pool);
+                ctools_pool_free(&ku_pool);
             }
         } else {
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t using_row = output_specs[i].using_sorted_row;
-                int64_t master_row = output_specs[i].master_sorted_row;
-
-                if (is_shared && master_row >= 0) {
-                    continue;
-                }
-
-                const char *val = (using_row >= 0 && src->data.str[using_row]) ?
-                                   src->data.str[using_row] : "";
-                SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
-            }
+            /* Single keepusing var - run directly */
+            write_keepusing_var_thread(&ku_args[0]);
         }
+
+        free(ku_args);
     }
 
     double t_write_keepusing = cmerge_get_time_ms() - t_start;

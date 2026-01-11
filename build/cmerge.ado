@@ -274,15 +274,9 @@ program define cmerge, rclass
             local keepusing_names "`keepusing_names' `var'"
             local ++keepusing_count
 
-            * Capture type for placeholder creation
-            capture confirm string variable `var'
-            if _rc == 0 {
-                local vtype : type `var'
-                local keepusing_types "`keepusing_types' `vtype'"
-            }
-            else {
-                local keepusing_types "`keepusing_types' double"
-            }
+            * Capture type for placeholder creation (preserve original type)
+            local vtype : type `var'
+            local keepusing_types "`keepusing_types' `vtype'"
         }
     }
     else {
@@ -302,14 +296,9 @@ program define cmerge, rclass
                 local keepusing_names "`keepusing_names' `var'"
                 local ++keepusing_count
 
-                capture confirm string variable `var'
-                if _rc == 0 {
-                    local vtype : type `var'
-                    local keepusing_types "`keepusing_types' `vtype'"
-                }
-                else {
-                    local keepusing_types "`keepusing_types' double"
-                }
+                * Capture type for placeholder creation (preserve original type)
+                local vtype : type `var'
+                local keepusing_types "`keepusing_types' `vtype'"
             }
         }
         local using_keep_vars "`keyvars' `keepusing_names'"
@@ -388,12 +377,13 @@ program define cmerge, rclass
         * Check if variable already exists in master (overlapping var)
         capture confirm variable `vname'
         if _rc != 0 {
-            * Variable doesn't exist - create placeholder
+            * Variable doesn't exist - create placeholder with original type
             if substr("`vtype'", 1, 3) == "str" {
                 qui gen `vtype' `vname' = ""
             }
             else {
-                qui gen double `vname' = .
+                * Use original numeric type (byte, int, long, float, or double)
+                qui gen `vtype' `vname' = .
             }
         }
         * Get current index (whether new or existing)

@@ -25,14 +25,17 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cmerge.do 
+. do validation/validate_csort.do 
 
 . /****************************************************************************
 > ***
->  * validate_cmerge.do
+>  * validate_csort.do
 >  *
->  * Comprehensive validation tests for cmerge vs native merge
->  * Tests all merge types and options across multiple built-in Stata datasets
+>  * Comprehensive validation tests for csort vs native sort
+>  * Tests sorting functionality across various data types and scenarios
+>  *
+>  * Note: csort uses inherently stable radix sort, so we compare against
+>  * Stata's "sort, stable" for exact matches.
 >  ****************************************************************************
 > **/
 . 
@@ -991,727 +994,365 @@ end of do-file
 > ====="
 ======================================================================
 
-. di as text "              CMERGE VALIDATION TEST SUITE"
-              CMERGE VALIDATION TEST SUITE
+. di as text "              CSORT VALIDATION TEST SUITE"
+              CSORT VALIDATION TEST SUITE
 
 . di as text "=================================================================
 > ====="
 ======================================================================
 
 . 
-. * Create temp directory for test files
-. capture mkdir "validation/temp"
+. /****************************************************************************
+> ***
+>  * Preliminary: Check if csort plugin works
+>  ****************************************************************************
+> **/
+. print_section "Preliminary: Check if csort plugin works"
+
+----------------------------------------------------------------------
+Preliminary: Check if csort plugin works
+----------------------------------------------------------------------
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. capture noisily csort price
+
+. local csort_works = (_rc == 0)
+
+. 
+. if !`csort_works' {
+.     di as error "  csort plugin is not functioning (rc=`=_rc')"
+.     di as error "  Skipping all csort tests"
+.     global TESTS_PASSED = 0
+.     global TESTS_FAILED = 1
+.     global TESTS_TOTAL = 1
+.     print_summary "csort"
+.     exit 1
+. }
+
+. 
+. di as result "  csort plugin is functional"
+  csort plugin is functional
+
+. global TESTS_PASSED = $TESTS_PASSED + 1
+
+. global TESTS_TOTAL = $TESTS_TOTAL + 1
 
 . 
 . /****************************************************************************
 > ***
->  * Basic 1:1 merge tests
+>  * Auto dataset tests
 >  ****************************************************************************
 > **/
-. print_section "1:1 merge tests"
+. print_section "Auto dataset"
 
 ----------------------------------------------------------------------
-1:1 merge tests
+Auto dataset
 ----------------------------------------------------------------------
 
 . 
-. * Auto dataset - numeric key
 . sysuse auto, clear
 (1978 automobile data)
 
-. keep make price mpg
-
-. gen id = _n
-
-. order id
-
-. tempfile master
-
-. quietly save `master'
+. 
+. * Single numeric variable
+. benchmark_sort price, testname("single numeric (price)")
+(1978 automobile data)
+[PASS] single numeric (price)
 
 . 
 . sysuse auto, clear
 (1978 automobile data)
 
-. keep make weight length
-
-. gen id = _n
-
-. order id
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
+. benchmark_sort weight, testname("single numeric (weight)")
 (1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', testname("1:1 numeric key")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] 1:1 numeric key
-
-. 
-. * Auto dataset - string key
-. sysuse auto, clear
-(1978 automobile data)
-
-. keep make price mpg
-
-. tempfile master
-
-. quietly save `master'
+[PASS] single numeric (weight)
 
 . 
 . sysuse auto, clear
 (1978 automobile data)
 
-. keep make weight length
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort mpg, testname("single numeric (mpg)")
+(1978 automobile data)
+[PASS] single numeric (mpg)
 
 . 
-. use `master', clear
+. * Single string variable
+. sysuse auto, clear
 (1978 automobile data)
 
-. benchmark_merge 1:1 make using `using_1', testname("1:1 string key (make)")
+. benchmark_sort make, testname("single string (make)")
+(1978 automobile data)
+[PASS] single string (make)
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (_merge==3)
-    -----------------------------------------
+. 
+. * Categorical variable with duplicates
+. sysuse auto, clear
 (1978 automobile data)
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
+. benchmark_sort foreign, testname("binary with duplicates (foreign)")
+(1978 automobile data)
+[PASS] binary with duplicates (foreign)
 
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] 1:1 string key (make)
+. 
+. * Variable with missing values
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort rep78, testname("with missing values (rep78)")
+(1978 automobile data)
+[PASS] with missing values (rep78)
+
+. 
+. * Multi-variable sorts
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort foreign price, testname("two vars (foreign price)")
+(1978 automobile data)
+[PASS] two vars (foreign price)
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort foreign rep78 price, testname("three vars (foreign rep78 price
+> )")
+(1978 automobile data)
+[PASS] three vars (foreign rep78 price)
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort make price, testname("string + numeric (make price)")
+(1978 automobile data)
+[PASS] string + numeric (make price)
 
 . 
 . /****************************************************************************
 > ***
->  * m:1 merge tests
+>  * Census dataset tests
 >  ****************************************************************************
 > **/
-. print_section "m:1 merge tests"
+. print_section "Census dataset"
 
 ----------------------------------------------------------------------
-m:1 merge tests
+Census dataset
 ----------------------------------------------------------------------
-
-. 
-. * Auto foreign lookup
-. sysuse auto, clear
-(1978 automobile data)
-
-. keep make price mpg foreign
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. clear
-
-. input byte foreign str20 country
-
-      foreign               country
-  1. 0 "Domestic"
-  2. 1 "Foreign"
-  3. end
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge m:1 foreign using `using_1', testname("m:1 foreign lookup")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] m:1 foreign lookup
-
-. 
-. * Census region lookup
-. sysuse census, clear
-(1980 Census data by state)
-
-. keep state region pop
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. clear
-
-. input byte region str20 region_name
-
-       region           region_name
-  1. 1 "NE"
-  2. 2 "N Cntrl"
-  3. 3 "South"
-  4. 4 "West"
-  5. end
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1980 Census data by state)
-
-. benchmark_merge m:1 region using `using_1', testname("m:1 census region")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-(1980 Census data by state)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-[PASS] m:1 census region (sort order differs)
-
-. 
-. /****************************************************************************
-> ***
->  * 1:m merge tests
->  ****************************************************************************
-> **/
-. print_section "1:m merge tests"
-
-----------------------------------------------------------------------
-1:m merge tests
-----------------------------------------------------------------------
-
-. 
-. * Region to states
-. clear
-
-. input byte region str20 division_name
-
-       region         division_name
-  1. 1 "Northeast"
-  2. 2 "Midwest"
-  3. 3 "South"
-  4. 4 "West"
-  5. end
-
-. tempfile master
-
-. quietly save `master'
 
 . 
 . sysuse census, clear
 (1980 Census data by state)
 
-. keep state region pop medage
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-
-. benchmark_merge 1:m region using `using_1', testname("1:m region to states")
-(variable region was byte, now int to accommodate using data's values)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-[PASS] 1:m region to states (sort order differs)
-
-. 
-. /****************************************************************************
-> ***
->  * keep() option tests
->  ****************************************************************************
-> **/
-. print_section "keep() option tests"
-
-----------------------------------------------------------------------
-keep() option tests
-----------------------------------------------------------------------
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. keep if _n <= 50
-(24 observations deleted)
-
-. gen id = _n
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. keep if _n >= 30
-(29 observations deleted)
-
-. gen id = _n + 29
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', keep(match) testname("keep(match)")
-(label origin already defined)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            53
-        from master                        29  (_merge==1)
-        from using                         24  (_merge==2)
-
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-[PASS] keep(match)
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', keep(master) testname("keep(master)")
-(label origin already defined)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            29
-        from master                        29  (_merge==1)
-        from using                          0  (_merge==2)
-
-    Matched                                 0  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            53
-        from master                        29  (_merge==1)
-        from using                         24  (_merge==2)
-
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-[PASS] keep(master)
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', keep(using) testname("keep(using)")
-(label origin already defined)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            24
-        from master                         0  (_merge==1)
-        from using                         24  (_merge==2)
-
-    Matched                                 0  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            53
-        from master                        29  (_merge==1)
-        from using                         24  (_merge==2)
-
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-[PASS] keep(using)
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', keep(master match) testname("keep(mas
-> ter match)")
-(label origin already defined)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            29
-        from master                        29  (_merge==1)
-        from using                          0  (_merge==2)
-
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                            53
-        from master                        29  (_merge==1)
-        from using                         24  (_merge==2)
-
-    Matched                                21  (_merge==3)
-    -----------------------------------------
-[PASS] keep(master match)
-
-. 
-. /****************************************************************************
-> ***
->  * generate/nogenerate options
->  ****************************************************************************
-> **/
-. print_section "generate/nogenerate options"
-
-----------------------------------------------------------------------
-generate/nogenerate options
-----------------------------------------------------------------------
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id make price
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id weight length
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', nogenerate testname("nogenerate")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] nogenerate
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', generate(merge_result) testname("gene
-> rate(merge_result)")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (merge_result==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] generate(merge_result)
-
-. 
-. /****************************************************************************
-> ***
->  * keepusing() option
->  ****************************************************************************
-> **/
-. print_section "keepusing() option"
-
-----------------------------------------------------------------------
-keepusing() option
-----------------------------------------------------------------------
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id make price
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id weight length turn
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', keepusing(weight) testname("keepusing
-> (weight)")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] keepusing(weight)
-
-. 
-. /****************************************************************************
-> ***
->  * Multiple key variables
->  ****************************************************************************
-> **/
-. print_section "Multiple key variables"
-
-----------------------------------------------------------------------
-Multiple key variables
-----------------------------------------------------------------------
-
-. 
-. * Two keys
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-. keep in 1/2000
-(26,534 observations deleted)
-
-. keep idcode year ln_wage age
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-. keep in 1/2000
-(26,534 observations deleted)
-
-. keep idcode year tenure ttl_exp
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-. benchmark_merge 1:1 idcode year using `using_1', testname("two keys (idcode y
-> ear)")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                             2,000  (_merge==3)
-    -----------------------------------------
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                             2,000  (_merge==3)
-    -----------------------------------------
-[PASS] two keys (idcode year)
-
-. 
-. * Three keys
-. clear
-
-. set obs 500
-Number of observations (_N) was 0, now 500.
-
-. gen id1 = mod(_n-1, 10) + 1
-
-. gen id2 = mod(floor((_n-1)/10), 10) + 1
-
-. gen id3 = floor((_n-1)/100) + 1
-
-. gen value1 = runiform()
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. clear
-
-. set obs 500
-Number of observations (_N) was 0, now 500.
-
-. gen id1 = mod(_n-1, 10) + 1
-
-. gen id2 = mod(floor((_n-1)/10), 10) + 1
-
-. gen id3 = floor((_n-1)/100) + 1
-
-. gen value2 = runiform() * 100
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-
-. benchmark_merge 1:1 id1 id2 id3 using `using_1', testname("three keys")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                               500  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                               500  (_merge==3)
-    -----------------------------------------
-[PASS] three keys
-
-. 
-. * Mixed string and numeric keys
-. sysuse census, clear
+. benchmark_sort state, testname("state name")
 (1980 Census data by state)
-
-. keep state region pop
-
-. tempfile master
-
-. quietly save `master'
+[PASS] state name
 
 . 
 . sysuse census, clear
 (1980 Census data by state)
 
-. keep state region medage
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort region, testname("region code")
+(1980 Census data by state)
+[PASS] region code
 
 . 
-. use `master', clear
+. sysuse census, clear
 (1980 Census data by state)
 
-. benchmark_merge 1:1 state region using `using_1', testname("mixed keys (strin
-> g + numeric)")
-(label cenreg already defined)
+. benchmark_sort pop, testname("population")
+(1980 Census data by state)
+[PASS] population
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                50  (_merge==3)
-    -----------------------------------------
+. 
+. sysuse census, clear
 (1980 Census data by state)
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
+. benchmark_sort region state, testname("region state")
+(1980 Census data by state)
+[PASS] region state
 
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-[PASS] mixed keys (string + numeric)
+. 
+. sysuse census, clear
+(1980 Census data by state)
+
+. benchmark_sort region pop, testname("region pop")
+(1980 Census data by state)
+[PASS] region pop
+
+. 
+. /****************************************************************************
+> ***
+>  * Synthetic data tests
+>  ****************************************************************************
+> **/
+. print_section "Synthetic data"
+
+----------------------------------------------------------------------
+Synthetic data
+----------------------------------------------------------------------
+
+. 
+. * Large dataset
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 100)
+
+. gen value = runiform()
+
+. gen str20 label = "item" + string(runiformint(1, 500))
+
+. 
+. benchmark_sort value, testname("10K random floats")
+[PASS] 10K random floats
+
+. 
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 100)
+
+. gen value = runiform()
+
+. gen str20 label = "item" + string(runiformint(1, 500))
+
+. 
+. benchmark_sort group, testname("10K random ints")
+[PASS] 10K random ints
+
+. 
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 100)
+
+. gen value = runiform()
+
+. gen str20 label = "item" + string(runiformint(1, 500))
+
+. 
+. benchmark_sort label, testname("10K random strings")
+[PASS] 10K random strings
+
+. 
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 100)
+
+. gen value = runiform()
+
+. gen str20 label = "item" + string(runiformint(1, 500))
+
+. 
+. benchmark_sort group value, testname("10K group + value")
+[PASS] 10K group + value
+
+. 
+. * Negative numbers
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = runiform() * 200 - 100
+
+. 
+. benchmark_sort x, testname("negative numbers")
+[PASS] negative numbers
+
+. 
+. * All same values (degenerate case)
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 5
+
+. 
+. benchmark_sort x, testname("all same values")
+[PASS] all same values
+
+. 
+. * Already sorted
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = _n
+
+. 
+. benchmark_sort x, testname("already sorted")
+[PASS] already sorted
+
+. 
+. * Reverse sorted
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 1000 - _n
+
+. 
+. benchmark_sort x, testname("reverse sorted")
+[PASS] reverse sorted
+
+. 
+. * Integer edge cases
+. clear
+
+. set obs 100
+Number of observations (_N) was 0, now 100.
+
+. gen long x = runiformint(-2147483647, 2147483646)
+
+. 
+. benchmark_sort x, testname("extreme integers")
+[PASS] extreme integers
+
+. 
+. * Float precision
+. clear
+
+. set obs 100
+Number of observations (_N) was 0, now 100.
+
+. gen double x = runiform() * 1e-10
+
+. 
+. benchmark_sort x, testname("small floats")
+[PASS] small floats
 
 . 
 . /****************************************************************************
@@ -1726,354 +1367,393 @@ Edge cases
 ----------------------------------------------------------------------
 
 . 
-. * No matches
+. * Empty string handling
 . clear
 
-. input int id float value
+. set obs 100
+Number of observations (_N) was 0, now 100.
 
-           id      value
-  1. 1 10
-  2. 2 20
-  3. 3 30
-  4. end
+. gen str10 x = ""
+(100 missing values generated)
 
-. tempfile master
-
-. quietly save `master'
+. replace x = "test" if _n > 50
+(50 real changes made)
 
 . 
+. benchmark_sort x, testname("empty strings")
+[PASS] empty strings
+
+. 
+. * Very long strings
 . clear
 
-. input int id float other
+. set obs 100
+Number of observations (_N) was 0, now 100.
 
-           id      other
-  1. 100 1.5
-  2. 200 2.5
-  3. 300 3.5
-  4. end
-
-. tempfile using_1
-
-. quietly save `using_1'
+. gen str200 x = "a" * runiformint(1, 200)
 
 . 
-. use `master', clear
-
-. benchmark_merge 1:1 id using `using_1', testname("no matches")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             6
-        from master                         3  (_merge==1)
-        from using                          3  (_merge==2)
-
-    Matched                                 0  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             6
-        from master                         3  (_merge==1)
-        from using                          3  (_merge==2)
-
-    Matched                                 0  (_merge==3)
-    -----------------------------------------
-[PASS] no matches
+. benchmark_sort x, testname("variable length strings")
+[PASS] variable length strings
 
 . 
-. * All matches
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id make price
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. sysuse auto, clear
-(1978 automobile data)
-
-. gen id = _n
-
-. keep id weight
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(1978 automobile data)
-
-. benchmark_merge 1:1 id using `using_1', testname("all matches")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-(1978 automobile data)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                74  (_merge==3)
-    -----------------------------------------
-[PASS] all matches
-
-. 
-. * Missing key values
+. * Single observation
 . clear
 
-. input int id float value
+. set obs 1
+Number of observations (_N) was 0, now 1.
 
-           id      value
-  1. 1 10
-  2. 2 20
-  3. . 30
-  4. 4 40
-  5. end
-
-. tempfile master
-
-. quietly save `master'
+. gen x = 42
 
 . 
+. benchmark_sort x, testname("single observation")
+[PASS] single observation
+
+. 
+. * Two observations
 . clear
 
-. input int id float other
+. set obs 2
+Number of observations (_N) was 0, now 2.
 
-           id      other
-  1. 1 100
-  2. . 200
-  3. 3 300
-  4. 4 400
-  5. end
-
-. tempfile using_1
-
-. quietly save `using_1'
+. gen x = 2 - _n
 
 . 
-. use `master', clear
-
-. benchmark_merge 1:1 id using `using_1', testname("missing key values")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             2
-        from master                         1  (_merge==1)
-        from using                          1  (_merge==2)
-
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             2
-        from master                         1  (_merge==1)
-        from using                          1  (_merge==2)
-
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-[PASS] missing key values (sort order differs)
-
-. 
-. * Negative key values
-. clear
-
-. input int id float value
-
-           id      value
-  1. -5 10
-  2. -2 20
-  3. 0 30
-  4. 2 40
-  5. 5 50
-  6. end
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. clear
-
-. input int id float other
-
-           id      other
-  1. -5 100
-  2. -1 200
-  3. 0 300
-  4. 1 400
-  5. 5 500
-  6. end
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-
-. benchmark_merge 1:1 id using `using_1', testname("negative keys")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             4
-        from master                         2  (_merge==1)
-        from using                          2  (_merge==2)
-
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             4
-        from master                         2  (_merge==1)
-        from using                          2  (_merge==2)
-
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-[PASS] negative keys (sort order differs)
-
-. 
-. * Float key values
-. clear
-
-. input float id float value
-
-            id      value
-  1. 1.5 10
-  2. 2.7 20
-  3. 3.14159 30
-  4. end
-
-. tempfile master
-
-. quietly save `master'
-
-. 
-. clear
-
-. input float id float other
-
-            id      other
-  1. 1.5 100
-  2. 2.7 200
-  3. 3.14159 300
-  4. end
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-
-. benchmark_merge 1:1 id using `using_1', testname("float keys")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                 3  (_merge==3)
-    -----------------------------------------
-[PASS] float keys
+. benchmark_sort x, testname("two observations")
+[PASS] two observations
 
 . 
 . /****************************************************************************
 > ***
->  * Large dataset tests
+>  * Larger scale tests
 >  ****************************************************************************
 > **/
-. print_section "Large dataset tests"
+. print_section "Larger scale tests"
 
 ----------------------------------------------------------------------
-Large dataset tests
+Larger scale tests
 ----------------------------------------------------------------------
 
 . 
-. * 50K 1:1 merge
+. clear
+
+. set seed 54321
+
+. set obs 50000
+Number of observations (_N) was 0, now 50,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 500)
+
+. gen value = rnormal()
+
+. 
+. benchmark_sort value, testname("50K random normal")
+[PASS] 50K random normal
+
+. 
+. clear
+
+. set seed 54321
+
+. set obs 50000
+Number of observations (_N) was 0, now 50,000.
+
+. gen id = _n
+
+. gen group = runiformint(1, 500)
+
+. gen value = rnormal()
+
+. 
+. benchmark_sort group id, testname("50K group + id")
+[PASS] 50K group + id
+
+. 
+. /****************************************************************************
+> ***
+>  * Algorithm-specific tests: MSD Radix Sort
+>  ****************************************************************************
+> **/
+. print_section "MSD Radix Sort Algorithm"
+
+----------------------------------------------------------------------
+MSD Radix Sort Algorithm
+----------------------------------------------------------------------
+
+. 
+. * Numeric sorting
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort price, testname("numeric") algorithm(msd)
+(1978 automobile data)
+[PASS] numeric [alg=msd]
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort mpg weight, testname("multi-numeric") algorithm(msd)
+(1978 automobile data)
+[PASS] multi-numeric [alg=msd]
+
+. 
+. * String sorting (MSD is optimized for strings)
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort make, testname("string (make)") algorithm(msd)
+(1978 automobile data)
+[PASS] string (make) [alg=msd]
+
+. 
+. sysuse census, clear
+(1980 Census data by state)
+
+. benchmark_sort state, testname("string (state)") algorithm(msd)
+(1980 Census data by state)
+[PASS] string (state) [alg=msd]
+
+. 
+. * Mixed types
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort foreign make, testname("mixed types") algorithm(msd)
+(1978 automobile data)
+[PASS] mixed types [alg=msd]
+
+. 
+. * With missing values
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort rep78, testname("with missings") algorithm(msd)
+(1978 automobile data)
+[PASS] with missings [alg=msd]
+
+. 
+. * Larger dataset
 . clear
 
 . set seed 12345
 
-. set obs 50000
-Number of observations (_N) was 0, now 50,000.
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
 
-. gen id = _n
+. gen str20 label = "item" + string(runiformint(1, 500))
 
-. gen value1 = runiform()
+. gen value = rnormal()
 
-. gen value2 = runiformint(1, 100)
-
-. tempfile master
-
-. quietly save `master'
+. 
+. benchmark_sort label, testname("10K strings") algorithm(msd)
+[PASS] 10K strings [alg=msd]
 
 . 
 . clear
 
-. set obs 50000
-Number of observations (_N) was 0, now 50,000.
+. set seed 12345
 
-. gen id = _n
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
 
-. gen extra1 = runiform() * 100
+. gen str20 label = "item" + string(runiformint(1, 500))
 
-. gen extra2 = runiformint(1, 1000)
-
-. tempfile using_1
-
-. quietly save `using_1'
+. gen value = rnormal()
 
 . 
-. use `master', clear
-
-. benchmark_merge 1:1 id using `using_1', testname("50K 1:1 full match")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                            50,000  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                            50,000  (_merge==3)
-    -----------------------------------------
-[PASS] 50K 1:1 full match
+. benchmark_sort value, testname("10K numeric") algorithm(msd)
+[PASS] 10K numeric [alg=msd]
 
 . 
-. * 100K m:1 merge
+. /****************************************************************************
+> ***
+>  * Algorithm-specific tests: Timsort
+>  ****************************************************************************
+> **/
+. print_section "Timsort Algorithm"
+
+----------------------------------------------------------------------
+Timsort Algorithm
+----------------------------------------------------------------------
+
+. 
+. * Numeric sorting
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort price, testname("numeric") algorithm(timsort)
+(1978 automobile data)
+[PASS] numeric [alg=timsort]
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort mpg weight, testname("multi-numeric") algorithm(timsort)
+(1978 automobile data)
+[PASS] multi-numeric [alg=timsort]
+
+. 
+. * String sorting
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort make, testname("string (make)") algorithm(timsort)
+(1978 automobile data)
+[PASS] string (make) [alg=timsort]
+
+. 
+. sysuse census, clear
+(1980 Census data by state)
+
+. benchmark_sort state, testname("string (state)") algorithm(timsort)
+(1980 Census data by state)
+[PASS] string (state) [alg=timsort]
+
+. 
+. * Mixed types
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort foreign make, testname("mixed types") algorithm(timsort)
+(1978 automobile data)
+[PASS] mixed types [alg=timsort]
+
+. 
+. * With missing values
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort rep78, testname("with missings") algorithm(timsort)
+(1978 automobile data)
+[PASS] with missings [alg=timsort]
+
+. 
+. * Already sorted (Timsort should excel here)
 . clear
 
-. set seed 11111
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
 
-. set obs 100000
-Number of observations (_N) was 0, now 100,000.
+. gen x = _n
 
-. gen group_id = runiformint(1, 1000)
+. 
+. benchmark_sort x, testname("already sorted") algorithm(timsort)
+[PASS] already sorted [alg=timsort]
 
-. gen value = runiform()
+. 
+. * Reverse sorted
+. clear
 
-. tempfile master
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
 
-. quietly save `master'
+. gen x = 5000 - _n
+
+. 
+. benchmark_sort x, testname("reverse sorted") algorithm(timsort)
+[PASS] reverse sorted [alg=timsort]
+
+. 
+. * Partially sorted (panel-like data)
+. clear
+
+. set seed 99999
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen panel_id = mod(_n - 1, 100) + 1
+
+. gen time = ceil(_n / 100)
+
+. gen value = rnormal()
+
+. sort panel_id  /* Already sorted by panel_id */
+
+. 
+. benchmark_sort panel_id time, testname("panel data") algorithm(timsort)
+[PASS] panel data [alg=timsort]
+
+. 
+. * Larger dataset
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen value = rnormal()
+
+. 
+. benchmark_sort value, testname("10K numeric") algorithm(timsort)
+[PASS] 10K numeric [alg=timsort]
+
+. 
+. /****************************************************************************
+> ***
+>  * Edge cases for all algorithms
+>  ****************************************************************************
+> **/
+. print_section "Edge cases - all algorithms"
+
+----------------------------------------------------------------------
+Edge cases - all algorithms
+----------------------------------------------------------------------
+
+. 
+. * Single observation
+. clear
+
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(lsd)
+[PASS] single obs [alg=lsd]
+
+. 
+. clear
+
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(msd)
+[PASS] single obs [alg=msd]
+
+. 
+. clear
+
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(timsort)
+[PASS] single obs [alg=timsort]
+
+. 
+. * All same values
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 5
+
+. 
+. benchmark_sort x, testname("all same") algorithm(lsd)
+[PASS] all same [alg=lsd]
 
 . 
 . clear
@@ -2081,443 +1761,491 @@ Number of observations (_N) was 0, now 100,000.
 . set obs 1000
 Number of observations (_N) was 0, now 1,000.
 
-. gen group_id = _n
-
-. gen group_name = "Group" + string(group_id)
-
-. gen group_weight = runiform()
-
-. tempfile using_1
-
-. quietly save `using_1'
+. gen x = 5
 
 . 
-. use `master', clear
-
-. benchmark_merge m:1 group_id using `using_1', testname("100K m:1")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                           100,000  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                           100,000  (_merge==3)
-    -----------------------------------------
-[PASS] 100K m:1 (sort order differs)
-
-. 
-. * Partial overlap
-. clear
-
-. set seed 22222
-
-. set obs 30000
-Number of observations (_N) was 0, now 30,000.
-
-. gen id = _n
-
-. gen value1 = runiform()
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort x, testname("all same") algorithm(msd)
+[PASS] all same [alg=msd]
 
 . 
 . clear
 
-. set obs 30000
-Number of observations (_N) was 0, now 30,000.
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
 
-. gen id = _n + 15000
-
-. gen value2 = runiform()
-
-. tempfile using_1
-
-. quietly save `using_1'
+. gen x = 5
 
 . 
-. use `master', clear
+. benchmark_sort x, testname("all same") algorithm(timsort)
+[PASS] all same [alg=timsort]
 
-. benchmark_merge 1:1 id using `using_1', testname("partial overlap (50%)")
+. 
+. * Negative numbers
+. clear
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                        30,000
-        from master                    15,000  (_merge==1)
-        from using                     15,000  (_merge==2)
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
 
-    Matched                            15,000  (_merge==3)
-    -----------------------------------------
+. gen x = runiform() * 200 - 100
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                        30,000
-        from master                    15,000  (_merge==1)
-        from using                     15,000  (_merge==2)
+. 
+. benchmark_sort x, testname("negatives") algorithm(msd)
+[PASS] negatives [alg=msd]
 
-    Matched                            15,000  (_merge==3)
-    -----------------------------------------
-[PASS] partial overlap (50%)
+. 
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = runiform() * 200 - 100
+
+. 
+. benchmark_sort x, testname("negatives") algorithm(timsort)
+[PASS] negatives [alg=timsort]
 
 . 
 . /****************************************************************************
 > ***
->  * String key tests
+>  * Algorithm-specific tests: Sample Sort
 >  ****************************************************************************
 > **/
-. print_section "String key tests"
+. print_section "Sample Sort Algorithm"
 
 ----------------------------------------------------------------------
-String key tests
+Sample Sort Algorithm
 ----------------------------------------------------------------------
 
 . 
-. * Long string keys
-. clear
+. * Numeric sorting
+. sysuse auto, clear
+(1978 automobile data)
 
-. set obs 100
-Number of observations (_N) was 0, now 100.
-
-. gen str50 long_key = "prefix_" + string(_n, "%04.0f") + "_suffix_data"
-
-. gen value1 = runiform()
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort price, testname("numeric") algorithm(sample)
+(1978 automobile data)
+[PASS] numeric [alg=sample]
 
 . 
-. clear
+. sysuse auto, clear
+(1978 automobile data)
 
-. set obs 100
-Number of observations (_N) was 0, now 100.
-
-. gen str50 long_key = "prefix_" + string(_n, "%04.0f") + "_suffix_data"
-
-. gen value2 = runiform() * 100
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort mpg weight, testname("multi-numeric") algorithm(sample)
+(1978 automobile data)
+[PASS] multi-numeric [alg=sample]
 
 . 
-. use `master', clear
+. * String sorting
+. sysuse auto, clear
+(1978 automobile data)
 
-. benchmark_merge 1:1 long_key using `using_1', testname("long string keys")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                               100  (_merge==3)
-    -----------------------------------------
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                               100  (_merge==3)
-    -----------------------------------------
-[PASS] long string keys
-
-. 
-. * Census state name
-. sysuse census, clear
-(1980 Census data by state)
-
-. keep state pop
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort make, testname("string (make)") algorithm(sample)
+(1978 automobile data)
+[PASS] string (make) [alg=sample]
 
 . 
 . sysuse census, clear
 (1980 Census data by state)
 
-. keep state medage death marriage divorce
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort state, testname("string (state)") algorithm(sample)
+(1980 Census data by state)
+[PASS] string (state) [alg=sample]
 
 . 
-. use `master', clear
-(1980 Census data by state)
+. * Mixed types
+. sysuse auto, clear
+(1978 automobile data)
 
-. benchmark_merge 1:1 state using `using_1', testname("state name 1:1")
+. benchmark_sort foreign make, testname("mixed types") algorithm(sample)
+(1978 automobile data)
+[PASS] mixed types [alg=sample]
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-(1980 Census data by state)
+. 
+. * With missing values
+. sysuse auto, clear
+(1978 automobile data)
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
+. benchmark_sort rep78, testname("with missings") algorithm(sample)
+(1978 automobile data)
+[PASS] with missings [alg=sample]
 
-    Matched                                50  (_merge==3)
-    -----------------------------------------
-[PASS] state name 1:1
+. 
+. * Larger dataset
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen value = rnormal()
+
+. 
+. benchmark_sort value, testname("10K numeric") algorithm(sample)
+[PASS] 10K numeric [alg=sample]
 
 . 
 . /****************************************************************************
 > ***
->  * Panel data tests
+>  * Algorithm-specific tests: Counting Sort
 >  ****************************************************************************
 > **/
-. print_section "Panel data (nlswork)"
+. print_section "Counting Sort Algorithm"
 
 ----------------------------------------------------------------------
-Panel data (nlswork)
+Counting Sort Algorithm
 ----------------------------------------------------------------------
 
 . 
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. * Integer data
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep in 1/5000
-(23,534 observations deleted)
-
-. keep idcode year ln_wage hours
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort foreign, testname("binary (0/1)") algorithm(counting)
+(1978 automobile data)
+[PASS] binary (0/1) [alg=counting]
 
 . 
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep in 1/5000
-(23,534 observations deleted)
-
-. keep idcode year age tenure wks_work
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort rep78, testname("small int range") algorithm(counting)
+(1978 automobile data)
+[PASS] small int range [alg=counting]
 
 . 
-. use `master', clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. * Year-like data
+. clear
 
-. benchmark_merge 1:1 idcode year using `using_1', testname("panel 1:1")
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                             5,000  (_merge==3)
-    -----------------------------------------
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. set seed 12345
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
+. gen year = runiformint(1990, 2023)
 
-    Matched                             5,000  (_merge==3)
-    -----------------------------------------
-[PASS] panel 1:1
+. benchmark_sort year, testname("year data") algorithm(counting)
+[PASS] year data [alg=counting]
 
 . 
-. * m:1 individual characteristics
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. * State codes
+. clear
 
-. keep in 1/3000
-(25,534 observations deleted)
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
 
-. keep idcode year ln_wage
+. set seed 54321
 
-. tempfile master
+. gen state = runiformint(1, 50)
 
-. quietly save `master'
-
-. 
-. webuse nlswork, clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-. keep in 1/3000
-(25,534 observations deleted)
-
-. bysort idcode (year): keep if _n == 1
-(2,508 observations deleted)
-
-. keep idcode race grade
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort state, testname("state codes") algorithm(counting)
+[PASS] state codes [alg=counting]
 
 . 
-. use `master', clear
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. * Multi-key with integers
+. sysuse auto, clear
+(1978 automobile data)
 
-. benchmark_merge m:1 idcode using `using_1', testname("panel m:1 individual")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                             3,000  (_merge==3)
-    -----------------------------------------
-(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                             3,000  (_merge==3)
-    -----------------------------------------
-[PASS] panel m:1 individual
+. benchmark_sort foreign rep78, testname("multi-int") algorithm(counting)
+(1978 automobile data)
+[PASS] multi-int [alg=counting]
 
 . 
 . /****************************************************************************
 > ***
->  * Other built-in datasets
+>  * Algorithm-specific tests: Parallel Merge Sort
 >  ****************************************************************************
 > **/
-. print_section "Other datasets"
+. print_section "Parallel Merge Sort Algorithm"
 
 ----------------------------------------------------------------------
-Other datasets
+Parallel Merge Sort Algorithm
 ----------------------------------------------------------------------
 
 . 
-. * Voter dataset
-. sysuse voter, clear
-(1992 US presidential voters)
+. * Numeric sorting
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep pop frac
-
-. gen id = _n
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort price, testname("numeric") algorithm(merge)
+(1978 automobile data)
+[PASS] numeric [alg=merge]
 
 . 
-. sysuse voter, clear
-(1992 US presidential voters)
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep cand inc
-
-. gen id = _n
-
-. tempfile using_1
-
-. quietly save `using_1'
+. benchmark_sort mpg weight, testname("multi-numeric") algorithm(merge)
+(1978 automobile data)
+[PASS] multi-numeric [alg=merge]
 
 . 
-. use `master', clear
-(1992 US presidential voters)
+. * String sorting
+. sysuse auto, clear
+(1978 automobile data)
 
-. benchmark_merge 1:1 id using `using_1', testname("voter 1:1")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                                15  (_merge==3)
-    -----------------------------------------
-(1992 US presidential voters)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                                15  (_merge==3)
-    -----------------------------------------
-[PASS] voter 1:1
+. benchmark_sort make, testname("string (make)") algorithm(merge)
+(1978 automobile data)
+[PASS] string (make) [alg=merge]
 
 . 
-. * US life expectancy
-. sysuse uslifeexp, clear
-(US life expectancy, 1900–1999)
+. sysuse census, clear
+(1980 Census data by state)
 
-. keep year le
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort state, testname("string (state)") algorithm(merge)
+(1980 Census data by state)
+[PASS] string (state) [alg=merge]
 
 . 
-. sysuse uslifeexp, clear
-(US life expectancy, 1900–1999)
+. * Mixed types
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep year le_male le_female
-
-. tempfile using_1
-
-. quietly save `using_1'
-
-. 
-. use `master', clear
-(US life expectancy, 1900–1999)
-
-. benchmark_merge 1:1 year using `using_1', testname("uslifeexp 1:1")
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                               100  (_merge==3)
-    -----------------------------------------
-(US life expectancy, 1900–1999)
-
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-
-    Matched                               100  (_merge==3)
-    -----------------------------------------
-[PASS] uslifeexp 1:1
+. benchmark_sort foreign make, testname("mixed types") algorithm(merge)
+(1978 automobile data)
+[PASS] mixed types [alg=merge]
 
 . 
-. * SP500
-. sysuse sp500, clear
-(S&P 500)
+. * With missing values
+. sysuse auto, clear
+(1978 automobile data)
 
-. keep date open high
-
-. tempfile master
-
-. quietly save `master'
+. benchmark_sort rep78, testname("with missings") algorithm(merge)
+(1978 automobile data)
+[PASS] with missings [alg=merge]
 
 . 
-. sysuse sp500, clear
-(S&P 500)
+. * Larger dataset
+. clear
 
-. keep date low close volume
+. set seed 12345
 
-. tempfile using_1
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
 
-. quietly save `using_1'
+. gen value = rnormal()
 
 . 
-. use `master', clear
-(S&P 500)
+. benchmark_sort value, testname("10K numeric") algorithm(merge)
+[PASS] 10K numeric [alg=merge]
 
-. benchmark_merge 1:1 date using `using_1', testname("sp500 1:1")
+. 
+. /****************************************************************************
+> ***
+>  * Edge cases for new algorithms
+>  ****************************************************************************
+> **/
+. print_section "Edge cases - new algorithms"
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
-    Matched                               248  (_merge==3)
-    -----------------------------------------
-(S&P 500)
+----------------------------------------------------------------------
+Edge cases - new algorithms
+----------------------------------------------------------------------
 
-    Result                      Number of obs
-    -----------------------------------------
-    Not matched                             0
+. 
+. * Single observation
+. clear
 
-    Matched                               248  (_merge==3)
-    -----------------------------------------
-[PASS] sp500 1:1
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(sample)
+[PASS] single obs [alg=sample]
+
+. 
+. clear
+
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(merge)
+[PASS] single obs [alg=merge]
+
+. 
+. * All same values
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 5
+
+. 
+. benchmark_sort x, testname("all same") algorithm(sample)
+[PASS] all same [alg=sample]
+
+. 
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 5
+
+. 
+. benchmark_sort x, testname("all same") algorithm(merge)
+[PASS] all same [alg=merge]
+
+. 
+. /****************************************************************************
+> ***
+>  * Algorithm-specific tests: IPS4o (In-place Parallel Super Scalar Samplesort
+> )
+>  ****************************************************************************
+> **/
+. print_section "IPS4o Algorithm"
+
+----------------------------------------------------------------------
+IPS4o Algorithm
+----------------------------------------------------------------------
+
+. 
+. * Numeric sorting
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort price, testname("numeric") algorithm(ips4o)
+(1978 automobile data)
+[PASS] numeric [alg=ips4o]
+
+. 
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort mpg weight, testname("multi-numeric") algorithm(ips4o)
+(1978 automobile data)
+[PASS] multi-numeric [alg=ips4o]
+
+. 
+. * String sorting
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort make, testname("string (make)") algorithm(ips4o)
+(1978 automobile data)
+[PASS] string (make) [alg=ips4o]
+
+. 
+. sysuse census, clear
+(1980 Census data by state)
+
+. benchmark_sort state, testname("string (state)") algorithm(ips4o)
+(1980 Census data by state)
+[PASS] string (state) [alg=ips4o]
+
+. 
+. * Mixed types
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort foreign make, testname("mixed types") algorithm(ips4o)
+(1978 automobile data)
+[PASS] mixed types [alg=ips4o]
+
+. 
+. * With missing values
+. sysuse auto, clear
+(1978 automobile data)
+
+. benchmark_sort rep78, testname("with missings") algorithm(ips4o)
+(1978 automobile data)
+[PASS] with missings [alg=ips4o]
+
+. 
+. * Larger dataset
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen value = rnormal()
+
+. 
+. benchmark_sort value, testname("10K numeric") algorithm(ips4o)
+[PASS] 10K numeric [alg=ips4o]
+
+. 
+. clear
+
+. set seed 12345
+
+. set obs 10000
+Number of observations (_N) was 0, now 10,000.
+
+. gen str20 label = "item" + string(runiformint(1, 500))
+
+. 
+. benchmark_sort label, testname("10K strings") algorithm(ips4o)
+[PASS] 10K strings [alg=ips4o]
+
+. 
+. * Edge cases for IPS4o
+. clear
+
+. set obs 1
+Number of observations (_N) was 0, now 1.
+
+. gen x = 42
+
+. 
+. benchmark_sort x, testname("single obs") algorithm(ips4o)
+[PASS] single obs [alg=ips4o]
+
+. 
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = 5
+
+. 
+. benchmark_sort x, testname("all same") algorithm(ips4o)
+[PASS] all same [alg=ips4o]
+
+. 
+. clear
+
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+
+. gen x = runiform() * 200 - 100
+
+. 
+. benchmark_sort x, testname("negatives") algorithm(ips4o)
+[PASS] negatives [alg=ips4o]
+
+. 
+. * Already sorted (edge case)
+. clear
+
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
+
+. gen x = _n
+
+. 
+. benchmark_sort x, testname("already sorted") algorithm(ips4o)
+[PASS] already sorted [alg=ips4o]
+
+. 
+. * Reverse sorted
+. clear
+
+. set obs 5000
+Number of observations (_N) was 0, now 5,000.
+
+. gen x = 5000 - _n
+
+. 
+. benchmark_sort x, testname("reverse sorted") algorithm(ips4o)
+[PASS] reverse sorted [alg=ips4o]
 
 . 
 . /****************************************************************************
@@ -2525,14 +2253,14 @@ Other datasets
 >  * SUMMARY
 >  ****************************************************************************
 > **/
-. print_summary "cmerge"
+. print_summary "csort"
 
 ----------------------------------------------------------------------
-SUMMARY: cmerge
+SUMMARY: csort
 ----------------------------------------------------------------------
-Tests passed: 30
+Tests passed: 93
 Tests failed: 0
-Total tests:  30
+Total tests:  93
 ALL TESTS PASSED
 ----------------------------------------------------------------------
 

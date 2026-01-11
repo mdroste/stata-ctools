@@ -69,7 +69,11 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_data_io.c \
               $(SRC_DIR)/ctools_sort_radix_lsd.c \
               $(SRC_DIR)/ctools_sort_radix_msd.c \
-              $(SRC_DIR)/ctools_sort_timsort.c
+              $(SRC_DIR)/ctools_sort_timsort.c \
+              $(SRC_DIR)/ctools_sort_sample.c \
+              $(SRC_DIR)/ctools_sort_counting.c \
+              $(SRC_DIR)/ctools_sort_merge.c \
+              $(SRC_DIR)/ctools_sort_ips4o.c
 
 # csort module
 CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c

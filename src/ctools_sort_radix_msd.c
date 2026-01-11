@@ -17,14 +17,21 @@
     - Use insertion sort for small buckets (better cache behavior)
 
     Parallelization Strategy:
-    - Top-level histogram and scatter are parallelized
+    - Top-level histogram and scatter are parallelized with pthreads
     - Recursive calls on independent buckets run in parallel via OpenMP tasks
     - Falls back to sequential insertion sort for small subarrays
+    - Reusable context allocation to avoid per-pass malloc overhead
 
     Numeric Sorting:
     - Uses same IEEE 754 bit manipulation as LSD
     - Processes bytes from MSB (byte 7) to LSB (byte 0)
     - Single pass when data has low entropy in high bytes
+
+    Optimizations:
+    - Pointer swapping instead of memcpy between passes
+    - Parallel histogram and scatter at top level
+    - Reusable allocation context across all passes
+    - Cache-aligned memory allocation
 */
 
 #include <stdlib.h>
@@ -40,6 +47,9 @@
 
 /* Minimum bucket size for parallel recursion */
 #define MSD_PARALLEL_THRESHOLD 10000
+
+/* Minimum observations for parallel histogram/scatter */
+#define MSD_PARALLEL_HIST_THRESHOLD (MIN_OBS_PER_THREAD * 2)
 
 /* ============================================================================
    Utility Functions
@@ -81,6 +91,175 @@ static inline uint64_t msd_double_to_sortable(double d)
     }
 
     return bits;
+}
+
+/* ============================================================================
+   Reusable Context for Parallel MSD Sort
+   ============================================================================ */
+
+/* Thread argument for parallel histogram */
+typedef struct {
+    size_t *order;
+    uint64_t *keys;
+    size_t start;
+    size_t end;
+    int shift;
+    size_t *local_counts;
+} msd_histogram_args_t;
+
+/* Thread argument for parallel scatter */
+typedef struct {
+    size_t *order;
+    size_t *temp_order;
+    uint64_t *keys;
+    size_t start;
+    size_t end;
+    int shift;
+    size_t *local_offsets;
+} msd_scatter_args_t;
+
+/*
+    Reusable allocation context for parallel MSD sort.
+    Allocated once per variable and reused across all byte passes.
+*/
+typedef struct {
+    int num_threads;
+    pthread_t *threads;
+    msd_histogram_args_t *hist_args;
+    msd_scatter_args_t *scatter_args;
+    size_t **all_local_counts;   /* [num_threads][RADIX_SIZE] */
+    size_t *global_counts;       /* [RADIX_SIZE] */
+    size_t *global_offsets;      /* [RADIX_SIZE] */
+    size_t **thread_offsets;     /* [num_threads][RADIX_SIZE] */
+} msd_sort_context_t;
+
+/*
+    Allocate reusable context for parallel MSD sort.
+*/
+static msd_sort_context_t *msd_context_alloc(int num_threads)
+{
+    msd_sort_context_t *ctx;
+    int t;
+
+    ctx = (msd_sort_context_t *)calloc(1, sizeof(msd_sort_context_t));
+    if (ctx == NULL) return NULL;
+
+    ctx->num_threads = num_threads;
+    ctx->threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+    ctx->hist_args = (msd_histogram_args_t *)malloc(num_threads * sizeof(msd_histogram_args_t));
+    ctx->scatter_args = (msd_scatter_args_t *)malloc(num_threads * sizeof(msd_scatter_args_t));
+    ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->global_counts = (size_t *)calloc(RADIX_SIZE, sizeof(size_t));
+    ctx->global_offsets = (size_t *)malloc(RADIX_SIZE * sizeof(size_t));
+    ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
+
+    if (!ctx->threads || !ctx->hist_args || !ctx->scatter_args ||
+        !ctx->all_local_counts || !ctx->global_counts ||
+        !ctx->global_offsets || !ctx->thread_offsets) {
+        goto fail;
+    }
+
+    for (t = 0; t < num_threads; t++) {
+        ctx->all_local_counts[t] = NULL;
+        ctx->thread_offsets[t] = NULL;
+    }
+
+    for (t = 0; t < num_threads; t++) {
+        ctx->all_local_counts[t] = (size_t *)calloc(RADIX_SIZE, sizeof(size_t));
+        ctx->thread_offsets[t] = (size_t *)malloc(RADIX_SIZE * sizeof(size_t));
+        if (!ctx->all_local_counts[t] || !ctx->thread_offsets[t]) {
+            goto fail;
+        }
+    }
+
+    return ctx;
+
+fail:
+    if (ctx) {
+        if (ctx->all_local_counts) {
+            for (t = 0; t < num_threads; t++) {
+                free(ctx->all_local_counts[t]);
+            }
+        }
+        if (ctx->thread_offsets) {
+            for (t = 0; t < num_threads; t++) {
+                free(ctx->thread_offsets[t]);
+            }
+        }
+        free(ctx->threads);
+        free(ctx->hist_args);
+        free(ctx->scatter_args);
+        free(ctx->all_local_counts);
+        free(ctx->global_counts);
+        free(ctx->global_offsets);
+        free(ctx->thread_offsets);
+        free(ctx);
+    }
+    return NULL;
+}
+
+/*
+    Free MSD sort context.
+*/
+static void msd_context_free(msd_sort_context_t *ctx)
+{
+    int t;
+    if (ctx == NULL) return;
+
+    for (t = 0; t < ctx->num_threads; t++) {
+        free(ctx->all_local_counts[t]);
+        free(ctx->thread_offsets[t]);
+    }
+    free(ctx->threads);
+    free(ctx->hist_args);
+    free(ctx->scatter_args);
+    free(ctx->all_local_counts);
+    free(ctx->global_counts);
+    free(ctx->global_offsets);
+    free(ctx->thread_offsets);
+    free(ctx);
+}
+
+/* Thread function: compute local histogram for MSD */
+static void *msd_histogram_thread(void *arg)
+{
+    msd_histogram_args_t *args = (msd_histogram_args_t *)arg;
+    size_t i;
+    uint8_t byte_val;
+    size_t *order = args->order;
+    uint64_t *keys = args->keys;
+    int shift = args->shift;
+
+    memset(args->local_counts, 0, RADIX_SIZE * sizeof(size_t));
+
+    for (i = args->start; i < args->end; i++) {
+        byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
+        args->local_counts[byte_val]++;
+    }
+
+    return NULL;
+}
+
+/* Thread function: scatter elements to sorted positions */
+static void *msd_scatter_thread(void *arg)
+{
+    msd_scatter_args_t *args = (msd_scatter_args_t *)arg;
+    size_t i;
+    uint8_t byte_val;
+    size_t local_offsets[RADIX_SIZE];
+    size_t *order = args->order;
+    uint64_t *keys = args->keys;
+    size_t *temp_order = args->temp_order;
+    int shift = args->shift;
+
+    memcpy(local_offsets, args->local_offsets, RADIX_SIZE * sizeof(size_t));
+
+    for (i = args->start; i < args->end; i++) {
+        byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
+        temp_order[local_offsets[byte_val]++] = order[i];
+    }
+
+    return NULL;
 }
 
 /* ============================================================================
@@ -162,77 +341,222 @@ static void insertion_sort_string(size_t *order, char **strings,
    ============================================================================ */
 
 /*
-    Recursive MSD radix sort for numeric data.
-    Processes one byte at a time from MSB to LSB.
+    Parallel MSD radix sort pass for numeric data.
+    Uses context for thread-local allocations.
+    Returns 1 if pass was skipped (uniform distribution), 0 otherwise.
 */
-static void msd_sort_numeric_recursive(size_t *order, size_t *temp_order,
-                                       uint64_t *keys, size_t start,
-                                       size_t end, int byte_pos)
+static int msd_sort_pass_numeric_parallel(size_t *order, size_t *temp_order,
+                                          uint64_t *keys, size_t start,
+                                          size_t end, int byte_pos,
+                                          msd_sort_context_t *ctx,
+                                          size_t *bucket_starts_out,
+                                          size_t *counts_out)
+{
+    size_t n = end - start;
+    size_t chunk_size;
+    int shift = byte_pos * RADIX_BITS;
+    int t, b;
+    int num_threads = ctx->num_threads;
+
+    /* Phase 1: Parallel histogram */
+    chunk_size = (n + num_threads - 1) / num_threads;
+    for (t = 0; t < num_threads; t++) {
+        size_t t_start = start + (size_t)t * chunk_size;
+        size_t t_end = start + (size_t)(t + 1) * chunk_size;
+        if (t_end > end) t_end = end;
+        if (t_start >= end) t_start = t_end = end;
+
+        ctx->hist_args[t].order = order;
+        ctx->hist_args[t].keys = keys;
+        ctx->hist_args[t].start = t_start;
+        ctx->hist_args[t].end = t_end;
+        ctx->hist_args[t].shift = shift;
+        ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
+
+        pthread_create(&ctx->threads[t], NULL, msd_histogram_thread, &ctx->hist_args[t]);
+    }
+
+    for (t = 0; t < num_threads; t++) {
+        pthread_join(ctx->threads[t], NULL);
+    }
+
+    /* Combine histograms - iterate bucket-first for cache locality */
+    memset(ctx->global_counts, 0, RADIX_SIZE * sizeof(size_t));
+    for (b = 0; b < RADIX_SIZE; b++) {
+        for (t = 0; t < num_threads; t++) {
+            ctx->global_counts[b] += ctx->all_local_counts[t][b];
+        }
+    }
+
+    /* Check for uniform distribution */
+    {
+        int non_empty = 0;
+        for (b = 0; b < RADIX_SIZE; b++) {
+            if (ctx->global_counts[b] > 0) {
+                non_empty++;
+                if (non_empty > 1) break;
+            }
+        }
+        if (non_empty <= 1) {
+            return 1;  /* Skip this pass */
+        }
+    }
+
+    /* Compute prefix sums */
+    ctx->global_offsets[0] = start;
+    for (b = 1; b < RADIX_SIZE; b++) {
+        ctx->global_offsets[b] = ctx->global_offsets[b - 1] + ctx->global_counts[b - 1];
+    }
+
+    /* Save bucket starts for recursive calls */
+    if (bucket_starts_out) {
+        for (b = 0; b < RADIX_SIZE; b++) {
+            bucket_starts_out[b] = ctx->global_offsets[b];
+        }
+    }
+    if (counts_out) {
+        memcpy(counts_out, ctx->global_counts, RADIX_SIZE * sizeof(size_t));
+    }
+
+    /* Compute per-thread offsets */
+    for (b = 0; b < RADIX_SIZE; b++) {
+        size_t offset = ctx->global_offsets[b];
+        for (t = 0; t < num_threads; t++) {
+            ctx->thread_offsets[t][b] = offset;
+            offset += ctx->all_local_counts[t][b];
+        }
+    }
+
+    /* Phase 2: Parallel scatter */
+    for (t = 0; t < num_threads; t++) {
+        size_t t_start = start + (size_t)t * chunk_size;
+        size_t t_end = start + (size_t)(t + 1) * chunk_size;
+        if (t_end > end) t_end = end;
+        if (t_start >= end) t_start = t_end = end;
+
+        ctx->scatter_args[t].order = order;
+        ctx->scatter_args[t].temp_order = temp_order;
+        ctx->scatter_args[t].keys = keys;
+        ctx->scatter_args[t].start = t_start;
+        ctx->scatter_args[t].end = t_end;
+        ctx->scatter_args[t].shift = shift;
+        ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
+
+        pthread_create(&ctx->threads[t], NULL, msd_scatter_thread, &ctx->scatter_args[t]);
+    }
+
+    for (t = 0; t < num_threads; t++) {
+        pthread_join(ctx->threads[t], NULL);
+    }
+
+    return 0;
+}
+
+/*
+    Sequential MSD radix sort pass (for small subarrays or recursive calls).
+    Returns 1 if skipped (uniform), 0 otherwise.
+*/
+static int msd_sort_pass_numeric_seq(size_t *order, size_t *temp_order,
+                                     uint64_t *keys, size_t start, size_t end,
+                                     int byte_pos, size_t *bucket_starts_out,
+                                     size_t *counts_out)
 {
     size_t counts[RADIX_SIZE] = {0};
     size_t offsets[RADIX_SIZE];
-    size_t bucket_starts[RADIX_SIZE];
-    size_t i, n;
+    size_t i;
     uint8_t byte_val;
-    int shift;
-    int non_empty_buckets = 0;
+    int shift = byte_pos * RADIX_BITS;
+    int non_empty = 0;
     int b;
 
-    n = end - start;
-
-    /* Base case: use insertion sort for small arrays */
-    if (n <= MSD_INSERTION_THRESHOLD) {
-        insertion_sort_numeric(order, keys, start, end);
-        return;
-    }
-
-    /* Base case: processed all bytes */
-    if (byte_pos < 0) {
-        return;
-    }
-
-    shift = byte_pos * RADIX_BITS;
-
-    /* Count occurrences of each byte value */
     for (i = start; i < end; i++) {
         byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
         counts[byte_val]++;
     }
 
-    /* Check for uniform distribution (all in one bucket) */
     for (b = 0; b < RADIX_SIZE; b++) {
         if (counts[b] > 0) {
-            non_empty_buckets++;
-            if (non_empty_buckets > 1) break;
+            non_empty++;
+            if (non_empty > 1) break;
         }
     }
-
-    /* If all elements in same bucket, skip this byte and continue */
-    if (non_empty_buckets <= 1) {
-        msd_sort_numeric_recursive(order, temp_order, keys, start, end,
-                                   byte_pos - 1);
-        return;
+    if (non_empty <= 1) {
+        return 1;
     }
 
-    /* Compute prefix sums (bucket starting positions) */
     offsets[0] = start;
-    bucket_starts[0] = start;
     for (b = 1; b < RADIX_SIZE; b++) {
         offsets[b] = offsets[b - 1] + counts[b - 1];
-        bucket_starts[b] = offsets[b];
     }
 
-    /* Scatter elements to their bucket positions */
+    if (bucket_starts_out) {
+        for (b = 0; b < RADIX_SIZE; b++) {
+            bucket_starts_out[b] = (b == 0) ? start : offsets[b];
+        }
+    }
+    if (counts_out) {
+        memcpy(counts_out, counts, RADIX_SIZE * sizeof(size_t));
+    }
+
     for (i = start; i < end; i++) {
         byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
         temp_order[offsets[byte_val]++] = order[i];
     }
 
-    /* Copy back to order array */
-    memcpy(&order[start], &temp_order[start], n * sizeof(size_t));
+    return 0;
+}
 
-    /* Recursively sort each non-empty bucket */
-    /* Use OpenMP tasks for large buckets */
+/*
+    Recursive MSD radix sort for numeric data (for subarrays).
+    Uses pointer swapping to avoid memcpy.
+    order_is_primary indicates whether order currently holds the data.
+*/
+static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
+                                       uint64_t *keys, size_t start,
+                                       size_t end, int byte_pos,
+                                       int a_is_current)
+{
+    size_t counts[RADIX_SIZE];
+    size_t bucket_starts[RADIX_SIZE];
+    size_t n = end - start;
+    size_t *current_order = a_is_current ? order_a : order_b;
+    size_t *temp_order = a_is_current ? order_b : order_a;
+    int b;
+    int skipped;
+
+    /* Base case: use insertion sort for small arrays */
+    if (n <= MSD_INSERTION_THRESHOLD) {
+        insertion_sort_numeric(current_order, keys, start, end);
+        /* If result is in wrong buffer, copy it */
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+
+    /* Base case: processed all bytes */
+    if (byte_pos < 0) {
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+
+    skipped = msd_sort_pass_numeric_seq(current_order, temp_order, keys,
+                                        start, end, byte_pos,
+                                        bucket_starts, counts);
+
+    if (skipped) {
+        /* Skip this byte, continue with same buffer */
+        msd_sort_numeric_recursive(order_a, order_b, keys, start, end,
+                                   byte_pos - 1, a_is_current);
+        return;
+    }
+
+    /* Result is now in temp_order, so flip the flag */
+    int next_is_a = !a_is_current;
+
+    /* Recursively sort each bucket */
     #ifdef _OPENMP
     #pragma omp parallel if(n >= MSD_PARALLEL_THRESHOLD)
     {
@@ -245,19 +569,22 @@ static void msd_sort_numeric_recursive(size_t *order, size_t *temp_order,
     #ifdef _OPENMP
                     if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
                         #pragma omp task
-                        msd_sort_numeric_recursive(order, temp_order, keys,
+                        msd_sort_numeric_recursive(order_a, order_b, keys,
                                                    bucket_starts[b], bucket_end,
-                                                   byte_pos - 1);
+                                                   byte_pos - 1, next_is_a);
                     } else {
-                        msd_sort_numeric_recursive(order, temp_order, keys,
+                        msd_sort_numeric_recursive(order_a, order_b, keys,
                                                    bucket_starts[b], bucket_end,
-                                                   byte_pos - 1);
+                                                   byte_pos - 1, next_is_a);
                     }
     #else
-                    msd_sort_numeric_recursive(order, temp_order, keys,
+                    msd_sort_numeric_recursive(order_a, order_b, keys,
                                                bucket_starts[b], bucket_end,
-                                               byte_pos - 1);
+                                               byte_pos - 1, next_is_a);
     #endif
+                } else if (counts[b] == 1 && !next_is_a) {
+                    /* Single element in wrong buffer - copy it */
+                    order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
                 }
             }
     #ifdef _OPENMP
@@ -269,37 +596,115 @@ static void msd_sort_numeric_recursive(size_t *order, size_t *temp_order,
 
 /*
     Sort by a single numeric variable using MSD radix sort.
+    Uses parallel histogram/scatter at top level, then recursive for buckets.
 */
 static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
 {
-    size_t *temp_order;
+    size_t *order_a;
+    size_t *order_b;
     uint64_t *keys;
     size_t i;
     double *dbl_data;
+    int use_parallel;
+    int num_threads;
+    msd_sort_context_t *ctx = NULL;
+    size_t bucket_starts[RADIX_SIZE];
+    size_t counts[RADIX_SIZE];
+    int skipped;
+    int b;
 
-    /* Allocate temporary arrays */
-    temp_order = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
-                                              data->nobs * sizeof(size_t));
+    order_a = data->sort_order;
+    order_b = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
+                                           data->nobs * sizeof(size_t));
     keys = (uint64_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
                                           data->nobs * sizeof(uint64_t));
 
-    if (temp_order == NULL || keys == NULL) {
-        free(temp_order);
+    if (order_b == NULL || keys == NULL) {
+        free(order_b);
         free(keys);
         return STATA_ERR_MEMORY;
     }
 
     /* Convert doubles to sortable uint64 keys */
     dbl_data = data->vars[var_idx].data.dbl;
+    #ifdef _OPENMP
+    #pragma omp parallel for if(data->nobs >= MSD_PARALLEL_HIST_THRESHOLD)
+    #endif
     for (i = 0; i < data->nobs; i++) {
         keys[i] = msd_double_to_sortable(dbl_data[i]);
     }
 
-    /* Sort starting from MSB (byte 7) */
-    msd_sort_numeric_recursive(data->sort_order, temp_order, keys,
-                               0, data->nobs, 7);
+    /* Decide on parallel sort */
+    use_parallel = (data->nobs >= MSD_PARALLEL_HIST_THRESHOLD);
+    num_threads = NUM_THREADS;
+    if (data->nobs < (size_t)MIN_OBS_PER_THREAD * (size_t)num_threads) {
+        num_threads = (int)(data->nobs / MIN_OBS_PER_THREAD);
+        if (num_threads < 2) {
+            use_parallel = 0;
+        }
+    }
 
-    free(temp_order);
+    if (use_parallel) {
+        ctx = msd_context_alloc(num_threads);
+        if (ctx == NULL) {
+            free(order_b);
+            free(keys);
+            return STATA_ERR_MEMORY;
+        }
+
+        /* Top-level parallel sort pass */
+        skipped = msd_sort_pass_numeric_parallel(order_a, order_b, keys,
+                                                  0, data->nobs, 7, ctx,
+                                                  bucket_starts, counts);
+        msd_context_free(ctx);
+
+        if (skipped) {
+            /* All in one bucket at byte 7, recurse sequentially */
+            msd_sort_numeric_recursive(order_a, order_b, keys, 0, data->nobs, 6, 1);
+        } else {
+            /* Result is in order_b, recurse on each bucket */
+            #ifdef _OPENMP
+            #pragma omp parallel
+            {
+                #pragma omp single nowait
+                {
+            #endif
+                    for (b = 0; b < RADIX_SIZE; b++) {
+                        if (counts[b] > 1) {
+                            size_t bucket_end = bucket_starts[b] + counts[b];
+            #ifdef _OPENMP
+                            if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
+                                #pragma omp task
+                                msd_sort_numeric_recursive(order_a, order_b, keys,
+                                                           bucket_starts[b], bucket_end,
+                                                           6, 0);  /* 0 = data is in order_b */
+                            } else {
+                                msd_sort_numeric_recursive(order_a, order_b, keys,
+                                                           bucket_starts[b], bucket_end,
+                                                           6, 0);
+                            }
+            #else
+                            msd_sort_numeric_recursive(order_a, order_b, keys,
+                                                       bucket_starts[b], bucket_end,
+                                                       6, 0);
+            #endif
+                        } else if (counts[b] == 1) {
+                            /* Single element - copy from order_b to order_a */
+                            order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
+                        }
+                    }
+            #ifdef _OPENMP
+                }
+                #pragma omp taskwait
+            }
+            #endif
+        }
+    } else {
+        /* Sequential sort for small datasets */
+        msd_sort_numeric_recursive(order_a, order_b, keys, 0, data->nobs, 7, 1);
+    }
+
+    free(order_b);
     free(keys);
     return STATA_OK;
 }
@@ -308,113 +713,151 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
    MSD Radix Sort for String Data
    ============================================================================ */
 
+/* String bucket count (0 for end-of-string, 1-256 for characters) */
+#define STRING_BUCKET_SIZE 257
+
 /*
-    Recursive MSD radix sort for string data.
-    Processes one character at a time from leftmost to rightmost.
+    Sequential MSD string sort pass.
+    Returns 1 if skipped, 0 otherwise.
 */
-static void msd_sort_string_recursive(size_t *order, size_t *temp_order,
-                                      char **strings, size_t *str_lengths,
-                                      size_t start, size_t end, size_t char_pos)
+static int msd_sort_pass_string_seq(size_t *order, size_t *temp_order,
+                                    char **strings, size_t *str_lengths,
+                                    size_t start, size_t end, size_t char_pos,
+                                    size_t *bucket_starts_out, size_t *counts_out)
 {
-    /* 257 buckets: 0 for end-of-string, 1-256 for character values */
-    size_t counts[257] = {0};
-    size_t offsets[257];
-    size_t bucket_starts[257];
-    size_t i, n, idx, len;
+    size_t counts[STRING_BUCKET_SIZE] = {0};
+    size_t offsets[STRING_BUCKET_SIZE];
+    size_t i, idx, len;
     unsigned int bucket;
-    int non_empty_buckets = 0;
+    int non_empty = 0;
     int b;
 
-    n = end - start;
-
-    /* Base case: use insertion sort for small arrays */
-    if (n <= MSD_INSERTION_THRESHOLD) {
-        insertion_sort_string(order, strings, str_lengths, start, end, char_pos);
-        return;
-    }
-
-    /* Count occurrences of each character at current position */
-    /* Bucket 0 = end-of-string, buckets 1-256 = character value + 1 */
     for (i = start; i < end; i++) {
         idx = order[i];
         len = str_lengths[idx];
-        if (char_pos >= len) {
-            bucket = 0;  /* End of string */
-        } else {
-            bucket = (unsigned char)strings[idx][char_pos] + 1;
-        }
+        bucket = (char_pos >= len) ? 0 : ((unsigned char)strings[idx][char_pos] + 1);
         counts[bucket]++;
     }
 
-    /* Check for uniform distribution */
-    for (b = 0; b < 257; b++) {
+    for (b = 0; b < STRING_BUCKET_SIZE; b++) {
         if (counts[b] > 0) {
-            non_empty_buckets++;
-            if (non_empty_buckets > 1) break;
+            non_empty++;
+            if (non_empty > 1) break;
         }
     }
-
-    /* If all elements in same bucket */
-    if (non_empty_buckets <= 1) {
-        /* If all strings ended, we're done */
-        if (counts[0] == n) {
-            return;
+    if (non_empty <= 1) {
+        /* Check if all strings ended */
+        if (counts[0] == (end - start)) {
+            return 2;  /* All done, no more recursion needed */
         }
-        /* Otherwise, continue to next character */
-        msd_sort_string_recursive(order, temp_order, strings, str_lengths,
-                                  start, end, char_pos + 1);
-        return;
+        return 1;  /* Skip this pass but continue */
     }
 
-    /* Compute prefix sums */
     offsets[0] = start;
-    bucket_starts[0] = start;
-    for (b = 1; b < 257; b++) {
+    for (b = 1; b < STRING_BUCKET_SIZE; b++) {
         offsets[b] = offsets[b - 1] + counts[b - 1];
-        bucket_starts[b] = offsets[b];
     }
 
-    /* Scatter elements to their bucket positions */
+    if (bucket_starts_out) {
+        for (b = 0; b < STRING_BUCKET_SIZE; b++) {
+            bucket_starts_out[b] = (b == 0) ? start : offsets[b];
+        }
+    }
+    if (counts_out) {
+        memcpy(counts_out, counts, STRING_BUCKET_SIZE * sizeof(size_t));
+    }
+
     for (i = start; i < end; i++) {
         idx = order[i];
         len = str_lengths[idx];
-        if (char_pos >= len) {
-            bucket = 0;
-        } else {
-            bucket = (unsigned char)strings[idx][char_pos] + 1;
-        }
+        bucket = (char_pos >= len) ? 0 : ((unsigned char)strings[idx][char_pos] + 1);
         temp_order[offsets[bucket]++] = idx;
     }
 
-    /* Copy back to order array */
-    memcpy(&order[start], &temp_order[start], n * sizeof(size_t));
+    return 0;
+}
 
-    /* Recursively sort each non-empty bucket (skip bucket 0 - strings that ended) */
+/*
+    Recursive MSD radix sort for string data with pointer swapping.
+    a_is_current indicates whether order_a currently holds the data.
+*/
+static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
+                                      char **strings, size_t *str_lengths,
+                                      size_t start, size_t end, size_t char_pos,
+                                      int a_is_current)
+{
+    size_t counts[STRING_BUCKET_SIZE];
+    size_t bucket_starts[STRING_BUCKET_SIZE];
+    size_t n = end - start;
+    size_t *current_order = a_is_current ? order_a : order_b;
+    size_t *temp_order = a_is_current ? order_b : order_a;
+    int b;
+    int result;
+
+    /* Base case: use insertion sort for small arrays */
+    if (n <= MSD_INSERTION_THRESHOLD) {
+        insertion_sort_string(current_order, strings, str_lengths, start, end, char_pos);
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+
+    result = msd_sort_pass_string_seq(current_order, temp_order, strings, str_lengths,
+                                      start, end, char_pos, bucket_starts, counts);
+
+    if (result == 2) {
+        /* All strings ended */
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+    if (result == 1) {
+        /* Skip this pass, continue with same buffer */
+        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
+                                  start, end, char_pos + 1, a_is_current);
+        return;
+    }
+
+    /* Result is in temp_order, so flip the flag */
+    int next_is_a = !a_is_current;
+
+    /* Recursively sort each bucket (skip bucket 0 - strings that ended) */
     #ifdef _OPENMP
     #pragma omp parallel if(n >= MSD_PARALLEL_THRESHOLD)
     {
         #pragma omp single nowait
         {
     #endif
-            for (b = 1; b < 257; b++) {  /* Skip bucket 0 */
+            for (b = 1; b < STRING_BUCKET_SIZE; b++) {
                 if (counts[b] > 1) {
                     size_t bucket_end = bucket_starts[b] + counts[b];
     #ifdef _OPENMP
                     if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
                         #pragma omp task
-                        msd_sort_string_recursive(order, temp_order, strings,
-                                                  str_lengths, bucket_starts[b],
-                                                  bucket_end, char_pos + 1);
+                        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
+                                                  bucket_starts[b], bucket_end,
+                                                  char_pos + 1, next_is_a);
                     } else {
-                        msd_sort_string_recursive(order, temp_order, strings,
-                                                  str_lengths, bucket_starts[b],
-                                                  bucket_end, char_pos + 1);
+                        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
+                                                  bucket_starts[b], bucket_end,
+                                                  char_pos + 1, next_is_a);
                     }
     #else
-                    msd_sort_string_recursive(order, temp_order, strings,
-                                              str_lengths, bucket_starts[b],
-                                              bucket_end, char_pos + 1);
+                    msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
+                                              bucket_starts[b], bucket_end,
+                                              char_pos + 1, next_is_a);
     #endif
+                } else if (counts[b] == 1 && !next_is_a) {
+                    /* Single element in wrong buffer */
+                    order_a[bucket_starts[b]] = order_b[bucket_starts[b]];
+                }
+            }
+            /* Handle bucket 0 (ended strings) */
+            if (counts[0] > 0 && !next_is_a) {
+                for (size_t j = bucket_starts[0]; j < bucket_starts[0] + counts[0]; j++) {
+                    order_a[j] = order_b[j];
                 }
             }
     #ifdef _OPENMP
@@ -429,36 +872,41 @@ static void msd_sort_string_recursive(size_t *order, size_t *temp_order,
 */
 static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
 {
-    size_t *temp_order;
+    size_t *order_a;
+    size_t *order_b;
     size_t *str_lengths;
     size_t i;
     char **str_data;
 
     str_data = data->vars[var_idx].data.str;
+    order_a = data->sort_order;
 
-    /* Pre-cache string lengths */
+    /* Pre-cache string lengths with parallel computation */
     str_lengths = (size_t *)malloc(data->nobs * sizeof(size_t));
     if (str_lengths == NULL) {
         return STATA_ERR_MEMORY;
     }
 
+    #ifdef _OPENMP
+    #pragma omp parallel for if(data->nobs >= MSD_PARALLEL_HIST_THRESHOLD)
+    #endif
     for (i = 0; i < data->nobs; i++) {
         str_lengths[i] = strlen(str_data[i]);
     }
 
     /* Allocate temporary order array */
-    temp_order = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
-                                              data->nobs * sizeof(size_t));
-    if (temp_order == NULL) {
+    order_b = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
+                                           data->nobs * sizeof(size_t));
+    if (order_b == NULL) {
         free(str_lengths);
         return STATA_ERR_MEMORY;
     }
 
     /* Sort starting from position 0 */
-    msd_sort_string_recursive(data->sort_order, temp_order, str_data,
-                              str_lengths, 0, data->nobs, 0);
+    msd_sort_string_recursive(order_a, order_b, str_data, str_lengths,
+                              0, data->nobs, 0, 1);  /* 1 = data starts in order_a */
 
-    free(temp_order);
+    free(order_b);
     free(str_lengths);
     return STATA_OK;
 }

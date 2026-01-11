@@ -19,18 +19,21 @@
  *
  * Compare csort vs sort, stable
  *
- * Syntax: benchmark_sort varlist [, testname(string)]
+ * Syntax: benchmark_sort varlist [, testname(string) algorithm(string)]
  *
  * Example:
  *   sysuse auto, clear
  *   benchmark_sort price
  *   benchmark_sort foreign rep78, testname("multi-var sort")
+ *   benchmark_sort price, algorithm(msd)
+ *   benchmark_sort price, algorithm(timsort)
  ******************************************************************************/
 capture program drop benchmark_sort
 program define benchmark_sort
-    syntax varlist [, testname(string)]
+    syntax varlist [, testname(string) ALGorithm(string)]
 
     if "`testname'" == "" local testname "sort `varlist'"
+    if "`algorithm'" != "" local testname "`testname' [alg=`algorithm']"
 
     global TESTS_TOTAL = $TESTS_TOTAL + 1
 
@@ -47,7 +50,12 @@ program define benchmark_sort
 
     * Restore and run csort
     use `original', clear
-    csort `varlist'
+    if "`algorithm'" != "" {
+        csort `varlist', algorithm(`algorithm')
+    }
+    else {
+        csort `varlist'
+    }
 
     * Compare datasets
     capture quietly cf _all using `stata_sorted'
@@ -63,6 +71,28 @@ program define benchmark_sort
         global TESTS_FAILED = $TESTS_FAILED + 1
         di as error "[FAIL] `testname'"
     }
+end
+
+/*******************************************************************************
+ * benchmark_sort_all_algs
+ *
+ * Run benchmark_sort with all three algorithms (lsd, msd, timsort)
+ *
+ * Syntax: benchmark_sort_all_algs varlist [, testname(string)]
+ *
+ * Example:
+ *   benchmark_sort_all_algs price, testname("numeric sort")
+ ******************************************************************************/
+capture program drop benchmark_sort_all_algs
+program define benchmark_sort_all_algs
+    syntax varlist [, testname(string)]
+
+    if "`testname'" == "" local testname "sort `varlist'"
+
+    * Test all three algorithms
+    benchmark_sort `varlist', testname("`testname'") algorithm(lsd)
+    benchmark_sort `varlist', testname("`testname'") algorithm(msd)
+    benchmark_sort `varlist', testname("`testname'") algorithm(timsort)
 end
 
 /*******************************************************************************
