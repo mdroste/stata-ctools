@@ -46,6 +46,7 @@ typedef struct {
         char **str;             /* String: char*[nobs], each heap-allocated */
     } data;
     size_t str_maxlen;          /* Max string length (string vars only) */
+    void *_arena;               /* Internal: string arena for fast bulk free (NULL if not used) */
 } stata_variable;
 
 /*

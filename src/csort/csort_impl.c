@@ -323,7 +323,13 @@ ST_retcode csort_main(const char *args)
         return 920;
     }
 
-    /* Calculate total time */
+    /* Clean up C memory (this can be slow for large datasets!) */
+    double t_cleanup = ctools_timer_seconds();
+    stata_data_free(&data);
+    free(sort_vars);
+    t_cleanup = ctools_timer_seconds() - t_cleanup;
+
+    /* Calculate total time (AFTER cleanup, so it's fully accounted) */
     t_end = ctools_timer_seconds();
     timer.total_time = t_end - t_start;
 
@@ -331,11 +337,8 @@ ST_retcode csort_main(const char *args)
     SF_scal_save("_csort_time_load", timer.load_time);
     SF_scal_save("_csort_time_sort", timer.sort_time);
     SF_scal_save("_csort_time_store", timer.store_time);
+    SF_scal_save("_csort_time_cleanup", t_cleanup);
     SF_scal_save("_csort_time_total", timer.total_time);
-
-    /* Clean up */
-    stata_data_free(&data);
-    free(sort_vars);
 
     return 0;
 }

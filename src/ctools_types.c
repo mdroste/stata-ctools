@@ -7,6 +7,21 @@
 #include <string.h>
 #include "ctools_types.h"
 
+/*
+    Platform-specific aligned memory free.
+    Matches aligned_alloc_cacheline() in ctools_data_io.c
+    On POSIX, posix_memalign memory can be freed with regular free().
+    On Windows, _aligned_malloc requires _aligned_free.
+*/
+static inline void aligned_free_internal(void *ptr)
+{
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
+    free(ptr);
+#endif
+}
+
 void stata_data_init(stata_data *data)
 {
     if (data == NULL) return;
@@ -17,31 +32,64 @@ void stata_data_init(stata_data *data)
     data->sort_order = NULL;
 }
 
+/*
+    Internal: Free a string arena (matches arena_create in ctools_data_io.c).
+    This is duplicated here to avoid circular dependencies.
+*/
+typedef struct {
+    char *base;
+    size_t capacity;
+    size_t used;
+} string_arena_internal;
+
+static void arena_free_internal(void *arena_ptr)
+{
+    if (arena_ptr != NULL) {
+        string_arena_internal *arena = (string_arena_internal *)arena_ptr;
+        free(arena->base);
+        free(arena);
+    }
+}
+
 void stata_data_free(stata_data *data)
 {
-    size_t i, j;
+    size_t i;
 
     if (data == NULL) return;
 
-    /* Free each variable's data */
+    /* Free each variable's data (allocated with aligned_alloc_cacheline) */
     if (data->vars != NULL) {
         for (i = 0; i < data->nvars; i++) {
             if (data->vars[i].type == STATA_TYPE_DOUBLE) {
-                free(data->vars[i].data.dbl);
+                /* Numeric data uses aligned allocation */
+                aligned_free_internal(data->vars[i].data.dbl);
             } else if (data->vars[i].type == STATA_TYPE_STRING) {
                 if (data->vars[i].data.str != NULL) {
-                    for (j = 0; j < data->vars[i].nobs; j++) {
-                        free(data->vars[i].data.str[j]);
+                    /* Check if strings were allocated via arena (fast path)
+                       or individually via strdup (slow path) */
+                    if (data->vars[i]._arena != NULL) {
+                        /* Arena allocation: O(1) bulk free - just free the arena.
+                           All strings are inside the arena's contiguous memory block. */
+                        arena_free_internal(data->vars[i]._arena);
+                        data->vars[i]._arena = NULL;
+                    } else {
+                        /* Legacy path: individual strdup allocations - O(n) frees.
+                           This path is only used if arena allocation failed. */
+                        for (size_t j = 0; j < data->vars[i].nobs; j++) {
+                            free(data->vars[i].data.str[j]);
+                        }
                     }
-                    free(data->vars[i].data.str);
+                    /* Free the pointer array (aligned allocation) */
+                    aligned_free_internal(data->vars[i].data.str);
                 }
             }
         }
-        free(data->vars);
+        /* Free vars array (aligned) */
+        aligned_free_internal(data->vars);
     }
 
-    /* Free sort order array */
-    free(data->sort_order);
+    /* Free sort order array (aligned) */
+    aligned_free_internal(data->sort_order);
 
     /* Reset the structure */
     stata_data_init(data);

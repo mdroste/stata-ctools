@@ -1,4 +1,4 @@
-*! version 1.4.0 10Jan2026
+*! version 1.5.0 11Jan2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!
@@ -15,6 +15,17 @@ program define csort
     version 14.0
 
     syntax varlist [if] [in], [Verbose TIMEit ALGorithm(string)]
+
+    * Start overall wall-clock timer
+    local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
+    if `__do_timing' {
+        timer clear 90
+        timer clear 91
+        timer clear 92
+        timer clear 93
+        timer on 90
+        timer on 91
+    }
 
     * Mark sample
     marksample touse, novarlist
@@ -146,18 +157,60 @@ program define csort
         }
     }
 
+    * End pre-plugin timer, start plugin timer
+    if `__do_timing' {
+        timer off 91
+        timer on 92
+    }
+
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
     plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code'"
 
-    * Display timing if requested (verbose or timeit)
-    if ("`verbose'" != "" | "`timeit'" != "") {
-        di as text _n "csort timing breakdown:"
-        di as text "  Data load:  " as result %8.4f _csort_time_load " sec"
-        di as text "  Sort:       " as result %8.4f _csort_time_sort " sec"
-        di as text "  Data store: " as result %8.4f _csort_time_store " sec"
-        di as text "  Total:      " as result %8.4f _csort_time_total " sec"
+    * End plugin timer, start post-plugin timer
+    if `__do_timing' {
+        timer off 92
+        timer on 93
     }
 
     * Set sort order in Stata (use stable to match csort's stable radix sort)
     sort `varlist', stable
+
+    * End all timers
+    if `__do_timing' {
+        timer off 93
+        timer off 90
+
+        * Extract timer values
+        quietly timer list 90
+        local __time_total = r(t90)
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+        quietly timer list 93
+        local __time_postplugin = r(t93)
+
+        * Calculate plugin call overhead (time in plugin call but outside C code)
+        local __plugin_call_overhead = `__time_plugin' - _csort_time_total
+
+        di as text _n "csort timing breakdown:"
+        di as text _n "  [Inside C code]"
+        di as text "    Data load (Stata->C): " as result %8.4f _csort_time_load " sec"
+        di as text "    Sort (in C memory):   " as result %8.4f _csort_time_sort " sec"
+        di as text "    Data store (C->Stata):" as result %8.4f _csort_time_store " sec"
+        di as text "    Memory cleanup:       " as result %8.4f _csort_time_cleanup " sec"
+        di as text "    --------------------------------"
+        di as text "    C code total:         " as result %8.4f _csort_time_total " sec"
+        di as text _n "  [Outside C code]"
+        di as text "    Pre-plugin ado:       " as result %8.4f `__time_preplugin' " sec" as text "  (syntax parsing, varlist)"
+        di as text "    Plugin call overhead: " as result %8.4f `__plugin_call_overhead' " sec" as text "  (Stata's plugin framework)"
+        di as text "    Post-plugin ado:      " as result %8.4f `__time_postplugin' " sec" as text "  (sort command)"
+        di as text "    --------------------------------"
+        di as text "    Non-C total:          " as result %8.4f (`__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin') " sec"
+        di as text _n "  [Summary]"
+        di as text "    Wall clock total:     " as result %8.4f `__time_total' " sec"
+        di as text "    C code:               " as result %8.1f (100 * _csort_time_total / `__time_total') "%%"
+        di as text "    Plugin call overhead: " as result %8.1f (100 * `__plugin_call_overhead' / `__time_total') "%%"
+        di as text "    Ado-file overhead:    " as result %8.1f (100 * (`__time_preplugin' + `__time_postplugin') / `__time_total') "%%"
+    }
 end
