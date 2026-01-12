@@ -194,8 +194,7 @@ static ST_retcode fit_quadratic_fast(
     rc = cholesky_solve(XtX, 3, coefs);
     if (rc != CBINSCATTER_OK) return rc;
 
-    /* Compute R² */
-    ST_double y_mean = s_y / s_1;
+    /* Compute R² (TSS = Σ(y-ȳ)² = Σy² - (Σy)²/n) */
     ST_double tss = s_yy - s_y * s_y / s_1;
 
     if (tss > 0.0) {
@@ -317,8 +316,7 @@ ST_retcode fit_polynomial(
     rc = cholesky_solve(XtX, K, coefs);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
-    /* Compute R² with second pass for RSS */
-    ST_double y_mean = sum_y / sum_w;
+    /* Compute R² with second pass for RSS (TSS = Σw(y-ȳ)² = Σwy² - (Σwy)²/Σw) */
     ST_double tss = sum_yy - sum_y * sum_y / sum_w;
 
     if (tss > 0.0) {

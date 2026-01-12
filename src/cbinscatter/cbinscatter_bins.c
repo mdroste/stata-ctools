@@ -29,7 +29,7 @@
  * Quickselect for finding k-th element
  * ======================================================================== */
 
-static inline void swap_double(ST_double *a, ST_double *b) {
+static inline __attribute__((unused)) void swap_double(ST_double *a, ST_double *b) {
     ST_double t = *a; *a = *b; *b = t;
 }
 
@@ -73,7 +73,7 @@ static ST_int partition_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int 
  * After this call, idx[k] contains the index of the k-th smallest value
  * and all elements before k are <= vals[idx[k]]
  */
-static void quickselect_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int hi, ST_int k) {
+static __attribute__((unused)) void quickselect_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int hi, ST_int k) {
     while (hi > lo) {
         if (hi - lo < 10) {
             /* Insertion sort for small arrays */
@@ -295,7 +295,7 @@ ST_retcode compute_bins_single_group(
     ST_retcode rc = CBINSCATTER_OK;
     ST_int *sort_idx = NULL;
     ST_int *bin_ids = NULL;
-    ST_int i, q, nq;
+    ST_int i, nq;
 
     nq = config->nquantiles;
     if (N < nq) nq = N;
@@ -393,7 +393,6 @@ ST_retcode compute_bins_single_group(
         }
 
         ST_int total_valid = cum_hist[HISTOGRAM_BUCKETS - 1];
-        ST_int obs_per_bin = (total_valid + nq - 1) / nq;  /* Ceiling division */
 
         /* Map each histogram bucket to a quantile bin */
         for (i = 0; i < HISTOGRAM_BUCKETS; i++) {

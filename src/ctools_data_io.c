@@ -302,8 +302,9 @@ static inline void stream_doubles_8(double * restrict dst, const double * restri
 
 /*
     Non-temporal store for 16 doubles (bypasses cache).
+    Note: Currently unused but kept for future optimization opportunities.
 */
-static inline void stream_doubles_16(double * restrict dst, const double * restrict src)
+static inline __attribute__((unused)) void stream_doubles_16(double * restrict dst, const double * restrict src)
 {
 #if defined(CTOOLS_X86) && defined(__SSE2__)
     _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));

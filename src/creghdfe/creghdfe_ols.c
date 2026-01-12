@@ -7,6 +7,7 @@
  */
 
 #include "creghdfe_ols.h"
+#include "../ctools_unroll.h"
 
 /* ========================================================================
  * Kahan-compensated dot product for numerical stability
@@ -30,37 +31,14 @@ ST_double kahan_dot(const ST_double * RESTRICT x,
 }
 
 /* ========================================================================
- * BLAS-like optimized dot product with 8-way unrolling
+ * BLAS-like optimized dot product - uses ctools K-way unrolling abstraction
  * ======================================================================== */
 
 ST_double fast_dot(const ST_double * RESTRICT x,
                    const ST_double * RESTRICT y,
                    ST_int N)
 {
-    ST_int i;
-    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
-    ST_int N8 = N - (N & 7);
-
-    /* 8-way unrolled main loop */
-    for (i = 0; i < N8; i += 8) {
-        sum0 += x[i+0] * y[i+0];
-        sum1 += x[i+1] * y[i+1];
-        sum2 += x[i+2] * y[i+2];
-        sum3 += x[i+3] * y[i+3];
-        sum4 += x[i+4] * y[i+4];
-        sum5 += x[i+5] * y[i+5];
-        sum6 += x[i+6] * y[i+6];
-        sum7 += x[i+7] * y[i+7];
-    }
-
-    /* Cleanup loop */
-    for (; i < N; i++) {
-        sum0 += x[i] * y[i];
-    }
-
-    /* Tree reduction for better numerical stability */
-    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
+    return ctools_dot_unrolled(x, y, N);
 }
 
 /* ========================================================================
@@ -146,7 +124,6 @@ void compute_xtx_xty_weighted(
     const ST_double *y = &data[0];  /* Column 0 is y */
 
     /* For aweight/pweight: normalize weights to sum to N (reghdfe.mata line 3598) */
-    ST_double *w_norm = NULL;
     ST_double weight_scale = 1.0;
     if (weight_type == 1 || weight_type == 3) {
         ST_double sum_w = 0.0;

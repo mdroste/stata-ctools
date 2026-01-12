@@ -36,7 +36,37 @@
 #include "ctools_types.h"
 #include "ctools_timer.h"
 #include "ctools_threads.h"
+#include "ctools_spi.h"
+#include "ctools_config.h"
 #include "cmerge_impl.h"
+
+/* ============================================================================
+ * Memory Allocation Utilities
+ * ============================================================================ */
+
+/* Allocate memory aligned to cache line boundary for optimal memory access */
+static inline void *cmerge_aligned_alloc(size_t size)
+{
+    void *ptr = NULL;
+#if defined(_WIN32)
+    ptr = _aligned_malloc(size, CACHE_LINE_SIZE);
+#else
+    if (posix_memalign(&ptr, CACHE_LINE_SIZE, size) != 0) {
+        return NULL;
+    }
+#endif
+    return ptr;
+}
+
+/* Free cache-line aligned memory */
+static inline void cmerge_aligned_free(void *ptr)
+{
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
+    free(ptr);
+#endif
+}
 
 /* ============================================================================
  * Configuration
@@ -527,155 +557,173 @@ static void *stream_master_var_thread(void *arg)
     a->success = 0;
 
     if (is_string) {
-        char **buf = malloc(output_nobs * sizeof(char *));
-        if (!buf) return (void *)1;
+        /* String variable streaming with OpenMP parallelization
+         * Each thread uses its own string buffer to avoid contention */
 
-        char strbuf[2048];
-
-        /* GATHER from original master positions */
-        for (size_t i = 0; i < output_nobs; i++) {
-            int64_t row = src_rows[i];
-            if (row >= 0) {
-                SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
-                buf[i] = strdup(strbuf);
-            } else if (a->is_key && g_using_cache.loaded) {
-                int64_t using_row = a->specs[i].using_sorted_row;
-                if (using_row >= 0 && a->key_idx >= 0) {
-                    char *s = g_using_cache.keys.vars[a->key_idx].data.str[using_row];
-                    buf[i] = strdup(s ? s : "");
-                } else {
-                    buf[i] = strdup("");
+        if (!a->is_key) {
+            /* FAST PATH: Non-key string variable */
+            #ifdef _OPENMP
+            #pragma omp parallel
+            {
+                char strbuf[2049];
+                #pragma omp for schedule(static, 16384)
+                for (size_t i = 0; i < output_nobs; i++) {
+                    int64_t row = src_rows[i];
+                    if (row >= 0) {
+                        SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
+                    } else {
+                        strbuf[0] = '\0';
+                    }
+                    SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
                 }
-            } else {
-                buf[i] = strdup("");
             }
-            if (!buf[i]) {
-                for (size_t k = 0; k < i; k++) free(buf[k]);
-                free(buf);
-                return (void *)1;
+            #else
+            char strbuf[2049];
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t row = src_rows[i];
+                if (row >= 0) {
+                    SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
+                } else {
+                    strbuf[0] = '\0';
+                }
+                SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
             }
-        }
-        size_t str_end8 = output_nobs - (output_nobs % 8);
+            #endif
+        } else {
+            /* SLOW PATH: Key string variable - needs fallback to using cache */
+            char **using_key_data = (g_using_cache.loaded && a->key_idx >= 0) ?
+                                     g_using_cache.keys.vars[a->key_idx].data.str : NULL;
 
-        /* SCATTER to output positions - 8x unrolled */
-        for (size_t i = 0; i < str_end8; i += 8) {
-            SF_sstore(var_idx, (ST_int)(i + 1), buf[i]);
-            SF_sstore(var_idx, (ST_int)(i + 2), buf[i + 1]);
-            SF_sstore(var_idx, (ST_int)(i + 3), buf[i + 2]);
-            SF_sstore(var_idx, (ST_int)(i + 4), buf[i + 3]);
-            SF_sstore(var_idx, (ST_int)(i + 5), buf[i + 4]);
-            SF_sstore(var_idx, (ST_int)(i + 6), buf[i + 5]);
-            SF_sstore(var_idx, (ST_int)(i + 7), buf[i + 6]);
-            SF_sstore(var_idx, (ST_int)(i + 8), buf[i + 7]);
-            free(buf[i]); free(buf[i+1]); free(buf[i+2]); free(buf[i+3]);
-            free(buf[i+4]); free(buf[i+5]); free(buf[i+6]); free(buf[i+7]);
+            #ifdef _OPENMP
+            #pragma omp parallel
+            {
+                char strbuf[2049];
+                #pragma omp for schedule(static, 16384)
+                for (size_t i = 0; i < output_nobs; i++) {
+                    int64_t row = src_rows[i];
+                    if (row >= 0) {
+                        SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
+                    } else if (using_key_data != NULL) {
+                        int64_t using_row = a->specs[i].using_sorted_row;
+                        if (using_row >= 0 && using_key_data[using_row]) {
+                            strncpy(strbuf, using_key_data[using_row], sizeof(strbuf) - 1);
+                            strbuf[sizeof(strbuf) - 1] = '\0';
+                        } else {
+                            strbuf[0] = '\0';
+                        }
+                    } else {
+                        strbuf[0] = '\0';
+                    }
+                    SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
+                }
+            }
+            #else
+            char strbuf[2049];
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t row = src_rows[i];
+                if (row >= 0) {
+                    SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
+                } else if (using_key_data != NULL) {
+                    int64_t using_row = a->specs[i].using_sorted_row;
+                    if (using_row >= 0 && using_key_data[using_row]) {
+                        strncpy(strbuf, using_key_data[using_row], sizeof(strbuf) - 1);
+                        strbuf[sizeof(strbuf) - 1] = '\0';
+                    } else {
+                        strbuf[0] = '\0';
+                    }
+                } else {
+                    strbuf[0] = '\0';
+                }
+                SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
+            }
+            #endif
         }
-        for (size_t i = str_end8; i < output_nobs; i++) {
-            SF_sstore(var_idx, (ST_int)(i + 1), buf[i]);
-            free(buf[i]);
-        }
-        free(buf);
 
     } else {
-        double *buf = malloc(output_nobs * sizeof(double));
-        if (!buf) return (void *)1;
+        /* NUMERIC VARIABLE STREAMING
+         *
+         * Optimization strategy: Sequential read -> C permute -> Sequential write
+         * Random SF_vdata calls are slow due to cache misses in Stata's data space.
+         * Instead:
+         * 1. Read source data sequentially into C buffer (cache-friendly)
+         * 2. Permute in C memory (random access to C memory is fast)
+         * 3. Write output sequentially to Stata (cache-friendly)
+         *
+         * This requires knowing the max source row to size the source buffer.
+         */
 
-        /* GATHER from original master positions - 8x unrolled with prefetching */
-        size_t i_end8 = output_nobs - (output_nobs % 8);
-        for (size_t i = 0; i < i_end8; i += 8) {
-            /* Prefetch future source row indices */
-            if (i + STREAM_PREFETCH_DISTANCE < output_nobs) {
-                __builtin_prefetch(&src_rows[i + STREAM_PREFETCH_DISTANCE], 0, 0);
+        /* Find max source row to determine source buffer size */
+        int64_t max_src_row = -1;
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (src_rows[i] > max_src_row) max_src_row = src_rows[i];
+        }
+
+        size_t src_nobs = (max_src_row >= 0) ? (size_t)(max_src_row + 1) : 0;
+
+        /* Allocate source buffer (for sequential read) and output buffer */
+        double *src_buf = NULL;
+        double *out_buf = (double *)cmerge_aligned_alloc(output_nobs * sizeof(double));
+        if (!out_buf) return (void *)1;
+
+        if (src_nobs > 0) {
+            src_buf = (double *)cmerge_aligned_alloc(src_nobs * sizeof(double));
+            if (!src_buf) {
+                cmerge_aligned_free(out_buf);
+                return (void *)1;
             }
 
-            /* Read 8 source row indices at once for better cache usage */
-            int64_t r0 = src_rows[i], r1 = src_rows[i+1];
-            int64_t r2 = src_rows[i+2], r3 = src_rows[i+3];
-            int64_t r4 = src_rows[i+4], r5 = src_rows[i+5];
-            int64_t r6 = src_rows[i+6], r7 = src_rows[i+7];
-
-            /* Handle each row - branch-reduced pattern */
-            if (r0 >= 0) SF_vdata(var_idx, (ST_int)(r0 + 1), &buf[i]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i].using_sorted_row];
-            else buf[i] = SV_missval;
-
-            if (r1 >= 0) SF_vdata(var_idx, (ST_int)(r1 + 1), &buf[i+1]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+1].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+1] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+1].using_sorted_row];
-            else buf[i+1] = SV_missval;
-
-            if (r2 >= 0) SF_vdata(var_idx, (ST_int)(r2 + 1), &buf[i+2]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+2].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+2] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+2].using_sorted_row];
-            else buf[i+2] = SV_missval;
-
-            if (r3 >= 0) SF_vdata(var_idx, (ST_int)(r3 + 1), &buf[i+3]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+3].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+3] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+3].using_sorted_row];
-            else buf[i+3] = SV_missval;
-
-            if (r4 >= 0) SF_vdata(var_idx, (ST_int)(r4 + 1), &buf[i+4]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+4].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+4] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+4].using_sorted_row];
-            else buf[i+4] = SV_missval;
-
-            if (r5 >= 0) SF_vdata(var_idx, (ST_int)(r5 + 1), &buf[i+5]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+5].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+5] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+5].using_sorted_row];
-            else buf[i+5] = SV_missval;
-
-            if (r6 >= 0) SF_vdata(var_idx, (ST_int)(r6 + 1), &buf[i+6]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+6].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+6] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+6].using_sorted_row];
-            else buf[i+6] = SV_missval;
-
-            if (r7 >= 0) SF_vdata(var_idx, (ST_int)(r7 + 1), &buf[i+7]);
-            else if (a->is_key && g_using_cache.loaded && a->specs[i+7].using_sorted_row >= 0 && a->key_idx >= 0)
-                buf[i+7] = g_using_cache.keys.vars[a->key_idx].data.dbl[a->specs[i+7].using_sorted_row];
-            else buf[i+7] = SV_missval;
+            /* STEP 1: Sequential read from Stata into source buffer */
+            size_t i_end16 = src_nobs - (src_nobs % 16);
+            for (size_t i = 0; i < i_end16; i += 16) {
+                SF_VDATA_BATCH16(var_idx, i + 1, &src_buf[i]);
+            }
+            for (size_t i = i_end16; i < src_nobs; i++) {
+                SF_vdata(var_idx, (ST_int)(i + 1), &src_buf[i]);
+            }
         }
-        /* Handle remainder */
-        for (size_t i = i_end8; i < output_nobs; i++) {
-            if (src_rows[i] >= 0) {
-                SF_vdata(var_idx, (ST_int)(src_rows[i] + 1), &buf[i]);
-            } else if (a->is_key && g_using_cache.loaded) {
-                int64_t using_row = a->specs[i].using_sorted_row;
-                if (using_row >= 0 && a->key_idx >= 0) {
-                    buf[i] = g_using_cache.keys.vars[a->key_idx].data.dbl[using_row];
+
+        /* STEP 2: Permute in C memory (very fast - just memory access) */
+        if (!a->is_key) {
+            /* FAST PATH: Non-key variable */
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static, 65536)
+            #endif
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t row = src_rows[i];
+                out_buf[i] = (row >= 0) ? src_buf[row] : SV_missval;
+            }
+        } else {
+            /* SLOW PATH: Key variable with using-cache fallback */
+            double *using_key_data = (g_using_cache.loaded && a->key_idx >= 0) ?
+                                      g_using_cache.keys.vars[a->key_idx].data.dbl : NULL;
+
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static, 65536)
+            #endif
+            for (size_t i = 0; i < output_nobs; i++) {
+                int64_t row = src_rows[i];
+                if (row >= 0) {
+                    out_buf[i] = src_buf[row];
+                } else if (using_key_data != NULL) {
+                    int64_t using_row = a->specs[i].using_sorted_row;
+                    out_buf[i] = (using_row >= 0) ? using_key_data[using_row] : SV_missval;
                 } else {
-                    buf[i] = SV_missval;
+                    out_buf[i] = SV_missval;
                 }
-            } else {
-                buf[i] = SV_missval;
             }
         }
 
-        /* SCATTER with 16-way unrolling for better cache utilization */
+        /* STEP 3: Sequential write to Stata */
         size_t i_end16 = output_nobs - (output_nobs % 16);
         for (size_t i = 0; i < i_end16; i += 16) {
-            SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
-            SF_vstore(var_idx, (ST_int)(i + 2), buf[i + 1]);
-            SF_vstore(var_idx, (ST_int)(i + 3), buf[i + 2]);
-            SF_vstore(var_idx, (ST_int)(i + 4), buf[i + 3]);
-            SF_vstore(var_idx, (ST_int)(i + 5), buf[i + 4]);
-            SF_vstore(var_idx, (ST_int)(i + 6), buf[i + 5]);
-            SF_vstore(var_idx, (ST_int)(i + 7), buf[i + 6]);
-            SF_vstore(var_idx, (ST_int)(i + 8), buf[i + 7]);
-            SF_vstore(var_idx, (ST_int)(i + 9), buf[i + 8]);
-            SF_vstore(var_idx, (ST_int)(i + 10), buf[i + 9]);
-            SF_vstore(var_idx, (ST_int)(i + 11), buf[i + 10]);
-            SF_vstore(var_idx, (ST_int)(i + 12), buf[i + 11]);
-            SF_vstore(var_idx, (ST_int)(i + 13), buf[i + 12]);
-            SF_vstore(var_idx, (ST_int)(i + 14), buf[i + 13]);
-            SF_vstore(var_idx, (ST_int)(i + 15), buf[i + 14]);
-            SF_vstore(var_idx, (ST_int)(i + 16), buf[i + 15]);
+            SF_VSTORE_BATCH16(var_idx, i + 1, &out_buf[i]);
         }
         for (size_t i = i_end16; i < output_nobs; i++) {
-            SF_vstore(var_idx, (ST_int)(i + 1), buf[i]);
+            SF_vstore(var_idx, (ST_int)(i + 1), out_buf[i]);
         }
 
-        free(buf);
+        if (src_buf) cmerge_aligned_free(src_buf);
+        cmerge_aligned_free(out_buf);
     }
 
     a->success = 1;
@@ -690,7 +738,8 @@ typedef struct {
     int keepusing_idx;              /* Index in keepusing array */
     ST_int dest_idx;                /* Destination Stata variable index */
     int is_shared;                  /* Is this a shared variable? */
-    size_t master_nvars;            /* For determining shared status */
+    int update_mode;                /* Update missing master values */
+    int replace_mode;               /* Replace all master values */
     cmerge_output_spec_t *specs;    /* Output specifications */
     size_t output_nobs;             /* Number of output observations */
     int success;                    /* Thread result */
@@ -702,6 +751,8 @@ static void *write_keepusing_var_thread(void *arg)
     size_t output_nobs = a->output_nobs;
     ST_int dest_idx = a->dest_idx;
     int is_shared = a->is_shared;
+    int update_mode = a->update_mode;
+    int replace_mode = a->replace_mode;
     cmerge_output_spec_t *specs = a->specs;
     stata_variable *src = &g_using_cache.keepusing.vars[a->keepusing_idx];
 
@@ -711,29 +762,74 @@ static void *write_keepusing_var_thread(void *arg)
         /* Numeric keepusing variable */
         for (size_t i = 0; i < output_nobs; i++) {
             int64_t using_row = specs[i].using_sorted_row;
-            int64_t master_row = specs[i].master_sorted_row;
+            int8_t merge_result = specs[i].merge_result;
 
-            /* For shared vars: only write for using-only rows */
-            if (is_shared && master_row >= 0) {
-                continue;
+            /* Determine if we should write using value */
+            int should_write = 0;
+
+            if (merge_result == MERGE_RESULT_USING_ONLY) {
+                /* Always write for using-only rows */
+                should_write = 1;
+            }
+            else if (merge_result == MERGE_RESULT_BOTH) {
+                /* Matched row - depends on shared status and update/replace */
+                if (!is_shared) {
+                    /* Non-shared var: always write using value for matched rows */
+                    should_write = 1;
+                }
+                else if (replace_mode) {
+                    /* Shared var with replace: always overwrite */
+                    should_write = 1;
+                }
+                else if (update_mode) {
+                    /* Shared var with update: only if master value is missing */
+                    double current_val;
+                    SF_vdata(dest_idx, (ST_int)(i + 1), &current_val);
+                    should_write = SF_is_missing(current_val);
+                }
+                /* else: shared var without update/replace - don't overwrite master */
             }
 
-            double val = (using_row >= 0) ? src->data.dbl[using_row] : SV_missval;
-            SF_vstore(dest_idx, (ST_int)(i + 1), val);
+            if (should_write && using_row >= 0) {
+                SF_vstore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]);
+            }
         }
     } else {
         /* String keepusing variable */
+        char str_buf[2049];
         for (size_t i = 0; i < output_nobs; i++) {
             int64_t using_row = specs[i].using_sorted_row;
-            int64_t master_row = specs[i].master_sorted_row;
+            int8_t merge_result = specs[i].merge_result;
 
-            if (is_shared && master_row >= 0) {
-                continue;
+            /* Determine if we should write using value */
+            int should_write = 0;
+
+            if (merge_result == MERGE_RESULT_USING_ONLY) {
+                /* Always write for using-only rows */
+                should_write = 1;
+            }
+            else if (merge_result == MERGE_RESULT_BOTH) {
+                /* Matched row - depends on shared status and update/replace */
+                if (!is_shared) {
+                    /* Non-shared var: always write using value for matched rows */
+                    should_write = 1;
+                }
+                else if (replace_mode) {
+                    /* Shared var with replace: always overwrite */
+                    should_write = 1;
+                }
+                else if (update_mode) {
+                    /* Shared var with update: only if master value is missing (empty string) */
+                    SF_sdata(dest_idx, (ST_int)(i + 1), str_buf);
+                    should_write = (str_buf[0] == '\0');
+                }
+                /* else: shared var without update/replace - don't overwrite master */
             }
 
-            const char *val = (using_row >= 0 && src->data.str[using_row]) ?
-                               src->data.str[using_row] : "";
-            SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
+            if (should_write && using_row >= 0) {
+                const char *val = src->data.str[using_row] ? src->data.str[using_row] : "";
+                SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
+            }
         }
     }
 
@@ -747,7 +843,6 @@ static void *write_keepusing_var_thread(void *arg)
 
 static ST_retcode cmerge_load_using(const char *args)
 {
-    char msg[256];
     ST_retcode rc;
 
 
@@ -762,6 +857,7 @@ static ST_retcode cmerge_load_using(const char *args)
     int n_keepusing = 0;
     int keepusing_indices[CMERGE_MAX_VARS];
     int verbose = 0;
+    int sorted = 0;
 
     char *token = strtok(args_copy, " ");
     int arg_idx = 0;
@@ -790,9 +886,14 @@ static ST_retcode cmerge_load_using(const char *args)
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
         }
+        else if (strcmp(token, "sorted") == 0) {
+            sorted = 1;
+        }
         arg_idx++;
         token = strtok(NULL, " ");
     }
+
+    (void)verbose;  /* Timing output moved to ado file */
 
     /* Free any previous cache */
     if (g_using_cache.loaded) {
@@ -801,30 +902,28 @@ static ST_retcode cmerge_load_using(const char *args)
         g_using_cache.loaded = 0;
     }
 
-    double t_start = cmerge_get_time_ms();
+    double t_phase1_start = cmerge_get_time_ms();
 
     /* Load ONLY key variables */
-    if (verbose) {
-        SF_display("cmerge: Loading using keys...\n");
-    }
-
+    double t_load_keys_start = cmerge_get_time_ms();
     rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
     if (rc != STATA_OK) {
         SF_error("cmerge: Failed to load using keys\n");
         return 459;
     }
+    double t_load_keys = cmerge_get_time_ms() - t_load_keys_start;
 
     /* Load ONLY keepusing variables */
+    double t_load_keepusing = 0;
     if (n_keepusing > 0) {
-        if (verbose) {
-            SF_display("cmerge: Loading keepusing variables...\n");
-        }
+        double t_load_keepusing_start = cmerge_get_time_ms();
         rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
         if (rc != STATA_OK) {
             stata_data_free(&g_using_cache.keys);
             SF_error("cmerge: Failed to load keepusing variables\n");
             return 459;
         }
+        t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
     } else {
         stata_data_init(&g_using_cache.keepusing);
     }
@@ -833,80 +932,81 @@ static ST_retcode cmerge_load_using(const char *args)
     g_using_cache.nkeys = nkeys;
     g_using_cache.n_keepusing = n_keepusing;
 
-    double t_load = cmerge_get_time_ms() - t_start;
+    double t_sort = 0;
+    double t_apply_perm = 0;
 
-    /* Sort using data on keys */
-    if (verbose) {
-        SF_display("cmerge: Sorting using data...\n");
-    }
-    double t_sort_start = cmerge_get_time_ms();
+    /* Sort using data on keys (skip if sorted option specified) */
+    if (!sorted) {
+        double t_sort_start = cmerge_get_time_ms();
 
-    int *sort_vars = malloc(nkeys * sizeof(int));
-    for (int i = 0; i < nkeys; i++) {
-        sort_vars[i] = i + 1;  /* 1-based within keys structure */
-    }
+        int *sort_vars = malloc(nkeys * sizeof(int));
+        for (int i = 0; i < nkeys; i++) {
+            sort_vars[i] = i + 1;  /* 1-based within keys structure */
+        }
 
-    /* Allocate permutation array to capture ordering before it's applied */
-    size_t nobs = g_using_cache.nobs;
-    size_t *perm = malloc(nobs * sizeof(size_t));
-    if (!perm) {
-        free(sort_vars);
-        stata_data_free(&g_using_cache.keys);
-        stata_data_free(&g_using_cache.keepusing);
-        SF_error("cmerge: Memory allocation failed for permutation\n");
-        return 920;
-    }
+        /* Allocate permutation array to capture ordering before it's applied */
+        size_t nobs = g_using_cache.nobs;
+        size_t *perm = malloc(nobs * sizeof(size_t));
+        if (!perm) {
+            free(sort_vars);
+            stata_data_free(&g_using_cache.keys);
+            stata_data_free(&g_using_cache.keepusing);
+            SF_error("cmerge: Memory allocation failed for permutation\n");
+            return 920;
+        }
 
-    /* Use _with_perm version to get permutation BEFORE it's reset to identity */
-    rc = ctools_sort_radix_lsd_with_perm(&g_using_cache.keys, sort_vars, nkeys, perm);
-    if (rc != STATA_OK) {
-        free(perm);
-        free(sort_vars);
-        stata_data_free(&g_using_cache.keys);
-        stata_data_free(&g_using_cache.keepusing);
-        SF_error("cmerge: Failed to sort using data\n");
-        return 459;
-    }
+        /* Use _with_perm version to get permutation BEFORE it's reset to identity */
+        rc = ctools_sort_ips4o_with_perm(&g_using_cache.keys, sort_vars, nkeys, perm);
+        if (rc != STATA_OK) {
+            free(perm);
+            free(sort_vars);
+            stata_data_free(&g_using_cache.keys);
+            stata_data_free(&g_using_cache.keepusing);
+            SF_error("cmerge: Failed to sort using data\n");
+            return 459;
+        }
 
-    /* Apply same permutation to keepusing
-       perm[sorted_idx] = original_idx, so:
-       new_data[sorted_idx] = old_data[perm[sorted_idx]] */
-    if (n_keepusing > 0) {
-        for (int v = 0; v < n_keepusing; v++) {
-            stata_variable *var = &g_using_cache.keepusing.vars[v];
-            if (var->type == STATA_TYPE_DOUBLE) {
-                double *new_data = malloc(nobs * sizeof(double));
-                for (size_t i = 0; i < nobs; i++) {
-                    new_data[i] = var->data.dbl[perm[i]];
+        t_sort = cmerge_get_time_ms() - t_sort_start;
+
+        /* Apply same permutation to keepusing */
+        double t_apply_perm_start = cmerge_get_time_ms();
+        if (n_keepusing > 0) {
+            for (int v = 0; v < n_keepusing; v++) {
+                stata_variable *var = &g_using_cache.keepusing.vars[v];
+                if (var->type == STATA_TYPE_DOUBLE) {
+                    double *new_data = malloc(nobs * sizeof(double));
+                    for (size_t i = 0; i < nobs; i++) {
+                        new_data[i] = var->data.dbl[perm[i]];
+                    }
+                    free(var->data.dbl);
+                    var->data.dbl = new_data;
+                } else {
+                    char **new_data = malloc(nobs * sizeof(char *));
+                    for (size_t i = 0; i < nobs; i++) {
+                        new_data[i] = var->data.str[perm[i]];
+                    }
+                    free(var->data.str);
+                    var->data.str = new_data;
                 }
-                free(var->data.dbl);
-                var->data.dbl = new_data;
-            } else {
-                char **new_data = malloc(nobs * sizeof(char *));
-                for (size_t i = 0; i < nobs; i++) {
-                    new_data[i] = var->data.str[perm[i]];
-                }
-                free(var->data.str);
-                var->data.str = new_data;
             }
         }
+        t_apply_perm = cmerge_get_time_ms() - t_apply_perm_start;
+
+        free(perm);
+        free(sort_vars);
     }
-
-    free(perm);
-    free(sort_vars);
-
-    double t_sort = cmerge_get_time_ms() - t_sort_start;
 
     g_using_cache.loaded = 1;
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg),
-                 "  Loaded %zu obs (%d keys, %d keepusing) in %.1f ms, sorted in %.1f ms\n",
-                 g_using_cache.nobs, nkeys, n_keepusing, t_load, t_sort);
-        SF_display(msg);
-    }
+    double t_phase1_total = cmerge_get_time_ms() - t_phase1_start;
 
+    /* Save Phase 1 timing to Stata scalars (in seconds) */
     SF_scal_save("_cmerge_using_nobs", (double)g_using_cache.nobs);
+    SF_scal_save("_cmerge_p1_load_keys", t_load_keys / 1000.0);
+    SF_scal_save("_cmerge_p1_load_keepusing", t_load_keepusing / 1000.0);
+    SF_scal_save("_cmerge_p1_sort", t_sort / 1000.0);
+    SF_scal_save("_cmerge_p1_apply_perm", t_apply_perm / 1000.0);
+    SF_scal_save("_cmerge_p1_total", t_phase1_total / 1000.0);
 
     return 0;
 }
@@ -917,7 +1017,6 @@ static ST_retcode cmerge_load_using(const char *args)
 
 static ST_retcode cmerge_execute(const char *args)
 {
-    char msg[512];
     ST_retcode rc;
     double t_start, t_total_start;
 
@@ -949,6 +1048,10 @@ static ST_retcode cmerge_execute(const char *args)
     int merge_var_idx = 0;
     int preserve_order = 0;
     int verbose = 0;
+    int sorted = 0;
+    int update_mode = 0;
+    int replace_mode = 0;
+    static int shared_flags[CMERGE_MAX_VARS];
 
     int arg_idx = 0;
     int in_keepusing_placeholders = 0;
@@ -1001,20 +1104,35 @@ static ST_retcode cmerge_execute(const char *args)
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
         }
+        else if (strcmp(token, "sorted") == 0) {
+            sorted = 1;
+        }
+        else if (strcmp(token, "update") == 0) {
+            update_mode = 1;
+        }
+        else if (strcmp(token, "replace") == 0) {
+            replace_mode = 1;
+        }
+        else if (strcmp(token, "shared_flags") == 0) {
+            /* Parse n_keepusing shared_flags values */
+            for (int i = 0; i < n_keepusing; i++) {
+                token = strtok(NULL, " ");
+                if (token) {
+                    shared_flags[i] = atoi(token);
+                } else {
+                    shared_flags[i] = 0;
+                }
+            }
+        }
         arg_idx++;
         token = strtok(NULL, " ");
     }
 
+    (void)verbose;  /* Timing output moved to ado file */
 
     /* ===================================================================
      * Step 1: Load ONLY master keys + _orig_row
      * =================================================================== */
-
-
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "cmerge: Loading master keys only...\n");
-        SF_display(msg);
-    }
 
 
     t_start = cmerge_get_time_ms();
@@ -1050,56 +1168,44 @@ static ST_retcode cmerge_execute(const char *args)
 
     double t_load = cmerge_get_time_ms() - t_start;
 
-
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  Loaded %zu obs, %d vars in %.1f ms\n",
-                 master_minimal.nobs, n_to_load, t_load);
-        SF_display(msg);
-    }
-
-
     /* ===================================================================
-     * Step 2: Sort master keys
+     * Step 2: Sort master keys (skip if sorted option specified)
      * =================================================================== */
 
-    if (verbose) SF_display("cmerge: Sorting master keys...\n");
-    t_start = cmerge_get_time_ms();
+    double t_sort = 0;
+    if (!sorted) {
+        t_start = cmerge_get_time_ms();
 
 
-    int *sort_vars = malloc(nkeys * sizeof(int));
+        int *sort_vars = malloc(nkeys * sizeof(int));
 
 
-    if (!sort_vars) {
-        stata_data_free(&master_minimal);
-        SF_error("cmerge: Failed to allocate sort_vars\n");
-        return 920;
-    }
+        if (!sort_vars) {
+            stata_data_free(&master_minimal);
+            SF_error("cmerge: Failed to allocate sort_vars\n");
+            return 920;
+        }
 
 
-    for (int i = 0; i < nkeys; i++) {
-        sort_vars[i] = i + 1;  /* 1-based within master_minimal */
-    }
+        for (int i = 0; i < nkeys; i++) {
+            sort_vars[i] = i + 1;  /* 1-based within master_minimal */
+        }
 
 
-    rc = ctools_sort_radix_lsd(&master_minimal, sort_vars, nkeys);
+        rc = ctools_sort_ips4o(&master_minimal, sort_vars, nkeys);
 
 
-    /* Validate master data after sort */
+        /* Validate master data after sort */
 
-    free(sort_vars);
+        free(sort_vars);
 
-    if (rc != STATA_OK) {
-        stata_data_free(&master_minimal);
-        return rc;
-    }
-
-
-    double t_sort = cmerge_get_time_ms() - t_start;
+        if (rc != STATA_OK) {
+            stata_data_free(&master_minimal);
+            return rc;
+        }
 
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  Sorted in %.1f ms\n", t_sort);
-        SF_display(msg);
+        t_sort = cmerge_get_time_ms() - t_start;
     }
 
 
@@ -1107,7 +1213,6 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 3: Perform sorted merge join
      * =================================================================== */
 
-    if (verbose) SF_display("cmerge: Performing merge join...\n");
     t_start = cmerge_get_time_ms();
 
 
@@ -1127,11 +1232,6 @@ static ST_retcode cmerge_execute(const char *args)
 
 
     double t_merge = cmerge_get_time_ms() - t_start;
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  Merge produced %zu rows in %.1f ms\n",
-                 output_nobs, t_merge);
-        SF_display(msg);
-    }
 
 
     /* ===================================================================
@@ -1164,9 +1264,9 @@ static ST_retcode cmerge_execute(const char *args)
      * Uses qsort O(n log n) - stable and well-tested
      * =================================================================== */
 
+    double t_reorder = 0;
     if (preserve_order && output_nobs > 0) {
-        if (verbose) SF_display("cmerge: Restoring original order...\n");
-        double t_reorder = cmerge_get_time_ms();
+        double t_reorder_start = cmerge_get_time_ms();
 
         /* Create (order_key, original_index) pairs for sorting */
         cmerge_order_pair_t *pairs = malloc(output_nobs * sizeof(cmerge_order_pair_t));
@@ -1215,11 +1315,7 @@ static ST_retcode cmerge_execute(const char *args)
 
         free(pairs);
 
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "  Reordered in %.1f ms\n",
-                     cmerge_get_time_ms() - t_reorder);
-            SF_display(msg);
-        }
+        t_reorder = cmerge_get_time_ms() - t_reorder_start;
     }
 
     /* Count merge results - unrolled for better performance */
@@ -1257,7 +1353,6 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 6: Write output to Stata
      * =================================================================== */
 
-    if (verbose) SF_display("cmerge: Writing output...\n");
     t_start = cmerge_get_time_ms();
 
     /* 6a: Write _merge variable - 16x unrolled for better cache performance */
@@ -1291,8 +1386,8 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* 6b: Write keepusing variables from cache (PARALLELIZED)
-       For shared variables (dest_idx <= master_nvars): only write for using-only rows
-       For new variables (dest_idx > master_nvars): write for all rows with using data */
+       For shared variables (is_shared=1): behavior depends on update/replace mode
+       For new variables (is_shared=0): write for all rows with using data */
     if (n_keepusing > 0) {
         keepusing_write_args_t *ku_args = malloc(n_keepusing * sizeof(keepusing_write_args_t));
         if (!ku_args) {
@@ -1305,8 +1400,9 @@ static ST_retcode cmerge_execute(const char *args)
         for (int kv = 0; kv < n_keepusing; kv++) {
             ku_args[kv].keepusing_idx = kv;
             ku_args[kv].dest_idx = (ST_int)keepusing_placeholder_indices[kv];
-            ku_args[kv].is_shared = (ku_args[kv].dest_idx <= (ST_int)master_nvars);
-            ku_args[kv].master_nvars = master_nvars;
+            ku_args[kv].is_shared = shared_flags[kv];
+            ku_args[kv].update_mode = update_mode;
+            ku_args[kv].replace_mode = replace_mode;
             ku_args[kv].specs = output_specs;
             ku_args[kv].output_nobs = output_nobs;
             ku_args[kv].success = 0;
@@ -1336,7 +1432,6 @@ static ST_retcode cmerge_execute(const char *args)
     double t_write_keepusing = cmerge_get_time_ms() - t_start;
 
     /* 6c: Stream master variables (parallel) */
-    if (verbose) SF_display("cmerge: Streaming master variables...\n");
     t_start = cmerge_get_time_ms();
 
     /* Determine which variables to stream:
@@ -1402,16 +1497,11 @@ static ST_retcode cmerge_execute(const char *args)
 
     double t_stream = cmerge_get_time_ms() - t_start;
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg),
-                 "  Wrote keepusing in %.1f ms, streamed %zu master vars in %.1f ms\n",
-                 t_write_keepusing, n_stream_vars, t_stream);
-        SF_display(msg);
-    }
-
     /* ===================================================================
-     * Cleanup and return
+     * Cleanup
      * =================================================================== */
+
+    double t_cleanup_start = cmerge_get_time_ms();
 
     free(output_specs);
     free(master_orig_rows);
@@ -1422,22 +1512,27 @@ static ST_retcode cmerge_execute(const char *args)
     stata_data_free(&g_using_cache.keepusing);
     g_using_cache.loaded = 0;
 
-    /* Save results */
+    double t_cleanup = cmerge_get_time_ms() - t_cleanup_start;
+
+    /* Calculate total time */
+    double t_total = cmerge_get_time_ms() - t_total_start;
+
+    /* Save merge results to Stata scalars */
     SF_scal_save("_cmerge_N", (double)output_nobs);
     SF_scal_save("_cmerge_N_1", (double)n_master_only);
     SF_scal_save("_cmerge_N_2", (double)n_using_only);
     SF_scal_save("_cmerge_N_3", (double)n_matched);
 
-    double t_total = cmerge_get_time_ms() - t_total_start;
-    SF_scal_save("_cmerge_time", t_total / 1000.0);
-
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "\nTotal C time: %.1f ms\n", t_total);
-        SF_display(msg);
-        snprintf(msg, sizeof(msg), "  Load: %.1f ms, Sort: %.1f ms, Merge: %.1f ms\n",
-                 t_load, t_sort, t_merge);
-        SF_display(msg);
-    }
+    /* Save Phase 2 timing to Stata scalars (in seconds) */
+    SF_scal_save("_cmerge_p2_load_master", t_load / 1000.0);
+    SF_scal_save("_cmerge_p2_sort_master", t_sort / 1000.0);
+    SF_scal_save("_cmerge_p2_merge_join", t_merge / 1000.0);
+    SF_scal_save("_cmerge_p2_reorder", t_reorder / 1000.0);
+    SF_scal_save("_cmerge_p2_write_keepusing", t_write_keepusing / 1000.0);
+    SF_scal_save("_cmerge_p2_stream_master", t_stream / 1000.0);
+    SF_scal_save("_cmerge_p2_cleanup", t_cleanup / 1000.0);
+    SF_scal_save("_cmerge_p2_total", t_total / 1000.0);
+    SF_scal_save("_cmerge_n_stream_vars", (double)n_stream_vars);
 
     return STATA_OK;
 }

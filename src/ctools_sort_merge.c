@@ -546,7 +546,6 @@ static stata_retcode parallel_merge_sort_numeric(size_t * MERGE_RESTRICT order,
                     if (i + 1 < num_blocks) {
                         /* Merge blocks i and i+1 */
                         size_t out_start = block_starts[i];
-                        size_t total_len = block_lens[i] + block_lens[i + 1];
 
                         #pragma omp task
                         {

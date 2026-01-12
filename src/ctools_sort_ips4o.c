@@ -1079,3 +1079,58 @@ stata_retcode ctools_sort_ips4o(stata_data *data, int *sort_vars, size_t nsort)
 
     return ips4o_apply_permutation(data);
 }
+
+/*
+    ctools_sort_ips4o_with_perm - IPS4o sort with permutation output
+
+    Same as ctools_sort_ips4o but captures the permutation mapping before
+    applying it. This is needed by cmerge to apply the same permutation to
+    keepusing variables that are stored separately from the key variables.
+
+    @param data       Dataset to sort (modified in place)
+    @param sort_vars  Array of 1-based variable indices to sort by
+    @param nsort      Number of sort variables
+    @param perm_out   Output array for permutation (must be pre-allocated with nobs elements)
+                      Maps sorted index -> original index
+
+    @return STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
+                                           size_t nsort, size_t *perm_out)
+{
+    if (!data || !sort_vars || data->nobs == 0 || nsort == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    /* Sort from last key to first for stable multi-key sort */
+    for (int k = (int)nsort - 1; k >= 0; k--) {
+        int var_idx = sort_vars[k] - 1;
+
+        if (var_idx < 0 || var_idx >= (int)data->nvars) {
+            return STATA_ERR_INVALID_INPUT;
+        }
+
+        stata_retcode rc;
+        if (data->vars[var_idx].type == STATA_TYPE_DOUBLE) {
+            rc = ips4o_sort_by_numeric_var(data, var_idx);
+        } else {
+            rc = ips4o_sort_by_string_var(data, var_idx);
+        }
+
+        if (rc != STATA_OK) return rc;
+    }
+
+    /* If caller wants the permutation, copy it BEFORE apply_permutation resets it */
+    if (perm_out != NULL) {
+        size_t nobs = data->nobs;
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+        #endif
+        for (size_t i = 0; i < nobs; i++) {
+            perm_out[i] = data->sort_order[i];
+        }
+    }
+
+    /* Apply the permutation to all variables (this resets sort_order to identity) */
+    return ips4o_apply_permutation(data);
+}

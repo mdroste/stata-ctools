@@ -171,6 +171,12 @@ stata_retcode ctools_sort_merge(stata_data *data, int *sort_vars, size_t nsort);
 // - General-purpose high-performance sorting
 stata_retcode ctools_sort_ips4o(stata_data *data, int *sort_vars, size_t nsort);
 
+// Sort data using IPS4o and return permutation mapping (sorted_idx -> original_idx)
+// If perm_out is non-NULL, fills it with the permutation before applying
+// perm_out must be pre-allocated with at least data->nobs elements
+stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
+                                           size_t nsort, size_t *perm_out);
+
 /* ---------------------------------------------------------------------------
    Sort Algorithm Selection
    --------------------------------------------------------------------------- */

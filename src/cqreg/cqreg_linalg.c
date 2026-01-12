@@ -6,6 +6,7 @@
  */
 
 #include "cqreg_linalg.h"
+#include "../ctools_unroll.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -22,30 +23,7 @@ ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
                     const ST_double * CQREG_RESTRICT y,
                     ST_int N)
 {
-    ST_int i;
-    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
-    ST_int N8 = N - (N % 8);
-
-    /* 8-way unrolled loop for better pipelining */
-    for (i = 0; i < N8; i += 8) {
-        sum0 += x[i]     * y[i];
-        sum1 += x[i + 1] * y[i + 1];
-        sum2 += x[i + 2] * y[i + 2];
-        sum3 += x[i + 3] * y[i + 3];
-        sum4 += x[i + 4] * y[i + 4];
-        sum5 += x[i + 5] * y[i + 5];
-        sum6 += x[i + 6] * y[i + 6];
-        sum7 += x[i + 7] * y[i + 7];
-    }
-
-    /* Handle remainder */
-    for (; i < N; i++) {
-        sum0 += x[i] * y[i];
-    }
-
-    /* Tree reduction for better numerical stability */
-    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
+    return ctools_dot_unrolled(x, y, N);
 }
 
 ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
@@ -92,22 +70,7 @@ ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
 
 ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N)
 {
-    ST_int i;
-    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_int N4 = N - (N % 4);
-
-    for (i = 0; i < N4; i += 4) {
-        sum0 += x[i]     * x[i];
-        sum1 += x[i + 1] * x[i + 1];
-        sum2 += x[i + 2] * x[i + 2];
-        sum3 += x[i + 3] * x[i + 3];
-    }
-
-    for (; i < N; i++) {
-        sum0 += x[i] * x[i];
-    }
-
-    return (sum0 + sum1) + (sum2 + sum3);
+    return ctools_dot_self_unrolled(x, N);
 }
 
 /* ============================================================================

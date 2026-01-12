@@ -46,6 +46,9 @@ where {it:merge_type} is one of
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
+{synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
+{synopt:{opt update}}update missing values of same-named variables with using data{p_end}
+{synopt:{opt replace}}replace all values of same-named variables with using data{p_end}
 {synoptline}
 
 {pstd}
@@ -107,6 +110,24 @@ during the merge operation.
 
 {phang}
 {opt nolabel} prevents value labels from being copied from the using dataset.
+By default, value labels attached to variables in the using dataset are copied
+to the merged result.
+
+{phang}
+{opt nonotes} prevents variable notes (characteristics) from being copied from
+the using dataset. By default, variable notes are preserved.
+
+{phang}
+{opt update} specifies that for observations that match, missing values of
+variables that exist in both datasets should be updated with corresponding
+non-missing values from the using dataset. Variables unique to using are
+always added.
+
+{phang}
+{opt replace} specifies that for observations that match, all values of
+variables that exist in both datasets should be replaced with corresponding
+values from the using dataset. This is more aggressive than {opt update}
+as it replaces non-missing values too.
 
 
 {marker remarks}{...}

@@ -7,38 +7,17 @@
  */
 
 #include "creghdfe_solver.h"
+#include "../ctools_unroll.h"
 
 /* ========================================================================
- * Dot product - highly optimized with 8-way unrolling
+ * Dot product - uses ctools K-way unrolling abstraction
  * ======================================================================== */
 
 ST_double dot_product(const ST_double * RESTRICT x,
                       const ST_double * RESTRICT y,
                       ST_int N)
 {
-    ST_int i;
-    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
-    ST_int N8 = N - (N % 8);
-
-    /* 8-way unrolled loop */
-    for (i = 0; i < N8; i += 8) {
-        sum0 += x[i] * y[i];
-        sum1 += x[i+1] * y[i+1];
-        sum2 += x[i+2] * y[i+2];
-        sum3 += x[i+3] * y[i+3];
-        sum4 += x[i+4] * y[i+4];
-        sum5 += x[i+5] * y[i+5];
-        sum6 += x[i+6] * y[i+6];
-        sum7 += x[i+7] * y[i+7];
-    }
-
-    /* Remainder */
-    for (i = N8; i < N; i++) {
-        sum0 += x[i] * y[i];
-    }
-
-    return (sum0 + sum1) + (sum2 + sum3) + (sum4 + sum5) + (sum6 + sum7);
+    return ctools_dot_unrolled(x, y, N);
 }
 
 /* ========================================================================

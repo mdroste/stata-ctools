@@ -23,7 +23,11 @@
       "Bash(for i in 1 2 3 4 5 6 7 8 9 10)",
       "Bash(do echo -n \"Run $i: \")",
       "Bash(done)",
-      "Bash(do stata -b do test_small.do)"
+      "Bash(do stata -b do test_small.do)",
+      "Bash(javac:*)",
+      "Bash(jar tf:*)",
+      "Bash(xargs -I{} sh -c 'jar xf \"\"\"\"/Applications/Stata/utilities/jar/sfi-api.jar\"\"\"\" {} 2>/dev/null')",
+      "Bash(javap:*)"
     ]
   }
 }

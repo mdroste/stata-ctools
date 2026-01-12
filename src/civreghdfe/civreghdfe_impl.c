@@ -88,7 +88,7 @@ static void matmul_ab(const ST_double *A, const ST_double *B,
     x is K x 1 (output, can be same as b for in-place)
     Returns 0 on success, -1 if not positive definite
 */
-static ST_int solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x)
+static __attribute__((unused)) ST_int solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x)
 {
     ST_int i, j;
     ST_double *L = (ST_double *)malloc(K * K * sizeof(ST_double));
