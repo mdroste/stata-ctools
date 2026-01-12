@@ -7,7 +7,7 @@
 do "validate_setup.do"
 
 
-quietly {
+noisily {
 	
 /*******************************************************************************
  * Basic 1:1 merge tests

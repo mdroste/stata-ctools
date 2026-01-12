@@ -557,99 +557,100 @@ static void *stream_master_var_thread(void *arg)
     a->success = 0;
 
     if (is_string) {
-        /* String variable streaming with OpenMP parallelization
-         * Each thread uses its own string buffer to avoid contention */
+        /* STRING VARIABLE STREAMING - Sequential I/O with C buffer
+         *
+         * CRITICAL: Stata's SPI (SF_sdata/SF_sstore) is NOT thread-safe.
+         * OpenMP parallel for on SPI calls causes data corruption.
+         * We must follow the same pattern as numerics:
+         * 1. Read ALL source strings sequentially into C buffer
+         * 2. Permute in C memory
+         * 3. Write back to Stata sequentially
+         */
 
-        if (!a->is_key) {
-            /* FAST PATH: Non-key string variable */
-            #ifdef _OPENMP
-            #pragma omp parallel
-            {
-                char strbuf[2049];
-                #pragma omp for schedule(static, 16384)
-                for (size_t i = 0; i < output_nobs; i++) {
-                    int64_t row = src_rows[i];
-                    if (row >= 0) {
-                        SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
-                    } else {
-                        strbuf[0] = '\0';
-                    }
-                    SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
-                }
-            }
-            #else
-            char strbuf[2049];
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t row = src_rows[i];
-                if (row >= 0) {
-                    SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
-                } else {
-                    strbuf[0] = '\0';
-                }
-                SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
-            }
-            #endif
-        } else {
-            /* SLOW PATH: Key string variable - needs fallback to using cache */
-            char **using_key_data = (g_using_cache.loaded && a->key_idx >= 0) ?
-                                     g_using_cache.keys.vars[a->key_idx].data.str : NULL;
+        /* Find max source row to determine source buffer size */
+        int64_t max_src_row = -1;
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (src_rows[i] > max_src_row) max_src_row = src_rows[i];
+        }
+        size_t src_nobs = (max_src_row >= 0) ? (size_t)(max_src_row + 1) : 0;
 
-            #ifdef _OPENMP
-            #pragma omp parallel
-            {
-                char strbuf[2049];
-                #pragma omp for schedule(static, 16384)
-                for (size_t i = 0; i < output_nobs; i++) {
-                    int64_t row = src_rows[i];
-                    if (row >= 0) {
-                        SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
-                    } else if (using_key_data != NULL) {
-                        int64_t using_row = a->specs[i].using_sorted_row;
-                        if (using_row >= 0 && using_key_data[using_row]) {
-                            strncpy(strbuf, using_key_data[using_row], sizeof(strbuf) - 1);
-                            strbuf[sizeof(strbuf) - 1] = '\0';
-                        } else {
-                            strbuf[0] = '\0';
-                        }
-                    } else {
-                        strbuf[0] = '\0';
-                    }
-                    SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
-                }
+        /* Allocate source and output string buffers */
+        char **src_buf = NULL;
+        char **out_buf = (char **)calloc(output_nobs, sizeof(char *));
+        if (!out_buf) return (void *)1;
+
+        if (src_nobs > 0) {
+            src_buf = (char **)calloc(src_nobs, sizeof(char *));
+            if (!src_buf) {
+                free(out_buf);
+                return (void *)1;
             }
-            #else
+
+            /* STEP 1: Sequential read from Stata into source buffer */
             char strbuf[2049];
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t row = src_rows[i];
-                if (row >= 0) {
-                    SF_sdata(var_idx, (ST_int)(row + 1), strbuf);
-                } else if (using_key_data != NULL) {
-                    int64_t using_row = a->specs[i].using_sorted_row;
-                    if (using_row >= 0 && using_key_data[using_row]) {
-                        strncpy(strbuf, using_key_data[using_row], sizeof(strbuf) - 1);
-                        strbuf[sizeof(strbuf) - 1] = '\0';
-                    } else {
-                        strbuf[0] = '\0';
-                    }
-                } else {
-                    strbuf[0] = '\0';
+            for (size_t i = 0; i < src_nobs; i++) {
+                SF_sdata(var_idx, (ST_int)(i + 1), strbuf);
+                src_buf[i] = strdup(strbuf);
+                if (!src_buf[i]) {
+                    /* Cleanup on allocation failure */
+                    for (size_t j = 0; j < i; j++) free(src_buf[j]);
+                    free(src_buf);
+                    free(out_buf);
+                    return (void *)1;
                 }
-                SF_sstore(var_idx, (ST_int)(i + 1), strbuf);
             }
-            #endif
         }
 
+        /* STEP 2: Permute in C memory */
+        char **using_key_data = (a->is_key && g_using_cache.loaded && a->key_idx >= 0) ?
+                                 g_using_cache.keys.vars[a->key_idx].data.str : NULL;
+
+        for (size_t i = 0; i < output_nobs; i++) {
+            int64_t row = src_rows[i];
+            if (row >= 0 && src_buf && src_buf[row]) {
+                out_buf[i] = strdup(src_buf[row]);  /* Copy - multiple outputs may reference same source row */
+            } else if (using_key_data != NULL) {
+                int64_t using_row = a->specs[i].using_sorted_row;
+                if (using_row >= 0 && using_key_data[using_row]) {
+                    out_buf[i] = strdup(using_key_data[using_row]);
+                } else {
+                    out_buf[i] = strdup("");
+                }
+            } else {
+                out_buf[i] = strdup("");
+            }
+        }
+
+        /* Free remaining src_buf entries (unused rows) */
+        if (src_buf) {
+            for (size_t i = 0; i < src_nobs; i++) {
+                if (src_buf[i]) free(src_buf[i]);
+            }
+            free(src_buf);
+        }
+
+        /* STEP 3: Sequential write to Stata */
+        for (size_t i = 0; i < output_nobs; i++) {
+            SF_sstore(var_idx, (ST_int)(i + 1), out_buf[i] ? out_buf[i] : "");
+        }
+
+        /* Free output buffer */
+        for (size_t i = 0; i < output_nobs; i++) {
+            if (out_buf[i]) free(out_buf[i]);
+        }
+        free(out_buf);
+
     } else {
-        /* NUMERIC VARIABLE STREAMING
+        /* NUMERIC VARIABLE STREAMING - Optimized Sequential I/O
          *
-         * Optimization strategy: Sequential read -> C permute -> Sequential write
-         * Random SF_vdata calls are slow due to cache misses in Stata's data space.
-         * Instead:
-         * 1. Read source data sequentially into C buffer (cache-friendly)
-         * 2. Permute in C memory (random access to C memory is fast)
-         * 3. Write output sequentially to Stata (cache-friendly)
+         * Key insight: Stata's SPI (SF_vdata/SF_vstore) is inherently sequential I/O.
+         * Row-level OpenMP adds overhead without benefit. Instead, we use:
+         * 1. 16x batched SPI calls to reduce function call overhead
+         * 2. Double buffering for software pipelining (overlap load/store)
+         * 3. Prefetching for improved memory latency hiding
+         * 4. Variable-level parallelism via pthreads (handled by caller)
          *
-         * This requires knowing the max source row to size the source buffer.
+         * This matches the efficient pattern in ctools_data_io.c.
          */
 
         /* Find max source row to determine source buffer size */
@@ -660,7 +661,7 @@ static void *stream_master_var_thread(void *arg)
 
         size_t src_nobs = (max_src_row >= 0) ? (size_t)(max_src_row + 1) : 0;
 
-        /* Allocate source buffer (for sequential read) and output buffer */
+        /* Allocate aligned source and output buffers */
         double *src_buf = NULL;
         double *out_buf = (double *)cmerge_aligned_alloc(output_nobs * sizeof(double));
         if (!out_buf) return (void *)1;
@@ -672,22 +673,48 @@ static void *stream_master_var_thread(void *arg)
                 return (void *)1;
             }
 
-            /* STEP 1: Sequential read from Stata into source buffer */
-            size_t i_end16 = src_nobs - (src_nobs % 16);
-            for (size_t i = 0; i < i_end16; i += 16) {
-                SF_VDATA_BATCH16(var_idx, i + 1, &src_buf[i]);
+            /* STEP 1: Sequential batched read from Stata into source buffer
+             * Uses 16x unrolling with software pipelining for maximum throughput */
+            double v0[16], v1[16];
+            size_t i_end_16 = src_nobs - (src_nobs % 16);
+            size_t prefetch_end = (src_nobs > 32) ? (i_end_16 - 32) : 0;
+
+            size_t i = 0;
+            if (prefetch_end > 0) {
+                /* Prime the pipeline */
+                SF_VDATA_BATCH16(var_idx, 1, v0);
+
+                for (; i < prefetch_end; i += 16) {
+                    /* Prefetch destination ahead */
+                    CTOOLS_PREFETCH(&src_buf[i + 32]);
+                    CTOOLS_PREFETCH(&src_buf[i + 40]);
+
+                    /* Load next batch while storing current */
+                    SF_VDATA_BATCH16(var_idx, i + 17, v1);
+
+                    /* Store to C buffer */
+                    memcpy(&src_buf[i], v0, sizeof(v0));
+
+                    /* Swap buffers */
+                    memcpy(v0, v1, sizeof(v0));
+                }
             }
-            for (size_t i = i_end16; i < src_nobs; i++) {
+
+            /* Remaining 16-element blocks */
+            for (; i < i_end_16; i += 16) {
+                SF_VDATA_BATCH16(var_idx, i + 1, v0);
+                memcpy(&src_buf[i], v0, sizeof(v0));
+            }
+
+            /* Handle remainder */
+            for (; i < src_nobs; i++) {
                 SF_vdata(var_idx, (ST_int)(i + 1), &src_buf[i]);
             }
         }
 
-        /* STEP 2: Permute in C memory (very fast - just memory access) */
+        /* STEP 2: Permute in C memory (fast - pure memory operations) */
         if (!a->is_key) {
-            /* FAST PATH: Non-key variable */
-            #ifdef _OPENMP
-            #pragma omp parallel for schedule(static, 65536)
-            #endif
+            /* FAST PATH: Non-key variable - simple gather */
             for (size_t i = 0; i < output_nobs; i++) {
                 int64_t row = src_rows[i];
                 out_buf[i] = (row >= 0) ? src_buf[row] : SV_missval;
@@ -697,9 +724,6 @@ static void *stream_master_var_thread(void *arg)
             double *using_key_data = (g_using_cache.loaded && a->key_idx >= 0) ?
                                       g_using_cache.keys.vars[a->key_idx].data.dbl : NULL;
 
-            #ifdef _OPENMP
-            #pragma omp parallel for schedule(static, 65536)
-            #endif
             for (size_t i = 0; i < output_nobs; i++) {
                 int64_t row = src_rows[i];
                 if (row >= 0) {
@@ -713,13 +737,44 @@ static void *stream_master_var_thread(void *arg)
             }
         }
 
-        /* STEP 3: Sequential write to Stata */
-        size_t i_end16 = output_nobs - (output_nobs % 16);
-        for (size_t i = 0; i < i_end16; i += 16) {
-            SF_VSTORE_BATCH16(var_idx, i + 1, &out_buf[i]);
-        }
-        for (size_t i = i_end16; i < output_nobs; i++) {
-            SF_vstore(var_idx, (ST_int)(i + 1), out_buf[i]);
+        /* STEP 3: Sequential batched write to Stata
+         * Uses 16x unrolling with software pipelining */
+        {
+            double v0[16], v1[16];
+            size_t i_end_16 = output_nobs - (output_nobs % 16);
+            size_t prefetch_end = (output_nobs > 32) ? (i_end_16 - 32) : 0;
+
+            size_t i = 0;
+            if (prefetch_end > 0) {
+                /* Prime the pipeline */
+                memcpy(v0, &out_buf[0], sizeof(v0));
+
+                for (; i < prefetch_end; i += 16) {
+                    /* Prefetch source ahead */
+                    CTOOLS_PREFETCH(&out_buf[i + 32]);
+                    CTOOLS_PREFETCH(&out_buf[i + 40]);
+
+                    /* Load next batch */
+                    memcpy(v1, &out_buf[i + 16], sizeof(v1));
+
+                    /* Write current batch to Stata */
+                    SF_VSTORE_BATCH16(var_idx, i + 1, v0);
+
+                    /* Swap buffers */
+                    memcpy(v0, v1, sizeof(v0));
+                }
+            }
+
+            /* Remaining 16-element blocks */
+            for (; i < i_end_16; i += 16) {
+                memcpy(v0, &out_buf[i], sizeof(v0));
+                SF_VSTORE_BATCH16(var_idx, i + 1, v0);
+            }
+
+            /* Handle remainder */
+            for (; i < output_nobs; i++) {
+                SF_vstore(var_idx, (ST_int)(i + 1), out_buf[i]);
+            }
         }
 
         if (src_buf) cmerge_aligned_free(src_buf);

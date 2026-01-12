@@ -1,26 +1,25 @@
-/*******************************************************************************
- * validate_setup.do
- *
- * Setup and helper programs for ctools validation test suite
- * This file is included by all individual validation tests
- ******************************************************************************/
+*===============================================================================
+* PROGRAM: validate_setup.do
+* PURPOSE: Helper programs for validation
+*===============================================================================
 
 version 14.0
 clear all
 set more off
 set trace off
 
-* Load ctools from build directory
-adopath + "build"
-cap program drop ctools_plugin
-program ctools_plugin, plugin using("build/ctools_mac_arm.plugin")
+* Add build directory with ctools to adopath
+adopath + "../build"
 
 * Global counters
 global TESTS_PASSED = 0
 global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
 
+*-------------------------------------------------------------------------------
 * Helper program to compare scalars with tolerance
+*-------------------------------------------------------------------------------
+
 capture program drop assert_scalar_equal
 program define assert_scalar_equal
     args name val1 val2 tol testname
@@ -41,7 +40,10 @@ program define assert_scalar_equal
     }
 end
 
+*-------------------------------------------------------------------------------
 * Helper program to compare matrices
+*-------------------------------------------------------------------------------
+
 capture program drop assert_matrix_equal
 program define assert_matrix_equal
     args mat1 mat2 tol testname
@@ -72,7 +74,10 @@ program define assert_matrix_equal
     }
 end
 
+*-------------------------------------------------------------------------------
 * Helper program to compare variables
+*-------------------------------------------------------------------------------
+
 capture program drop assert_var_equal
 program define assert_var_equal
     args var1 var2 tol testname
@@ -94,7 +99,10 @@ program define assert_var_equal
     }
 end
 
+*-------------------------------------------------------------------------------
 * Helper program to compare string variables
+*-------------------------------------------------------------------------------
+
 capture program drop assert_strvar_equal
 program define assert_strvar_equal
     args var1 var2 testname
@@ -114,7 +122,11 @@ program define assert_strvar_equal
     }
 end
 
+*-------------------------------------------------------------------------------
 * Helper to check if two datasets are identical (with fallback to sorted comparison)
+
+*-------------------------------------------------------------------------------
+
 capture program drop assert_data_equal
 program define assert_data_equal
     args file1 file2 testname
@@ -162,7 +174,10 @@ program define assert_data_equal
     }
 end
 
-* Helper to compare datasets after sorting (for merges where row order may differ)
+*-------------------------------------------------------------------------------
+* Helper to compare datasets after sorting (merges where row order may differ)
+*-------------------------------------------------------------------------------
+
 capture program drop assert_data_equal_sorted
 program define assert_data_equal_sorted
     args file1 file2 sortkey testname
@@ -200,7 +215,10 @@ program define assert_data_equal_sorted
     }
 end
 
-* Helper to compare merge counts (for merges where row order may differ)
+*-------------------------------------------------------------------------------
+* Helper to compare merge counts (merges where row order may differ)
+*-------------------------------------------------------------------------------
+
 capture program drop assert_merge_counts_equal
 program define assert_merge_counts_equal
     args file1 file2 testname
@@ -243,7 +261,10 @@ program define assert_merge_counts_equal
     }
 end
 
+*-------------------------------------------------------------------------------
 * Helper program to print section header
+*-------------------------------------------------------------------------------
+
 capture program drop print_section
 program define print_section
     args title
@@ -273,11 +294,8 @@ program define print_summary
     di as text "{hline 70}"
 end
 
-* Create temp directory for test files
-capture mkdir "validation/temp"
-
 * Load benchmark helper programs
-do "validation/benchmark_helpers.do"
+do "benchmark_helpers.do"
 
 di as text ""
 di as text "ctools validation framework loaded"

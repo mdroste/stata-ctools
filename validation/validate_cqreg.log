@@ -25,18 +25,22 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cmerge.do 
+. do validate_cqreg.do 
 
-. *============================================================================
-> ===
-. * PROGRAM: validate_cmerge.do
-. * PURPOSE: Validation of -cmerge- vs. -merge-
-. *============================================================================
-> ===
+. /****************************************************************************
+> ***
+>  * validate_cqreg.do
+>  *
+>  * Comprehensive validation tests for cqreg vs qreg
+>  * Tests quantile regression across various scenarios
+>  *
+>  * Note: Coefficients and standard errors are compared with tolerance 1e-6
+>  * due to floating-point precision differences in complex optimization
+>  ****************************************************************************
+> **/
 . 
-. * Load helper programs
-. do "validate_setup.do"
-file validate_setup.do not found
+. do "validation/validate_setup.do"
+file validation/validate_setup.do not found
 r(601);
 
 end of do-file

@@ -1,0 +1,2235 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do validate_cmerge_debug.do 
+
+. *============================================================================
+> ===
+. * PROGRAM: validate_cmerge.do
+. * PURPOSE: Validation of -cmerge- vs. -merge-
+. *============================================================================
+> ===
+. 
+. * Load helper programs
+. do "validate_setup.do"
+
+. *============================================================================
+> ===
+. * PROGRAM: validate_setup.do
+. * PURPOSE: Helper programs for validation
+. *============================================================================
+> ===
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. set trace off
+
+. 
+. * Add build directory with ctools to adopath
+. adopath + "../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "../build"
+
+. 
+. * Global counters
+. global TESTS_PASSED = 0
+
+. global TESTS_FAILED = 0
+
+. global TESTS_TOTAL = 0
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper program to compare scalars with tolerance
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_scalar_equal
+
+. program define assert_scalar_equal
+  1.     args name val1 val2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-6
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     local diff = abs(`val1' - `val2')
+  5.     * Handle exact match case (for integers like N)
+.     if `diff' == 0 | `diff' < `tol' {
+  6.         global TESTS_PASSED = $TESTS_PASSED + 1
+  7.         di as result "  PASS: `testname' (`name' diff = " %12.2e `diff' ")
+> "
+  8.     }
+  9.     else {
+ 10.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 11.         di as error "  FAIL: `testname' (`name': `val1' vs `val2', diff = 
+> " %12.2e `diff' ")"
+ 12.     }
+ 13. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper program to compare matrices
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_matrix_equal
+
+. program define assert_matrix_equal
+  1.     args mat1 mat2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-6
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     tempname diff
+  5.     matrix `diff' = `mat1' - `mat2'
+  6.     local maxdiff = 0
+  7.     local rows = rowsof(`diff')
+  8.     local cols = colsof(`diff')
+  9.     forvalues i = 1/`rows' {
+ 10.         forvalues j = 1/`cols' {
+ 11.             local d = abs(`diff'[`i', `j'])
+ 12.             if `d' > `maxdiff' local maxdiff = `d'
+ 13.         }
+ 14.     }
+ 15. 
+.     if `maxdiff' < `tol' {
+ 16.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 17.         di as result "  PASS: `testname' (max diff = " %12.2e `maxdiff' ")
+> "
+ 18.     }
+ 19.     else {
+ 20.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 21.         di as error "  FAIL: `testname' (max diff = " %12.2e `maxdiff' ")"
+ 22.     }
+ 23. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper program to compare variables
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_var_equal
+
+. program define assert_var_equal
+  1.     args var1 var2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-10
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     quietly count if abs(`var1' - `var2') > `tol'
+  5.     local ndiff = r(N)
+  6. 
+.     if `ndiff' == 0 {
+  7.         global TESTS_PASSED = $TESTS_PASSED + 1
+  8.         di as result "  PASS: `testname' (all values match)"
+  9.     }
+ 10.     else {
+ 11.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 12.         di as error "  FAIL: `testname' (`ndiff' values differ)"
+ 13.     }
+ 14. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper program to compare string variables
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_strvar_equal
+
+. program define assert_strvar_equal
+  1.     args var1 var2 testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     quietly count if `var1' != `var2'
+  4.     local ndiff = r(N)
+  5. 
+.     if `ndiff' == 0 {
+  6.         global TESTS_PASSED = $TESTS_PASSED + 1
+  7.         di as result "  PASS: `testname' (all values match)"
+  8.     }
+  9.     else {
+ 10.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 11.         di as error "  FAIL: `testname' (`ndiff' values differ)"
+ 12.     }
+ 13. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper to check if two datasets are identical (with fallback to sorted comp
+> arison)
+. 
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_data_equal
+
+. program define assert_data_equal
+  1.     args file1 file2 testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     preserve
+  4.     capture quietly {
+  5.         use "`file1'", clear
+  6.         cf _all using "`file2'"
+  7.     }
+  8.     local rc = _rc
+  9.     restore
+ 10. 
+.     if `rc' == 0 {
+ 11.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 12.         di as result "  PASS: `testname' (datasets identical)"
+ 13.     }
+ 14.     else {
+ 15.         * Try sorting both datasets by all variables before comparing
+.         preserve
+ 16.         capture quietly {
+ 17.             use "`file1'", clear
+ 18.             ds
+ 19.             local allvars `r(varlist)'
+ 20.             sort `allvars'
+ 21.             tempfile sorted1
+ 22.             save `sorted1', replace
+ 23. 
+.             use "`file2'", clear
+ 24.             sort `allvars'
+ 25.             cf _all using `sorted1'
+ 26.         }
+ 27.         local rc2 = _rc
+ 28.         restore
+ 29. 
+.         if `rc2' == 0 {
+ 30.             global TESTS_PASSED = $TESTS_PASSED + 1
+ 31.             di as result "  PASS: `testname' (datasets identical after sor
+> ting)"
+ 32.         }
+ 33.         else {
+ 34.             global TESTS_FAILED = $TESTS_FAILED + 1
+ 35.             di as error "  FAIL: `testname' (datasets differ even after so
+> rting)"
+ 36.         }
+ 37.     }
+ 38. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper to compare datasets after sorting (merges where row order may differ
+> )
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_data_equal_sorted
+
+. program define assert_data_equal_sorted
+  1.     args file1 file2 sortkey testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     preserve
+  4.     quietly {
+  5.         * Load and sort first file
+.         use "`file1'", clear
+  6.         sort `sortkey', stable
+  7.         tempfile sorted1
+  8.         save `sorted1'
+  9. 
+.         * Load and sort second file
+.         use "`file2'", clear
+ 10.         sort `sortkey', stable
+ 11.         tempfile sorted2
+ 12.         save `sorted2'
+ 13. 
+.         * Compare
+.         use `sorted1', clear
+ 14.         cf _all using `sorted2'
+ 15.     }
+ 16.     local rc = _rc
+ 17.     restore
+ 18. 
+.     if `rc' == 0 {
+ 19.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 20.         di as result "  PASS: `testname' (datasets identical after sorting
+> )"
+ 21.     }
+ 22.     else {
+ 23.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 24.         di as error "  FAIL: `testname' (datasets differ even after sortin
+> g)"
+ 25.     }
+ 26. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper to compare merge counts (merges where row order may differ)
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop assert_merge_counts_equal
+
+. program define assert_merge_counts_equal
+  1.     args file1 file2 testname
+  2. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  3. 
+.     preserve
+  4.     quietly {
+  5.         use "`file1'", clear
+  6.         local n1 = _N
+  7.         count if _merge == 1
+  8.         local m1_1 = r(N)
+  9.         count if _merge == 2
+ 10.         local m1_2 = r(N)
+ 11.         count if _merge == 3
+ 12.         local m1_3 = r(N)
+ 13. 
+.         use "`file2'", clear
+ 14.         local n2 = _N
+ 15.         count if _merge == 1
+ 16.         local m2_1 = r(N)
+ 17.         count if _merge == 2
+ 18.         local m2_2 = r(N)
+ 19.         count if _merge == 3
+ 20.         local m2_3 = r(N)
+ 21.     }
+ 22.     restore
+ 23. 
+.     local pass = (`n1' == `n2') & (`m1_1' == `m2_1') & (`m1_2' == `m2_2') & (
+> `m1_3' == `m2_3')
+ 24. 
+.     if `pass' {
+ 25.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 26.         di as result "  PASS: `testname' (N=`n1', m1=`m1_1', m2=`m1_2', m3
+> =`m1_3')"
+ 27.     }
+ 28.     else {
+ 29.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 30.         di as error "  FAIL: `testname' counts differ"
+ 31.         di as error "    Stata: N=`n1', m1=`m1_1', m2=`m1_2', m3=`m1_3'"
+ 32.         di as error "    cmerge: N=`n2', m1=`m2_1', m2=`m2_2', m3=`m2_3'"
+ 33.     }
+ 34. end
+
+. 
+. *----------------------------------------------------------------------------
+> ---
+. * Helper program to print section header
+. *----------------------------------------------------------------------------
+> ---
+. 
+. capture program drop print_section
+
+. program define print_section
+  1.     args title
+  2.     di as text ""
+  3.     di as text "{hline 70}"
+  4.     di as text "`title'"
+  5.     di as text "{hline 70}"
+  6. end
+
+. 
+. * Helper program to print test summary
+. capture program drop print_summary
+
+. program define print_summary
+  1.     args component
+  2.     di as text ""
+  3.     di as text "{hline 70}"
+  4.     di as text "SUMMARY: `component'"
+  5.     di as text "{hline 70}"
+  6.     di as text "Tests passed: " as result $TESTS_PASSED
+  7.     di as text "Tests failed: " as result $TESTS_FAILED
+  8.     di as text "Total tests:  " as result $TESTS_TOTAL
+  9.     if $TESTS_FAILED > 0 {
+ 10.         di as error "VALIDATION FAILED"
+ 11.     }
+ 12.     else {
+ 13.         di as result "ALL TESTS PASSED"
+ 14.     }
+ 15.     di as text "{hline 70}"
+ 16. end
+
+. 
+. * Load benchmark helper programs
+. do "benchmark_helpers.do"
+
+. /****************************************************************************
+> ***
+>  * benchmark_helpers.do
+>  *
+>  * Benchmark helper programs for ctools validation test suite
+>  * Each program runs both ctools and Stata native commands, compares results,
+>  * and reports PASS/FAIL in a concise format.
+>  *
+>  * Usage:
+>  *   benchmark_sort varlist [, options]
+>  *   benchmark_merge mergetype keyvar using filename [, options]
+>  *   benchmark_reghdfe depvar indepvars, absorb(varlist) [options]
+>  *   benchmark_qreg depvar indepvars [, options]
+>  *   benchmark_import using filename [, options]
+>  *   benchmark_export using filename [, options]
+>  ****************************************************************************
+> **/
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_sort
+>  *
+>  * Compare csort vs sort, stable
+>  *
+>  * Syntax: benchmark_sort varlist [, testname(string) algorithm(string)]
+>  *
+>  * Example:
+>  *   sysuse auto, clear
+>  *   benchmark_sort price
+>  *   benchmark_sort foreign rep78, testname("multi-var sort")
+>  *   benchmark_sort price, algorithm(msd)
+>  *   benchmark_sort price, algorithm(timsort)
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_sort
+
+. program define benchmark_sort
+  1.     syntax varlist [, testname(string) ALGorithm(string)]
+  2. 
+.     if "`testname'" == "" local testname "sort `varlist'"
+  3.     if "`algorithm'" != "" local testname "`testname' [alg=`algorithm']"
+  4. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  5. 
+.     preserve
+  6. 
+.     * Save original data
+.     tempfile original
+  7.     quietly save `original'
+  8. 
+.     * Run Stata sort, stable
+.     sort `varlist', stable
+  9.     tempfile stata_sorted
+ 10.     quietly save `stata_sorted'
+ 11. 
+.     * Restore and run csort
+.     use `original', clear
+ 12.     if "`algorithm'" != "" {
+ 13.         csort `varlist', algorithm(`algorithm')
+ 14.     }
+ 15.     else {
+ 16.         csort `varlist'
+ 17.     }
+ 18. 
+.     * Compare datasets
+.     capture quietly cf _all using `stata_sorted'
+ 19.     local rc = _rc
+ 20. 
+.     restore
+ 21. 
+.     if `rc' == 0 {
+ 22.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 23.         di as result "[PASS] `testname'"
+ 24.     }
+ 25.     else {
+ 26.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 27.         di as error "[FAIL] `testname'"
+ 28.     }
+ 29. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_sort_all_algs
+>  *
+>  * Run benchmark_sort with all three algorithms (lsd, msd, timsort)
+>  *
+>  * Syntax: benchmark_sort_all_algs varlist [, testname(string)]
+>  *
+>  * Example:
+>  *   benchmark_sort_all_algs price, testname("numeric sort")
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_sort_all_algs
+
+. program define benchmark_sort_all_algs
+  1.     syntax varlist [, testname(string)]
+  2. 
+.     if "`testname'" == "" local testname "sort `varlist'"
+  3. 
+.     * Test all three algorithms
+.     benchmark_sort `varlist', testname("`testname'") algorithm(lsd)
+  4.     benchmark_sort `varlist', testname("`testname'") algorithm(msd)
+  5.     benchmark_sort `varlist', testname("`testname'") algorithm(timsort)
+  6. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_merge
+>  *
+>  * Compare cmerge vs merge
+>  * Validates: (1) _merge counts match, (2) datasets are identical via cf _all
+>  *
+>  * Syntax: benchmark_merge mergetype keyvar using filename [, keep(string)
+>  *         generate(string) nogenerate keepusing(varlist) testname(string)]
+>  *
+>  * Example:
+>  *   benchmark_merge 1:1 id using mydata.dta
+>  *   benchmark_merge m:1 foreign using lookup.dta, keep(match)
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_merge
+
+. program define benchmark_merge
+  1.     syntax anything using/, [keep(string) GENerate(name) NOGENerate KEEPUS
+> ing(string) testname(string) SORTed]
+  2. 
+.     * Parse merge type and key vars
+.     gettoken mergetype keyvars : anything
+  3. 
+.     if "`testname'" == "" local testname "merge `mergetype' `keyvars'"
+  4. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  5. 
+.     * Build option string
+.     local opts ""
+  6.     if "`keep'" != "" local opts "`opts' keep(`keep')"
+  7.     if "`generate'" != "" local opts "`opts' generate(`generate')"
+  8.     if "`nogenerate'" != "" local opts "`opts' nogenerate"
+  9.     if "`keepusing'" != "" local opts "`opts' keepusing(`keepusing')"
+ 10.     if "`sorted'" != "" local opts "`opts' sorted"
+ 11. 
+.     preserve
+ 12. 
+.     * Save original data
+.     tempfile original
+ 13.     quietly save `original'
+ 14. 
+.     * Run Stata merge
+.     merge `mergetype' `keyvars' using `using', `opts'
+ 15. 
+.     * Get _merge counts from Stata
+.     capture confirm variable _merge
+ 16.     if _rc == 0 {
+ 17.         quietly count if _merge == 1
+ 18.         local stata_m1 = r(N)
+ 19.         quietly count if _merge == 2
+ 20.         local stata_m2 = r(N)
+ 21.         quietly count if _merge == 3
+ 22.         local stata_m3 = r(N)
+ 23.     }
+ 24.     else {
+ 25.         local stata_m1 = .
+ 26.         local stata_m2 = .
+ 27.         local stata_m3 = .
+ 28.     }
+ 29. 
+.     * Save unsorted for first comparison
+.     tempfile stata_merged_unsorted
+ 30.     quietly save `stata_merged_unsorted'
+ 31. 
+.     * Sort by ALL variables for deterministic comparison
+.     * (keyvars alone may leave order undefined within key groups)
+.     qui ds
+ 32.     local allvars `r(varlist)'
+ 33.     sort `allvars'
+ 34.     tempfile stata_merged_sorted
+ 35.     quietly save `stata_merged_sorted'
+ 36. 
+.     * Restore and run cmerge
+.     use `original', clear
+ 37.     cmerge `mergetype' `keyvars' using `using', `opts'
+ 38. 
+.     * Get _merge counts from cmerge
+.     capture confirm variable _merge
+ 39.     if _rc == 0 {
+ 40.         quietly count if _merge == 1
+ 41.         local cmerge_m1 = r(N)
+ 42.         quietly count if _merge == 2
+ 43.         local cmerge_m2 = r(N)
+ 44.         quietly count if _merge == 3
+ 45.         local cmerge_m3 = r(N)
+ 46.     }
+ 47.     else {
+ 48.         local cmerge_m1 = .
+ 49.         local cmerge_m2 = .
+ 50.         local cmerge_m3 = .
+ 51.     }
+ 52. 
+.     * Check 1: _merge counts match
+.     local counts_match = 1
+ 53.     if `stata_m1' != `cmerge_m1' | `stata_m2' != `cmerge_m2' | `stata_m3' 
+> != `cmerge_m3' {
+ 54.         local counts_match = 0
+ 55.     }
+ 56. 
+.     * Check 2a: cf _all BEFORE sorting (tests if order is identical too)
+.     capture quietly cf _all using `stata_merged_unsorted'
+ 57.     local cf_unsorted_rc = _rc
+ 58. 
+.     * Check 2b: cf _all AFTER sorting by ALL variables (tests content only)
+.     qui ds
+ 59.     local allvars `r(varlist)'
+ 60.     sort `allvars'
+ 61.     capture quietly cf _all using `stata_merged_sorted'
+ 62.     local cf_sorted_rc = _rc
+ 63. 
+.     restore
+ 64. 
+.     * Report results
+.     if `counts_match' & `cf_sorted_rc' == 0 {
+ 65.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 66.         if `cf_unsorted_rc' == 0 {
+ 67.             di as result "[PASS] `testname'"
+ 68.         }
+ 69.         else {
+ 70.             di as result "[PASS] `testname' (sort order differs)"
+ 71.         }
+ 72.     }
+ 73.     else {
+ 74.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 75.         if !`counts_match' {
+ 76.             di as error "[FAIL] `testname' (_merge counts: m1:`stata_m1'!=
+> `cmerge_m1' m2:`stata_m2'!=`cmerge_m2' m3:`stata_m3'!=`cmerge_m3')"
+ 77.         }
+ 78.         else {
+ 79.             di as error "[FAIL] `testname' (cf _all: datasets differ even 
+> after sorting)"
+ 80.         }
+ 81.     }
+ 82. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_reghdfe
+>  *
+>  * Compare creghdfe vs reghdfe
+>  *
+>  * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist)
+>  *         [vce(string) testname(string) tol(real)]
+>  *
+>  * Example:
+>  *   benchmark_reghdfe price mpg weight, absorb(foreign)
+>  *   benchmark_reghdfe y x1 x2 [aw=w], absorb(firm year) vce(cluster firm)
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_reghdfe
+
+. program define benchmark_reghdfe
+  1.     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(st
+> ring) testname(string) tol(real 1e-6)]
+  2. 
+.     gettoken depvar indepvars : varlist
+  3. 
+.     if "`testname'" == "" local testname "reghdfe `depvar' ... , absorb(`abso
+> rb')"
+  4. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  5. 
+.     * Build weight string
+.     local wtexp ""
+  6.     if "`weight'" != "" local wtexp "[`weight'`exp']"
+  7. 
+.     * Build vce option
+.     local vceopt ""
+  8.     if "`vce'" != "" local vceopt "vce(`vce')"
+  9. 
+.     preserve
+ 10. 
+.     * Run reghdfe
+.     quietly reghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') 
+> `vceopt'
+ 11.     matrix reghdfe_b = e(b)
+ 12.     local reghdfe_N = e(N)
+ 13. 
+.     * Run creghdfe
+.     quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb')
+>  `vceopt'
+ 14.     matrix creghdfe_b = e(b)
+ 15.     local creghdfe_N = e(N)
+ 16. 
+.     restore
+ 17. 
+.     * Compare N
+.     if `reghdfe_N' != `creghdfe_N' {
+ 18.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 19.         di as error "[FAIL] `testname' (N: `reghdfe_N' != `creghdfe_N')"
+ 20.         exit
+ 21.     }
+ 22. 
+.     * Compare coefficients
+.     tempname diff
+ 23.     matrix `diff' = reghdfe_b - creghdfe_b
+ 24.     local cols = colsof(`diff')
+ 25.     local maxdiff = 0
+ 26.     forvalues j = 1/`cols' {
+ 27.         local d = abs(`diff'[1, `j'])
+ 28.         if `d' > `maxdiff' local maxdiff = `d'
+ 29.     }
+ 30. 
+.     if `maxdiff' < `tol' {
+ 31.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 32.         di as result "[PASS] `testname'"
+ 33.     }
+ 34.     else {
+ 35.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 36.         di as error "[FAIL] `testname' (max coef diff: " %9.2e `maxdiff' "
+> )"
+ 37.     }
+ 38. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_qreg
+>  *
+>  * Compare cqreg vs qreg
+>  *
+>  * Syntax: benchmark_qreg depvar indepvars [, quantile(real) vce(string)
+>  *         testname(string) tol(real)]
+>  *
+>  * Example:
+>  *   benchmark_qreg price mpg weight
+>  *   benchmark_qreg price mpg weight, quantile(0.25)
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_qreg
+
+. program define benchmark_qreg
+  1.     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) te
+> stname(string) tol(real 1e-6)]
+  2. 
+.     gettoken depvar indepvars : varlist
+  3. 
+.     if "`testname'" == "" local testname "qreg `depvar' ... , q(`quantile')"
+  4. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  5. 
+.     * Build vce option
+.     local vceopt ""
+  6.     if "`vce'" != "" local vceopt "vce(`vce')"
+  7. 
+.     preserve
+  8. 
+.     * Run qreg
+.     quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt
+> '
+  9.     matrix qreg_b = e(b)
+ 10.     local qreg_N = e(N)
+ 11. 
+.     * Run cqreg
+.     quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceop
+> t'
+ 12.     matrix cqreg_b = e(b)
+ 13.     local cqreg_N = e(N)
+ 14. 
+.     restore
+ 15. 
+.     * Compare N
+.     if `qreg_N' != `cqreg_N' {
+ 16.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 17.         di as error "[FAIL] `testname' (N: `qreg_N' != `cqreg_N')"
+ 18.         exit
+ 19.     }
+ 20. 
+.     * Compare coefficients
+.     tempname diff
+ 21.     matrix `diff' = qreg_b - cqreg_b
+ 22.     local cols = colsof(`diff')
+ 23.     local maxdiff = 0
+ 24.     forvalues j = 1/`cols' {
+ 25.         local d = abs(`diff'[1, `j'])
+ 26.         if `d' > `maxdiff' local maxdiff = `d'
+ 27.     }
+ 28. 
+.     if `maxdiff' < `tol' {
+ 29.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 30.         di as result "[PASS] `testname'"
+ 31.     }
+ 32.     else {
+ 33.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 34.         di as error "[FAIL] `testname' (max coef diff: " %9.2e `maxdiff' "
+> )"
+ 35.     }
+ 36. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_import
+>  *
+>  * Compare cimport delimited vs import delimited
+>  *
+>  * Syntax: benchmark_import using filename [, delimiters(string) varnames(str
+> ing)
+>  *         case(string) rowrange(string) testname(string)]
+>  *
+>  * Example:
+>  *   benchmark_import using "data.csv"
+>  *   benchmark_import using "data.tsv", delimiters(tab)
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_import
+
+. program define benchmark_import
+  1.     syntax using/, [DELIMiters(string) VARNames(string) CASE(string) ROWRa
+> nge(string) testname(string) clear]
+  2. 
+.     if "`testname'" == "" local testname "import `using'"
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     * Build option string
+.     local opts "clear"
+  5.     if "`delimiters'" != "" local opts "`opts' delimiters(`delimiters')"
+  6.     if "`varnames'" != "" local opts "`opts' varnames(`varnames')"
+  7.     if "`case'" != "" local opts "`opts' case(`case')"
+  8.     if "`rowrange'" != "" local opts "`opts' rowrange(`rowrange')"
+  9. 
+.     preserve
+ 10. 
+.     * Run Stata import
+.     import delimited `using', `opts'
+ 11.     local stata_n = _N
+ 12.     local stata_k = c(k)
+ 13.     tempfile stata_import
+ 14.     quietly save `stata_import'
+ 15. 
+.     * Run cimport
+.     cimport delimited `using', `opts'
+ 16.     local cimport_n = _N
+ 17.     local cimport_k = c(k)
+ 18. 
+.     restore
+ 19. 
+.     * Compare dimensions
+.     if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+ 20.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 21.         di as result "[PASS] `testname' (N=`stata_n', K=`stata_k')"
+ 22.     }
+ 23.     else {
+ 24.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 25.         di as error "[FAIL] `testname' (N: `stata_n'!=`cimport_n', K: `sta
+> ta_k'!=`cimport_k')"
+ 26.     }
+ 27. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_export
+>  *
+>  * Compare cexport delimited vs export delimited
+>  *
+>  * Syntax: benchmark_export [varlist] using filename [, delimiter(string)
+>  *         novarnames quote testname(string)]
+>  *
+>  * Example:
+>  *   benchmark_export using "output.csv", replace
+>  *   benchmark_export price mpg using "output.csv", replace
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_export
+
+. program define benchmark_export
+  1.     syntax [varlist] using/, [DELIMiter(string) NOVARNames QUOTE replace t
+> estname(string)]
+  2. 
+.     if "`testname'" == "" local testname "export `using'"
+  3. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     * Build option string
+.     local opts "replace"
+  5.     if "`delimiter'" != "" local opts "`opts' delimiter(`delimiter')"
+  6.     if "`novarnames'" != "" local opts "`opts' novarnames"
+  7.     if "`quote'" != "" local opts "`opts' quote"
+  8. 
+.     preserve
+  9. 
+.     * Generate temp filenames
+.     tempfile stata_export cexport_export
+ 10.     local stata_csv = subinstr("`stata_export'", ".dta", ".csv", .)
+ 11.     local cexport_csv = subinstr("`cexport_export'", ".dta", ".csv", .)
+ 12. 
+.     * Run Stata export
+.     if "`varlist'" != "" {
+ 13.         export delimited `varlist' using "`stata_csv'", `opts'
+ 14.     }
+ 15.     else {
+ 16.         export delimited using "`stata_csv'", `opts'
+ 17.     }
+ 18. 
+.     * Run cexport
+.     if "`varlist'" != "" {
+ 19.         cexport delimited `varlist' using "`cexport_csv'", `opts'
+ 20.     }
+ 21.     else {
+ 22.         cexport delimited using "`cexport_csv'", `opts'
+ 23.     }
+ 24. 
+.     * Reimport and compare
+.     import delimited using "`stata_csv'", clear
+ 25.     local stata_n = _N
+ 26.     local stata_k = c(k)
+ 27. 
+.     import delimited using "`cexport_csv'", clear
+ 28.     local cexport_n = _N
+ 29.     local cexport_k = c(k)
+ 30. 
+.     * Cleanup temp files
+.     capture erase "`stata_csv'"
+ 31.     capture erase "`cexport_csv'"
+ 32. 
+.     restore
+ 33. 
+.     * Compare dimensions
+.     if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
+ 34.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 35.         di as result "[PASS] `testname' (N=`stata_n', K=`cexport_k')"
+ 36.     }
+ 37.     else {
+ 38.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 39.         di as error "[FAIL] `testname' (N: `stata_n'!=`cexport_n', K: `sta
+> ta_k'!=`cexport_k')"
+ 40.     }
+ 41. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_binscatter (for cbinscatter validation)
+>  *
+>  * Compare cbinscatter vs binscatter (if installed)
+>  *
+>  * Syntax: benchmark_binscatter yvar xvar [, controls(varlist) absorb(varlist
+> )
+>  *         by(varname) nquantiles(int) testname(string)]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_binscatter
+
+. program define benchmark_binscatter
+  1.     syntax varlist(min=2 max=2) [if] [in] [aw fw pw], [controls(varlist) A
+> bsorb(varlist) BY(varname) NQuantiles(integer 20) testname(string) nograph]
+  2. 
+.     gettoken yvar xvar : varlist
+  3. 
+.     if "`testname'" == "" local testname "binscatter `yvar' `xvar'"
+  4. 
+.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  5. 
+.     * Build option string
+.     local opts "nquantiles(`nquantiles') nograph"
+  6.     if "`controls'" != "" local opts "`opts' controls(`controls')"
+  7.     if "`absorb'" != "" local opts "`opts' absorb(`absorb')"
+  8.     if "`by'" != "" local opts "`opts' by(`by')"
+  9. 
+.     * Build weight string
+.     local wtexp ""
+ 10.     if "`weight'" != "" local wtexp "[`weight'`exp']"
+ 11. 
+.     preserve
+ 12. 
+.     * Run cbinscatter
+.     quietly cbinscatter `yvar' `xvar' `wtexp' `if' `in', `opts'
+ 13.     local cbin_N = e(N)
+ 14.     local cbin_nq = e(nquantiles)
+ 15.     matrix cbin_data = e(bindata)
+ 16. 
+.     restore
+ 17. 
+.     * Verify cbinscatter produced valid results
+.     if `cbin_N' > 0 & `cbin_nq' == `nquantiles' {
+ 18.         global TESTS_PASSED = $TESTS_PASSED + 1
+ 19.         di as result "[PASS] `testname' (N=`cbin_N', bins=`cbin_nq')"
+ 20.     }
+ 21.     else {
+ 22.         global TESTS_FAILED = $TESTS_FAILED + 1
+ 23.         di as error "[FAIL] `testname' (N=`cbin_N', bins=`cbin_nq')"
+ 24.     }
+ 25. end
+
+. 
+. di as text "Benchmark helper programs loaded"
+Benchmark helper programs loaded
+
+. 
+end of do-file
+
+. 
+. di as text ""
+
+
+. di as text "ctools validation framework loaded"
+ctools validation framework loaded
+
+. di as text ""
+
+
+. 
+end of do-file
+
+. 
+. 
+. noisily {
+.         
+. /****************************************************************************
+> ***
+>  * Basic 1:1 merge tests
+>  ****************************************************************************
+> **/
+.  
+. noi print_section "1:1 merge tests"
+
+----------------------------------------------------------------------
+1:1 merge tests
+----------------------------------------------------------------------
+. 
+. 
+. * Auto dataset - numeric key
+. sysuse auto, clear
+(1978 automobile data)
+. keep make price mpg
+. gen id = _n
+. tempfile master_1
+. quietly save `master_1'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. keep make weight length
+. gen id = _n
+. tempfile using_1
+. quietly save `using_1'
+. 
+. noi di "Test 1: 1:1 numeric key, auto dataset"
+Test 1: 1:1 numeric key, auto dataset
+. use `master_1', clear
+(1978 automobile data)
+. noi benchmark_merge 1:1 id using `using_1', testname("1:1 numeric key")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] 1:1 numeric key
+. 
+. * Auto dataset - string key
+. sysuse auto, clear
+(1978 automobile data)
+. keep make price mpg
+. tempfile master_2
+. quietly save `master_2'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. keep make weight length
+. tempfile using_2
+. save `using_2'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St11232.000004 saved
+    as .dta format
+. 
+. noi di "Test 2: 1:1 string key, auto dataset"
+Test 2: 1:1 string key, auto dataset
+. use `master_2', clear
+(1978 automobile data)
+. noi benchmark_merge 1:1 make using `using_2', testname("1:1 string key (make)
+> ")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] 1:1 string key (make)
+. 
+. /****************************************************************************
+> ***
+>  * m:1 merge tests
+>  ****************************************************************************
+> **/
+. print_section "m:1 merge tests"
+
+----------------------------------------------------------------------
+m:1 merge tests
+----------------------------------------------------------------------
+. 
+. * Auto foreign lookup
+. sysuse auto, clear
+(1978 automobile data)
+. keep make price mpg foreign
+. tempfile master_3
+. quietly save `master_3'
+. 
+. clear
+. input byte foreign str20 country
+
+      foreign               country
+  1. 0 "Domestic"
+  2. 1 "Foreign"
+  3. end
+. tempfile using_3
+. quietly save `using_3'
+. 
+. use `master_3', clear
+(1978 automobile data)
+. benchmark_merge m:1 foreign using `using_3', testname("m:1 foreign lookup")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] m:1 foreign lookup
+. 
+. * Census region lookup
+. sysuse census, clear
+(1980 Census data by state)
+. keep state region pop
+. tempfile master_4
+. quietly save `master_4'
+. 
+. clear
+. input byte region str20 region_name
+
+       region           region_name
+  1. 1 "NE"
+  2. 2 "N Cntrl"
+  3. 3 "South"
+  4. 4 "West"
+  5. end
+. tempfile using_4
+. quietly save `using_4'
+. 
+. use `master_4', clear
+(1980 Census data by state)
+. benchmark_merge m:1 region using `using_4', testname("m:1 census region")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+(1980 Census data by state)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+[PASS] m:1 census region (sort order differs)
+. 
+. /****************************************************************************
+> ***
+>  * 1:m merge tests
+>  ****************************************************************************
+> **/
+. print_section "1:m merge tests"
+
+----------------------------------------------------------------------
+1:m merge tests
+----------------------------------------------------------------------
+. 
+. * Region to states
+. clear
+. input byte region str20 division_name
+
+       region         division_name
+  1. 1 "Northeast"
+  2. 2 "Midwest"
+  3. 3 "South"
+  4. 4 "West"
+  5. end
+. tempfile master_5
+. quietly save `master_5'
+. 
+. sysuse census, clear
+(1980 Census data by state)
+. keep state region pop medage
+. tempfile using_5
+. quietly save `using_5'
+. 
+. use `master_5', clear
+. benchmark_merge 1:m region using `using_5', testname("1:m region to states")
+(variable region was byte, now int to accommodate using data's values)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+[PASS] 1:m region to states (sort order differs)
+. 
+. /****************************************************************************
+> ***
+>  * keep() option tests
+>  ****************************************************************************
+> **/
+. print_section "keep() option tests"
+
+----------------------------------------------------------------------
+keep() option tests
+----------------------------------------------------------------------
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. keep if _n <= 50
+(24 observations deleted)
+. gen id = _n
+. tempfile master_6
+. quietly save `master_6'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. keep if _n >= 30
+(29 observations deleted)
+. gen id = _n + 29
+. tempfile using_6
+. quietly save `using_6'
+. 
+. use `master_6', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_6', keep(match) testname("keep(match)")
+(label origin already defined)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                21  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                21  (_merge==3)
+    -----------------------------------------
+[PASS] keep(match)
+. 
+. use `master_6', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_6', keep(master) testname("keep(master)")
+(label origin already defined)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            29
+        from master                        29  (_merge==1)
+        from using                          0  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            29
+        from master                        29  (_merge==1)
+        from using                          0  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+[PASS] keep(master)
+. 
+. use `master_6', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_6', keep(using) testname("keep(using)")
+(label origin already defined)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            24
+        from master                         0  (_merge==1)
+        from using                         24  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            24
+        from master                         0  (_merge==1)
+        from using                         24  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+[PASS] keep(using)
+. 
+. use `master_6', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_6', keep(master match) testname("keep(mas
+> ter match)")
+(label origin already defined)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            29
+        from master                        29  (_merge==1)
+        from using                          0  (_merge==2)
+
+    Matched                                21  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                            29
+        from master                        29  (_merge==1)
+        from using                          0  (_merge==2)
+
+    Matched                                21  (_merge==3)
+    -----------------------------------------
+[PASS] keep(master match)
+. 
+. /****************************************************************************
+> ***
+>  * generate/nogenerate options
+>  ****************************************************************************
+> **/
+. print_section "generate/nogenerate options"
+
+----------------------------------------------------------------------
+generate/nogenerate options
+----------------------------------------------------------------------
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id make price
+. tempfile master
+. quietly save `master'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id weight length
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_1', nogenerate testname("nogenerate")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] nogenerate
+. 
+. use `master', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_1', generate(merge_result) testname("gene
+> rate(merge_result)")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (merge_result==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] generate(merge_result)
+. 
+. /****************************************************************************
+> ***
+>  * keepusing() option
+>  ****************************************************************************
+> **/
+. print_section "keepusing() option"
+
+----------------------------------------------------------------------
+keepusing() option
+----------------------------------------------------------------------
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id make price
+. tempfile master
+. quietly save `master'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id weight length turn
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_1', keepusing(weight) testname("keepusing
+> (weight)")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] keepusing(weight)
+. 
+. /****************************************************************************
+> ***
+>  * Multiple key variables
+>  ****************************************************************************
+> **/
+. print_section "Multiple key variables"
+
+----------------------------------------------------------------------
+Multiple key variables
+----------------------------------------------------------------------
+. 
+. * Two keys
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/2000
+(26,534 observations deleted)
+. keep idcode year ln_wage age
+. tempfile master
+. quietly save `master'
+. 
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/2000
+(26,534 observations deleted)
+. keep idcode year tenure ttl_exp
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. benchmark_merge 1:1 idcode year using `using_1', testname("two keys (idcode y
+> ear)")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                             2,000  (_merge==3)
+    -----------------------------------------
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                             2,000  (_merge==3)
+    -----------------------------------------
+[PASS] two keys (idcode year)
+. 
+. * Three keys
+. clear
+. set obs 500
+Number of observations (_N) was 0, now 500.
+. gen id1 = mod(_n-1, 10) + 1
+. gen id2 = mod(floor((_n-1)/10), 10) + 1
+. gen id3 = floor((_n-1)/100) + 1
+. gen value1 = runiform()
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. set obs 500
+Number of observations (_N) was 0, now 500.
+. gen id1 = mod(_n-1, 10) + 1
+. gen id2 = mod(floor((_n-1)/10), 10) + 1
+. gen id3 = floor((_n-1)/100) + 1
+. gen value2 = runiform() * 100
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id1 id2 id3 using `using_1', testname("three keys")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                               500  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                               500  (_merge==3)
+    -----------------------------------------
+[PASS] three keys
+. 
+. * Mixed string and numeric keys
+. sysuse census, clear
+(1980 Census data by state)
+. keep state region pop
+. tempfile master
+. quietly save `master'
+. 
+. sysuse census, clear
+(1980 Census data by state)
+. keep state region medage
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1980 Census data by state)
+. benchmark_merge 1:1 state region using `using_1', testname("mixed keys (strin
+> g + numeric)")
+(label cenreg already defined)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+(1980 Census data by state)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+[PASS] mixed keys (string + numeric)
+. 
+. /****************************************************************************
+> ***
+>  * Edge cases
+>  ****************************************************************************
+> **/
+. print_section "Edge cases"
+
+----------------------------------------------------------------------
+Edge cases
+----------------------------------------------------------------------
+. 
+. * No matches
+. clear
+. input int id float value
+
+           id      value
+  1. 1 10
+  2. 2 20
+  3. 3 30
+  4. end
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. input int id float other
+
+           id      other
+  1. 100 1.5
+  2. 200 2.5
+  3. 300 3.5
+  4. end
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("no matches")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             6
+        from master                         3  (_merge==1)
+        from using                          3  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             6
+        from master                         3  (_merge==1)
+        from using                          3  (_merge==2)
+
+    Matched                                 0  (_merge==3)
+    -----------------------------------------
+[PASS] no matches
+. 
+. * All matches
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id make price
+. tempfile master
+. quietly save `master'
+. 
+. sysuse auto, clear
+(1978 automobile data)
+. gen id = _n
+. keep id weight
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1978 automobile data)
+. benchmark_merge 1:1 id using `using_1', testname("all matches")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+(1978 automobile data)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                74  (_merge==3)
+    -----------------------------------------
+[PASS] all matches
+. 
+. * Missing key values
+. clear
+. input int id float value
+
+           id      value
+  1. 1 10
+  2. 2 20
+  3. . 30
+  4. 4 40
+  5. end
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. input int id float other
+
+           id      other
+  1. 1 100
+  2. . 200
+  3. 3 300
+  4. 4 400
+  5. end
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("missing key values")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             2
+        from master                         1  (_merge==1)
+        from using                          1  (_merge==2)
+
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             2
+        from master                         1  (_merge==1)
+        from using                          1  (_merge==2)
+
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+[PASS] missing key values (sort order differs)
+. 
+. * Negative key values
+. clear
+. input int id float value
+
+           id      value
+  1. -5 10
+  2. -2 20
+  3. 0 30
+  4. 2 40
+  5. 5 50
+  6. end
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. input int id float other
+
+           id      other
+  1. -5 100
+  2. -1 200
+  3. 0 300
+  4. 1 400
+  5. 5 500
+  6. end
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("negative keys")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             4
+        from master                         2  (_merge==1)
+        from using                          2  (_merge==2)
+
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             4
+        from master                         2  (_merge==1)
+        from using                          2  (_merge==2)
+
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+[PASS] negative keys (sort order differs)
+. 
+. * Float key values
+. clear
+. input float id float value
+
+            id      value
+  1. 1.5 10
+  2. 2.7 20
+  3. 3.14159 30
+  4. end
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. input float id float other
+
+            id      other
+  1. 1.5 100
+  2. 2.7 200
+  3. 3.14159 300
+  4. end
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("float keys")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                 3  (_merge==3)
+    -----------------------------------------
+[PASS] float keys
+. 
+. /****************************************************************************
+> ***
+>  * Large dataset tests
+>  ****************************************************************************
+> **/
+. print_section "Large dataset tests"
+
+----------------------------------------------------------------------
+Large dataset tests
+----------------------------------------------------------------------
+. 
+. * 50K 1:1 merge
+. clear
+. set seed 12345
+. set obs 50000
+Number of observations (_N) was 0, now 50,000.
+. gen id = _n
+. gen value1 = runiform()
+. gen value2 = runiformint(1, 100)
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. set obs 50000
+Number of observations (_N) was 0, now 50,000.
+. gen id = _n
+. gen extra1 = runiform() * 100
+. gen extra2 = runiformint(1, 1000)
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("50K 1:1 full match")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                            50,000  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                            50,000  (_merge==3)
+    -----------------------------------------
+[PASS] 50K 1:1 full match
+. 
+. * 100K m:1 merge
+. clear
+. set seed 11111
+. set obs 100000
+Number of observations (_N) was 0, now 100,000.
+. gen group_id = runiformint(1, 1000)
+. gen value = runiform()
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. set obs 1000
+Number of observations (_N) was 0, now 1,000.
+. gen group_id = _n
+. gen group_name = "Group" + string(group_id)
+. gen group_weight = runiform()
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge m:1 group_id using `using_1', testname("100K m:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                           100,000  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                           100,000  (_merge==3)
+    -----------------------------------------
+[PASS] 100K m:1 (sort order differs)
+. 
+. * Partial overlap
+. clear
+. set seed 22222
+. set obs 30000
+Number of observations (_N) was 0, now 30,000.
+. gen id = _n
+. gen value1 = runiform()
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. set obs 30000
+Number of observations (_N) was 0, now 30,000.
+. gen id = _n + 15000
+. gen value2 = runiform()
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 id using `using_1', testname("partial overlap (50%)")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                        30,000
+        from master                    15,000  (_merge==1)
+        from using                     15,000  (_merge==2)
+
+    Matched                            15,000  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                        30,000
+        from master                    15,000  (_merge==1)
+        from using                     15,000  (_merge==2)
+
+    Matched                            15,000  (_merge==3)
+    -----------------------------------------
+[PASS] partial overlap (50%)
+. 
+. /****************************************************************************
+> ***
+>  * String key tests
+>  ****************************************************************************
+> **/
+. print_section "String key tests"
+
+----------------------------------------------------------------------
+String key tests
+----------------------------------------------------------------------
+. 
+. * Long string keys
+. clear
+. set obs 100
+Number of observations (_N) was 0, now 100.
+. gen str50 long_key = "prefix_" + string(_n, "%04.0f") + "_suffix_data"
+. gen value1 = runiform()
+. tempfile master
+. quietly save `master'
+. 
+. clear
+. set obs 100
+Number of observations (_N) was 0, now 100.
+. gen str50 long_key = "prefix_" + string(_n, "%04.0f") + "_suffix_data"
+. gen value2 = runiform() * 100
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+. benchmark_merge 1:1 long_key using `using_1', testname("long string keys")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                               100  (_merge==3)
+    -----------------------------------------
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                               100  (_merge==3)
+    -----------------------------------------
+[PASS] long string keys
+. 
+. * Census state name
+. sysuse census, clear
+(1980 Census data by state)
+. keep state pop
+. tempfile master
+. quietly save `master'
+. 
+. sysuse census, clear
+(1980 Census data by state)
+. keep state medage death marriage divorce
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1980 Census data by state)
+. benchmark_merge 1:1 state using `using_1', testname("state name 1:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+(1980 Census data by state)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                50  (_merge==3)
+    -----------------------------------------
+[PASS] state name 1:1
+. 
+. /****************************************************************************
+> ***
+>  * Panel data tests
+>  ****************************************************************************
+> **/
+. print_section "Panel data (nlswork)"
+
+----------------------------------------------------------------------
+Panel data (nlswork)
+----------------------------------------------------------------------
+. 
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/5000
+(23,534 observations deleted)
+. keep idcode year ln_wage hours
+. tempfile master
+. quietly save `master'
+. 
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/5000
+(23,534 observations deleted)
+. keep idcode year age tenure wks_work
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. benchmark_merge 1:1 idcode year using `using_1', testname("panel 1:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                             5,000  (_merge==3)
+    -----------------------------------------
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                             5,000  (_merge==3)
+    -----------------------------------------
+[PASS] panel 1:1
+. 
+. * m:1 individual characteristics
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/3000
+(25,534 observations deleted)
+. keep idcode year ln_wage
+. tempfile master
+. quietly save `master'
+. 
+. webuse nlswork, clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. keep in 1/3000
+(25,534 observations deleted)
+. bysort idcode (year): keep if _n == 1
+(2,508 observations deleted)
+. keep idcode race grade
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+. benchmark_merge m:1 idcode using `using_1', testname("panel m:1 individual")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                             3,000  (_merge==3)
+    -----------------------------------------
+(National Longitudinal Survey of Young Women, 14-24 years old in 1968)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                             3,000  (_merge==3)
+    -----------------------------------------
+[PASS] panel m:1 individual
+. 
+. /****************************************************************************
+> ***
+>  * Other built-in datasets
+>  ****************************************************************************
+> **/
+. print_section "Other datasets"
+
+----------------------------------------------------------------------
+Other datasets
+----------------------------------------------------------------------
+. 
+. * Voter dataset
+. sysuse voter, clear
+(1992 US presidential voters)
+. keep pop frac
+. gen id = _n
+. tempfile master
+. quietly save `master'
+. 
+. sysuse voter, clear
+(1992 US presidential voters)
+. keep cand inc
+. gen id = _n
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(1992 US presidential voters)
+. benchmark_merge 1:1 id using `using_1', testname("voter 1:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                15  (_merge==3)
+    -----------------------------------------
+(1992 US presidential voters)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                                15  (_merge==3)
+    -----------------------------------------
+[PASS] voter 1:1
+. 
+. * US life expectancy
+. sysuse uslifeexp, clear
+(US life expectancy, 1900–1999)
+. keep year le
+. tempfile master
+. quietly save `master'
+. 
+. sysuse uslifeexp, clear
+(US life expectancy, 1900–1999)
+. keep year le_male le_female
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(US life expectancy, 1900–1999)
+. benchmark_merge 1:1 year using `using_1', testname("uslifeexp 1:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                               100  (_merge==3)
+    -----------------------------------------
+(US life expectancy, 1900–1999)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                               100  (_merge==3)
+    -----------------------------------------
+[PASS] uslifeexp 1:1
+. 
+. * SP500
+. sysuse sp500, clear
+(S&P 500)
+. keep date open high
+. tempfile master
+. quietly save `master'
+. 
+. sysuse sp500, clear
+(S&P 500)
+. keep date low close volume
+. tempfile using_1
+. quietly save `using_1'
+. 
+. use `master', clear
+(S&P 500)
+. benchmark_merge 1:1 date using `using_1', testname("sp500 1:1")
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                               248  (_merge==3)
+    -----------------------------------------
+(S&P 500)
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+
+    Matched                               248  (_merge==3)
+    -----------------------------------------
+[PASS] sp500 1:1
+. 
+. /****************************************************************************
+> ***
+>  * SUMMARY
+>  ****************************************************************************
+> **/
+. print_summary "cmerge"
+
+----------------------------------------------------------------------
+SUMMARY: cmerge
+----------------------------------------------------------------------
+Tests passed: 30
+Tests failed: 0
+Total tests:  30
+ALL TESTS PASSED
+----------------------------------------------------------------------
+. 
+. * Return error code if any tests failed
+. if $TESTS_FAILED > 0 {
+.     exit 1
+. }
+. 
+. }
+
+. 
+end of do-file

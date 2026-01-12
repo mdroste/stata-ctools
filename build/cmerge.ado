@@ -755,14 +755,36 @@ program define cmerge, rclass
 
     * Display merge table
     if "`noreport'" == "" {
+        * Calculate display counts based on keep() option
+        local disp_master = `merge_master'
+        local disp_using = `merge_using'
+        local disp_matched = `merge_matched'
+
+        if "`keep'" != "" {
+            * Reset counts to 0 for categories not kept
+            local disp_master = 0
+            local disp_using = 0
+            local disp_matched = 0
+            foreach code of local keep_codes {
+                if `code' == 1 local disp_master = `merge_master'
+                if `code' == 2 local disp_using = `merge_using'
+                if `code' == 3 local disp_matched = `merge_matched'
+            }
+        }
+
+        local disp_not_matched = `disp_master' + `disp_using'
+
         di as text ""
         di as text "    Result" _col(33) "Number of obs"
         di as text "    {hline 41}"
-        di as text "    Not matched" _col(33) as result %13.0fc `=`merge_master' + `merge_using''
-        di as text "        from master" _col(33) as result %13.0fc `merge_master' as text "  (_merge==1)"
-        di as text "        from using" _col(33) as result %13.0fc `merge_using' as text "  (_merge==2)"
+        di as text "    Not matched" _col(33) as result %13.0fc `disp_not_matched'
+        * Only show detail rows if there are unmatched observations
+        if `disp_not_matched' > 0 {
+            di as text "        from master" _col(33) as result %13.0fc `disp_master' as text "  (_merge==1)"
+            di as text "        from using" _col(33) as result %13.0fc `disp_using' as text "  (_merge==2)"
+        }
         di as text ""
-        di as text "    Matched" _col(33) as result %13.0fc `merge_matched' as text "  (_merge==3)"
+        di as text "    Matched" _col(33) as result %13.0fc `disp_matched' as text "  (_merge==3)"
         di as text "    {hline 41}"
     }
 

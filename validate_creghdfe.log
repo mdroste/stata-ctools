@@ -25,17 +25,17 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_csort.do 
+. do validation/validate_creghdfe.do 
 
 . /****************************************************************************
 > ***
->  * validate_csort.do
+>  * validate_creghdfe.do
 >  *
->  * Comprehensive validation tests for csort vs native sort
->  * Tests sorting functionality across various data types and scenarios
+>  * Comprehensive validation tests for creghdfe vs reghdfe
+>  * Tests HDFE regression across various scenarios
 >  *
->  * Note: csort uses inherently stable radix sort, so we compare against
->  * Stata's "sort, stable" for exact matches.
+>  * Note: Coefficients and standard errors are compared with tolerance 1e-6
+>  * due to floating-point precision differences in complex matrix operations
 >  ****************************************************************************
 > **/
 . 

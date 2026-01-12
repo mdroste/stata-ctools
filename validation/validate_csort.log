@@ -25,18 +25,22 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cmerge.do 
+. do validate_csort.do 
 
-. *============================================================================
-> ===
-. * PROGRAM: validate_cmerge.do
-. * PURPOSE: Validation of -cmerge- vs. -merge-
-. *============================================================================
-> ===
+. /****************************************************************************
+> ***
+>  * validate_csort.do
+>  *
+>  * Comprehensive validation tests for csort vs native sort
+>  * Tests sorting functionality across various data types and scenarios
+>  *
+>  * Note: csort uses inherently stable radix sort, so we compare against
+>  * Stata's "sort, stable" for exact matches.
+>  ****************************************************************************
+> **/
 . 
-. * Load helper programs
-. do "validate_setup.do"
-file validate_setup.do not found
+. do "validation/validate_setup.do"
+file validation/validate_setup.do not found
 r(601);
 
 end of do-file
