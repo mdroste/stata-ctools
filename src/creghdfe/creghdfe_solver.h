@@ -18,6 +18,11 @@ ST_double dot_product(const ST_double * RESTRICT x,
                       const ST_double * RESTRICT y,
                       ST_int N);
 
+ST_double weighted_dot_product(const ST_double * RESTRICT x,
+                               const ST_double * RESTRICT y,
+                               const ST_double * RESTRICT w,
+                               ST_int N);
+
 /* ========================================================================
  * Fixed Effect Projection
  * ======================================================================== */

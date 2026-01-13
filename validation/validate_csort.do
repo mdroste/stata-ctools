@@ -8,7 +8,7 @@
  * Stata's "sort, stable" for exact matches.
  ******************************************************************************/
 
-do "validation/validate_setup.do"
+do "validate_setup.do"
 
 di as text ""
 di as text "======================================================================"

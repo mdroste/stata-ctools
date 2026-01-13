@@ -68,7 +68,7 @@ tempfile using_3
 quietly save `using_3'
 
 use `master_3', clear
-benchmark_merge m:1 foreign using `using_3', testname("m:1 foreign lookup")
+noi benchmark_merge m:1 foreign using `using_3', testname("m:1 foreign lookup")
 
 * Census region lookup
 sysuse census, clear
@@ -87,7 +87,7 @@ tempfile using_4
 quietly save `using_4'
 
 use `master_4', clear
-benchmark_merge m:1 region using `using_4', testname("m:1 census region")
+noi benchmark_merge m:1 region using `using_4', testname("m:1 census region")
 
 /*******************************************************************************
  * 1:m merge tests
@@ -111,7 +111,7 @@ tempfile using_5
 quietly save `using_5'
 
 use `master_5', clear
-benchmark_merge 1:m region using `using_5', testname("1:m region to states")
+noi benchmark_merge 1:m region using `using_5', testname("1:m region to states")
 
 /*******************************************************************************
  * keep() option tests
@@ -131,16 +131,16 @@ tempfile using_6
 quietly save `using_6'
 
 use `master_6', clear
-benchmark_merge 1:1 id using `using_6', keep(match) testname("keep(match)")
+noi benchmark_merge 1:1 id using `using_6', keep(match) testname("keep(match)")
 
 use `master_6', clear
-benchmark_merge 1:1 id using `using_6', keep(master) testname("keep(master)")
+noi benchmark_merge 1:1 id using `using_6', keep(master) testname("keep(master)")
 
 use `master_6', clear
-benchmark_merge 1:1 id using `using_6', keep(using) testname("keep(using)")
+noi benchmark_merge 1:1 id using `using_6', keep(using) testname("keep(using)")
 
 use `master_6', clear
-benchmark_merge 1:1 id using `using_6', keep(master match) testname("keep(master match)")
+noi benchmark_merge 1:1 id using `using_6', keep(master match) testname("keep(master match)")
 
 /*******************************************************************************
  * generate/nogenerate options
@@ -160,10 +160,10 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', nogenerate testname("nogenerate")
+noi benchmark_merge 1:1 id using `using_1', nogenerate testname("nogenerate")
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', generate(merge_result) testname("generate(merge_result)")
+noi benchmark_merge 1:1 id using `using_1', generate(merge_result) testname("generate(merge_result)")
 
 /*******************************************************************************
  * keepusing() option
@@ -183,7 +183,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', keepusing(weight) testname("keepusing(weight)")
+noi benchmark_merge 1:1 id using `using_1', keepusing(weight) testname("keepusing(weight)")
 
 /*******************************************************************************
  * Multiple key variables
@@ -204,7 +204,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 idcode year using `using_1', testname("two keys (idcode year)")
+noi benchmark_merge 1:1 idcode year using `using_1', testname("two keys (idcode year)")
 
 * Three keys
 clear
@@ -226,7 +226,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id1 id2 id3 using `using_1', testname("three keys")
+noi benchmark_merge 1:1 id1 id2 id3 using `using_1', testname("three keys")
 
 * Mixed string and numeric keys
 sysuse census, clear
@@ -240,7 +240,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 state region using `using_1', testname("mixed keys (string + numeric)")
+noi benchmark_merge 1:1 state region using `using_1', testname("mixed keys (string + numeric)")
 
 /*******************************************************************************
  * Edge cases
@@ -267,7 +267,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("no matches")
+noi benchmark_merge 1:1 id using `using_1', testname("no matches")
 
 * All matches
 sysuse auto, clear
@@ -283,7 +283,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("all matches")
+noi benchmark_merge 1:1 id using `using_1', testname("all matches")
 
 * Missing key values
 clear
@@ -307,7 +307,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("missing key values")
+noi benchmark_merge 1:1 id using `using_1', testname("missing key values")
 
 * Negative key values
 clear
@@ -333,7 +333,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("negative keys")
+noi benchmark_merge 1:1 id using `using_1', testname("negative keys")
 
 * Float key values
 clear
@@ -355,7 +355,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("float keys")
+noi benchmark_merge 1:1 id using `using_1', testname("float keys")
 
 /*******************************************************************************
  * Large dataset tests
@@ -381,7 +381,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("50K 1:1 full match")
+noi benchmark_merge 1:1 id using `using_1', testname("50K 1:1 full match")
 
 * 100K m:1 merge
 clear
@@ -401,7 +401,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge m:1 group_id using `using_1', testname("100K m:1")
+noi benchmark_merge m:1 group_id using `using_1', testname("100K m:1")
 
 * Partial overlap
 clear
@@ -420,7 +420,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("partial overlap (50%)")
+noi benchmark_merge 1:1 id using `using_1', testname("partial overlap (50%)")
 
 /*******************************************************************************
  * String key tests
@@ -443,7 +443,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 long_key using `using_1', testname("long string keys")
+noi benchmark_merge 1:1 long_key using `using_1', testname("long string keys")
 
 * Census state name
 sysuse census, clear
@@ -457,7 +457,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 state using `using_1', testname("state name 1:1")
+noi benchmark_merge 1:1 state using `using_1', testname("state name 1:1")
 
 /*******************************************************************************
  * Panel data tests
@@ -477,7 +477,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 idcode year using `using_1', testname("panel 1:1")
+noi benchmark_merge 1:1 idcode year using `using_1', testname("panel 1:1")
 
 * m:1 individual characteristics
 webuse nlswork, clear
@@ -494,7 +494,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge m:1 idcode using `using_1', testname("panel m:1 individual")
+noi benchmark_merge m:1 idcode using `using_1', testname("panel m:1 individual")
 
 /*******************************************************************************
  * Other built-in datasets
@@ -515,7 +515,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 id using `using_1', testname("voter 1:1")
+noi benchmark_merge 1:1 id using `using_1', testname("voter 1:1")
 
 * US life expectancy
 sysuse uslifeexp, clear
@@ -529,7 +529,7 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 year using `using_1', testname("uslifeexp 1:1")
+noi benchmark_merge 1:1 year using `using_1', testname("uslifeexp 1:1")
 
 * SP500
 sysuse sp500, clear
@@ -543,12 +543,192 @@ tempfile using_1
 quietly save `using_1'
 
 use `master', clear
-benchmark_merge 1:1 date using `using_1', testname("sp500 1:1")
+noi benchmark_merge 1:1 date using `using_1', testname("sp500 1:1")
+
+/*******************************************************************************
+ * assert() option tests
+ ******************************************************************************/
+noi print_section "assert() option tests"
+
+* Test assert(match) - should pass when all match
+sysuse auto, clear
+gen id = _n
+keep id make price
+tempfile master
+quietly save `master'
+
+sysuse auto, clear
+gen id = _n
+keep id weight
+tempfile using_1
+quietly save `using_1'
+
+use `master', clear
+noi benchmark_merge 1:1 id using `using_1', assert(match) testname("assert(match) - all match")
+
+* Test assert failure - for this we manually test since benchmark_merge expects success
+use `master', clear
+keep if _n <= 50
+tempfile master_partial
+quietly save `master_partial'
+
+use `master_partial', clear
+capture merge 1:1 id using `using_1', assert(match)
+local stata_rc = _rc
+
+use `master_partial', clear
+capture cmerge 1:1 id using `using_1', assert(match)
+local cmerge_rc = _rc
+
+global TESTS_TOTAL = $TESTS_TOTAL + 1
+if `stata_rc' != 0 & `cmerge_rc' != 0 {
+    global TESTS_PASSED = $TESTS_PASSED + 1
+    noi di as result "[PASS] assert(match) fails when not all match"
+}
+else {
+    global TESTS_FAILED = $TESTS_FAILED + 1
+    noi di as error "[FAIL] assert(match) should fail when not all match"
+}
+
+/*******************************************************************************
+ * update/replace options tests
+ ******************************************************************************/
+noi print_section "update/replace options"
+
+* Test update option - fills in missing values from using
+clear
+input int id float value
+1 10
+2 .
+3 30
+4 .
+end
+tempfile master
+quietly save `master'
+
+clear
+input int id float value
+1 100
+2 20
+3 .
+4 40
+end
+tempfile using_1
+quietly save `using_1'
+
+* Test with Stata's merge update
+use `master', clear
+merge 1:1 id using `using_1', update nogenerate
+local stata_v2 = value[2]
+local stata_v3 = value[3]
+
+* Test with cmerge update
+use `master', clear
+cmerge 1:1 id using `using_1', update nogenerate
+local cmerge_v2 = value[2]
+local cmerge_v3 = value[3]
+
+global TESTS_TOTAL = $TESTS_TOTAL + 1
+if `stata_v2' == `cmerge_v2' & `stata_v3' == `cmerge_v3' {
+    global TESTS_PASSED = $TESTS_PASSED + 1
+    noi di as result "[PASS] update option"
+}
+else {
+    global TESTS_FAILED = $TESTS_FAILED + 1
+    noi di as error "[FAIL] update option"
+}
+
+* Test update replace option (replace requires update in Stata)
+use `master', clear
+merge 1:1 id using `using_1', update replace nogenerate
+local stata_v1 = value[1]
+
+use `master', clear
+cmerge 1:1 id using `using_1', update replace nogenerate
+local cmerge_v1 = value[1]
+
+global TESTS_TOTAL = $TESTS_TOTAL + 1
+if `stata_v1' == `cmerge_v1' {
+    global TESTS_PASSED = $TESTS_PASSED + 1
+    noi di as result "[PASS] update replace option"
+}
+else {
+    global TESTS_FAILED = $TESTS_FAILED + 1
+    noi di as error "[FAIL] update replace option"
+}
+
+/*******************************************************************************
+ * sorted option test
+ ******************************************************************************/
+noi print_section "sorted option"
+
+* Pre-sort both datasets
+sysuse auto, clear
+gen id = _n
+keep id make price
+sort id
+tempfile master
+quietly save `master'
+
+sysuse auto, clear
+gen id = _n
+keep id weight
+sort id
+tempfile using_1
+quietly save `using_1'
+
+use `master', clear
+noi benchmark_merge 1:1 id using `using_1', sorted testname("sorted option")
+
+/*******************************************************************************
+ * force option test
+ ******************************************************************************/
+noi print_section "force option"
+
+* NOTE: cmerge currently doesn't require force for type mismatches
+* (it handles them automatically). This test verifies force option is accepted
+* and both succeed when force is specified.
+
+* Create datasets with NON-KEY variable type mismatch (force applies to non-key vars only)
+clear
+input int id float value
+1 10
+2 20
+end
+tempfile master
+quietly save `master'
+
+clear
+input int id str5 value
+1 "A"
+2 "B"
+end
+tempfile using_1
+quietly save `using_1'
+
+* Test that force option is accepted and works
+use `master', clear
+capture merge 1:1 id using `using_1', force nogenerate
+local stata_force_rc = _rc
+
+use `master', clear
+capture cmerge 1:1 id using `using_1', force nogenerate
+local cmerge_force_rc = _rc
+
+global TESTS_TOTAL = $TESTS_TOTAL + 1
+if `stata_force_rc' == 0 & `cmerge_force_rc' == 0 {
+    global TESTS_PASSED = $TESTS_PASSED + 1
+    noi di as result "[PASS] force option"
+}
+else {
+    global TESTS_FAILED = $TESTS_FAILED + 1
+    noi di as error "[FAIL] force option (stata=`stata_force_rc' cmerge=`cmerge_force_rc')"
+}
 
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/
-print_summary "cmerge"
+noi print_summary "cmerge"
 
 * Return error code if any tests failed
 if $TESTS_FAILED > 0 {

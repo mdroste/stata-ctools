@@ -1780,6 +1780,8 @@ ST_retcode cimport_main(const char *args) {
                 has_header = false;
             } else if (strcmp(token, "verbose") == 0) {
                 verbose = true;
+            } else if (strcmp(token, "tab") == 0) {
+                delimiter = '\t';
             } else if (strlen(token) == 1) {
                 delimiter = token[0];
             } else if (strlen(token) == 3 && token[0] == '"' && token[2] == '"') {

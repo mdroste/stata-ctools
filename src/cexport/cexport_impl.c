@@ -71,6 +71,10 @@ typedef struct {
     /* Data from Stata */
     stata_data data;
 
+    /* Observation range for if/in filtering */
+    size_t obs1;    /* First observation (1-based Stata index) */
+    size_t nobs_loaded;  /* Number of observations loaded */
+
     /* Variable names (for header) */
     char **varnames;
     size_t nvars;
@@ -330,6 +334,12 @@ static void *format_chunk_thread(void *arg)
     size_t pos = 0;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
+        /* Check if this observation satisfies the if condition */
+        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+        if (!SF_ifobs(stata_obs)) {
+            continue;  /* Skip observations that don't match if condition */
+        }
+
         int row_len = format_row(i, args->output_buffer + pos, args->buffer_size - pos);
         if (row_len < 0) {
             args->success = 0;
@@ -548,8 +558,10 @@ ST_retcode cexport_main(const char *args)
         return 198;
     }
 
-    /* Get dataset dimensions */
+    /* Get dataset dimensions and store observation range for if/in filtering */
+    g_ctx.obs1 = (size_t)SF_in1();
     nobs = SF_in2() - SF_in1() + 1;
+    g_ctx.nobs_loaded = nobs;
     nvars = SF_nvars();
 
     if (nobs == 0) {
@@ -646,7 +658,14 @@ ST_retcode cexport_main(const char *args)
             return 920;
         }
 
+        size_t rows_written = 0;
         for (size_t i = 0; i < nobs; i++) {
+            /* Check if this observation satisfies the if condition */
+            ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+            if (!SF_ifobs(stata_obs)) {
+                continue;  /* Skip observations that don't match if condition */
+            }
+
             int row_len = format_row(i, row_buf, avg_row_size * 4);
             if (row_len < 0) {
                 SF_error("cexport: row formatting failed\n");
@@ -660,8 +679,10 @@ ST_retcode cexport_main(const char *args)
                 cleanup_context();
                 return 693;
             }
+            rows_written++;
         }
         free(row_buf);
+        nobs = rows_written;  /* Update count for reporting */
     } else {
         /* Multi-threaded chunked processing */
         pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));

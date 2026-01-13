@@ -21,6 +21,25 @@ ST_double dot_product(const ST_double * RESTRICT x,
 }
 
 /* ========================================================================
+ * Weighted dot product: sum(w[i] * x[i] * y[i])
+ * ======================================================================== */
+
+ST_double weighted_dot_product(const ST_double * RESTRICT x,
+                               const ST_double * RESTRICT y,
+                               const ST_double * RESTRICT w,
+                               ST_int N)
+{
+    ST_double sum = 0.0;
+    ST_int i;
+
+    #pragma omp simd reduction(+:sum)
+    for (i = 0; i < N; i++) {
+        sum += w[i] * x[i] * y[i];
+    }
+    return sum;
+}
+
+/* ========================================================================
  * Project onto a single fixed effect using thread-local means buffer
  * ======================================================================== */
 
@@ -125,41 +144,84 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
     ST_double ssr, ssr_old, alpha, beta;
     ST_double improvement_potential, recent_ssr, update_error, uv;
     const ST_int N = S->N;
+    const ST_double * RESTRICT weights = S->weights;
+    const ST_int has_weights = S->has_weights;
 
-    improvement_potential = dot_product(y, y, N);
+    /* Use weighted dot products when weights are present */
+    if (has_weights && weights != NULL) {
+        improvement_potential = weighted_dot_product(y, y, weights, N);
 
-    transform_sym_kaczmarz_threaded(S, y, r, proj, S->thread_fe_means, thread_id);
-    ssr = dot_product(r, r, N);
-    memcpy(u, r, N * sizeof(ST_double));
+        transform_sym_kaczmarz_threaded(S, y, r, proj, S->thread_fe_means, thread_id);
+        ssr = weighted_dot_product(r, r, weights, N);
+        memcpy(u, r, N * sizeof(ST_double));
 
-    for (iter = 1; iter <= S->maxiter; iter++) {
-        transform_sym_kaczmarz_threaded(S, u, v, proj, S->thread_fe_means, thread_id);
+        for (iter = 1; iter <= S->maxiter; iter++) {
+            transform_sym_kaczmarz_threaded(S, u, v, proj, S->thread_fe_means, thread_id);
 
-        uv = dot_product(u, v, N);
-        alpha = (fabs(uv) < 1e-30) ? 0.0 : ssr / uv;
+            uv = weighted_dot_product(u, v, weights, N);
+            alpha = (fabs(uv) < 1e-30) ? 0.0 : ssr / uv;
 
-        recent_ssr = alpha * ssr;
-        improvement_potential -= recent_ssr;
+            recent_ssr = alpha * ssr;
+            improvement_potential -= recent_ssr;
 
-        /* Fused update loop with SIMD */
-        #pragma omp simd
-        for (i = 0; i < N; i++) {
-            y[i] -= alpha * u[i];
-            r[i] -= alpha * v[i];
+            /* Fused update loop with SIMD */
+            #pragma omp simd
+            for (i = 0; i < N; i++) {
+                y[i] -= alpha * u[i];
+                r[i] -= alpha * v[i];
+            }
+
+            ssr_old = ssr;
+            ssr = weighted_dot_product(r, r, weights, N);
+            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
+
+            #pragma omp simd
+            for (i = 0; i < N; i++) {
+                u[i] = r[i] + beta * u[i];
+            }
+
+            update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
+            if (update_error <= S->tolerance) {
+                return iter;
+            }
         }
+    } else {
+        /* Unweighted case - original code */
+        improvement_potential = dot_product(y, y, N);
 
-        ssr_old = ssr;
+        transform_sym_kaczmarz_threaded(S, y, r, proj, S->thread_fe_means, thread_id);
         ssr = dot_product(r, r, N);
-        beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
+        memcpy(u, r, N * sizeof(ST_double));
 
-        #pragma omp simd
-        for (i = 0; i < N; i++) {
-            u[i] = r[i] + beta * u[i];
-        }
+        for (iter = 1; iter <= S->maxiter; iter++) {
+            transform_sym_kaczmarz_threaded(S, u, v, proj, S->thread_fe_means, thread_id);
 
-        update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
-        if (update_error <= S->tolerance) {
-            return iter;
+            uv = dot_product(u, v, N);
+            alpha = (fabs(uv) < 1e-30) ? 0.0 : ssr / uv;
+
+            recent_ssr = alpha * ssr;
+            improvement_potential -= recent_ssr;
+
+            /* Fused update loop with SIMD */
+            #pragma omp simd
+            for (i = 0; i < N; i++) {
+                y[i] -= alpha * u[i];
+                r[i] -= alpha * v[i];
+            }
+
+            ssr_old = ssr;
+            ssr = dot_product(r, r, N);
+            beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
+
+            #pragma omp simd
+            for (i = 0; i < N; i++) {
+                u[i] = r[i] + beta * u[i];
+            }
+
+            update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
+            if (update_error <= S->tolerance) {
+                return iter;
+            }
         }
     }
 

@@ -8,7 +8,7 @@
  * due to floating-point precision differences in complex matrix operations
  ******************************************************************************/
 
-do "validation/validate_setup.do"
+do "validate_setup.do"
 
 di as text ""
 di as text "======================================================================"

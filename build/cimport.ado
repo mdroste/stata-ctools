@@ -32,14 +32,19 @@ program define cimport, rclass
     }
 
     * Now parse the rest with import delimited-style syntax
-    syntax [using/] [, Delimiters(string) VARNames(string) CLEAR ///
+    * Support both "using filename" and just "filename" (like import delimited does)
+    syntax [anything] [using/] [, Delimiters(string) VARNames(string) CLEAR ///
         CASE(string) ENCoding(string) BINDQuotes(string) ///
         STRIPQuotes ROWRange(string) Verbose FAST]
 
-    * Handle using - filename might be first positional argument
+    * Handle filename - can come from using/ or as first positional argument
+    if `"`using'"' == "" & `"`anything'"' != "" {
+        * Filename provided without "using" keyword
+        local using `"`anything'"'
+    }
     if `"`using'"' == "" {
         di as error "cimport delimited: filename required"
-        di as error "Syntax: cimport delimited using filename [, options]"
+        di as error "Syntax: cimport delimited [using] filename [, options]"
         exit 198
     }
 
@@ -64,16 +69,23 @@ program define cimport, rclass
     }
 
     * Validate delimiter - for now only single character supported
+    * For plugin: pass "tab" keyword instead of actual tab character
+    local plugin_delim `"`delimiters'"'
     if length(`"`delimiters'"') != 1 {
         * Handle special cases like tab
         if `"`delimiters'"' == "tab" | `"`delimiters'"' == "\t" {
             local delimiters "	"
+            local plugin_delim "tab"
         }
         else {
             di as error "cimport: delimiter must be a single character"
             di as error "(multi-character delimiters not yet supported)"
             exit 198
         }
+    }
+    * Also check if delimiter is already a tab character
+    if `"`delimiters'"' == "	" {
+        local plugin_delim "tab"
     }
 
     * Parse varnames option
@@ -298,7 +310,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport scan `using' `delimiters' `opt_noheader' `opt_verbose'"
+        "cimport scan `using' `plugin_delim' `opt_noheader' `opt_verbose'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -420,7 +432,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport load `using' `delimiters' `opt_noheader' `opt_verbose'"
+        "cimport load `using' `plugin_delim' `opt_noheader' `opt_verbose'"
 
     local load_rc = _rc
     if `load_rc' {

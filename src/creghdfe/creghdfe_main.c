@@ -569,22 +569,27 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 1;
     }
 
-    /* Compact data and recompute means */
+    /* Compact data and recompute means (weighted if using weights) */
     for (k = 0; k < K; k++) means_compact[k] = 0.0;
+    ST_double sum_w_compact = 0.0;
 
     idx = 0;
     for (i = 0; i < N_orig; i++) {
         if (mask[i]) {
+            ST_double w = (has_weights) ? weights[i] : 1.0;
             for (k = 0; k < K; k++) {
                 data_compact[k * N + idx] = data[k * N_orig + i];
-                means_compact[k] += data[k * N_orig + i];
+                means_compact[k] += w * data[k * N_orig + i];
             }
+            sum_w_compact += w;
             idx++;
         }
     }
 
+    /* Divide by sum of weights (or N if unweighted) */
+    ST_double mean_divisor = (has_weights) ? sum_w_compact : (ST_double)N;
     for (k = 0; k < K; k++) {
-        means_compact[k] /= N;
+        means_compact[k] /= mean_divisor;
     }
 
     /* Free original data, use compacted */
@@ -623,6 +628,26 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
         }
 
+        /* For aweight/pweight: normalize weights so sum(w) = N
+         * This is what reghdfe does (reghdfe.mata line 3598)
+         * For fweight: keep raw weights (no normalization) */
+        if (weight_type == 1 || weight_type == 3) {
+            ST_double scale = (ST_double)N / sum_w;
+            for (idx = 0; idx < N; idx++) {
+                weights_compact[idx] *= scale;
+            }
+            /* Also normalize the weighted_counts in factors */
+            for (g = 0; g < G; g++) {
+                if (g_state->factors[g].weighted_counts) {
+                    for (i = 0; i < g_state->factors[g].num_levels; i++) {
+                        g_state->factors[g].weighted_counts[i] *= scale;
+                    }
+                }
+            }
+            /* After normalization, sum_w should be N for aw/pw */
+            /* But we keep the original sum_w for fweight calculations */
+        }
+
         free(weights);
         g_state->weights = weights_compact;
         g_state->sum_weights = sum_w;
@@ -634,20 +659,35 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* ================================================================
-     * STEP 6: Compute TSS and stdevs on compacted data
+     * STEP 6: Compute TSS and stdevs on compacted data (weighted if using weights)
+     * Note: for aweight/pweight, weights have been normalized so sum(w) = N
      * ================================================================ */
     for (k = 0; k < K; k++) {
         ST_double ss = 0.0;
         ST_double *col = &data[k * N];
         ST_double mean_k = means[k];
 
-        #pragma omp simd reduction(+:ss)
-        for (idx = 0; idx < N; idx++) {
-            ST_double dev = col[idx] - mean_k;
-            ss += dev * dev;
+        if (has_weights && g_state->weights != NULL) {
+            /* Weighted TSS: sum(w * (x - mean)^2) */
+            for (idx = 0; idx < N; idx++) {
+                ST_double dev = col[idx] - mean_k;
+                ss += g_state->weights[idx] * dev * dev;
+            }
+            /* For normalized weights (aw/pw), sum(w) = N, so df is still N-1 */
+            /* For fweight, sum(w) = sum_weights, so df is sum_weights - 1 */
+            ST_double df_stdev = (weight_type == 2) ? (g_state->sum_weights - 1.0) : (ST_double)(N - 1);
+            tss[k] = ss;
+            stdevs[k] = sqrt(ss / df_stdev);
+        } else {
+            /* Unweighted TSS */
+            #pragma omp simd reduction(+:ss)
+            for (idx = 0; idx < N; idx++) {
+                ST_double dev = col[idx] - mean_k;
+                ss += dev * dev;
+            }
+            tss[k] = ss;
+            stdevs[k] = sqrt(ss / (N - 1));
         }
-        tss[k] = ss;
-        stdevs[k] = sqrt(ss / (N - 1));
         if (stdevs[k] < 1e-30) stdevs[k] = 1.0;
     }
 
@@ -1356,7 +1396,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * ================================================================ */
 
     /* HDFE init results */
-    SF_scal_save("__creghdfe_N", (ST_double)N);
+    /* For fweight, report N as sum of weights (like reghdfe) */
+    if (weight_type == 2 && has_weights) {
+        SF_scal_save("__creghdfe_N", g_state->sum_weights);
+    } else {
+        SF_scal_save("__creghdfe_N", (ST_double)N);
+    }
     SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
     for (g = 0; g < G; g++) {
         sprintf(scalar_name, "__creghdfe_num_levels_%d", g + 1);
@@ -1367,7 +1412,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
 
     /* OLS results */
-    SF_scal_save("__creghdfe_ols_N", (ST_double)N);
+    /* For fweight, report N as sum of weights (like reghdfe) */
+    if (weight_type == 2 && has_weights) {
+        SF_scal_save("__creghdfe_ols_N", g_state->sum_weights);
+    } else {
+        SF_scal_save("__creghdfe_ols_N", (ST_double)N);
+    }
     SF_scal_save("__creghdfe_K_keep", (ST_double)K_keep);
     SF_scal_save("__creghdfe_has_cons", 1.0);
     SF_scal_save("__creghdfe_rss", rss);

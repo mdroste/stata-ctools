@@ -27,7 +27,14 @@
       "Bash(javac:*)",
       "Bash(jar tf:*)",
       "Bash(xargs -I{} sh -c 'jar xf \"\"\"\"/Applications/Stata/utilities/jar/sfi-api.jar\"\"\"\" {} 2>/dev/null')",
-      "Bash(javap:*)"
+      "Bash(javap:*)",
+      "Bash(for f in validate_csort.log validate_cmerge.log validate_cqreg.log validate_cimport.log validate_cexport.log)",
+      "Bash(do echo '=== $f ===' grep -E \"\\(SUMMARY|Tests passed|Tests failed|ALL TESTS|VALIDATION\\)\" $f)",
+      "Bash(do echo \"=== $f ===\" tail -20 \"$f\")",
+      "Bash(for f in validate_cmerge.log validate_cimport.log validate_cexport.log)",
+      "Bash(do echo \"=== $f ===\" tail -30 \"$f\")",
+      "Bash(do echo \"=== $f ===\" grep -E \"\\(SUMMARY|Tests passed|Tests failed|ALL TESTS|VALIDATION FAILED\\)\" \"$f\")",
+      "Bash(for f in validate_cmerge.log validate_cexport.log validate_cimport.log)"
     ]
   }
 }

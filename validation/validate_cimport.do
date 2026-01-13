@@ -5,7 +5,7 @@
  * Tests CSV import functionality across various scenarios
  ******************************************************************************/
 
-do "validation/validate_setup.do"
+do "validate_setup.do"
 
 di as text ""
 di as text "======================================================================"
@@ -13,7 +13,7 @@ di as text "              CIMPORT VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 * Create temp directory for test files
-capture mkdir "validation/temp"
+capture mkdir "temp"
 
 /*******************************************************************************
  * Create test CSV files
@@ -22,7 +22,7 @@ print_section "Creating test files"
 
 * Test file 1: Basic CSV with mixed types
 capture file close _all
-file open csvfile using "validation/temp/basic.csv", write replace
+file open csvfile using "temp/basic.csv", write replace
 file write csvfile "id,name,value,price" _n
 file write csvfile "1,Alpha,100,10.5" _n
 file write csvfile "2,Beta,200,20.75" _n
@@ -32,7 +32,7 @@ file write csvfile "5,Epsilon,500,50.99" _n
 file close csvfile
 
 * Test file 2: Tab-delimited
-file open tsvfile using "validation/temp/basic.tsv", write replace
+file open tsvfile using "temp/basic.tsv", write replace
 file write tsvfile "id" _tab "name" _tab "value" _n
 file write tsvfile "1" _tab "Apple" _tab "1.5" _n
 file write tsvfile "2" _tab "Banana" _tab "2.5" _n
@@ -40,7 +40,7 @@ file write tsvfile "3" _tab "Cherry" _tab "3.5" _n
 file close tsvfile
 
 * Test file 3: CSV with missing values
-file open csvfile using "validation/temp/missing.csv", write replace
+file open csvfile using "temp/missing.csv", write replace
 file write csvfile "id,name,value,score" _n
 file write csvfile "1,A,100,95" _n
 file write csvfile "2,B,,85" _n
@@ -50,7 +50,7 @@ file write csvfile "5,E,," _n
 file close csvfile
 
 * Test file 4: CSV with quoted fields
-file open csvfile using "validation/temp/quoted.csv", write replace
+file open csvfile using "temp/quoted.csv", write replace
 file write csvfile `"id,name,description"' _n
 file write csvfile `"1,"Smith, John","A person with comma""' _n
 file write csvfile `"2,"Doe, Jane","Another person""' _n
@@ -58,14 +58,14 @@ file write csvfile `"3,Simple,No quotes needed"' _n
 file close csvfile
 
 * Test file 5: CSV without header
-file open csvfile using "validation/temp/noheader.csv", write replace
+file open csvfile using "temp/noheader.csv", write replace
 file write csvfile "1,Alpha,100" _n
 file write csvfile "2,Beta,200" _n
 file write csvfile "3,Gamma,300" _n
 file close csvfile
 
 * Test file 6: CSV with various numeric formats
-file open csvfile using "validation/temp/numeric.csv", write replace
+file open csvfile using "temp/numeric.csv", write replace
 file write csvfile "integer,decimal,scientific,negative" _n
 file write csvfile "1,1.5,1e10,-100" _n
 file write csvfile "100,0.001,2.5e-5,-0.5" _n
@@ -73,7 +73,7 @@ file write csvfile "999999,123.456789,1e-10,-999999" _n
 file close csvfile
 
 * Test file 7: Large CSV
-file open csvfile using "validation/temp/large.csv", write replace
+file open csvfile using "temp/large.csv", write replace
 file write csvfile "id,group,value1,value2,label" _n
 forvalues i = 1/5000 {
     local g = mod(`i', 100) + 1
@@ -84,7 +84,7 @@ forvalues i = 1/5000 {
 file close csvfile
 
 * Test file 8: CSV with UPPER case headers
-file open csvfile using "validation/temp/uppercase.csv", write replace
+file open csvfile using "temp/uppercase.csv", write replace
 file write csvfile "ID,NAME,VALUE" _n
 file write csvfile "1,Test,100" _n
 file write csvfile "2,Data,200" _n
@@ -97,21 +97,51 @@ di as result "[DONE] Test files created"
  ******************************************************************************/
 print_section "Basic import tests"
 
-benchmark_import using "validation/temp/basic.csv", testname("basic CSV")
+benchmark_import using "temp/basic.csv", testname("basic CSV")
 
-benchmark_import using "validation/temp/basic.tsv", delimiters(tab) testname("tab-delimited")
+benchmark_import using "temp/basic.tsv", delimiters(tab) testname("tab-delimited")
 
-benchmark_import using "validation/temp/missing.csv", testname("with missing values")
+benchmark_import using "temp/missing.csv", testname("with missing values")
 
-benchmark_import using "validation/temp/quoted.csv", testname("quoted fields")
+benchmark_import using "temp/quoted.csv", testname("quoted fields")
 
-benchmark_import using "validation/temp/noheader.csv", varnames(nonames) testname("no header")
+benchmark_import using "temp/noheader.csv", varnames(nonames) testname("no header")
 
-benchmark_import using "validation/temp/uppercase.csv", case(lower) testname("case(lower)")
+benchmark_import using "temp/uppercase.csv", case(lower) testname("case(lower)")
 
-benchmark_import using "validation/temp/numeric.csv", testname("numeric formats")
+benchmark_import using "temp/numeric.csv", testname("numeric formats")
 
-benchmark_import using "validation/temp/large.csv", testname("large file (5K rows)")
+benchmark_import using "temp/large.csv", testname("large file (5K rows)")
+
+/*******************************************************************************
+ * case() option tests
+ ******************************************************************************/
+print_section "case() option tests"
+
+benchmark_import using "temp/uppercase.csv", case(upper) testname("case(upper)")
+
+benchmark_import using "temp/uppercase.csv", case(preserve) testname("case(preserve)")
+
+/*******************************************************************************
+ * NOTE: rowrange() option is parsed but not yet implemented in cimport
+ * Tests skipped until feature is implemented
+ ******************************************************************************/
+
+/*******************************************************************************
+ * bindquotes() option tests
+ ******************************************************************************/
+print_section "bindquotes() option tests"
+
+* Create a test file with embedded quotes
+capture file close _all
+file open csvfile using "temp/bindquotes_test.csv", write replace
+file write csvfile `"id,name,value"' _n
+file write csvfile `"1,"Simple Name",100"' _n
+file write csvfile `"2,"Name with ""quotes""",200"' _n
+file write csvfile `"3,NoQuotes,300"' _n
+file close csvfile
+
+benchmark_import using "temp/bindquotes_test.csv", testname("bindquotes default (strict)")
 
 /*******************************************************************************
  * Round-trip tests (export then reimport)
@@ -119,12 +149,12 @@ benchmark_import using "validation/temp/large.csv", testname("large file (5K row
 print_section "Round-trip tests"
 
 sysuse auto, clear
-export delimited using "validation/temp/auto_export.csv", replace
-benchmark_import using "validation/temp/auto_export.csv", testname("auto round-trip")
+export delimited using "temp/auto_export.csv", replace
+benchmark_import using "temp/auto_export.csv", testname("auto round-trip")
 
 sysuse census, clear
-export delimited using "validation/temp/census_export.csv", replace
-benchmark_import using "validation/temp/census_export.csv", testname("census round-trip")
+export delimited using "temp/census_export.csv", replace
+benchmark_import using "temp/census_export.csv", testname("census round-trip")
 
 /*******************************************************************************
  * Detailed comparison tests
@@ -132,10 +162,10 @@ benchmark_import using "validation/temp/census_export.csv", testname("census rou
 print_section "Detailed comparison tests"
 
 * String variable types
-import delimited using "validation/temp/basic.csv", clear
+import delimited using "temp/basic.csv", clear
 local stata_type : type name
 
-cimport delimited using "validation/temp/basic.csv", clear
+cimport delimited using "temp/basic.csv", clear
 local cimport_type : type name
 
 global TESTS_TOTAL = $TESTS_TOTAL + 1
@@ -149,11 +179,11 @@ else {
 }
 
 * Numeric type inference
-import delimited using "validation/temp/basic.csv", clear
+import delimited using "temp/basic.csv", clear
 local stata_id_type : type id
 local stata_value_type : type value
 
-cimport delimited using "validation/temp/basic.csv", clear
+cimport delimited using "temp/basic.csv", clear
 local cimport_id_type : type id
 local cimport_value_type : type value
 
@@ -171,11 +201,11 @@ else {
 }
 
 * Missing value counts
-import delimited using "validation/temp/missing.csv", clear
+import delimited using "temp/missing.csv", clear
 quietly count if missing(value)
 local stata_miss = r(N)
 
-cimport delimited using "validation/temp/missing.csv", clear
+cimport delimited using "temp/missing.csv", clear
 quietly count if missing(value)
 local cimport_miss = r(N)
 
@@ -190,12 +220,12 @@ else {
 }
 
 * Large file statistics
-import delimited using "validation/temp/large.csv", clear
+import delimited using "temp/large.csv", clear
 quietly summarize value1
 local stata_mean = r(mean)
 local stata_n = _N
 
-cimport delimited using "validation/temp/large.csv", clear
+cimport delimited using "temp/large.csv", clear
 quietly summarize value1
 local cimport_mean = r(mean)
 local cimport_n = _N
@@ -213,16 +243,17 @@ else {
 /*******************************************************************************
  * Cleanup temp files
  ******************************************************************************/
-capture erase "validation/temp/basic.csv"
-capture erase "validation/temp/basic.tsv"
-capture erase "validation/temp/missing.csv"
-capture erase "validation/temp/quoted.csv"
-capture erase "validation/temp/noheader.csv"
-capture erase "validation/temp/numeric.csv"
-capture erase "validation/temp/large.csv"
-capture erase "validation/temp/uppercase.csv"
-capture erase "validation/temp/auto_export.csv"
-capture erase "validation/temp/census_export.csv"
+capture erase "temp/basic.csv"
+capture erase "temp/basic.tsv"
+capture erase "temp/missing.csv"
+capture erase "temp/quoted.csv"
+capture erase "temp/noheader.csv"
+capture erase "temp/numeric.csv"
+capture erase "temp/large.csv"
+capture erase "temp/uppercase.csv"
+capture erase "temp/auto_export.csv"
+capture erase "temp/census_export.csv"
+capture erase "temp/bindquotes_test.csv"
 
 /*******************************************************************************
  * SUMMARY

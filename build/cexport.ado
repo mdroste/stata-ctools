@@ -53,19 +53,19 @@ program define cexport, rclass
         local delimiter ","
     }
 
-    * Handle tab delimiter
+    * Handle tab delimiter - pass "tab" keyword to plugin (not actual char)
+    local plugin_delim `"`delimiter'"'
     if `"`delimiter'"' == "tab" | `"`delimiter'"' == "\t" {
-        local delimiter "	"
+        local plugin_delim "tab"
         local delim_display "tab"
     }
     else {
         local delim_display `"`delimiter'"'
-    }
-
-    * Validate delimiter
-    if length(`"`delimiter'"') != 1 {
-        di as error "cexport: delimiter must be a single character"
-        exit 198
+        * Validate delimiter (tab is handled specially)
+        if length(`"`delimiter'"') != 1 {
+            di as error "cexport: delimiter must be a single character"
+            exit 198
+        }
     }
 
     * If no varlist specified, use all variables
@@ -206,7 +206,7 @@ program define cexport, rclass
     * Plugin expects: filename delimiter [options]
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `using' `delimiter' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose'"
+        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose'"
 
     local export_rc = _rc
 

@@ -110,7 +110,8 @@ end
  ******************************************************************************/
 capture program drop benchmark_merge
 program define benchmark_merge
-    syntax anything using/, [keep(string) GENerate(name) NOGENerate KEEPUSing(string) testname(string) SORTed]
+    syntax anything using/, [keep(string) GENerate(name) NOGENerate KEEPUSing(string) ///
+        testname(string) SORTed ASSert(string) UPDATE REPLACE FORCE NOLabel NONotes]
 
     * Parse merge type and key vars
     gettoken mergetype keyvars : anything
@@ -126,6 +127,12 @@ program define benchmark_merge
     if "`nogenerate'" != "" local opts "`opts' nogenerate"
     if "`keepusing'" != "" local opts "`opts' keepusing(`keepusing')"
     if "`sorted'" != "" local opts "`opts' sorted"
+    if "`assert'" != "" local opts "`opts' assert(`assert')"
+    if "`update'" != "" local opts "`opts' update"
+    if "`replace'" != "" local opts "`opts' replace"
+    if "`force'" != "" local opts "`opts' force"
+    if "`nolabel'" != "" local opts "`opts' nolabel"
+    if "`nonotes'" != "" local opts "`opts' nonotes"
 
     preserve
 
