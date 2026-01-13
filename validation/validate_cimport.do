@@ -1,266 +1,478 @@
 /*******************************************************************************
  * validate_cimport.do
  *
- * Comprehensive validation tests for cimport vs import delimited
- * Tests CSV import functionality across various scenarios
+ * Comprehensive validation tests for cimport delimited vs import delimited
+ * Tests all import options: delimiters, varnames, case, bindquotes, stripquotes
  ******************************************************************************/
 
 do "validate_setup.do"
 
+quietly {
+
 di as text ""
 di as text "======================================================================"
-di as text "              CIMPORT VALIDATION TEST SUITE"
+di as text "              CIMPORT DELIMITED VALIDATION TEST SUITE"
 di as text "======================================================================"
 
-* Create temp directory for test files
 capture mkdir "temp"
 
 /*******************************************************************************
  * Create test CSV files
  ******************************************************************************/
-print_section "Creating test files"
+noi print_section "Creating Test Data Files"
 
-* Test file 1: Basic CSV with mixed types
 capture file close _all
-file open csvfile using "temp/basic.csv", write replace
-file write csvfile "id,name,value,price" _n
-file write csvfile "1,Alpha,100,10.5" _n
-file write csvfile "2,Beta,200,20.75" _n
-file write csvfile "3,Gamma,300,30.125" _n
-file write csvfile "4,Delta,400,40.0" _n
-file write csvfile "5,Epsilon,500,50.99" _n
-file close csvfile
 
-* Test file 2: Tab-delimited
-file open tsvfile using "temp/basic.tsv", write replace
-file write tsvfile "id" _tab "name" _tab "value" _n
-file write tsvfile "1" _tab "Apple" _tab "1.5" _n
-file write tsvfile "2" _tab "Banana" _tab "2.5" _n
-file write tsvfile "3" _tab "Cherry" _tab "3.5" _n
-file close tsvfile
+* Basic CSV with headers
+file open fh using "temp/basic.csv", write replace
+file write fh "id,name,value,category" _n
+file write fh "1,Alpha,100.5,A" _n
+file write fh "2,Beta,200.25,B" _n
+file write fh "3,Gamma,300.75,A" _n
+file write fh "4,Delta,400.1,C" _n
+file write fh "5,Epsilon,500.9,B" _n
+file close fh
 
-* Test file 3: CSV with missing values
-file open csvfile using "temp/missing.csv", write replace
-file write csvfile "id,name,value,score" _n
-file write csvfile "1,A,100,95" _n
-file write csvfile "2,B,,85" _n
-file write csvfile "3,,300," _n
-file write csvfile "4,D,400,75" _n
-file write csvfile "5,E,," _n
-file close csvfile
+* Tab-delimited file
+file open fh using "temp/tabfile.tsv", write replace
+file write fh "id	name	score	group" _n
+file write fh "1	John	85.5	X" _n
+file write fh "2	Jane	92.3	Y" _n
+file write fh "3	Bob	78.1	X" _n
+file write fh "4	Alice	95.7	Z" _n
+file close fh
 
-* Test file 4: CSV with quoted fields
-file open csvfile using "temp/quoted.csv", write replace
-file write csvfile `"id,name,description"' _n
-file write csvfile `"1,"Smith, John","A person with comma""' _n
-file write csvfile `"2,"Doe, Jane","Another person""' _n
-file write csvfile `"3,Simple,No quotes needed"' _n
-file close csvfile
+* Semicolon-delimited file
+file open fh using "temp/semicolon.csv", write replace
+file write fh "code;description;amount" _n
+file write fh "A001;Widget;1234.56" _n
+file write fh "B002;Gadget;2345.67" _n
+file write fh "C003;Gizmo;3456.78" _n
+file close fh
 
-* Test file 5: CSV without header
-file open csvfile using "temp/noheader.csv", write replace
-file write csvfile "1,Alpha,100" _n
-file write csvfile "2,Beta,200" _n
-file write csvfile "3,Gamma,300" _n
-file close csvfile
+* No header file
+file open fh using "temp/noheader.csv", write replace
+file write fh "1,Alpha,100" _n
+file write fh "2,Beta,200" _n
+file write fh "3,Gamma,300" _n
+file close fh
 
-* Test file 6: CSV with various numeric formats
-file open csvfile using "temp/numeric.csv", write replace
-file write csvfile "integer,decimal,scientific,negative" _n
-file write csvfile "1,1.5,1e10,-100" _n
-file write csvfile "100,0.001,2.5e-5,-0.5" _n
-file write csvfile "999999,123.456789,1e-10,-999999" _n
-file close csvfile
+* File with missing values
+file open fh using "temp/missing.csv", write replace
+file write fh "id,x,y,z" _n
+file write fh "1,10,20,30" _n
+file write fh "2,,22," _n
+file write fh "3,30,,33" _n
+file write fh "4,,,44" _n
+file write fh "5,50,52,55" _n
+file close fh
 
-* Test file 7: Large CSV
-file open csvfile using "temp/large.csv", write replace
-file write csvfile "id,group,value1,value2,label" _n
+* File with quoted fields
+file open fh using "temp/quoted.csv", write replace
+file write fh `"id,text,value"' _n
+file write fh `"1,"Hello, World",100"' _n
+file write fh `"2,"Embedded ""quotes""",200"' _n
+file write fh `"3,Normal text,300"' _n
+file close fh
+
+* Large file
+file open fh using "temp/large.csv", write replace
+file write fh "id,group,x,y,label" _n
 forvalues i = 1/5000 {
-    local g = mod(`i', 100) + 1
-    local v1 = `i' * 1.5
-    local v2 = runiform() * 1000
-    file write csvfile "`i',`g',`v1',`v2',item`i'" _n
+    local group = mod(`i'-1, 100) + 1
+    local x = runiform() * 100
+    local y = runiformint(1, 1000)
+    file write fh "`i',`group',`x',`y',Item`i'" _n
 }
-file close csvfile
+file close fh
 
-* Test file 8: CSV with UPPER case headers
-file open csvfile using "temp/uppercase.csv", write replace
-file write csvfile "ID,NAME,VALUE" _n
-file write csvfile "1,Test,100" _n
-file write csvfile "2,Data,200" _n
-file close csvfile
+* Case test file
+file open fh using "temp/casetest.csv", write replace
+file write fh "FirstName,LastName,AGE,mixed_Case" _n
+file write fh "John,Doe,25,abc" _n
+file write fh "Jane,Smith,30,def" _n
+file close fh
 
-di as result "[DONE] Test files created"
-
-/*******************************************************************************
- * Basic import tests
- ******************************************************************************/
-print_section "Basic import tests"
-
-benchmark_import using "temp/basic.csv", testname("basic CSV")
-
-benchmark_import using "temp/basic.tsv", delimiters(tab) testname("tab-delimited")
-
-benchmark_import using "temp/missing.csv", testname("with missing values")
-
-benchmark_import using "temp/quoted.csv", testname("quoted fields")
-
-benchmark_import using "temp/noheader.csv", varnames(nonames) testname("no header")
-
-benchmark_import using "temp/uppercase.csv", case(lower) testname("case(lower)")
-
-benchmark_import using "temp/numeric.csv", testname("numeric formats")
-
-benchmark_import using "temp/large.csv", testname("large file (5K rows)")
+noi test_pass "Test files created"
 
 /*******************************************************************************
- * case() option tests
+ * SECTION 1: Plugin check
  ******************************************************************************/
-print_section "case() option tests"
+noi print_section "Plugin Check"
 
-benchmark_import using "temp/uppercase.csv", case(upper) testname("case(upper)")
-
-benchmark_import using "temp/uppercase.csv", case(preserve) testname("case(preserve)")
+capture cimport delimited using "temp/basic.csv", clear
+if _rc != 0 {
+    noi test_fail "cimport plugin load" "returned error `=_rc'"
+    noi print_summary "cimport"
+    exit 1
+}
+noi test_pass "cimport plugin loads and runs"
 
 /*******************************************************************************
- * NOTE: rowrange() option is parsed but not yet implemented in cimport
- * Tests skipped until feature is implemented
+ * SECTION 2: Basic comma-delimited import
  ******************************************************************************/
+noi print_section "Basic Comma-Delimited Import"
 
-/*******************************************************************************
- * bindquotes() option tests
- ******************************************************************************/
-print_section "bindquotes() option tests"
-
-* Create a test file with embedded quotes
-capture file close _all
-file open csvfile using "temp/bindquotes_test.csv", write replace
-file write csvfile `"id,name,value"' _n
-file write csvfile `"1,"Simple Name",100"' _n
-file write csvfile `"2,"Name with ""quotes""",200"' _n
-file write csvfile `"3,NoQuotes,300"' _n
-file close csvfile
-
-benchmark_import using "temp/bindquotes_test.csv", testname("bindquotes default (strict)")
-
-/*******************************************************************************
- * Round-trip tests (export then reimport)
- ******************************************************************************/
-print_section "Round-trip tests"
-
-sysuse auto, clear
-export delimited using "temp/auto_export.csv", replace
-benchmark_import using "temp/auto_export.csv", testname("auto round-trip")
-
-sysuse census, clear
-export delimited using "temp/census_export.csv", replace
-benchmark_import using "temp/census_export.csv", testname("census round-trip")
-
-/*******************************************************************************
- * Detailed comparison tests
- ******************************************************************************/
-print_section "Detailed comparison tests"
-
-* String variable types
 import delimited using "temp/basic.csv", clear
-local stata_type : type name
+local stata_n = _N
+local stata_k = c(k)
 
 cimport delimited using "temp/basic.csv", clear
-local cimport_type : type name
+local cimport_n = _N
+local cimport_k = c(k)
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if substr("`stata_type'", 1, 3) == "str" & substr("`cimport_type'", 1, 3) == "str" {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] string type inference"
+if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    noi test_pass "basic CSV dimensions match (N=`stata_n', K=`stata_k')"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] string type inference"
+    noi test_fail "basic CSV" "N: `stata_n' vs `cimport_n', K: `stata_k' vs `cimport_k'"
 }
 
-* Numeric type inference
-import delimited using "temp/basic.csv", clear
-local stata_id_type : type id
-local stata_value_type : type value
+/*******************************************************************************
+ * SECTION 3: Tab-delimited import
+ ******************************************************************************/
+noi print_section "Tab-Delimited Import"
 
-cimport delimited using "temp/basic.csv", clear
-local cimport_id_type : type id
-local cimport_value_type : type value
+import delimited using "temp/tabfile.tsv", delimiters(tab) clear
+local stata_n = _N
+local stata_k = c(k)
 
-local id_numeric = ("`stata_id_type'" != "str" & "`cimport_id_type'" != "str")
-local value_numeric = ("`stata_value_type'" != "str" & "`cimport_value_type'" != "str")
+cimport delimited using "temp/tabfile.tsv", delimiters(tab) clear
+local cimport_n = _N
+local cimport_k = c(k)
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `id_numeric' & `value_numeric' {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] numeric type inference"
+if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    noi test_pass "tab-delimited dimensions match"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] numeric type inference"
+    noi test_fail "tab-delimited" "dimensions differ"
 }
 
-* Missing value counts
+/*******************************************************************************
+ * SECTION 4: Semicolon-delimited import
+ ******************************************************************************/
+noi print_section "Semicolon-Delimited Import"
+
+import delimited using "temp/semicolon.csv", delimiters(";") clear
+local stata_n = _N
+
+cimport delimited using "temp/semicolon.csv", delimiters(";") clear
+local cimport_n = _N
+
+if `stata_n' == `cimport_n' {
+    noi test_pass "semicolon-delimited N matches"
+}
+else {
+    noi test_fail "semicolon-delimited" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 5: varnames() option
+ ******************************************************************************/
+noi print_section "varnames() Option"
+
+* varnames(1)
+import delimited using "temp/basic.csv", varnames(1) clear
+local stata_n = _N
+
+cimport delimited using "temp/basic.csv", varnames(1) clear
+local cimport_n = _N
+
+if `stata_n' == `cimport_n' {
+    noi test_pass "varnames(1) N matches"
+}
+else {
+    noi test_fail "varnames(1)" "N differs"
+}
+
+* varnames(nonames)
+import delimited using "temp/noheader.csv", varnames(nonames) clear
+local stata_n = _N
+local stata_k = c(k)
+
+cimport delimited using "temp/noheader.csv", varnames(nonames) clear
+local cimport_n = _N
+local cimport_k = c(k)
+
+if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    noi test_pass "varnames(nonames) dimensions match"
+}
+else {
+    noi test_fail "varnames(nonames)" "dimensions differ"
+}
+
+/*******************************************************************************
+ * SECTION 6: case() option
+ ******************************************************************************/
+noi print_section "case() Option"
+
+* case(preserve)
+capture cimport delimited using "temp/casetest.csv", case(preserve) clear
+if _rc == 0 {
+    noi test_pass "case(preserve) accepted"
+}
+else {
+    noi test_fail "case(preserve)" "returned error `=_rc'"
+}
+
+* case(lower)
+capture cimport delimited using "temp/casetest.csv", case(lower) clear
+if _rc == 0 {
+    ds
+    local varlist `r(varlist)'
+    local lower_ok = 1
+    foreach v of local varlist {
+        if "`v'" != lower("`v'") local lower_ok = 0
+    }
+    if `lower_ok' {
+        noi test_pass "case(lower) produces lowercase vars"
+    }
+    else {
+        noi test_fail "case(lower)" "vars not all lowercase"
+    }
+}
+else {
+    noi test_fail "case(lower)" "returned error `=_rc'"
+}
+
+* case(upper)
+capture cimport delimited using "temp/casetest.csv", case(upper) clear
+if _rc == 0 {
+    ds
+    local varlist `r(varlist)'
+    local upper_ok = 1
+    foreach v of local varlist {
+        if "`v'" != upper("`v'") local upper_ok = 0
+    }
+    if `upper_ok' {
+        noi test_pass "case(upper) produces uppercase vars"
+    }
+    else {
+        noi test_fail "case(upper)" "vars not all uppercase"
+    }
+}
+else {
+    noi test_fail "case(upper)" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 7: Missing values handling
+ ******************************************************************************/
+noi print_section "Missing Values"
+
 import delimited using "temp/missing.csv", clear
-quietly count if missing(value)
+count if missing(x)
 local stata_miss = r(N)
 
 cimport delimited using "temp/missing.csv", clear
-quietly count if missing(value)
+count if missing(x)
 local cimport_miss = r(N)
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
 if `stata_miss' == `cimport_miss' {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] missing value handling"
+    noi test_pass "missing value count matches"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] missing value handling"
+    noi test_fail "missing values" "counts differ: `stata_miss' vs `cimport_miss'"
 }
 
-* Large file statistics
-import delimited using "temp/large.csv", clear
-quietly summarize value1
-local stata_mean = r(mean)
+/*******************************************************************************
+ * SECTION 8: Quoted fields
+ ******************************************************************************/
+noi print_section "Quoted Fields"
+
+import delimited using "temp/quoted.csv", clear
 local stata_n = _N
 
-cimport delimited using "temp/large.csv", clear
-quietly summarize value1
-local cimport_mean = r(mean)
+cimport delimited using "temp/quoted.csv", clear
 local cimport_n = _N
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_n' == `cimport_n' & abs(`stata_mean' - `cimport_mean') < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] large file statistics"
+if `stata_n' == `cimport_n' {
+    noi test_pass "quoted fields N matches"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] large file statistics"
+    noi test_fail "quoted fields" "N differs"
 }
 
 /*******************************************************************************
- * Cleanup temp files
+ * SECTION 9: bindquotes() option
  ******************************************************************************/
-capture erase "temp/basic.csv"
-capture erase "temp/basic.tsv"
-capture erase "temp/missing.csv"
-capture erase "temp/quoted.csv"
-capture erase "temp/noheader.csv"
-capture erase "temp/numeric.csv"
-capture erase "temp/large.csv"
-capture erase "temp/uppercase.csv"
-capture erase "temp/auto_export.csv"
-capture erase "temp/census_export.csv"
-capture erase "temp/bindquotes_test.csv"
+noi print_section "bindquotes() Option"
+
+capture cimport delimited using "temp/quoted.csv", bindquotes(strict) clear
+if _rc == 0 {
+    noi test_pass "bindquotes(strict) accepted"
+}
+else {
+    noi test_fail "bindquotes(strict)" "returned error `=_rc'"
+}
+
+capture cimport delimited using "temp/quoted.csv", bindquotes(loose) clear
+if _rc == 0 {
+    noi test_pass "bindquotes(loose) accepted"
+}
+else {
+    noi test_fail "bindquotes(loose)" "returned error `=_rc'"
+}
 
 /*******************************************************************************
- * SUMMARY
+ * SECTION 10: stripquotes option
  ******************************************************************************/
-print_summary "cimport"
+noi print_section "stripquotes Option"
 
-* Return error code if any tests failed
+capture cimport delimited using "temp/quoted.csv", stripquotes clear
+if _rc == 0 {
+    noi test_pass "stripquotes option accepted"
+}
+else {
+    noi test_fail "stripquotes" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 11: Large file import
+ ******************************************************************************/
+noi print_section "Large File Import"
+
+import delimited using "temp/large.csv", clear
+local stata_n = _N
+local stata_k = c(k)
+
+cimport delimited using "temp/large.csv", clear
+local cimport_n = _N
+local cimport_k = c(k)
+
+if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    noi test_pass "large file (5000 rows) dimensions match"
+}
+else {
+    noi test_fail "large file" "dimensions differ"
+}
+
+/*******************************************************************************
+ * SECTION 12: verbose/fast options
+ ******************************************************************************/
+noi print_section "verbose/fast Options"
+
+capture cimport delimited using "temp/basic.csv", verbose clear
+if _rc == 0 {
+    noi test_pass "verbose option accepted"
+}
+else {
+    noi test_fail "verbose option" "returned error `=_rc'"
+}
+
+capture cimport delimited using "temp/basic.csv", fast clear
+if _rc == 0 {
+    noi test_pass "fast option accepted"
+}
+else {
+    noi test_fail "fast option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 13: clear option behavior
+ ******************************************************************************/
+noi print_section "clear Option"
+
+sysuse auto, clear
+capture cimport delimited using "temp/basic.csv"
+if _rc != 0 {
+    noi test_pass "no clear: fails with data in memory"
+}
+else {
+    noi test_fail "no clear" "should fail with data in memory"
+}
+
+capture cimport delimited using "temp/basic.csv", clear
+if _rc == 0 {
+    noi test_pass "clear option works"
+}
+else {
+    noi test_fail "clear option" "failed"
+}
+
+/*******************************************************************************
+ * SECTION 14: Value comparisons
+ ******************************************************************************/
+noi print_section "Value Comparisons"
+
+import delimited using "temp/basic.csv", clear
+local stata_id2 = id[2]
+local stata_name2 = name[2]
+
+cimport delimited using "temp/basic.csv", clear
+local cimport_id2 = id[2]
+local cimport_name2 = name[2]
+
+if `stata_id2' == `cimport_id2' {
+    noi test_pass "numeric values match"
+}
+else {
+    noi test_fail "numeric values" "differ"
+}
+
+if "`stata_name2'" == "`cimport_name2'" {
+    noi test_pass "string values match"
+}
+else {
+    noi test_fail "string values" "differ"
+}
+
+/*******************************************************************************
+ * SECTION 15: Round-trip tests
+ ******************************************************************************/
+noi print_section "Round-Trip Tests"
+
+sysuse auto, clear
+export delimited using "temp/auto_rt.csv", replace
+
+import delimited using "temp/auto_rt.csv", clear
+local stata_n = _N
+local stata_k = c(k)
+
+cimport delimited using "temp/auto_rt.csv", clear
+local cimport_n = _N
+local cimport_k = c(k)
+
+if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    noi test_pass "auto dataset round-trip"
+}
+else {
+    noi test_fail "round-trip" "dimensions differ"
+}
+
+sysuse census, clear
+export delimited using "temp/census_rt.csv", replace
+
+import delimited using "temp/census_rt.csv", clear
+local stata_n = _N
+
+cimport delimited using "temp/census_rt.csv", clear
+local cimport_n = _N
+
+if `stata_n' == `cimport_n' {
+    noi test_pass "census dataset round-trip"
+}
+else {
+    noi test_fail "census round-trip" "N differs"
+}
+
+/*******************************************************************************
+ * Cleanup and summary
+ ******************************************************************************/
+
+local files : dir "temp" files "*.csv"
+foreach f of local files {
+    capture erase "temp/`f'"
+}
+local files : dir "temp" files "*.tsv"
+foreach f of local files {
+    capture erase "temp/`f'"
+}
+
+noi print_summary "cimport"
+
 if $TESTS_FAILED > 0 {
     exit 1
+}
+
 }

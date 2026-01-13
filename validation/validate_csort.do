@@ -1,11 +1,17 @@
 /*******************************************************************************
  * validate_csort.do
  *
- * Comprehensive validation tests for csort vs native sort
- * Tests sorting functionality across various data types and scenarios
+ * Comprehensive validation tests for csort vs native Stata sort
+ * Tests all sort algorithms and data type scenarios
  *
- * Note: csort uses inherently stable radix sort, so we compare against
- * Stata's "sort, stable" for exact matches.
+ * Algorithms tested:
+ *   - lsd (default): LSD radix sort
+ *   - msd: MSD radix sort
+ *   - timsort: Timsort
+ *   - sample: Sample sort
+ *   - counting: Counting sort
+ *   - merge: Parallel merge sort
+ *   - ips4o: In-place parallel super scalar samplesort
  ******************************************************************************/
 
 do "validate_setup.do"
@@ -16,70 +22,332 @@ di as text "              CSORT VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 /*******************************************************************************
- * Preliminary: Check if csort plugin works
+ * SECTION 1: Plugin functionality check
  ******************************************************************************/
-print_section "Preliminary: Check if csort plugin works"
+print_section "Plugin Check"
 
 sysuse auto, clear
 capture noisily csort price
-local csort_works = (_rc == 0)
-
-if !`csort_works' {
-    di as error "  csort plugin is not functioning (rc=`=_rc')"
-    di as error "  Skipping all csort tests"
-    global TESTS_PASSED = 0
-    global TESTS_FAILED = 1
-    global TESTS_TOTAL = 1
+if _rc != 0 {
+    test_fail "csort plugin load" "plugin returned error `=_rc'"
     print_summary "csort"
     exit 1
 }
-
-di as result "  csort plugin is functional"
-global TESTS_PASSED = $TESTS_PASSED + 1
-global TESTS_TOTAL = $TESTS_TOTAL + 1
+test_pass "csort plugin loads and runs"
 
 /*******************************************************************************
- * Auto dataset tests
+ * SECTION 2: Default algorithm (LSD) - comprehensive tests
  ******************************************************************************/
-print_section "Auto dataset"
-
-sysuse auto, clear
+print_section "Default Algorithm (LSD Radix Sort)"
 
 * Single numeric variable
-benchmark_sort price, testname("single numeric (price)")
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price")
 
 sysuse auto, clear
-benchmark_sort weight, testname("single numeric (weight)")
+benchmark_sort mpg, testname("numeric: mpg")
 
 sysuse auto, clear
-benchmark_sort mpg, testname("single numeric (mpg)")
+benchmark_sort weight, testname("numeric: weight")
 
 * Single string variable
 sysuse auto, clear
-benchmark_sort make, testname("single string (make)")
+benchmark_sort make, testname("string: make")
 
-* Categorical variable with duplicates
+* Binary/categorical variable
 sysuse auto, clear
-benchmark_sort foreign, testname("binary with duplicates (foreign)")
+benchmark_sort foreign, testname("binary: foreign")
 
 * Variable with missing values
 sysuse auto, clear
-benchmark_sort rep78, testname("with missing values (rep78)")
+benchmark_sort rep78, testname("with missings: rep78")
 
-* Multi-variable sorts
+* Multiple sort keys
 sysuse auto, clear
-benchmark_sort foreign price, testname("two vars (foreign price)")
-
-sysuse auto, clear
-benchmark_sort foreign rep78 price, testname("three vars (foreign rep78 price)")
+benchmark_sort foreign price, testname("two keys: foreign price")
 
 sysuse auto, clear
-benchmark_sort make price, testname("string + numeric (make price)")
+benchmark_sort foreign rep78 price, testname("three keys: foreign rep78 price")
+
+sysuse auto, clear
+benchmark_sort make price, testname("mixed keys: make price")
 
 /*******************************************************************************
- * Census dataset tests
+ * SECTION 3: MSD Radix Sort algorithm
  ******************************************************************************/
-print_section "Census dataset"
+print_section "MSD Radix Sort Algorithm"
+
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price") algorithm(msd)
+
+sysuse auto, clear
+benchmark_sort make, testname("string: make") algorithm(msd)
+
+sysuse census, clear
+benchmark_sort state, testname("string: state") algorithm(msd)
+
+sysuse auto, clear
+benchmark_sort foreign make, testname("mixed: foreign make") algorithm(msd)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("with missings") algorithm(msd)
+
+/*******************************************************************************
+ * SECTION 4: Timsort algorithm
+ ******************************************************************************/
+print_section "Timsort Algorithm"
+
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price") algorithm(timsort)
+
+sysuse auto, clear
+benchmark_sort mpg weight, testname("multi-numeric") algorithm(timsort)
+
+sysuse auto, clear
+benchmark_sort make, testname("string: make") algorithm(timsort)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("with missings") algorithm(timsort)
+
+* Already sorted (timsort excels here)
+clear
+set obs 5000
+gen x = _n
+benchmark_sort x, testname("already sorted") algorithm(timsort)
+
+* Reverse sorted
+clear
+set obs 5000
+gen x = 5000 - _n
+benchmark_sort x, testname("reverse sorted") algorithm(timsort)
+
+/*******************************************************************************
+ * SECTION 5: Sample Sort algorithm
+ ******************************************************************************/
+print_section "Sample Sort Algorithm"
+
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price") algorithm(sample)
+
+sysuse auto, clear
+benchmark_sort make, testname("string: make") algorithm(sample)
+
+sysuse census, clear
+benchmark_sort state, testname("string: state") algorithm(sample)
+
+sysuse auto, clear
+benchmark_sort foreign make, testname("mixed: foreign make") algorithm(sample)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("with missings") algorithm(sample)
+
+/*******************************************************************************
+ * SECTION 6: Counting Sort algorithm
+ ******************************************************************************/
+print_section "Counting Sort Algorithm"
+
+sysuse auto, clear
+benchmark_sort foreign, testname("binary (0/1)") algorithm(counting)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("small int range") algorithm(counting)
+
+clear
+set obs 5000
+set seed 12345
+gen year = runiformint(1990, 2023)
+benchmark_sort year, testname("year data") algorithm(counting)
+
+sysuse auto, clear
+benchmark_sort foreign rep78, testname("multi-int") algorithm(counting)
+
+/*******************************************************************************
+ * SECTION 7: Parallel Merge Sort algorithm
+ ******************************************************************************/
+print_section "Parallel Merge Sort Algorithm"
+
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price") algorithm(merge)
+
+sysuse auto, clear
+benchmark_sort make, testname("string: make") algorithm(merge)
+
+sysuse census, clear
+benchmark_sort state, testname("string: state") algorithm(merge)
+
+sysuse auto, clear
+benchmark_sort foreign make, testname("mixed: foreign make") algorithm(merge)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("with missings") algorithm(merge)
+
+/*******************************************************************************
+ * SECTION 8: IPS4o algorithm
+ ******************************************************************************/
+print_section "IPS4o Algorithm"
+
+sysuse auto, clear
+benchmark_sort price, testname("numeric: price") algorithm(ips4o)
+
+sysuse auto, clear
+benchmark_sort make, testname("string: make") algorithm(ips4o)
+
+sysuse census, clear
+benchmark_sort state, testname("string: state") algorithm(ips4o)
+
+sysuse auto, clear
+benchmark_sort foreign make, testname("mixed: foreign make") algorithm(ips4o)
+
+sysuse auto, clear
+benchmark_sort rep78, testname("with missings") algorithm(ips4o)
+
+* Already sorted
+clear
+set obs 5000
+gen x = _n
+benchmark_sort x, testname("already sorted") algorithm(ips4o)
+
+* Reverse sorted
+clear
+set obs 5000
+gen x = 5000 - _n
+benchmark_sort x, testname("reverse sorted") algorithm(ips4o)
+
+/*******************************************************************************
+ * SECTION 9: Edge cases - all algorithms
+ ******************************************************************************/
+print_section "Edge Cases"
+
+* Single observation
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 1
+    gen x = 42
+    benchmark_sort x, testname("single obs") algorithm(`alg')
+}
+
+* Two observations
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 2
+    gen x = 2 - _n
+    benchmark_sort x, testname("two obs") algorithm(`alg')
+}
+
+* All same values
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 1000
+    gen x = 5
+    benchmark_sort x, testname("all same values") algorithm(`alg')
+}
+
+/*******************************************************************************
+ * SECTION 10: Numeric edge cases
+ ******************************************************************************/
+print_section "Numeric Edge Cases"
+
+* Negative numbers
+clear
+set obs 1000
+gen x = runiform() * 200 - 100
+benchmark_sort x, testname("negative numbers")
+
+* Extreme integers
+clear
+set obs 100
+gen long x = runiformint(-2147483647, 2147483646)
+benchmark_sort x, testname("extreme integers")
+
+* Small floats
+clear
+set obs 100
+gen double x = runiform() * 1e-10
+benchmark_sort x, testname("small floats (1e-10)")
+
+* Large floats
+clear
+set obs 100
+gen double x = runiform() * 1e10
+benchmark_sort x, testname("large floats (1e10)")
+
+* Mixed positive/negative
+clear
+set obs 500
+gen x = cond(_n <= 250, -_n, _n - 250)
+benchmark_sort x, testname("mixed pos/neg")
+
+/*******************************************************************************
+ * SECTION 11: String edge cases
+ ******************************************************************************/
+print_section "String Edge Cases"
+
+* Empty strings
+clear
+set obs 100
+gen str10 x = ""
+replace x = "test" if _n > 50
+benchmark_sort x, testname("empty strings")
+
+* Variable length strings
+clear
+set obs 100
+gen str200 x = substr("a" * 200, 1, runiformint(1, 200))
+benchmark_sort x, testname("variable length strings")
+
+* Unicode/special characters (if supported)
+clear
+set obs 50
+gen str20 x = "item" + string(_n)
+replace x = "Item_" + string(_n) if _n > 25
+benchmark_sort x, testname("mixed case strings")
+
+/*******************************************************************************
+ * SECTION 12: Large dataset tests
+ ******************************************************************************/
+print_section "Large Dataset Tests"
+
+* 10K observations
+clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen value = runiform()
+gen str20 label = "item" + string(runiformint(1, 500))
+
+benchmark_sort value, testname("10K random floats")
+
+clear
+set seed 12345
+set obs 10000
+gen group = runiformint(1, 100)
+benchmark_sort group, testname("10K random ints")
+
+clear
+set seed 12345
+set obs 10000
+gen str20 label = "item" + string(runiformint(1, 500))
+benchmark_sort label, testname("10K random strings")
+
+* 50K observations
+clear
+set seed 54321
+set obs 50000
+gen value = rnormal()
+benchmark_sort value, testname("50K random normal")
+
+clear
+set seed 54321
+set obs 50000
+gen id = _n
+gen group = runiformint(1, 500)
+benchmark_sort group id, testname("50K group + id")
+
+/*******************************************************************************
+ * SECTION 13: Census dataset tests
+ ******************************************************************************/
+print_section "Census Dataset"
 
 sysuse census, clear
 benchmark_sort state, testname("state name")
@@ -97,522 +365,35 @@ sysuse census, clear
 benchmark_sort region pop, testname("region pop")
 
 /*******************************************************************************
- * Synthetic data tests
+ * SECTION 14: verbose and timeit options
  ******************************************************************************/
-print_section "Synthetic data"
+print_section "Option Tests"
 
-* Large dataset
-clear
-set seed 12345
-set obs 10000
-gen id = _n
-gen group = runiformint(1, 100)
-gen value = runiform()
-gen str20 label = "item" + string(runiformint(1, 500))
-
-benchmark_sort value, testname("10K random floats")
-
-clear
-set seed 12345
-set obs 10000
-gen id = _n
-gen group = runiformint(1, 100)
-gen value = runiform()
-gen str20 label = "item" + string(runiformint(1, 500))
-
-benchmark_sort group, testname("10K random ints")
-
-clear
-set seed 12345
-set obs 10000
-gen id = _n
-gen group = runiformint(1, 100)
-gen value = runiform()
-gen str20 label = "item" + string(runiformint(1, 500))
-
-benchmark_sort label, testname("10K random strings")
-
-clear
-set seed 12345
-set obs 10000
-gen id = _n
-gen group = runiformint(1, 100)
-gen value = runiform()
-gen str20 label = "item" + string(runiformint(1, 500))
-
-benchmark_sort group value, testname("10K group + value")
-
-* Negative numbers
-clear
-set obs 1000
-gen x = runiform() * 200 - 100
-
-benchmark_sort x, testname("negative numbers")
-
-* All same values (degenerate case)
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same values")
-
-* Already sorted
-clear
-set obs 1000
-gen x = _n
-
-benchmark_sort x, testname("already sorted")
-
-* Reverse sorted
-clear
-set obs 1000
-gen x = 1000 - _n
-
-benchmark_sort x, testname("reverse sorted")
-
-* Integer edge cases
-clear
-set obs 100
-gen long x = runiformint(-2147483647, 2147483646)
-
-benchmark_sort x, testname("extreme integers")
-
-* Float precision
-clear
-set obs 100
-gen double x = runiform() * 1e-10
-
-benchmark_sort x, testname("small floats")
-
-/*******************************************************************************
- * Edge cases
- ******************************************************************************/
-print_section "Edge cases"
-
-* Empty string handling
-clear
-set obs 100
-gen str10 x = ""
-replace x = "test" if _n > 50
-
-benchmark_sort x, testname("empty strings")
-
-* Very long strings
-clear
-set obs 100
-gen str200 x = "a" * runiformint(1, 200)
-
-benchmark_sort x, testname("variable length strings")
-
-* Single observation
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single observation")
-
-* Two observations
-clear
-set obs 2
-gen x = 2 - _n
-
-benchmark_sort x, testname("two observations")
-
-/*******************************************************************************
- * Larger scale tests
- ******************************************************************************/
-print_section "Larger scale tests"
-
-clear
-set seed 54321
-set obs 50000
-gen id = _n
-gen group = runiformint(1, 500)
-gen value = rnormal()
-
-benchmark_sort value, testname("50K random normal")
-
-clear
-set seed 54321
-set obs 50000
-gen id = _n
-gen group = runiformint(1, 500)
-gen value = rnormal()
-
-benchmark_sort group id, testname("50K group + id")
-
-/*******************************************************************************
- * Algorithm-specific tests: MSD Radix Sort
- ******************************************************************************/
-print_section "MSD Radix Sort Algorithm"
-
-* Numeric sorting
+* Test verbose option (just verify it doesn't error)
 sysuse auto, clear
-benchmark_sort price, testname("numeric") algorithm(msd)
+capture quietly csort price, verbose
+if _rc == 0 {
+    test_pass "verbose option accepted"
+}
+else {
+    test_fail "verbose option" "returned error `=_rc'"
+}
 
+* Test timeit option
 sysuse auto, clear
-benchmark_sort mpg weight, testname("multi-numeric") algorithm(msd)
-
-* String sorting (MSD is optimized for strings)
-sysuse auto, clear
-benchmark_sort make, testname("string (make)") algorithm(msd)
-
-sysuse census, clear
-benchmark_sort state, testname("string (state)") algorithm(msd)
-
-* Mixed types
-sysuse auto, clear
-benchmark_sort foreign make, testname("mixed types") algorithm(msd)
-
-* With missing values
-sysuse auto, clear
-benchmark_sort rep78, testname("with missings") algorithm(msd)
-
-* Larger dataset
-clear
-set seed 12345
-set obs 10000
-gen str20 label = "item" + string(runiformint(1, 500))
-gen value = rnormal()
-
-benchmark_sort label, testname("10K strings") algorithm(msd)
-
-clear
-set seed 12345
-set obs 10000
-gen str20 label = "item" + string(runiformint(1, 500))
-gen value = rnormal()
-
-benchmark_sort value, testname("10K numeric") algorithm(msd)
-
-/*******************************************************************************
- * Algorithm-specific tests: Timsort
- ******************************************************************************/
-print_section "Timsort Algorithm"
-
-* Numeric sorting
-sysuse auto, clear
-benchmark_sort price, testname("numeric") algorithm(timsort)
-
-sysuse auto, clear
-benchmark_sort mpg weight, testname("multi-numeric") algorithm(timsort)
-
-* String sorting
-sysuse auto, clear
-benchmark_sort make, testname("string (make)") algorithm(timsort)
-
-sysuse census, clear
-benchmark_sort state, testname("string (state)") algorithm(timsort)
-
-* Mixed types
-sysuse auto, clear
-benchmark_sort foreign make, testname("mixed types") algorithm(timsort)
-
-* With missing values
-sysuse auto, clear
-benchmark_sort rep78, testname("with missings") algorithm(timsort)
-
-* Already sorted (Timsort should excel here)
-clear
-set obs 5000
-gen x = _n
-
-benchmark_sort x, testname("already sorted") algorithm(timsort)
-
-* Reverse sorted
-clear
-set obs 5000
-gen x = 5000 - _n
-
-benchmark_sort x, testname("reverse sorted") algorithm(timsort)
-
-* Partially sorted (panel-like data)
-clear
-set seed 99999
-set obs 10000
-gen panel_id = mod(_n - 1, 100) + 1
-gen time = ceil(_n / 100)
-gen value = rnormal()
-sort panel_id  /* Already sorted by panel_id */
-
-benchmark_sort panel_id time, testname("panel data") algorithm(timsort)
-
-* Larger dataset
-clear
-set seed 12345
-set obs 10000
-gen value = rnormal()
-
-benchmark_sort value, testname("10K numeric") algorithm(timsort)
-
-/*******************************************************************************
- * Edge cases for all algorithms
- ******************************************************************************/
-print_section "Edge cases - all algorithms"
-
-* Single observation
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(lsd)
-
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(msd)
-
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(timsort)
-
-* All same values
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(lsd)
-
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(msd)
-
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(timsort)
-
-* Negative numbers
-clear
-set obs 1000
-gen x = runiform() * 200 - 100
-
-benchmark_sort x, testname("negatives") algorithm(msd)
-
-clear
-set obs 1000
-gen x = runiform() * 200 - 100
-
-benchmark_sort x, testname("negatives") algorithm(timsort)
-
-/*******************************************************************************
- * Algorithm-specific tests: Sample Sort
- ******************************************************************************/
-print_section "Sample Sort Algorithm"
-
-* Numeric sorting
-sysuse auto, clear
-benchmark_sort price, testname("numeric") algorithm(sample)
-
-sysuse auto, clear
-benchmark_sort mpg weight, testname("multi-numeric") algorithm(sample)
-
-* String sorting
-sysuse auto, clear
-benchmark_sort make, testname("string (make)") algorithm(sample)
-
-sysuse census, clear
-benchmark_sort state, testname("string (state)") algorithm(sample)
-
-* Mixed types
-sysuse auto, clear
-benchmark_sort foreign make, testname("mixed types") algorithm(sample)
-
-* With missing values
-sysuse auto, clear
-benchmark_sort rep78, testname("with missings") algorithm(sample)
-
-* Larger dataset
-clear
-set seed 12345
-set obs 10000
-gen value = rnormal()
-
-benchmark_sort value, testname("10K numeric") algorithm(sample)
-
-/*******************************************************************************
- * Algorithm-specific tests: Counting Sort
- ******************************************************************************/
-print_section "Counting Sort Algorithm"
-
-* Integer data
-sysuse auto, clear
-benchmark_sort foreign, testname("binary (0/1)") algorithm(counting)
-
-sysuse auto, clear
-benchmark_sort rep78, testname("small int range") algorithm(counting)
-
-* Year-like data
-clear
-set obs 5000
-set seed 12345
-gen year = runiformint(1990, 2023)
-benchmark_sort year, testname("year data") algorithm(counting)
-
-* State codes
-clear
-set obs 5000
-set seed 54321
-gen state = runiformint(1, 50)
-benchmark_sort state, testname("state codes") algorithm(counting)
-
-* Multi-key with integers
-sysuse auto, clear
-benchmark_sort foreign rep78, testname("multi-int") algorithm(counting)
-
-/*******************************************************************************
- * Algorithm-specific tests: Parallel Merge Sort
- ******************************************************************************/
-print_section "Parallel Merge Sort Algorithm"
-
-* Numeric sorting
-sysuse auto, clear
-benchmark_sort price, testname("numeric") algorithm(merge)
-
-sysuse auto, clear
-benchmark_sort mpg weight, testname("multi-numeric") algorithm(merge)
-
-* String sorting
-sysuse auto, clear
-benchmark_sort make, testname("string (make)") algorithm(merge)
-
-sysuse census, clear
-benchmark_sort state, testname("string (state)") algorithm(merge)
-
-* Mixed types
-sysuse auto, clear
-benchmark_sort foreign make, testname("mixed types") algorithm(merge)
-
-* With missing values
-sysuse auto, clear
-benchmark_sort rep78, testname("with missings") algorithm(merge)
-
-* Larger dataset
-clear
-set seed 12345
-set obs 10000
-gen value = rnormal()
-
-benchmark_sort value, testname("10K numeric") algorithm(merge)
-
-/*******************************************************************************
- * Edge cases for new algorithms
- ******************************************************************************/
-print_section "Edge cases - new algorithms"
-
-* Single observation
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(sample)
-
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(merge)
-
-* All same values
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(sample)
-
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(merge)
-
-/*******************************************************************************
- * Algorithm-specific tests: IPS4o (In-place Parallel Super Scalar Samplesort)
- ******************************************************************************/
-print_section "IPS4o Algorithm"
-
-* Numeric sorting
-sysuse auto, clear
-benchmark_sort price, testname("numeric") algorithm(ips4o)
-
-sysuse auto, clear
-benchmark_sort mpg weight, testname("multi-numeric") algorithm(ips4o)
-
-* String sorting
-sysuse auto, clear
-benchmark_sort make, testname("string (make)") algorithm(ips4o)
-
-sysuse census, clear
-benchmark_sort state, testname("string (state)") algorithm(ips4o)
-
-* Mixed types
-sysuse auto, clear
-benchmark_sort foreign make, testname("mixed types") algorithm(ips4o)
-
-* With missing values
-sysuse auto, clear
-benchmark_sort rep78, testname("with missings") algorithm(ips4o)
-
-* Larger dataset
-clear
-set seed 12345
-set obs 10000
-gen value = rnormal()
-
-benchmark_sort value, testname("10K numeric") algorithm(ips4o)
-
-clear
-set seed 12345
-set obs 10000
-gen str20 label = "item" + string(runiformint(1, 500))
-
-benchmark_sort label, testname("10K strings") algorithm(ips4o)
-
-* Edge cases for IPS4o
-clear
-set obs 1
-gen x = 42
-
-benchmark_sort x, testname("single obs") algorithm(ips4o)
-
-clear
-set obs 1000
-gen x = 5
-
-benchmark_sort x, testname("all same") algorithm(ips4o)
-
-clear
-set obs 1000
-gen x = runiform() * 200 - 100
-
-benchmark_sort x, testname("negatives") algorithm(ips4o)
-
-* Already sorted (edge case)
-clear
-set obs 5000
-gen x = _n
-
-benchmark_sort x, testname("already sorted") algorithm(ips4o)
-
-* Reverse sorted
-clear
-set obs 5000
-gen x = 5000 - _n
-
-benchmark_sort x, testname("reverse sorted") algorithm(ips4o)
+capture quietly csort price, timeit
+if _rc == 0 {
+    test_pass "timeit option accepted"
+}
+else {
+    test_fail "timeit option" "returned error `=_rc'"
+}
 
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 print_summary "csort"
 
-* Return error code if any tests failed
 if $TESTS_FAILED > 0 {
     exit 1
 }

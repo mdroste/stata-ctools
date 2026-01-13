@@ -50,18 +50,50 @@ void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
     /* Compute initial beta via OLS: beta = (X'X)^{-1} X'y */
     /* This gives a good starting point close to the solution */
 
-    /* Compute X'X */
+    /* Compute X'X with 8x loop unrolling */
+    ST_int N8 = N - (N & 7);
     memset(ipm->XDX, 0, K * K * sizeof(ST_double));
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
-        for (ST_int k = j; k < K; k++) {
+        /* Diagonal with 8x unrolling */
+        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+        for (i = 0; i < N8; i += 8) {
+            d0 += Xj[i]     * Xj[i];
+            d1 += Xj[i + 1] * Xj[i + 1];
+            d2 += Xj[i + 2] * Xj[i + 2];
+            d3 += Xj[i + 3] * Xj[i + 3];
+            d4 += Xj[i + 4] * Xj[i + 4];
+            d5 += Xj[i + 5] * Xj[i + 5];
+            d6 += Xj[i + 6] * Xj[i + 6];
+            d7 += Xj[i + 7] * Xj[i + 7];
+        }
+        for (; i < N; i++) {
+            d0 += Xj[i] * Xj[i];
+        }
+        ipm->XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
+
+        /* Off-diagonal with 8x unrolling */
+        for (ST_int k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[k * N];
-            ST_double sum = 0.0;
-            for (i = 0; i < N; i++) {
-                sum += Xj[i] * Xk[i];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                s0 += Xj[i]     * Xk[i];
+                s1 += Xj[i + 1] * Xk[i + 1];
+                s2 += Xj[i + 2] * Xk[i + 2];
+                s3 += Xj[i + 3] * Xk[i + 3];
+                s4 += Xj[i + 4] * Xk[i + 4];
+                s5 += Xj[i + 5] * Xk[i + 5];
+                s6 += Xj[i + 6] * Xk[i + 6];
+                s7 += Xj[i + 7] * Xk[i + 7];
             }
-            ipm->XDX[j * K + k] = sum;
-            ipm->XDX[k * K + j] = sum;
+            for (; i < N; i++) {
+                s0 += Xj[i] * Xk[i];
+            }
+            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            ipm->XDX[j * K + k] = total;
+            ipm->XDX[k * K + j] = total;
         }
     }
 
@@ -560,7 +592,7 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
     ST_int iter;
     ST_int N = ipm->N;
     ST_int K = ipm->K;
-    ST_int i, j, k;
+    ST_int i, j;
 
     if (ipm == NULL || y == NULL || X == NULL || beta == NULL) {
         return -1;
@@ -657,72 +689,80 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
         }
 
         /* Form weighted normal equations: (X'WX) Δβ = X'g
-         * Using 8x loop unrolling for better CPU pipelining */
+         * Parallelized across columns with 8x loop unrolling for CPU pipelining */
         memset(ipm->XDX, 0, K * K * sizeof(ST_double));
         ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
 
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(dynamic) if(K > 2 && N > 1000)
+        #endif
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
+            ST_int ii;
 
             /* Diagonal element with 8x unrolling */
             ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
             ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                d0 += w[i]     * Xj[i]     * Xj[i];
-                d1 += w[i + 1] * Xj[i + 1] * Xj[i + 1];
-                d2 += w[i + 2] * Xj[i + 2] * Xj[i + 2];
-                d3 += w[i + 3] * Xj[i + 3] * Xj[i + 3];
-                d4 += w[i + 4] * Xj[i + 4] * Xj[i + 4];
-                d5 += w[i + 5] * Xj[i + 5] * Xj[i + 5];
-                d6 += w[i + 6] * Xj[i + 6] * Xj[i + 6];
-                d7 += w[i + 7] * Xj[i + 7] * Xj[i + 7];
+            for (ii = 0; ii < N8; ii += 8) {
+                d0 += w[ii]     * Xj[ii]     * Xj[ii];
+                d1 += w[ii + 1] * Xj[ii + 1] * Xj[ii + 1];
+                d2 += w[ii + 2] * Xj[ii + 2] * Xj[ii + 2];
+                d3 += w[ii + 3] * Xj[ii + 3] * Xj[ii + 3];
+                d4 += w[ii + 4] * Xj[ii + 4] * Xj[ii + 4];
+                d5 += w[ii + 5] * Xj[ii + 5] * Xj[ii + 5];
+                d6 += w[ii + 6] * Xj[ii + 6] * Xj[ii + 6];
+                d7 += w[ii + 7] * Xj[ii + 7] * Xj[ii + 7];
             }
-            for (i = N8; i < N; i++) {
-                d0 += w[i] * Xj[i] * Xj[i];
+            for (ii = N8; ii < N; ii++) {
+                d0 += w[ii] * Xj[ii] * Xj[ii];
             }
             ipm->XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7)) + 1e-10;
 
             /* Off-diagonal elements with 8x unrolling */
-            for (k = j + 1; k < K; k++) {
-                const ST_double *Xk = &X[k * N];
+            for (ST_int kk = j + 1; kk < K; kk++) {
+                const ST_double *Xk = &X[kk * N];
                 ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
                 ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-                for (i = 0; i < N8; i += 8) {
-                    s0 += w[i]     * Xj[i]     * Xk[i];
-                    s1 += w[i + 1] * Xj[i + 1] * Xk[i + 1];
-                    s2 += w[i + 2] * Xj[i + 2] * Xk[i + 2];
-                    s3 += w[i + 3] * Xj[i + 3] * Xk[i + 3];
-                    s4 += w[i + 4] * Xj[i + 4] * Xk[i + 4];
-                    s5 += w[i + 5] * Xj[i + 5] * Xk[i + 5];
-                    s6 += w[i + 6] * Xj[i + 6] * Xk[i + 6];
-                    s7 += w[i + 7] * Xj[i + 7] * Xk[i + 7];
+                for (ii = 0; ii < N8; ii += 8) {
+                    s0 += w[ii]     * Xj[ii]     * Xk[ii];
+                    s1 += w[ii + 1] * Xj[ii + 1] * Xk[ii + 1];
+                    s2 += w[ii + 2] * Xj[ii + 2] * Xk[ii + 2];
+                    s3 += w[ii + 3] * Xj[ii + 3] * Xk[ii + 3];
+                    s4 += w[ii + 4] * Xj[ii + 4] * Xk[ii + 4];
+                    s5 += w[ii + 5] * Xj[ii + 5] * Xk[ii + 5];
+                    s6 += w[ii + 6] * Xj[ii + 6] * Xk[ii + 6];
+                    s7 += w[ii + 7] * Xj[ii + 7] * Xk[ii + 7];
                 }
-                for (i = N8; i < N; i++) {
-                    s0 += w[i] * Xj[i] * Xk[i];
+                for (ii = N8; ii < N; ii++) {
+                    s0 += w[ii] * Xj[ii] * Xk[ii];
                 }
                 ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
-                ipm->XDX[j * K + k] = total;
-                ipm->XDX[k * K + j] = total;
+                ipm->XDX[j * K + kk] = total;
+                ipm->XDX[kk * K + j] = total;
             }
         }
 
-        /* Compute X'g with 8x unrolling */
+        /* Compute X'g with 8x unrolling - parallelized */
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(static) if(K > 2 && N > 1000)
+        #endif
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
+            ST_int ii;
             ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
             ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                s0 += Xj[i]     * g[i];
-                s1 += Xj[i + 1] * g[i + 1];
-                s2 += Xj[i + 2] * g[i + 2];
-                s3 += Xj[i + 3] * g[i + 3];
-                s4 += Xj[i + 4] * g[i + 4];
-                s5 += Xj[i + 5] * g[i + 5];
-                s6 += Xj[i + 6] * g[i + 6];
-                s7 += Xj[i + 7] * g[i + 7];
+            for (ii = 0; ii < N8; ii += 8) {
+                s0 += Xj[ii]     * g[ii];
+                s1 += Xj[ii + 1] * g[ii + 1];
+                s2 += Xj[ii + 2] * g[ii + 2];
+                s3 += Xj[ii + 3] * g[ii + 3];
+                s4 += Xj[ii + 4] * g[ii + 4];
+                s5 += Xj[ii + 5] * g[ii + 5];
+                s6 += Xj[ii + 6] * g[ii + 6];
+                s7 += Xj[ii + 7] * g[ii + 7];
             }
-            for (i = N8; i < N; i++) {
-                s0 += Xj[i] * g[i];
+            for (ii = N8; ii < N; ii++) {
+                s0 += Xj[ii] * g[ii];
             }
             ipm->delta_beta[j] = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
         }
@@ -749,23 +789,61 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
         }
 
         /* Line search with backtracking
-         * New residual = old_residual - alpha * X * delta_beta */
+         * New residual = old_residual - alpha * X * delta_beta
+         * OPTIMIZED: 8x loop unrolling for vectorization */
         ST_double alpha = 1.0;
         ST_double obj_new;
         for (ST_int ls = 0; ls < 20; ls++) {
-            /* Compute new objective using cached X*delta_beta */
-            obj_new = 0.0;
-            for (i = 0; i < N; i++) {
-                ST_double r = ipm->r_primal[i] - alpha * X_delta_beta[i];
+            /* Compute new objective using cached X*delta_beta with 8x unrolling */
+            ST_double obj0 = 0.0, obj1 = 0.0, obj2 = 0.0, obj3 = 0.0;
+            ST_double obj4 = 0.0, obj5 = 0.0, obj6 = 0.0, obj7 = 0.0;
+            ST_int ii;
+
+            for (ii = 0; ii < N8; ii += 8) {
+                /* Unroll 8 iterations for ILP */
+                ST_double r0 = ipm->r_primal[ii]     - alpha * X_delta_beta[ii];
+                ST_double r1 = ipm->r_primal[ii + 1] - alpha * X_delta_beta[ii + 1];
+                ST_double r2 = ipm->r_primal[ii + 2] - alpha * X_delta_beta[ii + 2];
+                ST_double r3 = ipm->r_primal[ii + 3] - alpha * X_delta_beta[ii + 3];
+                ST_double r4 = ipm->r_primal[ii + 4] - alpha * X_delta_beta[ii + 4];
+                ST_double r5 = ipm->r_primal[ii + 5] - alpha * X_delta_beta[ii + 5];
+                ST_double r6 = ipm->r_primal[ii + 6] - alpha * X_delta_beta[ii + 6];
+                ST_double r7 = ipm->r_primal[ii + 7] - alpha * X_delta_beta[ii + 7];
+
+                ST_double z0 = -r0 * inv_mu, z1 = -r1 * inv_mu;
+                ST_double z2 = -r2 * inv_mu, z3 = -r3 * inv_mu;
+                ST_double z4 = -r4 * inv_mu, z5 = -r5 * inv_mu;
+                ST_double z6 = -r6 * inv_mu, z7 = -r7 * inv_mu;
+
+                /* Branchless approximation for log(1+exp(z)) in typical range */
+                #define LS_CONTRIB(r_val, z_val) \
+                    ((z_val > 20.0) ? (q * r_val + mu * z_val) : \
+                     ((z_val < -20.0) ? (q * r_val) : \
+                      (q * r_val + mu * log(1.0 + exp(z_val)))))
+
+                obj0 += LS_CONTRIB(r0, z0);
+                obj1 += LS_CONTRIB(r1, z1);
+                obj2 += LS_CONTRIB(r2, z2);
+                obj3 += LS_CONTRIB(r3, z3);
+                obj4 += LS_CONTRIB(r4, z4);
+                obj5 += LS_CONTRIB(r5, z5);
+                obj6 += LS_CONTRIB(r6, z6);
+                obj7 += LS_CONTRIB(r7, z7);
+                #undef LS_CONTRIB
+            }
+            /* Remainder loop */
+            for (; ii < N; ii++) {
+                ST_double r = ipm->r_primal[ii] - alpha * X_delta_beta[ii];
                 ST_double z = -r * inv_mu;
                 if (z > 20.0) {
-                    obj_new += q * r + mu * z;
+                    obj0 += q * r + mu * z;
                 } else if (z < -20.0) {
-                    obj_new += q * r;
+                    obj0 += q * r;
                 } else {
-                    obj_new += q * r + mu * log(1.0 + exp(z));
+                    obj0 += q * r + mu * log(1.0 + exp(z));
                 }
             }
+            obj_new = ((obj0 + obj4) + (obj1 + obj5)) + ((obj2 + obj6) + (obj3 + obj7));
 
             if (obj_new < obj + 1e-4 * alpha * delta_norm_sq) {
                 break;  /* Sufficient decrease */

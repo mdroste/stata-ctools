@@ -479,6 +479,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     for (g = 0; g < G; g++) {
         g_state->factors[g].num_levels = factors[g].num_levels;
+        g_state->factors[g].max_level = factors[g].num_levels - 1;  /* Remapped levels are 0 to n-1 */
         g_state->factors[g].has_intercept = 1;
         g_state->factors[g].levels = (ST_int *)malloc(N * sizeof(ST_int));
         g_state->factors[g].counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));

@@ -4,25 +4,26 @@
 
 High-performance C-accelerated drop-in replacements for Stata commands.
 
+** This is an initial release. This software has not been widely tested. Please report any bugs you encounter on Github Issues.**
+
 ## Overview
 
-**ctools** is a set of drop-in replacements for Stata programs. These programs inherit the syntax and functionality of each program that they replace, but are typically much faster for large datasets.
+**ctools** is a set of drop-in replacements for a variety of Stata programs. **ctools** programs inherit the syntax and functionality of the programs they replace, but are usually much faster for large datasets.
 
 **ctools** includes replacements for the following Stata programs:
 
 | Stata command | ctools command | Purpose | Typical speedup |
 | --- | --- | --- | ---: |
-| `sort` | `csort` | Sort dataset | **1-5x** |
-| `import delimited` | `cimport delimited` | Import CSV/TSV files | **50x** |
-| `export delimited` | `cexport delimited` | Export CSV/TSV files | **25x** |
-| `merge` | `cmerge` | Merge (join) datasets | **2-5x** |
-| `reghdfe` | `creghdfe` | High-dimensional FE regression | **10-20x** |
-| `ivreghdfe` | `civreghdfe` | High-dimensional FE IV (2SLS) regression | **10-20x** |
-| `qreg` | `cqreg` | Quantile regression | **4x** |
+| `import delimited` | `cimport delimited` | Import text-delimited files | **40x** |
+| `export delimited` | `cexport delimited` | Export text-delimited files | **25x** |
+| `sort` | `csort` | Sort dataset | **1-6x** |
+| `merge` | `cmerge` | Merge (join) datasets | **2-8x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **30x+** |
-| `ivreghdfe` | `civreghdfe` | IV regression with HDFE | **10-20x** |
+| `reghdfe` | `creghdfe` | OLS with high-dimensional fixed effects | **10-20x** |
+| `ivreghdfe` | `civreghdfe` | 2SLS with high-dimensional fixed effects | **10-20x** |
+| `qreg` | `cqreg` | Quantile regression | **4x** |
 
-Each of these programs is comprised of a wrapper ado file and plugin written in C. 
+Each of these programs is implemented with its own Stata .ado file (and internal .sthlp documentation).
 
 
 ## Installation
@@ -52,22 +53,24 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-## Authorship of this Program
+## Usage Notes
 
-Ctools contains >30k lines of code C code and ~4k lines of Stata code; 99.99% of this was written by Claude Code with Opus 4.5. 
-
-
-## Performance Notes
-
-- All commands use OpenMP for parallel computation when available.
-- All commands attempt to use the same few tricks to speed up computation where possible: 8-way or 16-way loop unrolling, SIMD vectorisation and OpenMP parallelization where appropriate. 
-- ctools works by transporting a copy of your data into C (and, depending on the program, possibly from C back to Stata). This means that you need a comfortable amount of memory (RAM) to run these programs. 
-- If your CPU has an exceptionally large L3 cache, you might try to mess with ctools_config.h to see if more aggressive prefetching buys you speed. 
+- Some of these programs have I/O overhead involved in transporting data from Stata to C. This matters for you in two ways. First, it means that using --ctools-- requires more memory (RAM) than built-in Stata command, particularly for -csort- and -cmerge- which tend to require loading all variables / many variables into memory (cqreg, creghdfe, binscatter etc. only pull in what is needed). In addition, this IO overhead means that -csort- and -cmerge- in particular will run faster when there are fewer variables in memory. 
+- The Stata function interface is limited to working with datasets with fewer than 2^32-1 observations (about 2.147 billion). This is a [known limitation]() of the Stata function interface for C plugins. 
+- csort includes an additional option (algorithm) allowing you to choose a handful of sorting algorithms, as described in the internal help.
 
 ## Compatibility
 
-- Stata 14.0 or later
-- Windows (x64), macOS (Intel and Apple Silicon), Linux (x64)
+- Stata 14.0+
+
+## Authorship
+
+99.9% of the code for ctools repository was written using Claude Opus 4.5 and Claude Code. by Claude Opus 4.5 using Claude Code.
+
+## Thanks
+
+Thanks to [Sergio Correa](https://github.com/sergiocorrea) for creating -[ftools](https://github.com/sergiocorrea/ftools)- and [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating -[gtools](https://github.com/mcaceresb/gtools)-. 
+
 
 ## License
 

@@ -39,7 +39,8 @@
  * ======================================================================== */
 
 typedef struct {
-    ST_int num_levels;
+    ST_int num_levels;           /* Number of unique levels (for df calculation) */
+    ST_int max_level;            /* Maximum level value (for array indexing) */
     ST_int has_intercept;
     ST_int num_slopes;
     ST_int *levels;

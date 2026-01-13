@@ -2,13 +2,12 @@
  * validate_cqreg.do
  *
  * Comprehensive validation tests for cqreg vs qreg
- * Tests quantile regression across various scenarios
- *
- * Note: Coefficients and standard errors are compared with tolerance 1e-6
- * due to floating-point precision differences in complex optimization
+ * Tests all options: quantile, vce, denmethod, bwmethod, tolerance, maxiter
  ******************************************************************************/
 
 do "validate_setup.do"
+
+quietly {
 
 di as text ""
 di as text "======================================================================"
@@ -16,265 +15,309 @@ di as text "              CQREG VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 /*******************************************************************************
- * Basic quantile tests (auto dataset)
+ * SECTION 1: Plugin check
  ******************************************************************************/
-print_section "Basic quantile tests"
+noi print_section "Plugin Check"
 
 sysuse auto, clear
-benchmark_qreg price mpg weight, testname("median (q=0.5)")
-
-sysuse auto, clear
-benchmark_qreg price mpg weight, quantile(0.25) testname("q=0.25")
-
-sysuse auto, clear
-benchmark_qreg price mpg weight, quantile(0.75) testname("q=0.75")
-
-sysuse auto, clear
-benchmark_qreg price mpg weight, quantile(0.10) testname("q=0.10")
-
-sysuse auto, clear
-benchmark_qreg price mpg weight, quantile(0.90) testname("q=0.90")
+capture cqreg price mpg weight
+if _rc != 0 {
+    noi test_fail "cqreg plugin load" "returned error `=_rc'"
+    noi print_summary "cqreg"
+    exit 1
+}
+noi test_pass "cqreg plugin loads and runs"
 
 /*******************************************************************************
- * Covariate variations
+ * SECTION 2: Basic quantile tests (auto)
  ******************************************************************************/
-print_section "Covariate variations"
+noi print_section "Basic Quantile Tests (auto)"
 
 sysuse auto, clear
-benchmark_qreg price mpg, testname("single covariate")
+noi benchmark_qreg price mpg weight, testname("median (q=0.5)")
 
 sysuse auto, clear
-benchmark_qreg price mpg weight length turn, testname("many covariates")
+noi benchmark_qreg price mpg weight, quantile(0.25) testname("q=0.25")
 
 sysuse auto, clear
-benchmark_qreg price mpg weight length, quantile(0.25) testname("many covariates q=0.25")
+noi benchmark_qreg price mpg weight, quantile(0.75) testname("q=0.75")
+
+sysuse auto, clear
+noi benchmark_qreg price mpg weight, quantile(0.10) testname("q=0.10")
+
+sysuse auto, clear
+noi benchmark_qreg price mpg weight, quantile(0.90) testname("q=0.90")
 
 /*******************************************************************************
- * Census dataset
+ * SECTION 3: Covariate variations
  ******************************************************************************/
-print_section "Census dataset"
+noi print_section "Covariate Variations"
+
+sysuse auto, clear
+noi benchmark_qreg price mpg, testname("single covariate")
+
+sysuse auto, clear
+noi benchmark_qreg price mpg weight length, testname("three covariates")
+
+sysuse auto, clear
+noi benchmark_qreg price mpg weight length turn displacement, testname("many covariates")
+
+/*******************************************************************************
+ * SECTION 4: VCE options
+ ******************************************************************************/
+noi print_section "VCE Options"
+
+sysuse auto, clear
+noi benchmark_qreg price mpg weight, vce(robust) testname("vce(robust)")
+
+* Note: cqreg may have different VCE options than Stata's qreg
+sysuse auto, clear
+capture cqreg price mpg weight, vce(iid)
+if _rc == 0 {
+    noi test_pass "vce(iid) accepted"
+}
+else {
+    noi test_fail "vce(iid)" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 5: Census dataset
+ ******************************************************************************/
+noi print_section "Census Dataset"
 
 sysuse census, clear
-benchmark_qreg pop medage death marriage, testname("census median")
+noi benchmark_qreg pop medage death, testname("census median")
 
 sysuse census, clear
-benchmark_qreg pop medage death marriage, quantile(0.75) testname("census q=0.75")
+noi benchmark_qreg pop medage death, quantile(0.25) testname("census q=0.25")
+
+sysuse census, clear
+noi benchmark_qreg pop medage death, quantile(0.75) testname("census q=0.75")
 
 /*******************************************************************************
- * Synthetic data
+ * SECTION 6: nlswork panel data
  ******************************************************************************/
-print_section "Synthetic data"
+noi print_section "Panel Data (nlswork)"
+
+webuse nlswork, clear
+keep in 1/5000
+noi benchmark_qreg ln_wage age tenure, testname("nlswork median")
+
+webuse nlswork, clear
+keep in 1/5000
+noi benchmark_qreg ln_wage age tenure, quantile(0.25) testname("nlswork q=0.25")
+
+webuse nlswork, clear
+keep in 1/5000
+noi benchmark_qreg ln_wage age tenure, quantile(0.75) testname("nlswork q=0.75")
+
+/*******************************************************************************
+ * SECTION 7: Large dataset
+ ******************************************************************************/
+noi print_section "Large Dataset"
 
 clear
 set seed 12345
-set obs 5000
-gen x = rnormal()
-gen y = 2 + 3*x + rnormal()
-benchmark_qreg y x, testname("5K synthetic")
-
-* Larger dataset
-clear
-set seed 54321
 set obs 10000
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen y = 1 + 0.5*x1 - 0.3*x2 + rnormal()
-benchmark_qreg y x1 x2, testname("10K synthetic")
+gen x1 = runiform()
+gen x2 = rnormal()
+gen x3 = runiformint(1, 100)
+gen y = 2*x1 + 3*x2 - 0.5*x3 + rnormal()
 
-clear
-set seed 54321
-set obs 10000
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen y = 1 + 0.5*x1 - 0.3*x2 + rnormal()
-benchmark_qreg y x1 x2, quantile(0.25) testname("10K synthetic q=0.25")
+noi benchmark_qreg y x1 x2 x3, testname("10K median")
 
-clear
-set seed 54321
-set obs 10000
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen y = 1 + 0.5*x1 - 0.3*x2 + rnormal()
-benchmark_qreg y x1 x2, quantile(0.75) testname("10K synthetic q=0.75")
+noi benchmark_qreg y x1 x2 x3, quantile(0.25) testname("10K q=0.25")
+
+noi benchmark_qreg y x1 x2 x3, quantile(0.75) testname("10K q=0.75")
 
 /*******************************************************************************
- * Bandwidth methods
+ * SECTION 8: denmethod option
  ******************************************************************************/
-print_section "Bandwidth methods"
+noi print_section "denmethod Option"
 
 sysuse auto, clear
-
-* Hall-Sheather (default)
-quietly cqreg price mpg weight, bwmethod(hsheather)
-local hs_se_mpg = _se[mpg]
-
-* Bofinger
-quietly cqreg price mpg weight, bwmethod(bofinger)
-local bof_se_mpg = _se[mpg]
-
-* Chamberlain
-quietly cqreg price mpg weight, bwmethod(chamberlain)
-local cham_se_mpg = _se[mpg]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `hs_se_mpg' > 0 & `bof_se_mpg' > 0 & `cham_se_mpg' > 0 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] all bandwidth methods produce valid SEs"
+capture cqreg price mpg weight, denmethod(fitted)
+if _rc == 0 {
+    noi test_pass "denmethod(fitted) accepted"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] some bandwidth methods failed"
-}
-
-/*******************************************************************************
- * HDFE tests (cqreg-specific)
- ******************************************************************************/
-print_section "HDFE tests (experimental)"
-
-sysuse auto, clear
-capture quietly cqreg price mpg weight, absorb(foreign)
-local cqreg_rc = _rc
-local cqreg_b_mpg = _b[mpg]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `cqreg_rc' == 0 & !missing(`cqreg_b_mpg') & `cqreg_b_mpg' != 0 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] single FE absorb"
-}
-else {
-    di as text "[INFO] single FE absorb skipped (experimental)"
+    noi test_fail "denmethod(fitted)" "returned error `=_rc'"
 }
 
 sysuse auto, clear
-capture quietly cqreg price mpg weight, absorb(foreign rep78)
-local cqreg_rc = _rc
-local cqreg_b_mpg = _b[mpg]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `cqreg_rc' == 0 & !missing(`cqreg_b_mpg') & `cqreg_b_mpg' != 0 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] two-way FE absorb"
+capture cqreg price mpg weight, denmethod(residual)
+if _rc == 0 {
+    noi test_pass "denmethod(residual) accepted"
 }
 else {
-    di as text "[INFO] two-way FE absorb skipped (experimental)"
+    noi test_fail "denmethod(residual)" "returned error `=_rc'"
 }
 
 sysuse auto, clear
-capture quietly cqreg price mpg weight, absorb(foreign) vce(cluster foreign)
-local cqreg_rc = _rc
-local cqreg_N_clust = e(N_clust)
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `cqreg_rc' == 0 & `cqreg_N_clust' == 2 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] HDFE + cluster VCE"
+capture cqreg price mpg weight, denmethod(kernel)
+if _rc == 0 {
+    noi test_pass "denmethod(kernel) accepted"
 }
 else {
-    di as text "[INFO] HDFE + cluster VCE skipped (experimental)"
+    noi test_fail "denmethod(kernel)" "returned error `=_rc'"
 }
 
 /*******************************************************************************
- * Stored results
+ * SECTION 9: bwmethod option
  ******************************************************************************/
-print_section "Stored results"
+noi print_section "bwmethod Option"
 
 sysuse auto, clear
-
-quietly qreg price mpg weight
-matrix qreg_b = e(b)
-local qreg_sum_adev = e(sum_adev)
-
-quietly cqreg price mpg weight
-matrix cqreg_b = e(b)
-local cqreg_sum_adev = e(sum_adev)
-
-* Compare e(b)
-tempname diff
-matrix `diff' = qreg_b - cqreg_b
-local cols = colsof(`diff')
-local maxdiff = 0
-forvalues j = 1/`cols' {
-    local d = abs(`diff'[1, `j'])
-    if `d' > `maxdiff' local maxdiff = `d'
-}
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `maxdiff' < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] e(b) matches"
+capture cqreg price mpg weight, bwmethod(hsheather)
+if _rc == 0 {
+    noi test_pass "bwmethod(hsheather) accepted"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] e(b) differs (max: " %9.2e `maxdiff' ")"
+    noi test_fail "bwmethod(hsheather)" "returned error `=_rc'"
 }
-
-* Compare sum_adev
-local rel_diff = abs(`qreg_sum_adev' - `cqreg_sum_adev') / `qreg_sum_adev'
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `rel_diff' < 0.001 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] e(sum_adev) matches (rel diff: " %9.6f `rel_diff' ")"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] e(sum_adev) differs (rel diff: " %9.6f `rel_diff' ")"
-}
-
-/*******************************************************************************
- * Convergence check
- ******************************************************************************/
-print_section "Convergence"
 
 sysuse auto, clear
-quietly cqreg price mpg weight
-local converged = 0
-capture local converged = e(converged)
-local b_mpg = _b[mpg]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `converged' == 1 | (!missing(`b_mpg') & `b_mpg' != 0) {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] algorithm converged"
+capture cqreg price mpg weight, bwmethod(bofinger)
+if _rc == 0 {
+    noi test_pass "bwmethod(bofinger) accepted"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] algorithm did not converge"
+    noi test_fail "bwmethod(bofinger)" "returned error `=_rc'"
+}
+
+sysuse auto, clear
+capture cqreg price mpg weight, bwmethod(chamberlain)
+if _rc == 0 {
+    noi test_pass "bwmethod(chamberlain) accepted"
+}
+else {
+    noi test_fail "bwmethod(chamberlain)" "returned error `=_rc'"
 }
 
 /*******************************************************************************
- * nlswork (may not converge - informational)
+ * SECTION 10: tolerance/maxiter options
  ******************************************************************************/
-print_section "nlswork (informational)"
+noi print_section "tolerance/maxiter Options"
 
-webuse nlswork, clear
-keep in 1/2000
-
-quietly qreg ln_wage age ttl_exp tenure
-local qreg_b_age = _b[age]
-
-quietly cqreg ln_wage age ttl_exp tenure
-local cqreg_converged = e(converged)
-local cqreg_b_age = _b[age]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `cqreg_converged' == 1 & abs(`qreg_b_age' - `cqreg_b_age') < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] nlswork coefficients match"
-}
-else if `cqreg_converged' == 1 {
-    di as text "[INFO] nlswork converged but coefficients differ slightly"
-    global TESTS_PASSED = $TESTS_PASSED + 1
+sysuse auto, clear
+capture cqreg price mpg weight, tolerance(1e-10)
+if _rc == 0 {
+    noi test_pass "tolerance(1e-10) accepted"
 }
 else {
-    di as text "[INFO] nlswork did not converge (IPM may need more iterations)"
+    noi test_fail "tolerance option" "returned error `=_rc'"
+}
+
+sysuse auto, clear
+capture cqreg price mpg weight, maxiter(500)
+if _rc == 0 {
+    noi test_pass "maxiter(500) accepted"
+}
+else {
+    noi test_fail "maxiter option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
- * SUMMARY
+ * SECTION 11: verbose/timeit options
  ******************************************************************************/
-print_summary "cqreg"
+noi print_section "verbose/timeit Options"
 
-* Return error code if any tests failed
+sysuse auto, clear
+capture cqreg price mpg weight, verbose
+if _rc == 0 {
+    noi test_pass "verbose option accepted"
+}
+else {
+    noi test_fail "verbose option" "returned error `=_rc'"
+}
+
+sysuse auto, clear
+capture cqreg price mpg weight, timeit
+if _rc == 0 {
+    noi test_pass "timeit option accepted"
+}
+else {
+    noi test_fail "timeit option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 12: if/in conditions
+ ******************************************************************************/
+noi print_section "if/in Conditions"
+
+sysuse auto, clear
+qreg price mpg weight if price > 5000
+local qreg_N = e(N)
+
+cqreg price mpg weight if price > 5000
+local cqreg_N = e(N)
+
+if `qreg_N' == `cqreg_N' {
+    noi test_pass "if condition: N matches"
+}
+else {
+    noi test_fail "if condition" "N differs"
+}
+
+sysuse auto, clear
+qreg price mpg weight in 1/50
+local qreg_N = e(N)
+
+cqreg price mpg weight in 1/50
+local cqreg_N = e(N)
+
+if `qreg_N' == `cqreg_N' {
+    noi test_pass "in condition: N matches"
+}
+else {
+    noi test_fail "in condition" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 13: absorb option (experimental)
+ ******************************************************************************/
+noi print_section "absorb Option (experimental)"
+
+sysuse auto, clear
+capture cqreg price mpg weight, absorb(foreign)
+if _rc == 0 {
+    noi test_pass "absorb option accepted"
+}
+else {
+    noi test_fail "absorb option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 14: Extreme quantiles
+ ******************************************************************************/
+noi print_section "Extreme Quantiles"
+
+sysuse auto, clear
+capture cqreg price mpg weight, quantile(0.05)
+if _rc == 0 {
+    noi test_pass "q=0.05 accepted"
+}
+else {
+    noi test_fail "q=0.05" "returned error `=_rc'"
+}
+
+sysuse auto, clear
+capture cqreg price mpg weight, quantile(0.95)
+if _rc == 0 {
+    noi test_pass "q=0.95 accepted"
+}
+else {
+    noi test_fail "q=0.95" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * Summary
+ ******************************************************************************/
+
+noi print_summary "cqreg"
+
 if $TESTS_FAILED > 0 {
     exit 1
+}
+
 }

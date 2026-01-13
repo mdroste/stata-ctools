@@ -241,12 +241,11 @@ program define cexport, rclass
         }
     }
 
-    timer clear
-
     * Return results
     return scalar N = `nobs'
     return scalar k = `nvars'
     return scalar time = `elapsed'
     return local filename `"`using'"'
 
+    timer clear 99
 end

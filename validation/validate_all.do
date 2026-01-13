@@ -10,7 +10,11 @@
  * Individual tests can also be run separately:
  *   stata -b do validation/validate_csort.do
  *   stata -b do validation/validate_cmerge.do
- *   etc.
+ *   stata -b do validation/validate_cimport.do
+ *   stata -b do validation/validate_cexport.do
+ *   stata -b do validation/validate_creghdfe.do
+ *   stata -b do validation/validate_cqreg.do
+ *   stata -b do validation/validate_civreghdfe.do
  ******************************************************************************/
 
 version 14.0
@@ -38,6 +42,9 @@ local total_passed = 0
 local total_failed = 0
 local total_tests = 0
 
+* Track all failures across all components
+local all_failures = ""
+
 * Create temp directory
 capture mkdir "validation/temp"
 
@@ -52,13 +59,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_csort.do"
 local csort_rc = _rc
 
-if `csort_rc' == 0 {
-    di as result "csort: ALL TESTS PASSED"
-}
-else {
-    di as error "csort: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -66,6 +66,22 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local csort_passed = $TESTS_PASSED
 local csort_failed = $TESTS_FAILED
 local csort_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [csort] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `csort_rc' == 0 & `csort_failed' == 0 {
+    di as result "csort: ALL TESTS PASSED (`csort_passed'/`csort_total')"
+}
+else {
+    di as error "csort: FAILED (`csort_failed' of `csort_total' tests failed)"
+}
 
 /*******************************************************************************
  * RUN CMERGE VALIDATION
@@ -78,13 +94,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_cmerge.do"
 local cmerge_rc = _rc
 
-if `cmerge_rc' == 0 {
-    di as result "cmerge: ALL TESTS PASSED"
-}
-else {
-    di as error "cmerge: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -92,6 +101,22 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local cmerge_passed = $TESTS_PASSED
 local cmerge_failed = $TESTS_FAILED
 local cmerge_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cmerge] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cmerge_rc' == 0 & `cmerge_failed' == 0 {
+    di as result "cmerge: ALL TESTS PASSED (`cmerge_passed'/`cmerge_total')"
+}
+else {
+    di as error "cmerge: FAILED (`cmerge_failed' of `cmerge_total' tests failed)"
+}
 
 /*******************************************************************************
  * RUN CIMPORT VALIDATION
@@ -104,13 +129,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_cimport.do"
 local cimport_rc = _rc
 
-if `cimport_rc' == 0 {
-    di as result "cimport: ALL TESTS PASSED"
-}
-else {
-    di as error "cimport: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -118,6 +136,22 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local cimport_passed = $TESTS_PASSED
 local cimport_failed = $TESTS_FAILED
 local cimport_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cimport] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cimport_rc' == 0 & `cimport_failed' == 0 {
+    di as result "cimport: ALL TESTS PASSED (`cimport_passed'/`cimport_total')"
+}
+else {
+    di as error "cimport: FAILED (`cimport_failed' of `cimport_total' tests failed)"
+}
 
 /*******************************************************************************
  * RUN CEXPORT VALIDATION
@@ -130,13 +164,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_cexport.do"
 local cexport_rc = _rc
 
-if `cexport_rc' == 0 {
-    di as result "cexport: ALL TESTS PASSED"
-}
-else {
-    di as error "cexport: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -144,6 +171,22 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local cexport_passed = $TESTS_PASSED
 local cexport_failed = $TESTS_FAILED
 local cexport_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cexport] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cexport_rc' == 0 & `cexport_failed' == 0 {
+    di as result "cexport: ALL TESTS PASSED (`cexport_passed'/`cexport_total')"
+}
+else {
+    di as error "cexport: FAILED (`cexport_failed' of `cexport_total' tests failed)"
+}
 
 /*******************************************************************************
  * RUN CREGHDFE VALIDATION
@@ -156,13 +199,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_creghdfe.do"
 local creghdfe_rc = _rc
 
-if `creghdfe_rc' == 0 {
-    di as result "creghdfe: ALL TESTS PASSED"
-}
-else {
-    di as error "creghdfe: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -170,6 +206,22 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local creghdfe_passed = $TESTS_PASSED
 local creghdfe_failed = $TESTS_FAILED
 local creghdfe_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [creghdfe] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `creghdfe_rc' == 0 & `creghdfe_failed' == 0 {
+    di as result "creghdfe: ALL TESTS PASSED (`creghdfe_passed'/`creghdfe_total')"
+}
+else {
+    di as error "creghdfe: FAILED (`creghdfe_failed' of `creghdfe_total' tests failed)"
+}
 
 /*******************************************************************************
  * RUN CQREG VALIDATION
@@ -182,13 +234,6 @@ di as text "====================================================================
 capture noisily do "validation/validate_cqreg.do"
 local cqreg_rc = _rc
 
-if `cqreg_rc' == 0 {
-    di as result "cqreg: ALL TESTS PASSED"
-}
-else {
-    di as error "cqreg: SOME TESTS FAILED"
-}
-
 local total_passed = `total_passed' + $TESTS_PASSED
 local total_failed = `total_failed' + $TESTS_FAILED
 local total_tests = `total_tests' + $TESTS_TOTAL
@@ -196,6 +241,57 @@ local total_tests = `total_tests' + $TESTS_TOTAL
 local cqreg_passed = $TESTS_PASSED
 local cqreg_failed = $TESTS_FAILED
 local cqreg_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cqreg] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cqreg_rc' == 0 & `cqreg_failed' == 0 {
+    di as result "cqreg: ALL TESTS PASSED (`cqreg_passed'/`cqreg_total')"
+}
+else {
+    di as error "cqreg: FAILED (`cqreg_failed' of `cqreg_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CIVREGHDFE VALIDATION
+ ******************************************************************************/
+di as text ""
+di as text "======================================================================"
+di as text "  Running: civreghdfe validation tests"
+di as text "======================================================================"
+
+capture noisily do "validation/validate_civreghdfe.do"
+local civreghdfe_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local civreghdfe_passed = $TESTS_PASSED
+local civreghdfe_failed = $TESTS_FAILED
+local civreghdfe_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [civreghdfe] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `civreghdfe_rc' == 0 & `civreghdfe_failed' == 0 {
+    di as result "civreghdfe: ALL TESTS PASSED (`civreghdfe_passed'/`civreghdfe_total')"
+}
+else {
+    di as error "civreghdfe: FAILED (`civreghdfe_failed' of `civreghdfe_total' tests failed)"
+}
 
 /*******************************************************************************
  * FINAL SUMMARY
@@ -205,62 +301,81 @@ di as text "####################################################################
 di as text "#                     VALIDATION SUMMARY                             #"
 di as text "######################################################################"
 di as text ""
+
+* Show all failures if any
+if `total_failed' > 0 {
+    di as error "{hline 70}"
+    di as error "ALL FAILED TESTS:"
+    di as error "{hline 70}"
+    di as error `"`all_failures'"'
+    di as error "{hline 70}"
+    di as text ""
+}
+
 di as text "Component Results:"
-di as text "{hline 50}"
-di as text "  Command      Passed   Failed   Total    Status"
-di as text "{hline 50}"
+di as text "{hline 55}"
+di as text "  Command       Passed   Failed   Total    Status"
+di as text "{hline 55}"
 
 * csort
 if `csort_failed' == 0 {
-    di as text "  csort    " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as result "PASS"
+    di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as result "PASS"
 }
 else {
-    di as text "  csort    " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as error "FAIL"
+    di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as error "FAIL"
 }
 
 * cmerge
 if `cmerge_failed' == 0 {
-    di as text "  cmerge   " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as result "PASS"
+    di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as result "PASS"
 }
 else {
-    di as text "  cmerge   " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as error "FAIL"
+    di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as error "FAIL"
 }
 
 * cimport
 if `cimport_failed' == 0 {
-    di as text "  cimport  " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as result "PASS"
+    di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as result "PASS"
 }
 else {
-    di as text "  cimport  " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as error "FAIL"
+    di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as error "FAIL"
 }
 
 * cexport
 if `cexport_failed' == 0 {
-    di as text "  cexport  " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as result "PASS"
+    di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as result "PASS"
 }
 else {
-    di as text "  cexport  " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as error "FAIL"
+    di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as error "FAIL"
 }
 
 * creghdfe
 if `creghdfe_failed' == 0 {
-    di as text "  creghdfe " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as result "PASS"
+    di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as result "PASS"
 }
 else {
-    di as text "  creghdfe " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as error "FAIL"
+    di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as error "FAIL"
 }
 
 * cqreg
 if `cqreg_failed' == 0 {
-    di as text "  cqreg    " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as result "PASS"
+    di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as result "PASS"
 }
 else {
-    di as text "  cqreg    " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as error "FAIL"
+    di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as error "FAIL"
 }
 
-di as text "{hline 50}"
-di as text "  TOTAL    " %8.0f `total_passed' %8.0f `total_failed' %8.0f `total_tests'
-di as text "{hline 50}"
+* civreghdfe
+if `civreghdfe_failed' == 0 {
+    di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as result "PASS"
+}
+else {
+    di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as error "FAIL"
+}
+
+di as text "{hline 55}"
+di as text "  TOTAL      " %8.0f `total_passed' %8.0f `total_failed' %8.0f `total_tests'
+di as text "{hline 55}"
 di as text ""
 
 * Overall result
@@ -277,6 +392,8 @@ else {
     di as error "#                   SOME VALIDATION TESTS FAILED                     #"
     di as error "#                                                                    #"
     di as error "######################################################################"
+    di as error ""
+    di as error "See 'ALL FAILED TESTS' section above for details."
 }
 
 di as text ""

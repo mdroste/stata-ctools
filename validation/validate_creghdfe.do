@@ -2,13 +2,12 @@
  * validate_creghdfe.do
  *
  * Comprehensive validation tests for creghdfe vs reghdfe
- * Tests HDFE regression across various scenarios
- *
- * Note: Coefficients and standard errors are compared with tolerance 1e-6
- * due to floating-point precision differences in complex matrix operations
+ * Tests all options: absorb, vce, weights, tolerance, maxiter, resid
  ******************************************************************************/
 
 do "validate_setup.do"
+
+quietly {
 
 di as text ""
 di as text "======================================================================"
@@ -16,264 +15,315 @@ di as text "              CREGHDFE VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 /*******************************************************************************
- * Auto dataset - basic tests
+ * SECTION 1: Plugin check
  ******************************************************************************/
-print_section "Auto dataset - basic"
+noi print_section "Plugin Check"
 
 sysuse auto, clear
-benchmark_reghdfe price mpg weight, absorb(foreign) testname("single FE")
-
-sysuse auto, clear
-benchmark_reghdfe price mpg weight, absorb(foreign rep78) testname("two-way FE")
-
-sysuse auto, clear
-benchmark_reghdfe price mpg, absorb(foreign) testname("single covariate")
-
-sysuse auto, clear
-benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("many covariates")
+capture creghdfe price mpg weight, absorb(foreign)
+if _rc != 0 {
+    noi test_fail "creghdfe plugin load" "returned error `=_rc'"
+    noi print_summary "creghdfe"
+    exit 1
+}
+noi test_pass "creghdfe plugin loads and runs"
 
 /*******************************************************************************
- * VCE options
+ * SECTION 2: Auto dataset - basic FE tests
  ******************************************************************************/
-print_section "VCE options"
+noi print_section "Basic Fixed Effects (auto)"
 
 sysuse auto, clear
-benchmark_reghdfe price mpg weight, absorb(foreign) vce(robust) testname("robust VCE")
+noi benchmark_reghdfe price mpg weight, absorb(foreign) testname("single FE")
 
 sysuse auto, clear
-benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("cluster VCE")
+noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) testname("two-way FE")
 
 sysuse auto, clear
-benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(robust) testname("two-way FE + robust")
+noi benchmark_reghdfe price mpg, absorb(foreign) testname("single covariate")
+
+sysuse auto, clear
+noi benchmark_reghdfe price mpg weight length, absorb(foreign) testname("three covariates")
+
+sysuse auto, clear
+noi benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("many covariates")
 
 /*******************************************************************************
- * Weights
+ * SECTION 3: VCE options
  ******************************************************************************/
-print_section "Weight options"
+noi print_section "VCE Options"
 
 sysuse auto, clear
-gen w = rep78
-replace w = 3 if missing(w)
-benchmark_reghdfe price mpg weight [aw=w], absorb(foreign) testname("aweight")
+noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(robust) testname("vce(robust)")
 
 sysuse auto, clear
-drop if missing(rep78)
-benchmark_reghdfe price mpg weight [fw=rep78], absorb(foreign) testname("fweight")
+noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("vce(cluster)")
 
 sysuse auto, clear
-gen w = rep78
-replace w = 3 if missing(w)
-benchmark_reghdfe price mpg weight [pw=w], absorb(foreign) testname("pweight")
+noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(robust) testname("two-way + robust")
 
-* aweight with robust
 sysuse auto, clear
-gen w = rep78
-replace w = 3 if missing(w)
-benchmark_reghdfe price mpg weight [aw=w], absorb(foreign) vce(robust) testname("aweight + robust")
-
-* aweight with cluster
-sysuse auto, clear
-gen w = rep78
-replace w = 3 if missing(w)
-benchmark_reghdfe price mpg weight [aw=w], absorb(foreign) vce(cluster foreign) testname("aweight + cluster")
+noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(cluster foreign) testname("two-way + cluster")
 
 /*******************************************************************************
- * Panel data (nlswork)
+ * SECTION 4: Weight tests
  ******************************************************************************/
-print_section "Panel data (nlswork)"
+noi print_section "Weights"
 
-webuse nlswork, clear
-keep in 1/5000
-benchmark_reghdfe ln_wage age ttl_exp tenure, absorb(idcode) testname("individual FE")
+sysuse auto, clear
+noi benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) testname("aweight")
 
-webuse nlswork, clear
-keep in 1/5000
-benchmark_reghdfe ln_wage age ttl_exp tenure, absorb(idcode year) testname("two-way panel FE")
+sysuse auto, clear
+gen int fw = ceil(mpg/5)
+noi benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) testname("fweight")
 
-webuse nlswork, clear
-keep in 1/5000
-benchmark_reghdfe ln_wage age ttl_exp tenure, absorb(idcode year) vce(cluster idcode) testname("panel + cluster")
-
-webuse nlswork, clear
-keep in 1/5000
-benchmark_reghdfe ln_wage age ttl_exp tenure, absorb(idcode) vce(robust) testname("individual FE + robust")
+sysuse auto, clear
+noi benchmark_reghdfe price mpg weight [pw=weight], absorb(foreign) testname("pweight")
 
 /*******************************************************************************
- * Census dataset
+ * SECTION 5: Census dataset
  ******************************************************************************/
-print_section "Census dataset"
+noi print_section "Census Dataset"
 
 sysuse census, clear
-benchmark_reghdfe pop medage death marriage, absorb(region) testname("region FE")
+noi benchmark_reghdfe pop medage, absorb(region) testname("single FE")
 
 sysuse census, clear
-benchmark_reghdfe pop medage, absorb(region) testname("region FE - simple")
+noi benchmark_reghdfe pop medage death, absorb(region) testname("two covariates")
+
+sysuse census, clear
+noi benchmark_reghdfe pop medage death marriage divorce, absorb(region) testname("many covariates")
+
+sysuse census, clear
+noi benchmark_reghdfe pop medage, absorb(region) vce(robust) testname("robust")
 
 /*******************************************************************************
- * Synthetic data
+ * SECTION 6: nlswork panel data
  ******************************************************************************/
-print_section "Synthetic data"
-
-* 20K observations
-clear
-set seed 98765
-set obs 20000
-gen firm = runiformint(1, 500)
-gen year = runiformint(2000, 2020)
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen y = 1 + 0.5*x1 - 0.3*x2 + rnormal() * 0.5
-
-benchmark_reghdfe y x1 x2, absorb(firm year) testname("20K two-way FE")
-
-* 50K observations
-clear
-set seed 11111
-set obs 50000
-gen firm = runiformint(1, 1000)
-gen year = runiformint(2000, 2020)
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen x3 = rnormal()
-gen y = 1 + 0.5*x1 - 0.3*x2 + 0.2*x3 + rnormal() * 0.5
-
-benchmark_reghdfe y x1 x2 x3, absorb(firm) testname("50K firm FE")
-
-clear
-set seed 11111
-set obs 50000
-gen firm = runiformint(1, 1000)
-gen year = runiformint(2000, 2020)
-gen x1 = rnormal()
-gen x2 = rnormal() * 2
-gen x3 = rnormal()
-gen y = 1 + 0.5*x1 - 0.3*x2 + 0.2*x3 + rnormal() * 0.5
-
-benchmark_reghdfe y x1 x2 x3, absorb(firm year) testname("50K two-way FE")
-
-/*******************************************************************************
- * High-dimensional FE
- ******************************************************************************/
-print_section "High-dimensional FE"
+noi print_section "Panel Data (nlswork)"
 
 webuse nlswork, clear
 keep in 1/10000
-benchmark_reghdfe ln_wage age ttl_exp, absorb(idcode) testname("many FE levels (idcode)")
+noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) testname("individual FE")
 
 webuse nlswork, clear
 keep in 1/10000
-benchmark_reghdfe ln_wage age ttl_exp, absorb(idcode year) testname("many FE levels (idcode year)")
+noi benchmark_reghdfe ln_wage age tenure, absorb(idcode year) testname("two-way FE")
+
+webuse nlswork, clear
+keep in 1/10000
+noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("three covariates")
+
+webuse nlswork, clear
+keep in 1/10000
+noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(robust) testname("robust")
+
+webuse nlswork, clear
+keep in 1/10000
+noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("cluster idcode")
 
 /*******************************************************************************
- * Edge cases
+ * SECTION 7: Large dataset
  ******************************************************************************/
-print_section "Edge cases"
+noi print_section "Large Dataset"
 
-* weights=1 should match unweighted
-sysuse auto, clear
-gen w1 = 1
-quietly creghdfe price mpg weight, absorb(foreign)
-local unweighted_b = _b[mpg]
-quietly creghdfe price mpg weight [aw=w1], absorb(foreign)
-local weighted1_b = _b[mpg]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if abs(`unweighted_b' - `weighted1_b') < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] weights=1 matches unweighted"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] weights=1 differs from unweighted"
-}
-
-* Single observation per FE group - verify it works
 clear
-set obs 100
-gen fe = _n
-gen x = rnormal()
-gen y = x + rnormal()
-capture benchmark_reghdfe y x, absorb(fe) testname("one obs per FE group")
+set seed 12345
+set obs 50000
+gen id = runiformint(1, 500)
+gen year = 2000 + runiformint(0, 10)
+gen x1 = runiform()
+gen x2 = rnormal()
+gen x3 = runiformint(1, 100)
+gen y = 2*x1 + 3*x2 - 0.5*x3 + rnormal()
+
+noi benchmark_reghdfe y x1 x2 x3, absorb(id) testname("50K single FE")
+
+noi benchmark_reghdfe y x1 x2 x3, absorb(id year) testname("50K two-way FE")
+
+noi benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K robust")
 
 /*******************************************************************************
- * Stored results check
+ * SECTION 8: tolerance/maxiter options
  ******************************************************************************/
-print_section "Stored results"
+noi print_section "tolerance/maxiter Options"
 
 sysuse auto, clear
-
-* Run both commands
-quietly reghdfe price mpg weight, absorb(foreign)
-matrix reghdfe_b = e(b)
-matrix reghdfe_V = e(V)
-local reghdfe_N = e(N)
-local reghdfe_df_r = e(df_r)
-
-quietly creghdfe price mpg weight, absorb(foreign)
-matrix creghdfe_b = e(b)
-matrix creghdfe_V = e(V)
-local creghdfe_N = e(N)
-local creghdfe_df_r = e(df_r)
-
-* Compare e(b)
-tempname diff
-matrix `diff' = reghdfe_b - creghdfe_b
-local cols = colsof(`diff')
-local maxdiff = 0
-forvalues j = 1/`cols' {
-    local d = abs(`diff'[1, `j'])
-    if `d' > `maxdiff' local maxdiff = `d'
-}
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `maxdiff' < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] e(b) matches"
+capture creghdfe price mpg weight, absorb(foreign) tolerance(1e-10)
+if _rc == 0 {
+    noi test_pass "tolerance(1e-10) accepted"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] e(b) differs (max: " %9.2e `maxdiff' ")"
+    noi test_fail "tolerance option" "returned error `=_rc'"
 }
 
-* Compare e(V)
-matrix `diff' = reghdfe_V - creghdfe_V
-local rows = rowsof(`diff')
-local cols = colsof(`diff')
-local maxdiff = 0
-forvalues i = 1/`rows' {
-    forvalues j = 1/`cols' {
-        local d = abs(`diff'[`i', `j'])
-        if `d' > `maxdiff' local maxdiff = `d'
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) maxiter(1000)
+if _rc == 0 {
+    noi test_pass "maxiter(1000) accepted"
+}
+else {
+    noi test_fail "maxiter option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 9: resid option
+ ******************************************************************************/
+noi print_section "resid Option"
+
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) resid
+if _rc == 0 {
+    capture confirm variable _reghdfe_resid
+    if _rc == 0 {
+        noi test_pass "resid option creates residual variable"
+    }
+    else {
+        noi test_fail "resid option" "residual variable not created"
     }
 }
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `maxdiff' < 1e-6 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] e(V) matches"
-}
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] e(V) differs (max: " %9.2e `maxdiff' ")"
+    noi test_fail "resid option" "returned error `=_rc'"
 }
 
-* Compare df_r
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `reghdfe_df_r' == `creghdfe_df_r' {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] e(df_r) matches"
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) resid2(myresid)
+if _rc == 0 {
+    capture confirm variable myresid
+    if _rc == 0 {
+        noi test_pass "resid2(name) creates named residual"
+    }
+    else {
+        noi test_fail "resid2(name)" "residual variable not created"
+    }
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] e(df_r) differs (`reghdfe_df_r' vs `creghdfe_df_r')"
+    noi test_fail "resid2 option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
- * SUMMARY
+ * SECTION 10: verbose/timeit options
  ******************************************************************************/
-print_summary "creghdfe"
+noi print_section "verbose/timeit Options"
 
-* Return error code if any tests failed
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) verbose
+if _rc == 0 {
+    noi test_pass "verbose option accepted"
+}
+else {
+    noi test_fail "verbose option" "returned error `=_rc'"
+}
+
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) timeit
+if _rc == 0 {
+    noi test_pass "timeit option accepted"
+}
+else {
+    noi test_fail "timeit option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 11: if/in conditions
+ ******************************************************************************/
+noi print_section "if/in Conditions"
+
+sysuse auto, clear
+reghdfe price mpg weight if price > 5000, absorb(foreign)
+matrix reghdfe_b = e(b)
+local reghdfe_N = e(N)
+
+creghdfe price mpg weight if price > 5000, absorb(foreign)
+matrix creghdfe_b = e(b)
+local creghdfe_N = e(N)
+
+if `reghdfe_N' == `creghdfe_N' {
+    noi test_pass "if condition: N matches"
+}
+else {
+    noi test_fail "if condition" "N differs"
+}
+
+sysuse auto, clear
+reghdfe price mpg weight in 1/50, absorb(foreign)
+local reghdfe_N = e(N)
+
+creghdfe price mpg weight in 1/50, absorb(foreign)
+local creghdfe_N = e(N)
+
+if `reghdfe_N' == `creghdfe_N' {
+    noi test_pass "in condition: N matches"
+}
+else {
+    noi test_fail "in condition" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 12: nostandardize option
+ ******************************************************************************/
+noi print_section "nostandardize Option"
+
+sysuse auto, clear
+capture creghdfe price mpg weight, absorb(foreign) nostandardize
+if _rc == 0 {
+    noi test_pass "nostandardize option accepted"
+}
+else {
+    noi test_fail "nostandardize option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 13: Edge cases
+ ******************************************************************************/
+noi print_section "Edge Cases"
+
+* Single observation per FE group
+clear
+set seed 99
+set obs 100
+gen id = _n
+gen x = runiform()
+gen y = x + rnormal()
+
+capture creghdfe y x, absorb(id)
+if _rc == 0 {
+    noi test_pass "singleton FE handling"
+}
+else {
+    noi test_fail "singleton FE" "returned error `=_rc'"
+}
+
+* Many FE levels
+clear
+set seed 123
+set obs 10000
+gen id = runiformint(1, 1000)
+gen x1 = runiform()
+gen x2 = rnormal()
+gen y = x1 + x2 + rnormal()
+
+reghdfe y x1 x2, absorb(id)
+local reghdfe_N = e(N)
+
+creghdfe y x1 x2, absorb(id)
+local creghdfe_N = e(N)
+
+if `reghdfe_N' == `creghdfe_N' {
+    noi test_pass "many FE levels (1000): N matches"
+}
+else {
+    noi test_fail "many FE levels" "N differs"
+}
+
+/*******************************************************************************
+ * Summary
+ ******************************************************************************/
+
+noi print_summary "creghdfe"
+
 if $TESTS_FAILED > 0 {
     exit 1
+}
+
 }

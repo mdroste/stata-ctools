@@ -1,0 +1,1128 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do validate_civreghdfe.do 
+
+. /****************************************************************************
+> ***
+>  * validate_civreghdfe.do
+>  *
+>  * Comprehensive validation tests for civreghdfe vs ivreghdfe
+>  * Tests all options: absorb, vce, weights, first, small, tolerance, maxiter
+>  *
+>  * Requires ivreghdfe to be installed (ssc install ivreghdfe)
+>  ****************************************************************************
+> **/
+. 
+. do "validate_setup.do"
+
+. /****************************************************************************
+> ***
+>  * validate_setup.do
+>  *
+>  * Core validation framework for ctools test suite
+>  * Provides helper programs and consistent PASS/FAIL output formatting
+>  *
+>  * Output format:
+>  *   [PASS] test description
+>  *   [FAIL] test description: detailed error message
+>  *
+>  * Failed tests are collected and displayed in a summary report at the end.
+>  ****************************************************************************
+> **/
+. 
+. version 14.0
+
+. clear all
+
+. set more off
+
+. set trace off
+
+. 
+. * Add build directory with ctools to adopath (use ++ for highest priority)
+. adopath ++ "../build"
+  [1]              "../build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. 
+. * Global counters
+. global TESTS_PASSED = 0
+
+. global TESTS_FAILED = 0
+
+. global TESTS_TOTAL = 0
+
+. 
+. * Default tolerance
+. global DEFAULT_TOL = 1e-6
+
+. 
+. * Initialize failure tracking (up to 100 failures)
+. global FAILURE_COUNT = 0
+
+. forvalues i = 1/100 {
+  2.     global FAILURE_`i' = ""
+  3. }
+
+. 
+. /****************************************************************************
+> ***
+>  * test_pass - Record a passing test
+>  ****************************************************************************
+> **/
+. capture program drop test_pass
+
+. program define test_pass
+  1.     args testname
+  2.     global TESTS_PASSED = $TESTS_PASSED + 1
+  3.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4.     di as result "[PASS] `testname'"
+  5. end
+
+. 
+. /****************************************************************************
+> ***
+>  * test_fail - Record a failing test with description
+>  ****************************************************************************
+> **/
+. capture program drop test_fail
+
+. program define test_fail
+  1.     args testname reason
+  2.     global TESTS_FAILED = $TESTS_FAILED + 1
+  3.     global TESTS_TOTAL = $TESTS_TOTAL + 1
+  4. 
+.     * Store failure details
+.     global FAILURE_COUNT = $FAILURE_COUNT + 1
+  5.     local idx = $FAILURE_COUNT
+  6.     if `idx' <= 100 {
+  7.         global FAILURE_`idx' = "`testname': `reason'"
+  8.     }
+  9. 
+.     * Print failure immediately (with emphasis)
+.     di as error ""
+ 10.     di as error ">>> [FAIL] `testname'"
+ 11.     di as error ">>>        `reason'"
+ 12.     di as error ""
+ 13. end
+
+. 
+. /****************************************************************************
+> ***
+>  * print_failures - Print all recorded failures
+>  ****************************************************************************
+> **/
+. capture program drop print_failures
+
+. program define print_failures
+  1.     if $FAILURE_COUNT == 0 {
+  2.         exit
+  3.     }
+  4. 
+.     di as error ""
+  5.     di as error "{hline 70}"
+  6.     di as error "FAILED TESTS DETAIL:"
+  7.     di as error "{hline 70}"
+  8. 
+.     local max_to_show = min($FAILURE_COUNT, 100)
+  9.     forvalues i = 1/`max_to_show' {
+ 10.         di as error "  `i'. ${FAILURE_`i'}"
+ 11.     }
+ 12. 
+.     if $FAILURE_COUNT > 100 {
+ 13.         local more = $FAILURE_COUNT - 100
+ 14.         di as error ""
+ 15.         di as error "  ... and `more' more failures not shown"
+ 16.     }
+ 17. 
+.     di as error "{hline 70}"
+ 18.     di as error ""
+ 19. end
+
+. 
+. /****************************************************************************
+> ***
+>  * assert_scalar_equal - Compare two scalar values
+>  ****************************************************************************
+> **/
+. capture program drop assert_scalar_equal
+
+. program define assert_scalar_equal
+  1.     args val1 val2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = $DEFAULT_TOL
+  3. 
+.     local diff = abs(`val1' - `val2')
+  4.     if `diff' == 0 | `diff' < `tol' {
+  5.         test_pass "`testname'"
+  6.     }
+  7.     else {
+  8.         test_fail "`testname'" "expected `val2', got `val1' (diff=`diff')"
+  9.     }
+ 10. end
+
+. 
+. /****************************************************************************
+> ***
+>  * assert_matrix_equal - Compare two matrices element-wise
+>  ****************************************************************************
+> **/
+. capture program drop assert_matrix_equal
+
+. program define assert_matrix_equal
+  1.     args mat1 mat2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = $DEFAULT_TOL
+  3. 
+.     tempname diff
+  4.     matrix `diff' = `mat1' - `mat2'
+  5.     local maxdiff = 0
+  6.     local rows = rowsof(`diff')
+  7.     local cols = colsof(`diff')
+  8.     forvalues i = 1/`rows' {
+  9.         forvalues j = 1/`cols' {
+ 10.             local d = abs(`diff'[`i', `j'])
+ 11.             if `d' > `maxdiff' local maxdiff = `d'
+ 12.         }
+ 13.     }
+ 14. 
+.     if `maxdiff' < `tol' {
+ 15.         test_pass "`testname'"
+ 16.     }
+ 17.     else {
+ 18.         test_fail "`testname'" "max element diff=`maxdiff'"
+ 19.     }
+ 20. end
+
+. 
+. /****************************************************************************
+> ***
+>  * assert_var_equal - Compare two numeric variables
+>  ****************************************************************************
+> **/
+. capture program drop assert_var_equal
+
+. program define assert_var_equal
+  1.     args var1 var2 tol testname
+  2. 
+.     if "`tol'" == "" local tol = 1e-10
+  3. 
+.     quietly count if abs(`var1' - `var2') > `tol'
+  4.     local ndiff = r(N)
+  5. 
+.     if `ndiff' == 0 {
+  6.         test_pass "`testname'"
+  7.     }
+  8.     else {
+  9.         test_fail "`testname'" "`ndiff' values differ"
+ 10.     }
+ 11. end
+
+. 
+. /****************************************************************************
+> ***
+>  * assert_strvar_equal - Compare two string variables
+>  ****************************************************************************
+> **/
+. capture program drop assert_strvar_equal
+
+. program define assert_strvar_equal
+  1.     args var1 var2 testname
+  2. 
+.     quietly count if `var1' != `var2'
+  3.     local ndiff = r(N)
+  4. 
+.     if `ndiff' == 0 {
+  5.         test_pass "`testname'"
+  6.     }
+  7.     else {
+  8.         test_fail "`testname'" "`ndiff' values differ"
+  9.     }
+ 10. end
+
+. 
+. /****************************************************************************
+> ***
+>  * assert_data_equal - Compare two datasets (with optional sorting)
+>  ****************************************************************************
+> **/
+. capture program drop assert_data_equal
+
+. program define assert_data_equal
+  1.     args file1 file2 testname
+  2. 
+.     preserve
+  3. 
+.     * Try direct comparison first
+.     capture quietly {
+  4.         use "`file1'", clear
+  5.         cf _all using "`file2'"
+  6.     }
+  7.     local rc = _rc
+  8. 
+.     if `rc' == 0 {
+  9.         restore
+ 10.         test_pass "`testname'"
+ 11.         exit
+ 12.     }
+ 13. 
+.     * Try sorted comparison
+.     capture quietly {
+ 14.         use "`file1'", clear
+ 15.         ds
+ 16.         local allvars `r(varlist)'
+ 17.         sort `allvars'
+ 18.         tempfile sorted1
+ 19.         save `sorted1', replace
+ 20. 
+.         use "`file2'", clear
+ 21.         sort `allvars'
+ 22.         cf _all using `sorted1'
+ 23.     }
+ 24.     local rc2 = _rc
+ 25.     restore
+ 26. 
+.     if `rc2' == 0 {
+ 27.         test_pass "`testname'"
+ 28.     }
+ 29.     else {
+ 30.         test_fail "`testname'" "datasets differ"
+ 31.     }
+ 32. end
+
+. 
+. /****************************************************************************
+> ***
+>  * print_section - Print section header
+>  ****************************************************************************
+> **/
+. capture program drop print_section
+
+. program define print_section
+  1.     args title
+  2.     di as text ""
+  3.     di as text "{hline 70}"
+  4.     di as text "`title'"
+  5.     di as text "{hline 70}"
+  6. end
+
+. 
+. /****************************************************************************
+> ***
+>  * print_summary - Print final test summary with failure details
+>  ****************************************************************************
+> **/
+. capture program drop print_summary
+
+. program define print_summary
+  1.     args component
+  2. 
+.     * Print detailed failure report first
+.     print_failures
+  3. 
+.     di as text ""
+  4.     di as text "{hline 70}"
+  5.     di as text "SUMMARY: `component'"
+  6.     di as text "{hline 70}"
+  7.     di as text "Tests passed: " as result $TESTS_PASSED as text " / " as r
+> esult $TESTS_TOTAL
+  8.     di as text "Tests failed: " as result $TESTS_FAILED
+  9.     di as text "{hline 70}"
+ 10.     if $TESTS_FAILED > 0 {
+ 11.         di as error "VALIDATION FAILED - See failed tests above"
+ 12.     }
+ 13.     else {
+ 14.         di as result "ALL TESTS PASSED"
+ 15.     }
+ 16.     di as text "{hline 70}"
+ 17. end
+
+. 
+. /****************************************************************************
+> ***
+>  * reset_counters - Reset test counters (for running multiple test suites)
+>  ****************************************************************************
+> **/
+. capture program drop reset_counters
+
+. program define reset_counters
+  1.     global TESTS_PASSED = 0
+  2.     global TESTS_FAILED = 0
+  3.     global TESTS_TOTAL = 0
+  4.     global FAILURE_COUNT = 0
+  5.     forvalues i = 1/100 {
+  6.         global FAILURE_`i' = ""
+  7.     }
+  8. end
+
+. 
+. * Load benchmark helper programs
+. do "benchmark_helpers.do"
+
+. /****************************************************************************
+> ***
+>  * benchmark_helpers.do
+>  *
+>  * Benchmark helper programs for ctools validation test suite
+>  * Each program runs both ctools and Stata native commands, compares results,
+>  * and reports [PASS] or [FAIL] with detailed error descriptions
+>  ****************************************************************************
+> **/
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_sort - Compare csort vs sort, stable
+>  *
+>  * Syntax: benchmark_sort varlist [, testname(string) algorithm(string)]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_sort
+
+. program define benchmark_sort
+  1.     syntax varlist [, testname(string) ALGorithm(string)]
+  2. 
+.     if "`testname'" == "" local testname "sort `varlist'"
+  3.     if "`algorithm'" != "" local testname "`testname' [alg=`algorithm']"
+  4. 
+.     preserve
+  5. 
+.     * Save original data
+.     tempfile original
+  6.     quietly save `original'
+  7. 
+.     * Run Stata sort, stable
+.     sort `varlist', stable
+  8.     tempfile stata_sorted
+  9.     quietly save `stata_sorted'
+ 10. 
+.     * Restore and run csort
+.     use `original', clear
+ 11.     if "`algorithm'" != "" {
+ 12.         capture csort `varlist', algorithm(`algorithm')
+ 13.     }
+ 14.     else {
+ 15.         capture csort `varlist'
+ 16.     }
+ 17.     local csort_rc = _rc
+ 18. 
+.     if `csort_rc' != 0 {
+ 19.         restore
+ 20.         test_fail "`testname'" "csort returned error `csort_rc'"
+ 21.         exit
+ 22.     }
+ 23. 
+.     * Compare datasets
+.     capture quietly cf _all using `stata_sorted'
+ 24.     local cf_rc = _rc
+ 25. 
+.     restore
+ 26. 
+.     if `cf_rc' == 0 {
+ 27.         test_pass "`testname'"
+ 28.     }
+ 29.     else {
+ 30.         test_fail "`testname'" "sorted data differs from Stata sort"
+ 31.     }
+ 32. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_merge - Compare cmerge vs merge
+>  *
+>  * Syntax: benchmark_merge mergetype keyvar using filename [, options]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_merge
+
+. program define benchmark_merge
+  1.     syntax anything using/, [keep(string) GENerate(name) NOGENerate KEEPUS
+> ing(string) ///
+>         testname(string) SORTed ASSert(string) UPDATE REPLACE FORCE NOLabel N
+> ONotes NOREPort]
+  2. 
+.     * Parse merge type and key vars
+.     gettoken mergetype keyvars : anything
+  3. 
+.     if "`testname'" == "" local testname "merge `mergetype' `keyvars'"
+  4. 
+.     * Build option string
+.     local opts ""
+  5.     if "`keep'" != "" local opts "`opts' keep(`keep')"
+  6.     if "`generate'" != "" local opts "`opts' generate(`generate')"
+  7.     if "`nogenerate'" != "" local opts "`opts' nogenerate"
+  8.     if "`keepusing'" != "" local opts "`opts' keepusing(`keepusing')"
+  9.     if "`sorted'" != "" local opts "`opts' sorted"
+ 10.     if "`assert'" != "" local opts "`opts' assert(`assert')"
+ 11.     if "`update'" != "" local opts "`opts' update"
+ 12.     if "`replace'" != "" local opts "`opts' replace"
+ 13.     if "`force'" != "" local opts "`opts' force"
+ 14.     if "`nolabel'" != "" local opts "`opts' nolabel"
+ 15.     if "`nonotes'" != "" local opts "`opts' nonotes"
+ 16. 
+.     preserve
+ 17. 
+.     * Save original data
+.     tempfile original
+ 18.     quietly save `original'
+ 19. 
+.     * Run Stata merge
+.     capture merge `mergetype' `keyvars' using `using', `opts'
+ 20.     local stata_rc = _rc
+ 21. 
+.     if `stata_rc' != 0 {
+ 22.         restore
+ 23.         test_fail "`testname'" "Stata merge returned error `stata_rc'"
+ 24.         exit
+ 25.     }
+ 26. 
+.     * Get _merge counts from Stata
+.     local stata_m1 = 0
+ 27.     local stata_m2 = 0
+ 28.     local stata_m3 = 0
+ 29.     capture confirm variable _merge
+ 30.     if _rc == 0 {
+ 31.         quietly count if _merge == 1
+ 32.         local stata_m1 = r(N)
+ 33.         quietly count if _merge == 2
+ 34.         local stata_m2 = r(N)
+ 35.         quietly count if _merge == 3
+ 36.         local stata_m3 = r(N)
+ 37.     }
+ 38. 
+.     * Sort by all variables for comparison
+.     qui ds
+ 39.     local allvars `r(varlist)'
+ 40.     sort `allvars'
+ 41.     tempfile stata_merged
+ 42.     quietly save `stata_merged'
+ 43. 
+.     * Restore and run cmerge
+.     use `original', clear
+ 44.     capture cmerge `mergetype' `keyvars' using `using', `opts' noreport
+ 45.     local cmerge_rc = _rc
+ 46. 
+.     if `cmerge_rc' != 0 {
+ 47.         restore
+ 48.         test_fail "`testname'" "cmerge returned error `cmerge_rc'"
+ 49.         exit
+ 50.     }
+ 51. 
+.     * Get _merge counts from cmerge
+.     local cmerge_m1 = 0
+ 52.     local cmerge_m2 = 0
+ 53.     local cmerge_m3 = 0
+ 54.     capture confirm variable _merge
+ 55.     if _rc == 0 {
+ 56.         quietly count if _merge == 1
+ 57.         local cmerge_m1 = r(N)
+ 58.         quietly count if _merge == 2
+ 59.         local cmerge_m2 = r(N)
+ 60.         quietly count if _merge == 3
+ 61.         local cmerge_m3 = r(N)
+ 62.     }
+ 63. 
+.     * Check counts match
+.     local counts_match = (`stata_m1' == `cmerge_m1') & (`stata_m2' == `cmerge
+> _m2') & (`stata_m3' == `cmerge_m3')
+ 64. 
+.     * Sort and compare datasets
+.     qui ds
+ 65.     local allvars `r(varlist)'
+ 66.     sort `allvars'
+ 67.     capture quietly cf _all using `stata_merged'
+ 68.     local cf_rc = _rc
+ 69. 
+.     restore
+ 70. 
+.     if `counts_match' & `cf_rc' == 0 {
+ 71.         test_pass "`testname'"
+ 72.     }
+ 73.     else if !`counts_match' {
+ 74.         test_fail "`testname'" "_merge counts differ: stata(m1=`stata_m1',
+> m2=`stata_m2',m3=`stata_m3') vs cmerge(m1=`cmerge_m1',m2=`cmerge_m2',m3=`cmer
+> ge_m3')"
+ 75.     }
+ 76.     else {
+ 77.         test_fail "`testname'" "merged data differs from Stata merge"
+ 78.     }
+ 79. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_reghdfe - Compare creghdfe vs reghdfe
+>  *
+>  * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist) [opti
+> ons]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_reghdfe
+
+. program define benchmark_reghdfe
+  1.     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(st
+> ring) testname(string) tol(real 1e-6)]
+  2. 
+.     gettoken depvar indepvars : varlist
+  3. 
+.     if "`testname'" == "" local testname "reghdfe `depvar' `indepvars', absor
+> b(`absorb')"
+  4. 
+.     * Build weight string
+.     local wtexp ""
+  5.     if "`weight'" != "" local wtexp "[`weight'`exp']"
+  6. 
+.     * Build vce option
+.     local vceopt ""
+  7.     if "`vce'" != "" local vceopt "vce(`vce')"
+  8. 
+.     preserve
+  9. 
+.     * Run reghdfe
+.     capture quietly reghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`a
+> bsorb') `vceopt'
+ 10.     local reghdfe_rc = _rc
+ 11. 
+.     if `reghdfe_rc' != 0 {
+ 12.         restore
+ 13.         test_fail "`testname'" "reghdfe returned error `reghdfe_rc'"
+ 14.         exit
+ 15.     }
+ 16. 
+.     matrix reghdfe_b = e(b)
+ 17.     local reghdfe_N = e(N)
+ 18. 
+.     * Run creghdfe
+.     capture quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`
+> absorb') `vceopt'
+ 19.     local creghdfe_rc = _rc
+ 20. 
+.     if `creghdfe_rc' != 0 {
+ 21.         restore
+ 22.         test_fail "`testname'" "creghdfe returned error `creghdfe_rc'"
+ 23.         exit
+ 24.     }
+ 25. 
+.     matrix creghdfe_b = e(b)
+ 26.     local creghdfe_N = e(N)
+ 27. 
+.     restore
+ 28. 
+.     * Compare N
+.     if `reghdfe_N' != `creghdfe_N' {
+ 29.         test_fail "`testname'" "N differs: reghdfe=`reghdfe_N' vs creghdfe
+> =`creghdfe_N'"
+ 30.         exit
+ 31.     }
+ 32. 
+.     * Compare coefficients
+.     tempname diff
+ 33.     matrix `diff' = reghdfe_b - creghdfe_b
+ 34.     local cols = colsof(`diff')
+ 35.     local maxdiff = 0
+ 36.     forvalues j = 1/`cols' {
+ 37.         local d = abs(`diff'[1, `j'])
+ 38.         if `d' > `maxdiff' local maxdiff = `d'
+ 39.     }
+ 40. 
+.     if `maxdiff' < `tol' {
+ 41.         test_pass "`testname'"
+ 42.     }
+ 43.     else {
+ 44.         test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
+ 45.     }
+ 46. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_qreg - Compare cqreg vs qreg
+>  *
+>  * Syntax: benchmark_qreg depvar indepvars [, quantile(real) options]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_qreg
+
+. program define benchmark_qreg
+  1.     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) te
+> stname(string) tol(real 1e-6)]
+  2. 
+.     gettoken depvar indepvars : varlist
+  3. 
+.     if "`testname'" == "" local testname "qreg `depvar' `indepvars', q(`quant
+> ile')"
+  4. 
+.     * Build vce option
+.     local vceopt ""
+  5.     if "`vce'" != "" local vceopt "vce(`vce')"
+  6. 
+.     preserve
+  7. 
+.     * Run qreg
+.     capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile')
+>  `vceopt'
+  8.     local qreg_rc = _rc
+  9. 
+.     if `qreg_rc' != 0 {
+ 10.         restore
+ 11.         test_fail "`testname'" "qreg returned error `qreg_rc'"
+ 12.         exit
+ 13.     }
+ 14. 
+.     matrix qreg_b = e(b)
+ 15.     local qreg_N = e(N)
+ 16. 
+.     * Run cqreg
+.     capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile'
+> ) `vceopt'
+ 17.     local cqreg_rc = _rc
+ 18. 
+.     if `cqreg_rc' != 0 {
+ 19.         restore
+ 20.         test_fail "`testname'" "cqreg returned error `cqreg_rc'"
+ 21.         exit
+ 22.     }
+ 23. 
+.     matrix cqreg_b = e(b)
+ 24.     local cqreg_N = e(N)
+ 25. 
+.     restore
+ 26. 
+.     * Compare N
+.     if `qreg_N' != `cqreg_N' {
+ 27.         test_fail "`testname'" "N differs: qreg=`qreg_N' vs cqreg=`cqreg_N
+> '"
+ 28.         exit
+ 29.     }
+ 30. 
+.     * Compare coefficients
+.     tempname diff
+ 31.     matrix `diff' = qreg_b - cqreg_b
+ 32.     local cols = colsof(`diff')
+ 33.     local maxdiff = 0
+ 34.     forvalues j = 1/`cols' {
+ 35.         local d = abs(`diff'[1, `j'])
+ 36.         if `d' > `maxdiff' local maxdiff = `d'
+ 37.     }
+ 38. 
+.     if `maxdiff' < `tol' {
+ 39.         test_pass "`testname'"
+ 40.     }
+ 41.     else {
+ 42.         test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
+ 43.     }
+ 44. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_import - Compare cimport vs import delimited
+>  *
+>  * Syntax: benchmark_import using filename [, options]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_import
+
+. program define benchmark_import
+  1.     syntax using/, [DELIMiters(string) VARNames(string) CASE(string) testn
+> ame(string)]
+  2. 
+.     if "`testname'" == "" local testname "import `using'"
+  3. 
+.     * Build option string
+.     local opts "clear"
+  4.     if "`delimiters'" != "" local opts "`opts' delimiters(`delimiters')"
+  5.     if "`varnames'" != "" local opts "`opts' varnames(`varnames')"
+  6.     if "`case'" != "" local opts "`opts' case(`case')"
+  7. 
+.     preserve
+  8. 
+.     * Run Stata import
+.     capture import delimited `using', `opts'
+  9.     local stata_rc = _rc
+ 10. 
+.     if `stata_rc' != 0 {
+ 11.         restore
+ 12.         test_fail "`testname'" "import delimited returned error `stata_rc'
+> "
+ 13.         exit
+ 14.     }
+ 15. 
+.     local stata_n = _N
+ 16.     local stata_k = c(k)
+ 17.     tempfile stata_import
+ 18.     quietly save `stata_import'
+ 19. 
+.     * Run cimport
+.     capture cimport delimited `using', `opts'
+ 20.     local cimport_rc = _rc
+ 21. 
+.     if `cimport_rc' != 0 {
+ 22.         restore
+ 23.         test_fail "`testname'" "cimport returned error `cimport_rc'"
+ 24.         exit
+ 25.     }
+ 26. 
+.     local cimport_n = _N
+ 27.     local cimport_k = c(k)
+ 28. 
+.     restore
+ 29. 
+.     * Compare dimensions
+.     if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+ 30.         test_pass "`testname'"
+ 31.     }
+ 32.     else {
+ 33.         test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`st
+> ata_k') vs cimport(N=`cimport_n',K=`cimport_k')"
+ 34.     }
+ 35. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_export - Compare cexport vs export delimited
+>  *
+>  * Syntax: benchmark_export [varlist] using filename [, options]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_export
+
+. program define benchmark_export
+  1.     syntax [varlist] using/, [DELIMiter(string) NOVARNames QUOTE NOLabel r
+> eplace testname(string)]
+  2. 
+.     if "`testname'" == "" local testname "export `using'"
+  3. 
+.     * Build option string
+.     local opts "replace"
+  4.     if "`delimiter'" != "" local opts "`opts' delimiter(`delimiter')"
+  5.     if "`novarnames'" != "" local opts "`opts' novarnames"
+  6.     if "`quote'" != "" local opts "`opts' quote"
+  7.     if "`nolabel'" != "" local opts "`opts' nolabel"
+  8. 
+.     preserve
+  9. 
+.     * Generate temp filenames
+.     tempfile stata_export cexport_export
+ 10.     local stata_csv "`stata_export'.csv"
+ 11.     local cexport_csv "`cexport_export'.csv"
+ 12. 
+.     * Run Stata export
+.     if "`varlist'" != "" {
+ 13.         capture export delimited `varlist' using "`stata_csv'", `opts'
+ 14.     }
+ 15.     else {
+ 16.         capture export delimited using "`stata_csv'", `opts'
+ 17.     }
+ 18.     local stata_rc = _rc
+ 19. 
+.     if `stata_rc' != 0 {
+ 20.         restore
+ 21.         test_fail "`testname'" "export delimited returned error `stata_rc'
+> "
+ 22.         exit
+ 23.     }
+ 24. 
+.     * Run cexport
+.     if "`varlist'" != "" {
+ 25.         capture cexport delimited `varlist' using "`cexport_csv'", `opts'
+ 26.     }
+ 27.     else {
+ 28.         capture cexport delimited using "`cexport_csv'", `opts'
+ 29.     }
+ 30.     local cexport_rc = _rc
+ 31. 
+.     if `cexport_rc' != 0 {
+ 32.         restore
+ 33.         test_fail "`testname'" "cexport returned error `cexport_rc'"
+ 34.         exit
+ 35.     }
+ 36. 
+.     * Reimport and compare
+.     import delimited using "`stata_csv'", clear
+ 37.     local stata_n = _N
+ 38.     local stata_k = c(k)
+ 39. 
+.     import delimited using "`cexport_csv'", clear
+ 40.     local cexport_n = _N
+ 41.     local cexport_k = c(k)
+ 42. 
+.     * Cleanup temp files
+.     capture erase "`stata_csv'"
+ 43.     capture erase "`cexport_csv'"
+ 44. 
+.     restore
+ 45. 
+.     * Compare dimensions
+.     if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
+ 46.         test_pass "`testname'"
+ 47.     }
+ 48.     else {
+ 49.         test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`st
+> ata_k') vs cexport(N=`cexport_n',K=`cexport_k')"
+ 50.     }
+ 51. end
+
+. 
+. /****************************************************************************
+> ***
+>  * benchmark_ivreghdfe - Compare civreghdfe vs ivreghdfe
+>  *
+>  * Syntax: benchmark_ivreghdfe spec, absorb(varlist) [options]
+>  ****************************************************************************
+> **/
+. capture program drop benchmark_ivreghdfe
+
+. program define benchmark_ivreghdfe
+  1.     syntax anything(name=spec), Absorb(varlist) [vce(string) testname(stri
+> ng) tol(real 1e-6)]
+  2. 
+.     if "`testname'" == "" local testname "ivreghdfe `spec', absorb(`absorb')"
+  3. 
+.     * Build vce option
+.     local vceopt ""
+  4.     if "`vce'" != "" local vceopt "vce(`vce')"
+  5. 
+.     preserve
+  6. 
+.     * Run ivreghdfe
+.     capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt'
+  7.     local ivreghdfe_rc = _rc
+  8. 
+.     if `ivreghdfe_rc' != 0 {
+  9.         restore
+ 10.         test_fail "`testname'" "ivreghdfe returned error `ivreghdfe_rc'"
+ 11.         exit
+ 12.     }
+ 13. 
+.     matrix ivreghdfe_b = e(b)
+ 14.     matrix ivreghdfe_V = e(V)
+ 15.     local ivreghdfe_N = e(N)
+ 16. 
+.     * Run civreghdfe
+.     capture quietly civreghdfe `spec', absorb(`absorb') `vceopt'
+ 17.     local civreghdfe_rc = _rc
+ 18. 
+.     if `civreghdfe_rc' != 0 {
+ 19.         restore
+ 20.         test_fail "`testname'" "civreghdfe returned error `civreghdfe_rc'"
+ 21.         exit
+ 22.     }
+ 23. 
+.     matrix civreghdfe_b = e(b)
+ 24.     matrix civreghdfe_V = e(V)
+ 25.     local civreghdfe_N = e(N)
+ 26. 
+.     restore
+ 27. 
+.     * Compare N
+.     if `ivreghdfe_N' != `civreghdfe_N' {
+ 28.         test_fail "`testname'" "N differs: ivreghdfe=`ivreghdfe_N' vs civr
+> eghdfe=`civreghdfe_N'"
+ 29.         exit
+ 30.     }
+ 31. 
+.     * Compare coefficients
+.     tempname diff_b
+ 32.     matrix `diff_b' = ivreghdfe_b - civreghdfe_b
+ 33.     local cols = colsof(`diff_b')
+ 34.     local maxdiff_b = 0
+ 35.     forvalues j = 1/`cols' {
+ 36.         local d = abs(`diff_b'[1, `j'])
+ 37.         if `d' > `maxdiff_b' local maxdiff_b = `d'
+ 38.     }
+ 39. 
+.     * Compare VCE using relative tolerance
+.     tempname diff_V
+ 40.     matrix `diff_V' = ivreghdfe_V - civreghdfe_V
+ 41.     local rows = rowsof(`diff_V')
+ 42.     local cols = colsof(`diff_V')
+ 43.     local maxreldiff_V = 0
+ 44.     forvalues i = 1/`rows' {
+ 45.         forvalues j = 1/`cols' {
+ 46.             local diff = abs(`diff_V'[`i', `j'])
+ 47.             local base = abs(ivreghdfe_V[`i', `j'])
+ 48.             if `base' > 1e-10 {
+ 49.                 local reldiff = `diff' / `base'
+ 50.             }
+ 51.             else {
+ 52.                 local reldiff = `diff'
+ 53.             }
+ 54.             if `reldiff' > `maxreldiff_V' local maxreldiff_V = `reldiff'
+ 55.         }
+ 56.     }
+ 57. 
+.     if `maxdiff_b' < `tol' & `maxreldiff_V' < `tol' {
+ 58.         test_pass "`testname'"
+ 59.     }
+ 60.     else if `maxdiff_b' >= `tol' {
+ 61.         test_fail "`testname'" "max coef diff = `maxdiff_b' (tol=`tol')"
+ 62.     }
+ 63.     else {
+ 64.         test_fail "`testname'" "max VCE relative diff = `maxreldiff_V' (to
+> l=`tol')"
+ 65.     }
+ 66. end
+
+. 
+. di as text "Benchmark helper programs loaded"
+Benchmark helper programs loaded
+
+. 
+end of do-file
+
+. 
+. di as text ""
+
+
+. di as text "ctools validation framework loaded"
+ctools validation framework loaded
+
+. di as text ""
+
+
+. 
+end of do-file
+
+. 
+. quietly {
+
+----------------------------------------------------------------------
+Prerequisite Check
+----------------------------------------------------------------------
+[PASS] ivreghdfe is installed
+
+----------------------------------------------------------------------
+Plugin Check
+----------------------------------------------------------------------
+[PASS] civreghdfe plugin loads and runs
+
+----------------------------------------------------------------------
+Basic IV Tests (auto)
+----------------------------------------------------------------------
+[PASS] single endog, single instr
+[PASS] single endog, two instr
+[PASS] with exog var
+[PASS] with multiple exog
+
+----------------------------------------------------------------------
+Multiple Endogenous Variables
+----------------------------------------------------------------------
+[PASS] two endog
+[PASS] two endog, more instr
+
+----------------------------------------------------------------------
+VCE Options
+----------------------------------------------------------------------
+[PASS] vce(robust)
+[PASS] vce(cluster)
+[PASS] multi-instr + robust
+
+----------------------------------------------------------------------
+Two-Way Fixed Effects
+----------------------------------------------------------------------
+[PASS] two-way FE
+[PASS] two-way + robust
+
+----------------------------------------------------------------------
+Census Dataset
+----------------------------------------------------------------------
+[PASS] census basic
+[PASS] census two instr
+[PASS] census with exog
+
+----------------------------------------------------------------------
+Panel Data (nlswork)
+----------------------------------------------------------------------
+[PASS] nlswork basic
+[PASS] nlswork two instr
+[PASS] nlswork robust
+[PASS] nlswork cluster
+
+----------------------------------------------------------------------
+Large Dataset
+----------------------------------------------------------------------
+[PASS] 20K dataset: N matches
+
+----------------------------------------------------------------------
+first Option
+----------------------------------------------------------------------
+[PASS] first option accepted
+
+----------------------------------------------------------------------
+small Option
+----------------------------------------------------------------------
+[PASS] small option accepted
+
+----------------------------------------------------------------------
+tolerance/maxiter Options
+----------------------------------------------------------------------
+[PASS] tolerance(1e-10) accepted
+[PASS] maxiter(1000) accepted
+
+----------------------------------------------------------------------
+verbose/timeit Options
+----------------------------------------------------------------------
+[PASS] verbose option accepted
+[PASS] timeit option accepted
+
+----------------------------------------------------------------------
+if/in Conditions
+----------------------------------------------------------------------
+[PASS] if condition: N matches
+[PASS] in condition: N matches
+
+----------------------------------------------------------------------
+Coefficient Comparison
+----------------------------------------------------------------------
+[PASS] coefficients match (maxdiff=5.68434188608e-14)
+
+----------------------------------------------------------------------
+Weights
+----------------------------------------------------------------------
+[PASS] aweight accepted
+[PASS] fweight accepted
+[PASS] pweight accepted
+
+----------------------------------------------------------------------
+SUMMARY: civreghdfe
+----------------------------------------------------------------------
+Tests passed: 33 / 33
+Tests failed: 0
+----------------------------------------------------------------------
+ALL TESTS PASSED
+----------------------------------------------------------------------
+
+. 
+end of do-file

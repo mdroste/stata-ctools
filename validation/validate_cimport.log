@@ -1350,6 +1350,88 @@ Loaded 3 observations
 [PASS] bindquotes default (strict) (N=3, K=3)
 
 . 
+. * Comprehensive quote binding edge case test
+. capture file close _all
+
+. file open csvfile using "temp/quote_edge_cases.csv", write replace
+(file temp/quote_edge_cases.csv not found)
+
+. file write csvfile `"a,b,c"' _n
+
+. file write csvfile `""normal","field","here""' _n
+
+. file write csvfile `""has""embedded""quotes","more""quotes","end""' _n
+
+. file write csvfile `""comma,inside","another,comma","ok""' _n
+
+. file write csvfile `""",empty,"""' _n
+
+. file write csvfile `"unquoted,"then quoted","back unquoted""' _n
+
+. file write csvfile `""spaces  ","  spaces","  both  ""' _n
+
+. file close csvfile
+
+. 
+. * Test comprehensive quote binding
+. import delimited using "temp/quote_edge_cases.csv", clear varnames(1) bindquo
+> tes(strict)
+(encoding automatically selected: ISO-8859-1)
+(3 vars, 6 obs)
+
+. rename (a b c) (a_stata b_stata c_stata)
+
+. tempfile stata_quote_data
+
+. save `stata_quote_data'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St39645.000001 saved
+    as .dta format
+
+. 
+. cimport delimited using "temp/quote_edge_cases.csv", clear varnames(1)
+Scanned 6 rows, 3 columns
+Loaded 6 observations
+(           6 observations read)
+
+. merge 1:1 _n using `stata_quote_data', nogen
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                 6  
+    -----------------------------------------
+
+. 
+. gen match_a = (a == a_stata)
+
+. gen match_b = (b == b_stata)
+
+. gen match_c = (c == c_stata)
+
+. 
+. qui count if match_a == 1 & match_b == 1 & match_c == 1
+
+. local all_match = r(N)
+
+. local total_rows = _N
+
+. 
+. global TESTS_TOTAL = $TESTS_TOTAL + 1
+
+. if `all_match' == `total_rows' {
+.     global TESTS_PASSED = $TESTS_PASSED + 1
+.     di as result "[PASS] quote binding edge cases (`all_match'/`total_rows' r
+> ows)"
+[PASS] quote binding edge cases (6/6 rows)
+. }
+
+. else {
+.     global TESTS_FAILED = $TESTS_FAILED + 1
+.     di as error "[FAIL] quote binding edge cases (`all_match'/`total_rows' ro
+> ws match)"
+. }
+
+. 
 . /****************************************************************************
 > ***
 >  * Round-trip tests (export then reimport)
@@ -1578,6 +1660,8 @@ Loaded 5000 observations
 
 . capture erase "temp/bindquotes_test.csv"
 
+. capture erase "temp/quote_edge_cases.csv"
+
 . 
 . /****************************************************************************
 > ***
@@ -1589,9 +1673,9 @@ Loaded 5000 observations
 ----------------------------------------------------------------------
 SUMMARY: cimport
 ----------------------------------------------------------------------
-Tests passed: 17
+Tests passed: 18
 Tests failed: 0
-Total tests:  17
+Total tests:  18
 ALL TESTS PASSED
 ----------------------------------------------------------------------
 

@@ -3,30 +3,13 @@
  *
  * Benchmark helper programs for ctools validation test suite
  * Each program runs both ctools and Stata native commands, compares results,
- * and reports PASS/FAIL in a concise format.
- *
- * Usage:
- *   benchmark_sort varlist [, options]
- *   benchmark_merge mergetype keyvar using filename [, options]
- *   benchmark_reghdfe depvar indepvars, absorb(varlist) [options]
- *   benchmark_qreg depvar indepvars [, options]
- *   benchmark_import using filename [, options]
- *   benchmark_export using filename [, options]
+ * and reports [PASS] or [FAIL] with detailed error descriptions
  ******************************************************************************/
 
 /*******************************************************************************
- * benchmark_sort
- *
- * Compare csort vs sort, stable
+ * benchmark_sort - Compare csort vs sort, stable
  *
  * Syntax: benchmark_sort varlist [, testname(string) algorithm(string)]
- *
- * Example:
- *   sysuse auto, clear
- *   benchmark_sort price
- *   benchmark_sort foreign rep78, testname("multi-var sort")
- *   benchmark_sort price, algorithm(msd)
- *   benchmark_sort price, algorithm(timsort)
  ******************************************************************************/
 capture program drop benchmark_sort
 program define benchmark_sort
@@ -34,8 +17,6 @@ program define benchmark_sort
 
     if "`testname'" == "" local testname "sort `varlist'"
     if "`algorithm'" != "" local testname "`testname' [alg=`algorithm']"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
 
     preserve
 
@@ -51,74 +32,47 @@ program define benchmark_sort
     * Restore and run csort
     use `original', clear
     if "`algorithm'" != "" {
-        csort `varlist', algorithm(`algorithm')
+        capture csort `varlist', algorithm(`algorithm')
     }
     else {
-        csort `varlist'
+        capture csort `varlist'
+    }
+    local csort_rc = _rc
+
+    if `csort_rc' != 0 {
+        restore
+        test_fail "`testname'" "csort returned error `csort_rc'"
+        exit
     }
 
     * Compare datasets
     capture quietly cf _all using `stata_sorted'
-    local rc = _rc
+    local cf_rc = _rc
 
     restore
 
-    if `rc' == 0 {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname'"
+    if `cf_rc' == 0 {
+        test_pass "`testname'"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname'"
+        test_fail "`testname'" "sorted data differs from Stata sort"
     }
 end
 
 /*******************************************************************************
- * benchmark_sort_all_algs
+ * benchmark_merge - Compare cmerge vs merge
  *
- * Run benchmark_sort with all three algorithms (lsd, msd, timsort)
- *
- * Syntax: benchmark_sort_all_algs varlist [, testname(string)]
- *
- * Example:
- *   benchmark_sort_all_algs price, testname("numeric sort")
- ******************************************************************************/
-capture program drop benchmark_sort_all_algs
-program define benchmark_sort_all_algs
-    syntax varlist [, testname(string)]
-
-    if "`testname'" == "" local testname "sort `varlist'"
-
-    * Test all three algorithms
-    benchmark_sort `varlist', testname("`testname'") algorithm(lsd)
-    benchmark_sort `varlist', testname("`testname'") algorithm(msd)
-    benchmark_sort `varlist', testname("`testname'") algorithm(timsort)
-end
-
-/*******************************************************************************
- * benchmark_merge
- *
- * Compare cmerge vs merge
- * Validates: (1) _merge counts match, (2) datasets are identical via cf _all
- *
- * Syntax: benchmark_merge mergetype keyvar using filename [, keep(string)
- *         generate(string) nogenerate keepusing(varlist) testname(string)]
- *
- * Example:
- *   benchmark_merge 1:1 id using mydata.dta
- *   benchmark_merge m:1 foreign using lookup.dta, keep(match)
+ * Syntax: benchmark_merge mergetype keyvar using filename [, options]
  ******************************************************************************/
 capture program drop benchmark_merge
 program define benchmark_merge
     syntax anything using/, [keep(string) GENerate(name) NOGENerate KEEPUSing(string) ///
-        testname(string) SORTed ASSert(string) UPDATE REPLACE FORCE NOLabel NONotes]
+        testname(string) SORTed ASSert(string) UPDATE REPLACE FORCE NOLabel NONotes NOREPort]
 
     * Parse merge type and key vars
     gettoken mergetype keyvars : anything
 
     if "`testname'" == "" local testname "merge `mergetype' `keyvars'"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
 
     * Build option string
     local opts ""
@@ -141,9 +95,19 @@ program define benchmark_merge
     quietly save `original'
 
     * Run Stata merge
-    merge `mergetype' `keyvars' using `using', `opts'
+    capture merge `mergetype' `keyvars' using `using', `opts'
+    local stata_rc = _rc
+
+    if `stata_rc' != 0 {
+        restore
+        test_fail "`testname'" "Stata merge returned error `stata_rc'"
+        exit
+    }
 
     * Get _merge counts from Stata
+    local stata_m1 = 0
+    local stata_m2 = 0
+    local stata_m3 = 0
     capture confirm variable _merge
     if _rc == 0 {
         quietly count if _merge == 1
@@ -153,29 +117,29 @@ program define benchmark_merge
         quietly count if _merge == 3
         local stata_m3 = r(N)
     }
-    else {
-        local stata_m1 = .
-        local stata_m2 = .
-        local stata_m3 = .
-    }
 
-    * Save unsorted for first comparison
-    tempfile stata_merged_unsorted
-    quietly save `stata_merged_unsorted'
-
-    * Sort by ALL variables for deterministic comparison
-    * (keyvars alone may leave order undefined within key groups)
+    * Sort by all variables for comparison
     qui ds
     local allvars `r(varlist)'
     sort `allvars'
-    tempfile stata_merged_sorted
-    quietly save `stata_merged_sorted'
+    tempfile stata_merged
+    quietly save `stata_merged'
 
     * Restore and run cmerge
     use `original', clear
-    cmerge `mergetype' `keyvars' using `using', `opts'
+    capture cmerge `mergetype' `keyvars' using `using', `opts' noreport
+    local cmerge_rc = _rc
+
+    if `cmerge_rc' != 0 {
+        restore
+        test_fail "`testname'" "cmerge returned error `cmerge_rc'"
+        exit
+    }
 
     * Get _merge counts from cmerge
+    local cmerge_m1 = 0
+    local cmerge_m2 = 0
+    local cmerge_m3 = 0
     capture confirm variable _merge
     if _rc == 0 {
         quietly count if _merge == 1
@@ -185,63 +149,34 @@ program define benchmark_merge
         quietly count if _merge == 3
         local cmerge_m3 = r(N)
     }
-    else {
-        local cmerge_m1 = .
-        local cmerge_m2 = .
-        local cmerge_m3 = .
-    }
 
-    * Check 1: _merge counts match
-    local counts_match = 1
-    if `stata_m1' != `cmerge_m1' | `stata_m2' != `cmerge_m2' | `stata_m3' != `cmerge_m3' {
-        local counts_match = 0
-    }
+    * Check counts match
+    local counts_match = (`stata_m1' == `cmerge_m1') & (`stata_m2' == `cmerge_m2') & (`stata_m3' == `cmerge_m3')
 
-    * Check 2a: cf _all BEFORE sorting (tests if order is identical too)
-    capture quietly cf _all using `stata_merged_unsorted'
-    local cf_unsorted_rc = _rc
-
-    * Check 2b: cf _all AFTER sorting by ALL variables (tests content only)
+    * Sort and compare datasets
     qui ds
     local allvars `r(varlist)'
     sort `allvars'
-    capture quietly cf _all using `stata_merged_sorted'
-    local cf_sorted_rc = _rc
+    capture quietly cf _all using `stata_merged'
+    local cf_rc = _rc
 
     restore
 
-    * Report results
-    if `counts_match' & `cf_sorted_rc' == 0 {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        if `cf_unsorted_rc' == 0 {
-            di as result "[PASS] `testname'"
-        }
-        else {
-            di as result "[PASS] `testname' (sort order differs)"
-        }
+    if `counts_match' & `cf_rc' == 0 {
+        test_pass "`testname'"
+    }
+    else if !`counts_match' {
+        test_fail "`testname'" "_merge counts differ: stata(m1=`stata_m1',m2=`stata_m2',m3=`stata_m3') vs cmerge(m1=`cmerge_m1',m2=`cmerge_m2',m3=`cmerge_m3')"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        if !`counts_match' {
-            di as error "[FAIL] `testname' (_merge counts: m1:`stata_m1'!=`cmerge_m1' m2:`stata_m2'!=`cmerge_m2' m3:`stata_m3'!=`cmerge_m3')"
-        }
-        else {
-            di as error "[FAIL] `testname' (cf _all: datasets differ even after sorting)"
-        }
+        test_fail "`testname'" "merged data differs from Stata merge"
     }
 end
 
 /*******************************************************************************
- * benchmark_reghdfe
+ * benchmark_reghdfe - Compare creghdfe vs reghdfe
  *
- * Compare creghdfe vs reghdfe
- *
- * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist)
- *         [vce(string) testname(string) tol(real)]
- *
- * Example:
- *   benchmark_reghdfe price mpg weight, absorb(foreign)
- *   benchmark_reghdfe y x1 x2 [aw=w], absorb(firm year) vce(cluster firm)
+ * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist) [options]
  ******************************************************************************/
 capture program drop benchmark_reghdfe
 program define benchmark_reghdfe
@@ -249,9 +184,7 @@ program define benchmark_reghdfe
 
     gettoken depvar indepvars : varlist
 
-    if "`testname'" == "" local testname "reghdfe `depvar' ... , absorb(`absorb')"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
+    if "`testname'" == "" local testname "reghdfe `depvar' `indepvars', absorb(`absorb')"
 
     * Build weight string
     local wtexp ""
@@ -264,12 +197,28 @@ program define benchmark_reghdfe
     preserve
 
     * Run reghdfe
-    quietly reghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
+    capture quietly reghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
+    local reghdfe_rc = _rc
+
+    if `reghdfe_rc' != 0 {
+        restore
+        test_fail "`testname'" "reghdfe returned error `reghdfe_rc'"
+        exit
+    }
+
     matrix reghdfe_b = e(b)
     local reghdfe_N = e(N)
 
     * Run creghdfe
-    quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
+    capture quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
+    local creghdfe_rc = _rc
+
+    if `creghdfe_rc' != 0 {
+        restore
+        test_fail "`testname'" "creghdfe returned error `creghdfe_rc'"
+        exit
+    }
+
     matrix creghdfe_b = e(b)
     local creghdfe_N = e(N)
 
@@ -277,8 +226,7 @@ program define benchmark_reghdfe
 
     * Compare N
     if `reghdfe_N' != `creghdfe_N' {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (N: `reghdfe_N' != `creghdfe_N')"
+        test_fail "`testname'" "N differs: reghdfe=`reghdfe_N' vs creghdfe=`creghdfe_N'"
         exit
     }
 
@@ -293,26 +241,17 @@ program define benchmark_reghdfe
     }
 
     if `maxdiff' < `tol' {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname'"
+        test_pass "`testname'"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (max coef diff: " %9.2e `maxdiff' ")"
+        test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
     }
 end
 
 /*******************************************************************************
- * benchmark_qreg
+ * benchmark_qreg - Compare cqreg vs qreg
  *
- * Compare cqreg vs qreg
- *
- * Syntax: benchmark_qreg depvar indepvars [, quantile(real) vce(string)
- *         testname(string) tol(real)]
- *
- * Example:
- *   benchmark_qreg price mpg weight
- *   benchmark_qreg price mpg weight, quantile(0.25)
+ * Syntax: benchmark_qreg depvar indepvars [, quantile(real) options]
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
@@ -320,9 +259,7 @@ program define benchmark_qreg
 
     gettoken depvar indepvars : varlist
 
-    if "`testname'" == "" local testname "qreg `depvar' ... , q(`quantile')"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
+    if "`testname'" == "" local testname "qreg `depvar' `indepvars', q(`quantile')"
 
     * Build vce option
     local vceopt ""
@@ -331,12 +268,28 @@ program define benchmark_qreg
     preserve
 
     * Run qreg
-    quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    local qreg_rc = _rc
+
+    if `qreg_rc' != 0 {
+        restore
+        test_fail "`testname'" "qreg returned error `qreg_rc'"
+        exit
+    }
+
     matrix qreg_b = e(b)
     local qreg_N = e(N)
 
     * Run cqreg
-    quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
+    local cqreg_rc = _rc
+
+    if `cqreg_rc' != 0 {
+        restore
+        test_fail "`testname'" "cqreg returned error `cqreg_rc'"
+        exit
+    }
+
     matrix cqreg_b = e(b)
     local cqreg_N = e(N)
 
@@ -344,8 +297,7 @@ program define benchmark_qreg
 
     * Compare N
     if `qreg_N' != `cqreg_N' {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (N: `qreg_N' != `cqreg_N')"
+        test_fail "`testname'" "N differs: qreg=`qreg_N' vs cqreg=`cqreg_N'"
         exit
     }
 
@@ -360,53 +312,57 @@ program define benchmark_qreg
     }
 
     if `maxdiff' < `tol' {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname'"
+        test_pass "`testname'"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (max coef diff: " %9.2e `maxdiff' ")"
+        test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
     }
 end
 
 /*******************************************************************************
- * benchmark_import
+ * benchmark_import - Compare cimport vs import delimited
  *
- * Compare cimport delimited vs import delimited
- *
- * Syntax: benchmark_import using filename [, delimiters(string) varnames(string)
- *         case(string) rowrange(string) testname(string)]
- *
- * Example:
- *   benchmark_import using "data.csv"
- *   benchmark_import using "data.tsv", delimiters(tab)
+ * Syntax: benchmark_import using filename [, options]
  ******************************************************************************/
 capture program drop benchmark_import
 program define benchmark_import
-    syntax using/, [DELIMiters(string) VARNames(string) CASE(string) ROWRange(string) testname(string) clear]
+    syntax using/, [DELIMiters(string) VARNames(string) CASE(string) testname(string)]
 
     if "`testname'" == "" local testname "import `using'"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
 
     * Build option string
     local opts "clear"
     if "`delimiters'" != "" local opts "`opts' delimiters(`delimiters')"
     if "`varnames'" != "" local opts "`opts' varnames(`varnames')"
     if "`case'" != "" local opts "`opts' case(`case')"
-    if "`rowrange'" != "" local opts "`opts' rowrange(`rowrange')"
 
     preserve
 
     * Run Stata import
-    import delimited `using', `opts'
+    capture import delimited `using', `opts'
+    local stata_rc = _rc
+
+    if `stata_rc' != 0 {
+        restore
+        test_fail "`testname'" "import delimited returned error `stata_rc'"
+        exit
+    }
+
     local stata_n = _N
     local stata_k = c(k)
     tempfile stata_import
     quietly save `stata_import'
 
     * Run cimport
-    cimport delimited `using', `opts'
+    capture cimport delimited `using', `opts'
+    local cimport_rc = _rc
+
+    if `cimport_rc' != 0 {
+        restore
+        test_fail "`testname'" "cimport returned error `cimport_rc'"
+        exit
+    }
+
     local cimport_n = _N
     local cimport_k = c(k)
 
@@ -414,62 +370,66 @@ program define benchmark_import
 
     * Compare dimensions
     if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname' (N=`stata_n', K=`stata_k')"
+        test_pass "`testname'"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (N: `stata_n'!=`cimport_n', K: `stata_k'!=`cimport_k')"
+        test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`stata_k') vs cimport(N=`cimport_n',K=`cimport_k')"
     }
 end
 
 /*******************************************************************************
- * benchmark_export
+ * benchmark_export - Compare cexport vs export delimited
  *
- * Compare cexport delimited vs export delimited
- *
- * Syntax: benchmark_export [varlist] using filename [, delimiter(string)
- *         novarnames quote testname(string)]
- *
- * Example:
- *   benchmark_export using "output.csv", replace
- *   benchmark_export price mpg using "output.csv", replace
+ * Syntax: benchmark_export [varlist] using filename [, options]
  ******************************************************************************/
 capture program drop benchmark_export
 program define benchmark_export
-    syntax [varlist] using/, [DELIMiter(string) NOVARNames QUOTE replace testname(string)]
+    syntax [varlist] using/, [DELIMiter(string) NOVARNames QUOTE NOLabel replace testname(string)]
 
     if "`testname'" == "" local testname "export `using'"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
 
     * Build option string
     local opts "replace"
     if "`delimiter'" != "" local opts "`opts' delimiter(`delimiter')"
     if "`novarnames'" != "" local opts "`opts' novarnames"
     if "`quote'" != "" local opts "`opts' quote"
+    if "`nolabel'" != "" local opts "`opts' nolabel"
 
     preserve
 
     * Generate temp filenames
     tempfile stata_export cexport_export
-    local stata_csv = subinstr("`stata_export'", ".dta", ".csv", .)
-    local cexport_csv = subinstr("`cexport_export'", ".dta", ".csv", .)
+    local stata_csv "`stata_export'.csv"
+    local cexport_csv "`cexport_export'.csv"
 
     * Run Stata export
     if "`varlist'" != "" {
-        export delimited `varlist' using "`stata_csv'", `opts'
+        capture export delimited `varlist' using "`stata_csv'", `opts'
     }
     else {
-        export delimited using "`stata_csv'", `opts'
+        capture export delimited using "`stata_csv'", `opts'
+    }
+    local stata_rc = _rc
+
+    if `stata_rc' != 0 {
+        restore
+        test_fail "`testname'" "export delimited returned error `stata_rc'"
+        exit
     }
 
     * Run cexport
     if "`varlist'" != "" {
-        cexport delimited `varlist' using "`cexport_csv'", `opts'
+        capture cexport delimited `varlist' using "`cexport_csv'", `opts'
     }
     else {
-        cexport delimited using "`cexport_csv'", `opts'
+        capture cexport delimited using "`cexport_csv'", `opts'
+    }
+    local cexport_rc = _rc
+
+    if `cexport_rc' != 0 {
+        restore
+        test_fail "`testname'" "cexport returned error `cexport_rc'"
+        exit
     }
 
     * Reimport and compare
@@ -489,61 +449,104 @@ program define benchmark_export
 
     * Compare dimensions
     if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname' (N=`stata_n', K=`cexport_k')"
+        test_pass "`testname'"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (N: `stata_n'!=`cexport_n', K: `stata_k'!=`cexport_k')"
+        test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`stata_k') vs cexport(N=`cexport_n',K=`cexport_k')"
     }
 end
 
 /*******************************************************************************
- * benchmark_binscatter (for cbinscatter validation)
+ * benchmark_ivreghdfe - Compare civreghdfe vs ivreghdfe
  *
- * Compare cbinscatter vs binscatter (if installed)
- *
- * Syntax: benchmark_binscatter yvar xvar [, controls(varlist) absorb(varlist)
- *         by(varname) nquantiles(int) testname(string)]
+ * Syntax: benchmark_ivreghdfe spec, absorb(varlist) [options]
  ******************************************************************************/
-capture program drop benchmark_binscatter
-program define benchmark_binscatter
-    syntax varlist(min=2 max=2) [if] [in] [aw fw pw], [controls(varlist) Absorb(varlist) BY(varname) NQuantiles(integer 20) testname(string) nograph]
+capture program drop benchmark_ivreghdfe
+program define benchmark_ivreghdfe
+    syntax anything(name=spec), Absorb(varlist) [vce(string) testname(string) tol(real 1e-6)]
 
-    gettoken yvar xvar : varlist
+    if "`testname'" == "" local testname "ivreghdfe `spec', absorb(`absorb')"
 
-    if "`testname'" == "" local testname "binscatter `yvar' `xvar'"
-
-    global TESTS_TOTAL = $TESTS_TOTAL + 1
-
-    * Build option string
-    local opts "nquantiles(`nquantiles') nograph"
-    if "`controls'" != "" local opts "`opts' controls(`controls')"
-    if "`absorb'" != "" local opts "`opts' absorb(`absorb')"
-    if "`by'" != "" local opts "`opts' by(`by')"
-
-    * Build weight string
-    local wtexp ""
-    if "`weight'" != "" local wtexp "[`weight'`exp']"
+    * Build vce option
+    local vceopt ""
+    if "`vce'" != "" local vceopt "vce(`vce')"
 
     preserve
 
-    * Run cbinscatter
-    quietly cbinscatter `yvar' `xvar' `wtexp' `if' `in', `opts'
-    local cbin_N = e(N)
-    local cbin_nq = e(nquantiles)
-    matrix cbin_data = e(bindata)
+    * Run ivreghdfe
+    capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt'
+    local ivreghdfe_rc = _rc
+
+    if `ivreghdfe_rc' != 0 {
+        restore
+        test_fail "`testname'" "ivreghdfe returned error `ivreghdfe_rc'"
+        exit
+    }
+
+    matrix ivreghdfe_b = e(b)
+    matrix ivreghdfe_V = e(V)
+    local ivreghdfe_N = e(N)
+
+    * Run civreghdfe
+    capture quietly civreghdfe `spec', absorb(`absorb') `vceopt'
+    local civreghdfe_rc = _rc
+
+    if `civreghdfe_rc' != 0 {
+        restore
+        test_fail "`testname'" "civreghdfe returned error `civreghdfe_rc'"
+        exit
+    }
+
+    matrix civreghdfe_b = e(b)
+    matrix civreghdfe_V = e(V)
+    local civreghdfe_N = e(N)
 
     restore
 
-    * Verify cbinscatter produced valid results
-    if `cbin_N' > 0 & `cbin_nq' == `nquantiles' {
-        global TESTS_PASSED = $TESTS_PASSED + 1
-        di as result "[PASS] `testname' (N=`cbin_N', bins=`cbin_nq')"
+    * Compare N
+    if `ivreghdfe_N' != `civreghdfe_N' {
+        test_fail "`testname'" "N differs: ivreghdfe=`ivreghdfe_N' vs civreghdfe=`civreghdfe_N'"
+        exit
+    }
+
+    * Compare coefficients
+    tempname diff_b
+    matrix `diff_b' = ivreghdfe_b - civreghdfe_b
+    local cols = colsof(`diff_b')
+    local maxdiff_b = 0
+    forvalues j = 1/`cols' {
+        local d = abs(`diff_b'[1, `j'])
+        if `d' > `maxdiff_b' local maxdiff_b = `d'
+    }
+
+    * Compare VCE using relative tolerance
+    tempname diff_V
+    matrix `diff_V' = ivreghdfe_V - civreghdfe_V
+    local rows = rowsof(`diff_V')
+    local cols = colsof(`diff_V')
+    local maxreldiff_V = 0
+    forvalues i = 1/`rows' {
+        forvalues j = 1/`cols' {
+            local diff = abs(`diff_V'[`i', `j'])
+            local base = abs(ivreghdfe_V[`i', `j'])
+            if `base' > 1e-10 {
+                local reldiff = `diff' / `base'
+            }
+            else {
+                local reldiff = `diff'
+            }
+            if `reldiff' > `maxreldiff_V' local maxreldiff_V = `reldiff'
+        }
+    }
+
+    if `maxdiff_b' < `tol' & `maxreldiff_V' < `tol' {
+        test_pass "`testname'"
+    }
+    else if `maxdiff_b' >= `tol' {
+        test_fail "`testname'" "max coef diff = `maxdiff_b' (tol=`tol')"
     }
     else {
-        global TESTS_FAILED = $TESTS_FAILED + 1
-        di as error "[FAIL] `testname' (N=`cbin_N', bins=`cbin_nq')"
+        test_fail "`testname'" "max VCE relative diff = `maxreldiff_V' (tol=`tol')"
     }
 end
 

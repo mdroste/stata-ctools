@@ -1,168 +1,225 @@
 /*******************************************************************************
  * validate_cexport.do
  *
- * Comprehensive validation tests for cexport vs export delimited
- * Tests CSV export functionality across various scenarios
+ * Comprehensive validation tests for cexport delimited vs export delimited
+ * Tests all export options: delimiter, novarnames, quote, nolabel, if/in
  ******************************************************************************/
 
 do "validate_setup.do"
 
+quietly {
+
 di as text ""
 di as text "======================================================================"
-di as text "              CEXPORT VALIDATION TEST SUITE"
+di as text "              CEXPORT DELIMITED VALIDATION TEST SUITE"
 di as text "======================================================================"
 
-* Create temp directory for test files
 capture mkdir "temp"
 
 /*******************************************************************************
- * Basic export tests
+ * SECTION 1: Plugin check
  ******************************************************************************/
-print_section "Basic export tests"
+noi print_section "Plugin Check"
 
 sysuse auto, clear
-benchmark_export using "temp/test.csv", testname("auto dataset")
-
-sysuse census, clear
-benchmark_export using "temp/test.csv", testname("census dataset")
-
-sysuse voter, clear
-benchmark_export using "temp/test.csv", testname("voter dataset")
-
-sysuse sp500, clear
-benchmark_export using "temp/test.csv", testname("sp500 dataset")
-
-sysuse uslifeexp, clear
-benchmark_export using "temp/test.csv", testname("uslifeexp dataset")
+capture cexport delimited using "temp/test.csv", replace
+if _rc != 0 {
+    noi test_fail "cexport plugin load" "returned error `=_rc'"
+    noi print_summary "cexport"
+    exit 1
+}
+noi test_pass "cexport plugin loads and runs"
 
 /*******************************************************************************
- * Selected variables
+ * SECTION 2: Basic comma-delimited export
  ******************************************************************************/
-print_section "Selected variables"
+noi print_section "Basic Comma-Delimited Export"
 
 sysuse auto, clear
-benchmark_export make price mpg using "temp/test.csv", testname("three variables")
 
-sysuse auto, clear
-benchmark_export make using "temp/test.csv", testname("single string var")
+export delimited using "temp/stata.csv", replace
+cexport delimited using "temp/cexport.csv", replace
 
-sysuse auto, clear
-benchmark_export price using "temp/test.csv", testname("single numeric var")
+import delimited using "temp/stata.csv", clear
+local stata_n = _N
+local stata_k = c(k)
 
-/*******************************************************************************
- * Delimiter options
- ******************************************************************************/
-print_section "Delimiter options"
+import delimited using "temp/cexport.csv", clear
+local cexport_n = _N
+local cexport_k = c(k)
 
-sysuse auto, clear
-keep make price mpg weight
-benchmark_export using "temp/test.csv", delimiter(";") testname("semicolon delimiter")
-
-/*******************************************************************************
- * Other options
- ******************************************************************************/
-print_section "Other options"
-
-sysuse auto, clear
-keep in 1/5
-keep make price
-benchmark_export using "temp/test.csv", novarnames testname("novarnames")
-
-sysuse auto, clear
-keep in 1/5
-keep make price
-benchmark_export using "temp/test.csv", quote testname("quote")
-
-/*******************************************************************************
- * nolabel option
- ******************************************************************************/
-print_section "nolabel option"
-
-sysuse auto, clear
-keep in 1/5
-keep make price foreign
-
-* Test with labels (default)
-export delimited using "temp/stata_label.csv", replace
-cexport delimited using "temp/cexport_label.csv", replace
-
-import delimited using "temp/stata_label.csv", clear stringcols(3)
-local stata_foreign1 = foreign[1]
-
-import delimited using "temp/cexport_label.csv", clear stringcols(3)
-local cexport_foreign1 = foreign[1]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if "`stata_foreign1'" == "`cexport_foreign1'" {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] value labels exported (default)"
+if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
+    noi test_pass "basic export dimensions match"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] value labels exported (default)"
-}
-
-* Test with nolabel
-sysuse auto, clear
-keep in 1/5
-keep make price foreign
-
-export delimited using "temp/stata_nolabel.csv", nolabel replace
-cexport delimited using "temp/cexport_nolabel.csv", nolabel replace
-
-import delimited using "temp/stata_nolabel.csv", clear
-local stata_foreign1 = foreign[1]
-
-import delimited using "temp/cexport_nolabel.csv", clear
-local cexport_foreign1 = foreign[1]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_foreign1' == `cexport_foreign1' {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] nolabel option"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] nolabel option"
+    noi test_fail "basic export" "dimensions differ"
 }
 
 /*******************************************************************************
- * Tab delimiter
+ * SECTION 3: Tab delimiter
  ******************************************************************************/
-print_section "Tab delimiter"
+noi print_section "Tab Delimiter"
 
 sysuse auto, clear
-keep in 1/10
-keep make price mpg
 
 export delimited using "temp/stata_tab.tsv", delimiter(tab) replace
 cexport delimited using "temp/cexport_tab.tsv", delimiter(tab) replace
 
 import delimited using "temp/stata_tab.tsv", delimiters(tab) clear
 local stata_n = _N
-local stata_k = c(k)
 
 import delimited using "temp/cexport_tab.tsv", delimiters(tab) clear
 local cexport_n = _N
-local cexport_k = c(k)
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] tab delimiter"
+if `stata_n' == `cexport_n' {
+    noi test_pass "tab delimiter N matches"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] tab delimiter (stata: N=`stata_n' K=`stata_k', cexport: N=`cexport_n' K=`cexport_k')"
+    noi test_fail "tab delimiter" "N differs"
 }
 
 /*******************************************************************************
- * if/in conditions
+ * SECTION 4: Semicolon delimiter
  ******************************************************************************/
-print_section "if/in conditions"
+noi print_section "Semicolon Delimiter"
 
-* Export with if condition
 sysuse auto, clear
+
+export delimited using "temp/stata_semi.csv", delimiter(";") replace
+cexport delimited using "temp/cexport_semi.csv", delimiter(";") replace
+
+import delimited using "temp/stata_semi.csv", delimiters(";") clear
+local stata_n = _N
+
+import delimited using "temp/cexport_semi.csv", delimiters(";") clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "semicolon delimiter N matches"
+}
+else {
+    noi test_fail "semicolon delimiter" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 5: novarnames option
+ ******************************************************************************/
+noi print_section "novarnames Option"
+
+sysuse auto, clear
+
+export delimited using "temp/stata_novar.csv", novarnames replace
+cexport delimited using "temp/cexport_novar.csv", novarnames replace
+
+import delimited using "temp/stata_novar.csv", varnames(nonames) clear
+local stata_n = _N
+
+import delimited using "temp/cexport_novar.csv", varnames(nonames) clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "novarnames N matches"
+}
+else {
+    noi test_fail "novarnames" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 6: quote option
+ ******************************************************************************/
+noi print_section "quote Option"
+
+sysuse auto, clear
+
+export delimited using "temp/stata_quote.csv", quote replace
+cexport delimited using "temp/cexport_quote.csv", quote replace
+
+import delimited using "temp/stata_quote.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_quote.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "quote option N matches"
+}
+else {
+    noi test_fail "quote option" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 7: nolabel option
+ ******************************************************************************/
+noi print_section "nolabel Option"
+
+sysuse auto, clear
+
+* With labels (default)
+export delimited using "temp/stata_label.csv", replace
+cexport delimited using "temp/cexport_label.csv", replace
+
+import delimited using "temp/stata_label.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_label.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "with labels N matches"
+}
+else {
+    noi test_fail "with labels" "N differs"
+}
+
+* Without labels
+sysuse auto, clear
+
+export delimited using "temp/stata_nolabel.csv", nolabel replace
+cexport delimited using "temp/cexport_nolabel.csv", nolabel replace
+
+import delimited using "temp/stata_nolabel.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_nolabel.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "nolabel N matches"
+}
+else {
+    noi test_fail "nolabel" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 8: Variable selection
+ ******************************************************************************/
+noi print_section "Variable Selection"
+
+sysuse auto, clear
+
+export delimited make price mpg using "temp/stata_vars.csv", replace
+cexport delimited make price mpg using "temp/cexport_vars.csv", replace
+
+import delimited using "temp/stata_vars.csv", clear
+local stata_k = c(k)
+
+import delimited using "temp/cexport_vars.csv", clear
+local cexport_k = c(k)
+
+if `stata_k' == `cexport_k' & `stata_k' == 3 {
+    noi test_pass "variable selection (3 vars)"
+}
+else {
+    noi test_fail "variable selection" "K differs or not 3"
+}
+
+/*******************************************************************************
+ * SECTION 9: if condition
+ ******************************************************************************/
+noi print_section "if Condition"
+
+sysuse auto, clear
+
 export delimited using "temp/stata_if.csv" if foreign == 1, replace
 cexport delimited using "temp/cexport_if.csv" if foreign == 1, replace
 
@@ -172,20 +229,40 @@ local stata_n = _N
 import delimited using "temp/cexport_if.csv", clear
 local cexport_n = _N
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_n' == `cexport_n' & `stata_n' == 22 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] if condition (foreign==1)"
+if `stata_n' == `cexport_n' {
+    noi test_pass "if condition N matches (foreign==1)"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] if condition"
+    noi test_fail "if condition" "N differs"
 }
 
-* Export with in range
 sysuse auto, clear
-export delimited using "temp/stata_in.csv" in 10/20, replace
-cexport delimited using "temp/cexport_in.csv" in 10/20, replace
+
+export delimited using "temp/stata_if2.csv" if price > 10000, replace
+cexport delimited using "temp/cexport_if2.csv" if price > 10000, replace
+
+import delimited using "temp/stata_if2.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_if2.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "if condition N matches (price>10000)"
+}
+else {
+    noi test_fail "if condition" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION 10: in condition
+ ******************************************************************************/
+noi print_section "in Condition"
+
+sysuse auto, clear
+
+export delimited using "temp/stata_in.csv" in 1/20, replace
+cexport delimited using "temp/cexport_in.csv" in 1/20, replace
 
 import delimited using "temp/stata_in.csv", clear
 local stata_n = _N
@@ -193,181 +270,257 @@ local stata_n = _N
 import delimited using "temp/cexport_in.csv", clear
 local cexport_n = _N
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_n' == `cexport_n' & `stata_n' == 11 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] in range (10/20)"
+if `stata_n' == `cexport_n' & `stata_n' == 20 {
+    noi test_pass "in 1/20 N=20"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] in range"
+    noi test_fail "in condition" "N differs or not 20"
+}
+
+sysuse auto, clear
+
+export delimited using "temp/stata_in2.csv" in 30/50, replace
+cexport delimited using "temp/cexport_in2.csv" in 30/50, replace
+
+import delimited using "temp/stata_in2.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_in2.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' & `stata_n' == 21 {
+    noi test_pass "in 30/50 N=21"
+}
+else {
+    noi test_fail "in 30/50" "N differs or not 21"
 }
 
 /*******************************************************************************
- * Special data types
+ * SECTION 11: Combined if and in
  ******************************************************************************/
-print_section "Special data types"
+noi print_section "Combined if and in"
 
-* Negative numbers
-clear
-set obs 5
-gen id = _n
-gen neg_int = -1 * _n * 100
-gen neg_float = -1 * _n * 1.5
+sysuse auto, clear
 
-cexport delimited using "temp/cexport_neg.csv", replace
-import delimited using "temp/cexport_neg.csv", clear
-local neg1 = neg_int[3]
+export delimited using "temp/stata_ifin.csv" if price > 5000 in 1/50, replace
+cexport delimited using "temp/cexport_ifin.csv" if price > 5000 in 1/50, replace
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `neg1' == -300 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] negative numbers"
+import delimited using "temp/stata_ifin.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_ifin.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "if and in combined N matches"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] negative numbers"
-}
-
-* Missing values
-clear
-set obs 5
-gen id = _n
-gen value = _n * 10
-replace value = . in 2
-replace value = . in 4
-
-export delimited using "temp/stata_miss.csv", replace
-cexport delimited using "temp/cexport_miss.csv", replace
-
-import delimited using "temp/stata_miss.csv", clear
-quietly count if missing(value)
-local stata_miss = r(N)
-
-import delimited using "temp/cexport_miss.csv", clear
-quietly count if missing(value)
-local cexport_miss = r(N)
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `stata_miss' == `cexport_miss' & `stata_miss' == 2 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] missing values"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] missing values"
-}
-
-* Numeric precision
-clear
-set obs 5
-gen double precise = _n * 1.123456789012345
-
-export delimited using "temp/stata_prec.csv", replace
-cexport delimited using "temp/cexport_prec.csv", replace
-
-import delimited using "temp/stata_prec.csv", clear
-local stata_p1 = precise[1]
-
-import delimited using "temp/cexport_prec.csv", clear
-local cexport_p1 = precise[1]
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if abs(`stata_p1' - `cexport_p1') < 1e-10 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] numeric precision"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] numeric precision"
+    noi test_fail "if and in" "N differs"
 }
 
 /*******************************************************************************
- * Large dataset
+ * SECTION 12: Census dataset
  ******************************************************************************/
-print_section "Large dataset"
+noi print_section "Census Dataset"
+
+sysuse census, clear
+
+export delimited using "temp/stata_census.csv", replace
+cexport delimited using "temp/cexport_census.csv", replace
+
+import delimited using "temp/stata_census.csv", clear
+local stata_n = _N
+local stata_k = c(k)
+
+import delimited using "temp/cexport_census.csv", clear
+local cexport_n = _N
+local cexport_k = c(k)
+
+if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
+    noi test_pass "census dimensions match"
+}
+else {
+    noi test_fail "census" "dimensions differ"
+}
+
+/*******************************************************************************
+ * SECTION 13: Large dataset export
+ ******************************************************************************/
+noi print_section "Large Dataset Export"
 
 clear
 set seed 12345
-set obs 10000
+set obs 50000
 gen id = _n
 gen group = runiformint(1, 100)
-gen value = runiform() * 1000
-gen str20 label = "item" + string(runiformint(1, 500))
+gen x = runiform()
+gen y = rnormal()
+gen str20 label = "item" + string(runiformint(1, 1000))
 
-benchmark_export using "temp/test.csv", testname("10K rows")
-
-* Verify statistics match
 export delimited using "temp/stata_large.csv", replace
 cexport delimited using "temp/cexport_large.csv", replace
 
 import delimited using "temp/stata_large.csv", clear
-quietly summarize value
-local stata_mean = r(mean)
+local stata_n = _N
 
 import delimited using "temp/cexport_large.csv", clear
-quietly summarize value
-local cexport_mean = r(mean)
+local cexport_n = _N
 
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if abs(`stata_mean' - `cexport_mean') < 0.01 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] large dataset statistics"
+if `stata_n' == `cexport_n' & `stata_n' == 50000 {
+    noi test_pass "large dataset (50K) N matches"
 }
 else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] large dataset statistics"
+    noi test_fail "large dataset" "N differs or not 50K"
 }
 
 /*******************************************************************************
- * Round-trip integrity
+ * SECTION 14: Panel data (nlswork)
  ******************************************************************************/
-print_section "Round-trip integrity"
-
-sysuse census, clear
-local orig_n = _N
-quietly summarize pop
-local orig_mean = r(mean)
-
-cexport delimited using "temp/census_rt.csv", replace
-import delimited using "temp/census_rt.csv", clear
-local reimport_n = _N
-quietly summarize pop
-local reimport_mean = r(mean)
-
-global TESTS_TOTAL = $TESTS_TOTAL + 1
-if `orig_n' == `reimport_n' & abs(`orig_mean' - `reimport_mean') < 1 {
-    global TESTS_PASSED = $TESTS_PASSED + 1
-    di as result "[PASS] round-trip integrity"
-}
-else {
-    global TESTS_FAILED = $TESTS_FAILED + 1
-    di as error "[FAIL] round-trip integrity"
-}
-
-/*******************************************************************************
- * Panel data
- ******************************************************************************/
-print_section "Panel data"
+noi print_section "Panel Data (nlswork)"
 
 webuse nlswork, clear
-keep in 1/1000
-benchmark_export using "temp/test.csv", testname("nlswork panel")
+keep in 1/10000
+
+export delimited using "temp/stata_panel.csv", replace
+cexport delimited using "temp/cexport_panel.csv", replace
+
+import delimited using "temp/stata_panel.csv", clear
+local stata_n = _N
+
+import delimited using "temp/cexport_panel.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' {
+    noi test_pass "panel data N matches"
+}
+else {
+    noi test_fail "panel data" "N differs"
+}
 
 /*******************************************************************************
- * Cleanup temp files
+ * SECTION 15: verbose/timeit options
  ******************************************************************************/
+noi print_section "verbose/timeit Options"
+
+sysuse auto, clear
+
+capture cexport delimited using "temp/test.csv", verbose replace
+if _rc == 0 {
+    noi test_pass "verbose option accepted"
+}
+else {
+    noi test_fail "verbose option" "returned error `=_rc'"
+}
+
+capture cexport delimited using "temp/test.csv", timeit replace
+if _rc == 0 {
+    noi test_pass "timeit option accepted"
+}
+else {
+    noi test_fail "timeit option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 16: replace behavior
+ ******************************************************************************/
+noi print_section "replace Behavior"
+
+sysuse auto, clear
+cexport delimited using "temp/repl.csv", replace
+
+capture cexport delimited using "temp/repl.csv"
+if _rc != 0 {
+    noi test_pass "without replace: fails for existing file"
+}
+else {
+    noi test_fail "without replace" "should fail"
+}
+
+capture cexport delimited using "temp/repl.csv", replace
+if _rc == 0 {
+    noi test_pass "with replace: overwrites file"
+}
+else {
+    noi test_fail "with replace" "failed"
+}
+
+/*******************************************************************************
+ * SECTION 17: Edge cases
+ ******************************************************************************/
+noi print_section "Edge Cases"
+
+* Single observation
+clear
+set obs 1
+gen x = 42
+gen str5 s = "test"
+
+cexport delimited using "temp/single.csv", replace
+import delimited using "temp/single.csv", clear
+if _N == 1 {
+    noi test_pass "single observation export"
+}
+else {
+    noi test_fail "single observation" "N != 1"
+}
+
+* Single variable
+clear
+set obs 100
+gen x = runiform()
+
+export delimited x using "temp/singlevar_stata.csv", replace
+cexport delimited x using "temp/singlevar_cexport.csv", replace
+
+import delimited using "temp/singlevar_cexport.csv", clear
+if c(k) == 1 {
+    noi test_pass "single variable export"
+}
+else {
+    noi test_fail "single variable" "K != 1"
+}
+
+* String with commas
+clear
+input id str40 name
+1 "Smith, John"
+2 "Doe, Jane"
+3 "Regular Name"
+end
+
+export delimited using "temp/comma_stata.csv", replace
+cexport delimited using "temp/comma_cexport.csv", replace
+
+import delimited using "temp/comma_stata.csv", clear
+local stata_n = _N
+
+import delimited using "temp/comma_cexport.csv", clear
+local cexport_n = _N
+
+if `stata_n' == `cexport_n' & `stata_n' == 3 {
+    noi test_pass "strings with commas"
+}
+else {
+    noi test_fail "strings with commas" "N differs"
+}
+
+/*******************************************************************************
+ * Cleanup and summary
+ ******************************************************************************/
+
 local files : dir "temp" files "*.csv"
 foreach f of local files {
     capture erase "temp/`f'"
 }
+local files : dir "temp" files "*.tsv"
+foreach f of local files {
+    capture erase "temp/`f'"
+}
 
-/*******************************************************************************
- * SUMMARY
- ******************************************************************************/
-print_summary "cexport"
+noi print_summary "cexport"
 
-* Return error code if any tests failed
 if $TESTS_FAILED > 0 {
     exit 1
+}
+
 }

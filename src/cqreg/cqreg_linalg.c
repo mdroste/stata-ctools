@@ -51,21 +51,26 @@ ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
 {
     ST_int i;
     ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_int N4 = N - (N % 4);
+    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
+    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
 
-    /* 4-way unrolled loop */
-    for (i = 0; i < N4; i += 4) {
+    /* 8-way unrolled loop for better instruction-level parallelism */
+    for (i = 0; i < N8; i += 8) {
         sum0 += w[i]     * x[i]     * y[i];
         sum1 += w[i + 1] * x[i + 1] * y[i + 1];
         sum2 += w[i + 2] * x[i + 2] * y[i + 2];
         sum3 += w[i + 3] * x[i + 3] * y[i + 3];
+        sum4 += w[i + 4] * x[i + 4] * y[i + 4];
+        sum5 += w[i + 5] * x[i + 5] * y[i + 5];
+        sum6 += w[i + 6] * x[i + 6] * y[i + 6];
+        sum7 += w[i + 7] * x[i + 7] * y[i + 7];
     }
 
     for (; i < N; i++) {
         sum0 += w[i] * x[i] * y[i];
     }
 
-    return (sum0 + sum1) + (sum2 + sum3);
+    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
 }
 
 ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N)
@@ -231,16 +236,30 @@ void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
                       ST_int M, ST_int N)
 {
     ST_int i, j;
+    ST_int M8 = M - (M & 7);  /* M rounded down to multiple of 8 */
 
     /* Initialize y to zero */
     memset(y, 0, M * sizeof(ST_double));
 
-    /* y = sum_j x[j] * A[:,j] */
+    /* y = sum_j x[j] * A[:,j]
+     * OPTIMIZED: 8x loop unrolling for better vectorization */
     for (j = 0; j < N; j++) {
         const ST_double *col = &A[j * M];
         ST_double xj = x[j];
-        #pragma omp simd
-        for (i = 0; i < M; i++) {
+
+        /* 8x unrolled main loop */
+        for (i = 0; i < M8; i += 8) {
+            y[i]     += xj * col[i];
+            y[i + 1] += xj * col[i + 1];
+            y[i + 2] += xj * col[i + 2];
+            y[i + 3] += xj * col[i + 3];
+            y[i + 4] += xj * col[i + 4];
+            y[i + 5] += xj * col[i + 5];
+            y[i + 6] += xj * col[i + 6];
+            y[i + 7] += xj * col[i + 7];
+        }
+        /* Remainder */
+        for (; i < M; i++) {
             y[i] += xj * col[i];
         }
     }
@@ -268,6 +287,7 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
                 ST_int N, ST_int K)
 {
     ST_int j, k, i;
+    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
 
     /* Initialize to zero */
     memset(XDX, 0, K * K * sizeof(ST_double));
@@ -275,6 +295,7 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
     /* Compute X' * D * X
      * XDX[j,k] = sum_i X[i,j] * D[i] * X[i,k]
      *          = sum_i D[i] * X[j*N + i] * X[k*N + i]
+     * OPTIMIZED: 8x loop unrolling with OpenMP parallelization
      */
 
     #ifdef _OPENMP
@@ -283,22 +304,45 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
 
-        /* Diagonal element */
-        ST_double diag = 0.0;
-        for (i = 0; i < N; i++) {
-            diag += D[i] * Xj[i] * Xj[i];
+        /* Diagonal element with 8x unrolling */
+        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+        for (i = 0; i < N8; i += 8) {
+            d0 += D[i]     * Xj[i]     * Xj[i];
+            d1 += D[i + 1] * Xj[i + 1] * Xj[i + 1];
+            d2 += D[i + 2] * Xj[i + 2] * Xj[i + 2];
+            d3 += D[i + 3] * Xj[i + 3] * Xj[i + 3];
+            d4 += D[i + 4] * Xj[i + 4] * Xj[i + 4];
+            d5 += D[i + 5] * Xj[i + 5] * Xj[i + 5];
+            d6 += D[i + 6] * Xj[i + 6] * Xj[i + 6];
+            d7 += D[i + 7] * Xj[i + 7] * Xj[i + 7];
         }
-        XDX[j * K + j] = diag;
+        for (; i < N; i++) {
+            d0 += D[i] * Xj[i] * Xj[i];
+        }
+        XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
 
-        /* Off-diagonal elements (upper triangle) */
+        /* Off-diagonal elements (upper triangle) with 8x unrolling */
         for (k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[k * N];
-            ST_double sum = 0.0;
-            for (i = 0; i < N; i++) {
-                sum += D[i] * Xj[i] * Xk[i];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                s0 += D[i]     * Xj[i]     * Xk[i];
+                s1 += D[i + 1] * Xj[i + 1] * Xk[i + 1];
+                s2 += D[i + 2] * Xj[i + 2] * Xk[i + 2];
+                s3 += D[i + 3] * Xj[i + 3] * Xk[i + 3];
+                s4 += D[i + 4] * Xj[i + 4] * Xk[i + 4];
+                s5 += D[i + 5] * Xj[i + 5] * Xk[i + 5];
+                s6 += D[i + 6] * Xj[i + 6] * Xk[i + 6];
+                s7 += D[i + 7] * Xj[i + 7] * Xk[i + 7];
             }
-            XDX[j * K + k] = sum;
-            XDX[k * K + j] = sum;  /* Symmetric */
+            for (; i < N; i++) {
+                s0 += D[i] * Xj[i] * Xk[i];
+            }
+            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            XDX[j * K + k] = total;
+            XDX[k * K + j] = total;  /* Symmetric */
         }
     }
 }

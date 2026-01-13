@@ -80,23 +80,24 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
     }
 
     vce_debug_log("  Computing X'X...\n");
-    /* Compute X'X */
-    memset(XtX, 0, K * K * sizeof(ST_double));
-
-    /* NOTE: OpenMP is INTENTIONALLY DISABLED here.
+    /* Compute X'X
+     * OPTIMIZED: Uses cqreg_dot and cqreg_dot_self which have 8x unrolling.
+     * NOTE: OpenMP is INTENTIONALLY DISABLED here.
      * When enabled, it causes heap corruption during cqreg_aligned_free()
      * later in this function. This appears to be an interaction between
      * OpenMP and the Stata plugin's memory allocation (posix_memalign).
      * Since K is typically small (3-20), parallelization provides minimal
      * benefit anyway. Keep this serial for stability.
      */
+    memset(XtX, 0, K * K * sizeof(ST_double));
+
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
 
-        /* Diagonal */
+        /* Diagonal - cqreg_dot_self already uses 8x unrolling */
         XtX[j * K + j] = cqreg_dot_self(Xj, N);
 
-        /* Off-diagonal */
+        /* Off-diagonal - cqreg_dot already uses 8x unrolling */
         for (k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[k * N];
             ST_double dot = cqreg_dot(Xj, Xk, N);
@@ -359,23 +360,83 @@ ST_int cqreg_vce_robust(ST_double *V,
      *
      * For r_i >= 0: psi_i = tau, psi_i^2 = tau^2
      * For r_i < 0:  psi_i = tau - 1, psi_i^2 = (1-tau)^2
+     *
+     * Optimized: Compute column-by-column with unrolling
      */
     memset(Omega, 0, K * K * sizeof(ST_double));
 
     ST_double psi_pos_sq = q * q;           /* tau^2 */
     ST_double psi_neg_sq = (1.0 - q) * (1.0 - q);  /* (1-tau)^2 */
 
-    for (i = 0; i < N; i++) {
-        ST_double psi_sq = (residuals[i] >= 0) ? psi_pos_sq : psi_neg_sq;
+    /* Pre-compute psi_sq for each observation to avoid branch in inner loop */
+    ST_double *psi_sq_vec = (ST_double *)malloc(N * sizeof(ST_double));
+    if (psi_sq_vec != NULL) {
+        for (i = 0; i < N; i++) {
+            psi_sq_vec[i] = (residuals[i] >= 0) ? psi_pos_sq : psi_neg_sq;
+        }
+
+        /* Compute Omega column-by-column with 8x unrolling */
+        ST_int N8 = N - (N & 7);
 
         for (j = 0; j < K; j++) {
-            ST_double Xij = X[j * N + i];
-            for (k = j; k < K; k++) {
-                ST_double Xik = X[k * N + i];
-                ST_double contrib = psi_sq * Xij * Xik;
-                Omega[j * K + k] += contrib;
-                if (k != j) {
-                    Omega[k * K + j] += contrib;
+            const ST_double *Xj = &X[j * N];
+
+            /* Diagonal element with 8x unrolling */
+            ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+            ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                d0 += psi_sq_vec[i]     * Xj[i]     * Xj[i];
+                d1 += psi_sq_vec[i + 1] * Xj[i + 1] * Xj[i + 1];
+                d2 += psi_sq_vec[i + 2] * Xj[i + 2] * Xj[i + 2];
+                d3 += psi_sq_vec[i + 3] * Xj[i + 3] * Xj[i + 3];
+                d4 += psi_sq_vec[i + 4] * Xj[i + 4] * Xj[i + 4];
+                d5 += psi_sq_vec[i + 5] * Xj[i + 5] * Xj[i + 5];
+                d6 += psi_sq_vec[i + 6] * Xj[i + 6] * Xj[i + 6];
+                d7 += psi_sq_vec[i + 7] * Xj[i + 7] * Xj[i + 7];
+            }
+            for (i = N8; i < N; i++) {
+                d0 += psi_sq_vec[i] * Xj[i] * Xj[i];
+            }
+            Omega[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
+
+            /* Off-diagonal elements with 8x unrolling */
+            for (k = j + 1; k < K; k++) {
+                const ST_double *Xk = &X[k * N];
+                ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+                ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+                for (i = 0; i < N8; i += 8) {
+                    s0 += psi_sq_vec[i]     * Xj[i]     * Xk[i];
+                    s1 += psi_sq_vec[i + 1] * Xj[i + 1] * Xk[i + 1];
+                    s2 += psi_sq_vec[i + 2] * Xj[i + 2] * Xk[i + 2];
+                    s3 += psi_sq_vec[i + 3] * Xj[i + 3] * Xk[i + 3];
+                    s4 += psi_sq_vec[i + 4] * Xj[i + 4] * Xk[i + 4];
+                    s5 += psi_sq_vec[i + 5] * Xj[i + 5] * Xk[i + 5];
+                    s6 += psi_sq_vec[i + 6] * Xj[i + 6] * Xk[i + 6];
+                    s7 += psi_sq_vec[i + 7] * Xj[i + 7] * Xk[i + 7];
+                }
+                for (i = N8; i < N; i++) {
+                    s0 += psi_sq_vec[i] * Xj[i] * Xk[i];
+                }
+                ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+                Omega[j * K + k] = total;
+                Omega[k * K + j] = total;  /* Symmetric */
+            }
+        }
+        free(psi_sq_vec);
+    } else {
+        /* Fallback: original implementation without pre-allocation */
+        for (i = 0; i < N; i++) {
+            ST_double psi_sq = (residuals[i] >= 0) ? psi_pos_sq : psi_neg_sq;
+
+            for (j = 0; j < K; j++) {
+                ST_double Xij = X[j * N + i];
+                for (k = j; k < K; k++) {
+                    ST_double Xik = X[k * N + i];
+                    ST_double contrib = psi_sq * Xij * Xik;
+                    Omega[j * K + k] += contrib;
+                    if (k != j) {
+                        Omega[k * K + j] += contrib;
+                    }
                 }
             }
         }
@@ -478,49 +539,104 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
         goto cleanup;
     }
 
-    /* Compute X'DX = sum_i f_i * X_i * X_i' */
+    /* Compute X'DX = sum_i f_i * X_i * X_i'
+     * OPTIMIZED: Column-major traversal with 8x loop unrolling */
     memset(XDX, 0, K * K * sizeof(ST_double));
+    ST_int N8 = N - (N & 7);
 
-    for (i = 0; i < N; i++) {
-        ST_double f_i = obs_density[i];
-        for (j = 0; j < K; j++) {
-            ST_double Xij = X[j * N + i];
-            ST_double f_Xij = f_i * Xij;
-            for (k = j; k < K; k++) {
-                ST_double Xik = X[k * N + i];
-                ST_double contrib = f_Xij * Xik;
-                XDX[j * K + k] += contrib;
-                if (k != j) {
-                    XDX[k * K + j] += contrib;
-                }
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+
+        /* Diagonal element with 8x unrolling */
+        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+        for (i = 0; i < N8; i += 8) {
+            d0 += obs_density[i]     * Xj[i]     * Xj[i];
+            d1 += obs_density[i + 1] * Xj[i + 1] * Xj[i + 1];
+            d2 += obs_density[i + 2] * Xj[i + 2] * Xj[i + 2];
+            d3 += obs_density[i + 3] * Xj[i + 3] * Xj[i + 3];
+            d4 += obs_density[i + 4] * Xj[i + 4] * Xj[i + 4];
+            d5 += obs_density[i + 5] * Xj[i + 5] * Xj[i + 5];
+            d6 += obs_density[i + 6] * Xj[i + 6] * Xj[i + 6];
+            d7 += obs_density[i + 7] * Xj[i + 7] * Xj[i + 7];
+        }
+        for (; i < N; i++) {
+            d0 += obs_density[i] * Xj[i] * Xj[i];
+        }
+        XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
+
+        /* Off-diagonal elements with 8x unrolling */
+        for (k = j + 1; k < K; k++) {
+            const ST_double *Xk = &X[k * N];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                s0 += obs_density[i]     * Xj[i]     * Xk[i];
+                s1 += obs_density[i + 1] * Xj[i + 1] * Xk[i + 1];
+                s2 += obs_density[i + 2] * Xj[i + 2] * Xk[i + 2];
+                s3 += obs_density[i + 3] * Xj[i + 3] * Xk[i + 3];
+                s4 += obs_density[i + 4] * Xj[i + 4] * Xk[i + 4];
+                s5 += obs_density[i + 5] * Xj[i + 5] * Xk[i + 5];
+                s6 += obs_density[i + 6] * Xj[i + 6] * Xk[i + 6];
+                s7 += obs_density[i + 7] * Xj[i + 7] * Xk[i + 7];
             }
+            for (; i < N; i++) {
+                s0 += obs_density[i] * Xj[i] * Xk[i];
+            }
+            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            XDX[j * K + k] = total;
+            XDX[k * K + j] = total;
         }
     }
 
     vce_debug_log("  XDX[0,0] = %.6e\n", XDX[0]);
 
-    /* Compute X'X */
+    /* Compute X'X
+     * OPTIMIZED: 8x loop unrolling */
     memset(XtX, 0, K * K * sizeof(ST_double));
 
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
 
-        /* Diagonal */
-        ST_double diag_sum = 0.0;
-        for (i = 0; i < N; i++) {
-            diag_sum += Xj[i] * Xj[i];
+        /* Diagonal with 8x unrolling */
+        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
+        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
+        for (i = 0; i < N8; i += 8) {
+            d0 += Xj[i]     * Xj[i];
+            d1 += Xj[i + 1] * Xj[i + 1];
+            d2 += Xj[i + 2] * Xj[i + 2];
+            d3 += Xj[i + 3] * Xj[i + 3];
+            d4 += Xj[i + 4] * Xj[i + 4];
+            d5 += Xj[i + 5] * Xj[i + 5];
+            d6 += Xj[i + 6] * Xj[i + 6];
+            d7 += Xj[i + 7] * Xj[i + 7];
         }
-        XtX[j * K + j] = diag_sum;
+        for (; i < N; i++) {
+            d0 += Xj[i] * Xj[i];
+        }
+        XtX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
 
-        /* Off-diagonal */
+        /* Off-diagonal with 8x unrolling */
         for (k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[k * N];
-            ST_double dot = 0.0;
-            for (i = 0; i < N; i++) {
-                dot += Xj[i] * Xk[i];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (i = 0; i < N8; i += 8) {
+                s0 += Xj[i]     * Xk[i];
+                s1 += Xj[i + 1] * Xk[i + 1];
+                s2 += Xj[i + 2] * Xk[i + 2];
+                s3 += Xj[i + 3] * Xk[i + 3];
+                s4 += Xj[i + 4] * Xk[i + 4];
+                s5 += Xj[i + 5] * Xk[i + 5];
+                s6 += Xj[i + 6] * Xk[i + 6];
+                s7 += Xj[i + 7] * Xk[i + 7];
             }
-            XtX[j * K + k] = dot;
-            XtX[k * K + j] = dot;
+            for (; i < N; i++) {
+                s0 += Xj[i] * Xk[i];
+            }
+            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            XtX[j * K + k] = total;
+            XtX[k * K + j] = total;
         }
     }
 

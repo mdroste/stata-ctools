@@ -1,6 +1,6 @@
-*! version 1.0.0 09jan2026
+*! version 1.1.0 13jan2026
 *! civreghdfe: C-accelerated instrumental variables regression with HDFE
-*! Implements 2SLS/IV with high-dimensional fixed effects absorption
+*! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
 program define civreghdfe, eclass sortpreserve
     version 14.0
@@ -14,7 +14,15 @@ program define civreghdfe, eclass sortpreserve
         MAXiter(integer 500) ///
         Verbose TIMEit ///
         FIRST ///
-        SMALL]
+        SMALL ///
+        LIML ///
+        FULLER(real 0) ///
+        Kclass(real 0) ///
+        GMM2s ///
+        CUE ///
+        COVIV ///
+        RESiduals(name) ///
+        NOConstant]
 
     * Start timing
     if "`timeit'" != "" {
@@ -75,6 +83,62 @@ program define civreghdfe, eclass sortpreserve
     }
     foreach v of local absorb {
         confirm variable `v'
+    }
+
+    * Load the platform-appropriate ctools plugin if not already loaded
+    capture program list ctools_plugin
+    if _rc != 0 {
+        local __os = c(os)
+        local __machine = c(machine_type)
+        local __is_mac = 0
+        if "`__os'" == "MacOSX" {
+            local __is_mac = 1
+        }
+        else if strpos(lower("`__machine'"), "mac") > 0 {
+            local __is_mac = 1
+        }
+        local __plugin = ""
+        if "`__os'" == "Windows" {
+            local __plugin "ctools_windows.plugin"
+        }
+        else if `__is_mac' {
+            local __is_arm = 0
+            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
+                local __is_arm = 1
+            }
+            if `__is_arm' == 0 {
+                tempfile __archfile
+                quietly shell uname -m > "`__archfile'" 2>&1
+                tempname __fh
+                file open `__fh' using "`__archfile'", read text
+                file read `__fh' __archline
+                file close `__fh'
+                capture erase "`__archfile'"
+                if strpos("`__archline'", "arm64") > 0 {
+                    local __is_arm = 1
+                }
+            }
+            if `__is_arm' {
+                local __plugin "ctools_mac_arm.plugin"
+            }
+            else {
+                local __plugin "ctools_mac_x86.plugin"
+            }
+        }
+        else if "`__os'" == "Unix" {
+            local __plugin "ctools_linux.plugin"
+        }
+        else {
+            local __plugin "ctools.plugin"
+        }
+        capture program ctools_plugin, plugin using("`__plugin'")
+        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
+            capture program ctools_plugin, plugin using("ctools.plugin")
+        }
+        if _rc != 0 & _rc != 110 {
+            di as error "civreghdfe: Could not load ctools plugin"
+            exit 601
+        }
     }
 
     * Count variables
@@ -182,6 +246,68 @@ program define civreghdfe, eclass sortpreserve
         di as text "{hline 60}"
     }
 
+    * Detect if cluster variable is nested within (same as) an absorb variable
+    * When cluster var = FE var, that FE shouldn't reduce DOF for VCE
+    local nested_fe_index = 0
+    if `vce_type' == 2 & "`cluster_var'" != "" {
+        local fe_idx = 1
+        foreach fe_var of local absorb {
+            if "`fe_var'" == "`cluster_var'" {
+                local nested_fe_index = `fe_idx'
+            }
+            local fe_idx = `fe_idx' + 1
+        }
+    }
+
+    * Determine estimation method
+    * 0 = 2SLS (default)
+    * 1 = LIML
+    * 2 = Fuller's modified LIML
+    * 3 = k-class
+    * 4 = GMM2S
+    * 5 = CUE
+    local est_method = 0
+    local kclass_val = 0
+    local fuller_val = 0
+
+    if "`liml'" != "" {
+        local est_method = 1
+        if "`verbose'" != "" {
+            di as text "Estimation method:     LIML"
+        }
+    }
+    else if `fuller' != 0 {
+        local est_method = 2
+        local fuller_val = `fuller'
+        if "`verbose'" != "" {
+            di as text "Estimation method:     Fuller LIML (alpha=`fuller')"
+        }
+    }
+    else if `kclass' != 0 {
+        local est_method = 3
+        local kclass_val = `kclass'
+        if "`verbose'" != "" {
+            di as text "Estimation method:     k-class (k=`kclass')"
+        }
+    }
+    else if "`gmm2s'" != "" {
+        local est_method = 4
+        if "`verbose'" != "" {
+            di as text "Estimation method:     Two-step GMM"
+        }
+    }
+    else if "`cue'" != "" {
+        local est_method = 5
+        if "`verbose'" != "" {
+            di as text "Estimation method:     CUE (Continuously Updated GMM)"
+        }
+    }
+    else {
+        if "`verbose'" != "" {
+            di as text "Estimation method:     2SLS"
+        }
+    }
+
     * Set up scalars for plugin
     scalar __civreghdfe_K_endog = `K_endog'
     scalar __civreghdfe_K_exog = `K_exog'
@@ -194,6 +320,11 @@ program define civreghdfe, eclass sortpreserve
     scalar __civreghdfe_maxiter = `maxiter'
     scalar __civreghdfe_tolerance = `tolerance'
     scalar __civreghdfe_verbose = ("`verbose'" != "")
+    scalar __civreghdfe_nested_fe_index = `nested_fe_index'
+    scalar __civreghdfe_est_method = `est_method'
+    scalar __civreghdfe_kclass = `kclass_val'
+    scalar __civreghdfe_fuller = `fuller_val'
+    scalar __civreghdfe_coviv = ("`coviv'" != "")
 
     * Create output matrices
     local K_total = `K_endog' + `K_exog'
@@ -232,16 +363,71 @@ program define civreghdfe, eclass sortpreserve
     matrix `V_temp' = __civreghdfe_V
 
     * Build variable names for matrices
-    local varnames ""
+    * ivreghdfe convention: [endog, exog] - we need to reorder from C's [exog, endog]
+    local varnames_c ""
     foreach v of local exogvars {
-        local varnames `varnames' `v'
+        local varnames_c `varnames_c' `v'
     }
+    foreach v of local endogvars {
+        local varnames_c `varnames_c' `v'
+    }
+
+    * Reorder to match ivreghdfe: [endog, exog]
+    local varnames ""
     foreach v of local endogvars {
         local varnames `varnames' `v'
     }
+    foreach v of local exogvars {
+        local varnames `varnames' `v'
+    }
 
-    * Note: The C code returns coefficients in order [exog, endog]
-    * But Stata convention is often [endog, exog] - let's keep C order for simplicity
+    * Reorder coefficient vector and VCE matrix
+    * C code returns [exog, endog], we want [endog, exog]
+    local K_total = `K_exog' + `K_endog'
+
+    if `K_endog' > 0 & `K_exog' > 0 {
+        * Need to reorder
+        tempname b_reorder V_reorder
+        matrix `b_reorder' = J(1, `K_total', 0)
+        matrix `V_reorder' = J(`K_total', `K_total', 0)
+
+        * Copy endogenous coefficients (from end of C output to start of reordered)
+        forvalues e = 1/`K_endog' {
+            local c_idx = `K_exog' + `e'
+            matrix `b_reorder'[1, `e'] = `b_temp'[1, `c_idx']
+        }
+
+        * Copy exogenous coefficients (from start of C output to end of reordered)
+        forvalues x = 1/`K_exog' {
+            local new_idx = `K_endog' + `x'
+            matrix `b_reorder'[1, `new_idx'] = `b_temp'[1, `x']
+        }
+
+        * Reorder VCE matrix
+        * Build mapping: new_order[i] = old_index
+        * For i = 1..K_endog: old index is K_exog + i
+        * For i = K_endog+1..K_total: old index is i - K_endog
+        forvalues i = 1/`K_total' {
+            if `i' <= `K_endog' {
+                local old_i = `K_exog' + `i'
+            }
+            else {
+                local old_i = `i' - `K_endog'
+            }
+            forvalues j = 1/`K_total' {
+                if `j' <= `K_endog' {
+                    local old_j = `K_exog' + `j'
+                }
+                else {
+                    local old_j = `j' - `K_endog'
+                }
+                matrix `V_reorder'[`i', `j'] = `V_temp'[`old_i', `old_j']
+            }
+        }
+
+        matrix `b_temp' = `b_reorder'
+        matrix `V_temp' = `V_reorder'
+    }
 
     * Add column/row names to matrices
     matrix colnames `b_temp' = `varnames'
@@ -286,7 +472,36 @@ program define civreghdfe, eclass sortpreserve
     ereturn local exogvars "`exogvars'"
     ereturn local instruments "`instruments'"
     ereturn local absorb "`absorb'"
-    ereturn local title "IV regression with HDFE"
+
+    * Set title and estimation method based on est_method
+    if `est_method' == 1 {
+        ereturn local title "LIML regression with HDFE"
+        ereturn local model "liml"
+        capture ereturn scalar lambda = __civreghdfe_lambda
+    }
+    else if `est_method' == 2 {
+        ereturn local title "Fuller LIML regression with HDFE"
+        ereturn local model "fuller"
+        ereturn scalar fuller = `fuller_val'
+        capture ereturn scalar lambda = __civreghdfe_lambda
+    }
+    else if `est_method' == 3 {
+        ereturn local title "k-class regression with HDFE"
+        ereturn local model "kclass"
+        ereturn scalar kclass = `kclass_val'
+    }
+    else if `est_method' == 4 {
+        ereturn local title "2-step GMM with HDFE"
+        ereturn local model "gmm2s"
+    }
+    else if `est_method' == 5 {
+        ereturn local title "CUE regression with HDFE"
+        ereturn local model "cue"
+    }
+    else {
+        ereturn local title "IV (2SLS) regression with HDFE"
+        ereturn local model "2sls"
+    }
 
     if `vce_type' == 0 {
         ereturn local vcetype "Unadjusted"
@@ -301,12 +516,13 @@ program define civreghdfe, eclass sortpreserve
 
     * Display results
     di as text ""
+    local disp_title = e(title)
     if `vce_type' == 2 {
-        di as text "IV regression with HDFE" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
+        di as text "`disp_title'" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
         di as text "Absorbed " `G' " HDFE groups" _col(49) "Num. clusters" _col(68) "=" _col(70) %9.0fc `N_clust'
     }
     else {
-        di as text "IV regression with HDFE" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
+        di as text "`disp_title'" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
         di as text "Absorbed " `G' " HDFE groups"
     }
     di as text ""
@@ -355,6 +571,12 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_df_a
     capture scalar drop __civreghdfe_K
     capture scalar drop __civreghdfe_N_clust
+    capture scalar drop __civreghdfe_nested_fe_index
+    capture scalar drop __civreghdfe_est_method
+    capture scalar drop __civreghdfe_kclass
+    capture scalar drop __civreghdfe_fuller
+    capture scalar drop __civreghdfe_coviv
+    capture scalar drop __civreghdfe_lambda
     forvalues e = 1/`K_endog' {
         capture scalar drop __civreghdfe_F1_`e'
     }

@@ -163,18 +163,361 @@ static void matmul_atdb(const ST_double *A, const ST_double *B,
 }
 
 /*
-    Compute 2SLS estimation.
+    Jacobi eigenvalue algorithm for symmetric matrices.
+    Computes all eigenvalues of a K x K symmetric matrix A.
+    Returns the minimum eigenvalue.
 
-    The 2SLS estimator is:
-    beta = (X'P_Z X)^-1 X'P_Z y
+    A is stored in column-major order and is modified in place.
+*/
+static ST_double jacobi_min_eigenvalue(ST_double *A, ST_int K)
+{
+    const ST_int max_iter = 100;
+    const ST_double tol = 1e-12;
+    ST_int iter, p, q, i;
+
+    /* Work with a copy */
+    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
+    memcpy(D, A, K * K * sizeof(ST_double));
+
+    for (iter = 0; iter < max_iter; iter++) {
+        /* Find largest off-diagonal element */
+        ST_double max_off = 0.0;
+        p = 0; q = 1;
+        for (i = 0; i < K; i++) {
+            for (ST_int j = i + 1; j < K; j++) {
+                ST_double val = fabs(D[j * K + i]);
+                if (val > max_off) {
+                    max_off = val;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+
+        /* Check convergence */
+        if (max_off < tol) break;
+
+        /* Compute rotation */
+        ST_double app = D[p * K + p];
+        ST_double aqq = D[q * K + q];
+        ST_double apq = D[q * K + p];
+
+        ST_double theta = 0.5 * atan2(2.0 * apq, aqq - app);
+        ST_double c = cos(theta);
+        ST_double s = sin(theta);
+
+        /* Apply rotation */
+        for (i = 0; i < K; i++) {
+            if (i != p && i != q) {
+                ST_double dip = D[p * K + i];
+                ST_double diq = D[q * K + i];
+                D[p * K + i] = c * dip - s * diq;
+                D[i * K + p] = D[p * K + i];
+                D[q * K + i] = s * dip + c * diq;
+                D[i * K + q] = D[q * K + i];
+            }
+        }
+
+        D[p * K + p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        D[q * K + q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        D[q * K + p] = 0.0;
+        D[p * K + q] = 0.0;
+    }
+
+    /* Find minimum eigenvalue (diagonal elements) */
+    ST_double min_eval = D[0];
+    for (i = 1; i < K; i++) {
+        if (D[i * K + i] < min_eval) {
+            min_eval = D[i * K + i];
+        }
+    }
+
+    free(D);
+    return min_eval;
+}
+
+/*
+    Compute matrix square root inverse: M^(-1/2)
+    For a symmetric positive definite matrix M, compute M^(-1/2)
+    using eigendecomposition.
+
+    Result is stored in Minv_sqrt (K x K, column-major)
+*/
+static ST_int matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *Minv_sqrt)
+{
+    /* For small matrices, use direct eigendecomposition via Jacobi */
+    /* This is a simplified version - for production, use LAPACK */
+
+    const ST_int max_iter = 100;
+    const ST_double tol = 1e-12;
+    ST_int iter, p, q, i, j;
+
+    /* Work matrices */
+    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
+    ST_double *V = (ST_double *)malloc(K * K * sizeof(ST_double));
+
+    memcpy(D, M, K * K * sizeof(ST_double));
+
+    /* Initialize V as identity */
+    memset(V, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) V[i * K + i] = 1.0;
+
+    /* Jacobi iteration to diagonalize D, accumulate eigenvectors in V */
+    for (iter = 0; iter < max_iter; iter++) {
+        /* Find largest off-diagonal element */
+        ST_double max_off = 0.0;
+        p = 0; q = 1;
+        for (i = 0; i < K; i++) {
+            for (j = i + 1; j < K; j++) {
+                ST_double val = fabs(D[j * K + i]);
+                if (val > max_off) {
+                    max_off = val;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+
+        if (max_off < tol) break;
+
+        ST_double app = D[p * K + p];
+        ST_double aqq = D[q * K + q];
+        ST_double apq = D[q * K + p];
+
+        ST_double theta = 0.5 * atan2(2.0 * apq, aqq - app);
+        ST_double c = cos(theta);
+        ST_double s = sin(theta);
+
+        /* Apply rotation to D */
+        for (i = 0; i < K; i++) {
+            if (i != p && i != q) {
+                ST_double dip = D[p * K + i];
+                ST_double diq = D[q * K + i];
+                D[p * K + i] = c * dip - s * diq;
+                D[i * K + p] = D[p * K + i];
+                D[q * K + i] = s * dip + c * diq;
+                D[i * K + q] = D[q * K + i];
+            }
+        }
+        D[p * K + p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        D[q * K + q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        D[q * K + p] = 0.0;
+        D[p * K + q] = 0.0;
+
+        /* Apply rotation to V */
+        for (i = 0; i < K; i++) {
+            ST_double vip = V[p * K + i];
+            ST_double viq = V[q * K + i];
+            V[p * K + i] = c * vip - s * viq;
+            V[q * K + i] = s * vip + c * viq;
+        }
+    }
+
+    /* Now D has eigenvalues on diagonal, V has eigenvectors as columns */
+    /* Compute V * diag(1/sqrt(eigenvalues)) * V' */
+
+    /* First compute V * diag(1/sqrt(eigenvalues)) */
+    ST_double *VD = (ST_double *)malloc(K * K * sizeof(ST_double));
+    for (j = 0; j < K; j++) {
+        ST_double eval = D[j * K + j];
+        if (eval <= 0) {
+            free(D); free(V); free(VD);
+            return -1;  /* Not positive definite */
+        }
+        ST_double inv_sqrt_eval = 1.0 / sqrt(eval);
+        for (i = 0; i < K; i++) {
+            VD[j * K + i] = V[j * K + i] * inv_sqrt_eval;
+        }
+    }
+
+    /* Compute VD * V' */
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            ST_double sum = 0.0;
+            for (ST_int k = 0; k < K; k++) {
+                sum += VD[k * K + i] * V[k * K + j];
+            }
+            Minv_sqrt[j * K + i] = sum;
+        }
+    }
+
+    free(D);
+    free(V);
+    free(VD);
+    return 0;
+}
+
+/*
+    Compute LIML lambda (minimum eigenvalue for k-class)
+
+    Y = [y, X_endog]  (N x (1 + K_endog))
+    Z = all instruments (N x K_iv)
+    Z2 = included instruments only (exogenous regressors) (N x K_exog)
+
+    Computes:
+    QWW = Y'(I - Z(Z'Z)^-1 Z')Y / N = Y'M_Z Y / N
+    QWW1 = Y'(I - Z2(Z2'Z2)^-1 Z2')Y / N = Y'M_{Z2} Y / N
+    lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2)
+*/
+static ST_double compute_liml_lambda(
+    const ST_double *y,
+    const ST_double *X_endog,
+    const ST_double *X_exog,
+    const ST_double *Z,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv)
+{
+    ST_int K_Y = 1 + K_endog;  /* Columns in Y = [y, X_endog] */
+    ST_int i, j;
+
+    /* Allocate Y = [y, X_endog] */
+    ST_double *Y = (ST_double *)malloc(N * K_Y * sizeof(ST_double));
+    memcpy(Y, y, N * sizeof(ST_double));
+    if (K_endog > 0) {
+        memcpy(Y + N, X_endog, N * K_endog * sizeof(ST_double));
+    }
+
+    /* Compute Z'Z and its inverse */
+    ST_double *ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    ST_double *ZtZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+
+    /* Invert Z'Z using Cholesky */
+    ST_double *ZtZ_L = (ST_double *)malloc(K_iv * K_iv * sizeof(ST_double));
+    memcpy(ZtZ_L, ZtZ, K_iv * K_iv * sizeof(ST_double));
+    if (cholesky(ZtZ_L, K_iv) != 0) {
+        /* Fallback: return 1.0 (equivalent to 2SLS) */
+        free(Y); free(ZtZ); free(ZtZ_inv); free(ZtZ_L);
+        return 1.0;
+    }
+    invert_from_cholesky(ZtZ_L, K_iv, ZtZ_inv);
+    free(ZtZ_L);
+
+    /* Compute Z'Y */
+    ST_double *ZtY = (ST_double *)calloc(K_iv * K_Y, sizeof(ST_double));
+    matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
+
+    /* Compute Y'Y */
+    ST_double *YtY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+    matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
+
+    /* Compute (Z'Z)^-1 * Z'Y */
+    ST_double *ZtZ_inv_ZtY = (ST_double *)calloc(K_iv * K_Y, sizeof(ST_double));
+    matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
+
+    /* Compute QWW = Y'Y - (Z'Y)'(Z'Z)^-1(Z'Y) = Y'M_Z Y */
+    ST_double *QWW = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+    ST_double *ZtY_t_ZtZ_inv_ZtY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+
+    /* (Z'Y)' * (Z'Z)^-1 * Z'Y */
+    for (i = 0; i < K_Y; i++) {
+        for (j = 0; j < K_Y; j++) {
+            ST_double sum = 0.0;
+            for (ST_int k = 0; k < K_iv; k++) {
+                sum += ZtY[i * K_iv + k] * ZtZ_inv_ZtY[j * K_iv + k];
+            }
+            ZtY_t_ZtZ_inv_ZtY[j * K_Y + i] = sum;
+        }
+    }
+
+    for (i = 0; i < K_Y * K_Y; i++) {
+        QWW[i] = YtY[i] - ZtY_t_ZtZ_inv_ZtY[i];
+    }
+
+    /* Now compute QWW1 = Y'M_{Z2} Y where Z2 = included instruments (exogenous) */
+    ST_double *QWW1 = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+
+    if (K_exog > 0) {
+        /* Z2 = X_exog (the included instruments / exogenous regressors) */
+        ST_double *Z2tZ2 = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+        ST_double *Z2tZ2_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+        ST_double *Z2tZ2_L = (ST_double *)malloc(K_exog * K_exog * sizeof(ST_double));
+        matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
+
+        memcpy(Z2tZ2_L, Z2tZ2, K_exog * K_exog * sizeof(ST_double));
+        if (cholesky(Z2tZ2_L, K_exog) != 0) {
+            free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
+            free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY); free(QWW1);
+            free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
+            return 1.0;
+        }
+        invert_from_cholesky(Z2tZ2_L, K_exog, Z2tZ2_inv);
+        free(Z2tZ2_L);
+
+        ST_double *Z2tY = (ST_double *)calloc(K_exog * K_Y, sizeof(ST_double));
+        matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
+
+        ST_double *Z2tZ2_inv_Z2tY = (ST_double *)calloc(K_exog * K_Y, sizeof(ST_double));
+        matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
+
+        ST_double *Z2tY_t_Z2tZ2_inv_Z2tY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+        for (i = 0; i < K_Y; i++) {
+            for (j = 0; j < K_Y; j++) {
+                ST_double sum = 0.0;
+                for (ST_int k = 0; k < K_exog; k++) {
+                    sum += Z2tY[i * K_exog + k] * Z2tZ2_inv_Z2tY[j * K_exog + k];
+                }
+                Z2tY_t_Z2tZ2_inv_Z2tY[j * K_Y + i] = sum;
+            }
+        }
+
+        for (i = 0; i < K_Y * K_Y; i++) {
+            QWW1[i] = YtY[i] - Z2tY_t_Z2tZ2_inv_Z2tY[i];
+        }
+
+        free(Z2tZ2); free(Z2tZ2_inv); free(Z2tY);
+        free(Z2tZ2_inv_Z2tY); free(Z2tY_t_Z2tZ2_inv_Z2tY);
+    }
+    else {
+        /* No exogenous regressors: QWW1 = Y'Y */
+        memcpy(QWW1, YtY, K_Y * K_Y * sizeof(ST_double));
+    }
+
+    /* Compute lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2) */
+    ST_double *QWW_inv_sqrt = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+    if (matpowersym_neg_half(QWW, K_Y, QWW_inv_sqrt) != 0) {
+        /* QWW not positive definite, fallback to 2SLS */
+        free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
+        free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY);
+        free(QWW1); free(QWW_inv_sqrt);
+        return 1.0;
+    }
+
+    /* Compute QWW^(-1/2) * QWW1 */
+    ST_double *temp1 = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+    matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
+
+    /* Compute (QWW^(-1/2) * QWW1) * QWW^(-1/2) */
+    ST_double *M_for_eigen = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
+    matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
+
+    /* Find minimum eigenvalue */
+    ST_double lambda = jacobi_min_eigenvalue(M_for_eigen, K_Y);
+
+    /* Cleanup */
+    free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
+    free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY);
+    free(QWW1); free(QWW_inv_sqrt); free(temp1); free(M_for_eigen);
+
+    return lambda;
+}
+
+/*
+    Compute k-class IV estimation (includes 2SLS, LIML, Fuller, etc.)
+
+    The k-class estimator is:
+    beta = ((1-k)*X'X + k*X'P_Z X)^-1 ((1-k)*X'y + k*X'P_Z y)
     where P_Z = Z(Z'Z)^-1 Z' is the projection onto the instrument space
 
-    For efficiency, we compute:
-    1. Z'Z and invert it
-    2. Z'X and Z'y
-    3. X'Z(Z'Z)^-1 Z'X = (Z'X)'(Z'Z)^-1(Z'X)
-    4. X'Z(Z'Z)^-1 Z'y
-    5. Solve for beta
+    When k=1, this reduces to 2SLS: beta = (X'P_Z X)^-1 X'P_Z y
+    When k=lambda (min eigenvalue), this is LIML
+    When k=lambda - alpha/(N-K_iv), this is Fuller LIML
+
+    Parameters:
+    - kclass: the k value (1.0 for 2SLS, lambda for LIML, etc.)
+    - est_method: 0=2SLS, 1=LIML, 2=Fuller, 3=kclass, 4=GMM2S, 5=CUE
 */
 ST_retcode compute_2sls(
     const ST_double *y,
@@ -194,18 +537,73 @@ ST_retcode compute_2sls(
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_int df_a,
-    ST_int verbose
+    ST_int nested_adj,
+    ST_int verbose,
+    ST_int est_method,
+    ST_double kclass_user,
+    ST_double fuller_alpha,
+    ST_double *lambda_out
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
     ST_int i, j, k;
 
+    /* Determine k value based on estimation method */
+    ST_double kclass = 1.0;  /* Default: 2SLS */
+    ST_double lambda = 1.0;
+
+    if (est_method == 1 || est_method == 2) {
+        /* LIML or Fuller: compute lambda */
+        lambda = compute_liml_lambda(y, X_endog, X_exog, Z, N, K_exog, K_endog, K_iv);
+
+        /* For exactly identified models, lambda should be 1 */
+        if (K_iv == K_total) {
+            lambda = 1.0;
+        }
+
+        if (est_method == 1) {
+            /* LIML */
+            kclass = lambda;
+        } else {
+            /* Fuller: k = lambda - alpha/(N - K_iv) */
+            if (fuller_alpha > (N - K_iv)) {
+                SF_error("civreghdfe: Invalid Fuller parameter\n");
+                return 198;
+            }
+            kclass = lambda - fuller_alpha / (ST_double)(N - K_iv);
+        }
+
+        if (lambda_out) *lambda_out = lambda;
+    }
+    else if (est_method == 3) {
+        /* User-specified k-class */
+        kclass = kclass_user;
+    }
+    /* est_method 0: k=1 (2SLS)
+       est_method 4: GMM2S - will be computed after initial 2SLS
+       est_method 5: CUE - not yet implemented */
+
+    const char *method_name = "2SLS";
+    if (est_method == 1) method_name = "LIML";
+    else if (est_method == 2) method_name = "Fuller LIML";
+    else if (est_method == 3) method_name = "k-class";
+    else if (est_method == 4) method_name = "GMM2S";
+    else if (est_method == 5) method_name = "CUE";
+
     if (verbose) {
-        SF_display("civreghdfe: Computing 2SLS estimation\n");
         char buf[256];
+        snprintf(buf, sizeof(buf), "civreghdfe: Computing %s estimation\n", method_name);
+        SF_display(buf);
         snprintf(buf, sizeof(buf), "  N=%d, K_exog=%d, K_endog=%d, K_iv=%d\n",
                  (int)N, (int)K_exog, (int)K_endog, (int)K_iv);
         SF_display(buf);
+        if (est_method == 1 || est_method == 2) {
+            snprintf(buf, sizeof(buf), "  lambda=%.6f, k=%.6f\n", lambda, kclass);
+            SF_display(buf);
+        } else if (est_method == 3) {
+            snprintf(buf, sizeof(buf), "  k=%.6f\n", kclass);
+            SF_display(buf);
+        }
     }
 
     /* Check identification */
@@ -327,36 +725,92 @@ ST_retcode compute_2sls(
         XtPzy[i] = sum;
     }
 
-    /* Step 7: Solve (X'P_Z X) * beta = X'P_Z y */
-    ST_double *XtPzX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
-    memcpy(XtPzX_copy, XtPzX, K_total * K_total * sizeof(ST_double));
+    /* Step 6b: For k-class estimation (k != 1), compute X'X and X'y */
+    ST_double *XtX = NULL;
+    ST_double *Xty = NULL;
+    ST_double *XkX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *Xky = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+    if (kclass != 1.0) {
+        XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        Xty = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+        /* Compute X'X */
+        if (weights && weight_type != 0) {
+            matmul_atdb(X_all, X_all, weights, N, K_total, K_total, XtX);
+        } else {
+            matmul_atb(X_all, X_all, N, K_total, K_total, XtX);
+        }
+
+        /* Compute X'y */
+        if (weights && weight_type != 0) {
+            for (i = 0; i < K_total; i++) {
+                ST_double sum = 0.0;
+                const ST_double *x_col = X_all + i * N;
+                for (k = 0; k < N; k++) {
+                    sum += x_col[k] * weights[k] * y[k];
+                }
+                Xty[i] = sum;
+            }
+        } else {
+            for (i = 0; i < K_total; i++) {
+                ST_double sum = 0.0;
+                const ST_double *x_col = X_all + i * N;
+                for (k = 0; k < N; k++) {
+                    sum += x_col[k] * y[k];
+                }
+                Xty[i] = sum;
+            }
+        }
+
+        /* Compute k-class weighted matrices:
+           XkX = (1-k)*X'X + k*X'P_Z X
+           Xky = (1-k)*X'y + k*X'P_Z y */
+        ST_double one_minus_k = 1.0 - kclass;
+        for (i = 0; i < K_total * K_total; i++) {
+            XkX[i] = one_minus_k * XtX[i] + kclass * XtPzX[i];
+        }
+        for (i = 0; i < K_total; i++) {
+            Xky[i] = one_minus_k * Xty[i] + kclass * XtPzy[i];
+        }
+    } else {
+        /* k = 1 (2SLS): just use X'P_Z X and X'P_Z y */
+        memcpy(XkX, XtPzX, K_total * K_total * sizeof(ST_double));
+        memcpy(Xky, XtPzy, K_total * sizeof(ST_double));
+    }
+
+    /* Step 7: Solve XkX * beta = Xky */
+    ST_double *XkX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+    memcpy(XkX_copy, XkX, K_total * K_total * sizeof(ST_double));
 
     /* Use Cholesky solve */
-    if (cholesky(XtPzX_copy, K_total) != 0) {
-        SF_error("civreghdfe: X'P_Z X is singular\n");
+    if (cholesky(XkX_copy, K_total) != 0) {
+        SF_error("civreghdfe: XkX matrix is singular\n");
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XtPzX_copy);
+        free(ZtZ_inv_Zty); free(XkX_copy);
+        if (XtX) free(XtX); if (Xty) free(Xty);
+        free(XkX); free(Xky);
         return 198;
     }
 
     /* Forward substitution */
     ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
     for (i = 0; i < K_total; i++) {
-        ST_double sum = XtPzy[i];
+        ST_double sum = Xky[i];
         for (j = 0; j < i; j++) {
-            sum -= XtPzX_copy[i * K_total + j] * beta_temp[j];
+            sum -= XkX_copy[i * K_total + j] * beta_temp[j];
         }
-        beta_temp[i] = sum / XtPzX_copy[i * K_total + i];
+        beta_temp[i] = sum / XkX_copy[i * K_total + i];
     }
 
     /* Backward substitution */
     for (i = K_total - 1; i >= 0; i--) {
         ST_double sum = beta_temp[i];
         for (j = i + 1; j < K_total; j++) {
-            sum -= XtPzX_copy[j * K_total + i] * beta[j];
+            sum -= XkX_copy[j * K_total + i] * beta[j];
         }
-        beta[i] = sum / XtPzX_copy[i * K_total + i];
+        beta[i] = sum / XkX_copy[i * K_total + i];
     }
 
     if (verbose) {
@@ -377,22 +831,224 @@ ST_retcode compute_2sls(
         resid[i] = y[i] - pred;
     }
 
+    /* Step 8b: For GMM2S, re-estimate with optimal weighting matrix */
+    if (est_method == 4 && vce_type > 0) {
+        /*
+            Two-step efficient GMM:
+            Step 1: 2SLS to get initial residuals (done above)
+            Step 2: Compute optimal weighting matrix W = (Z'ΩZ)^-1 where Ω = diag(e²)
+            Step 3: Re-estimate β = (X'ZWZ'X)^-1 X'ZWZ'y
+
+            For cluster-robust GMM, Ω is the cluster-robust covariance
+
+            NOTE: Under homoskedasticity (vce_type == 0), the optimal GMM weights
+            are (Z'Z)^-1, which gives exactly 2SLS. So we only re-estimate when
+            using robust or clustered VCE.
+        */
+
+        /* Compute Z'ΩZ where Ω = diag(e²) for heteroskedastic GMM */
+        ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+
+        if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+            /* Cluster-robust optimal weighting matrix */
+            /* First sum z_i * e_i within each cluster */
+            ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+
+            for (i = 0; i < N; i++) {
+                ST_int c = cluster_ids[i] - 1;
+                if (c < 0 || c >= num_clusters) continue;
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                ST_double we = w * resid[i];
+                for (j = 0; j < K_iv; j++) {
+                    cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+                }
+            }
+
+            /* Compute outer products: Z'ΩZ = sum_g (ze_g)(ze_g)' */
+            for (ST_int c = 0; c < num_clusters; c++) {
+                for (j = 0; j < K_iv; j++) {
+                    for (k = 0; k <= j; k++) {
+                        ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                        ZOmegaZ[j * K_iv + k] += contrib;
+                        if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+                    }
+                }
+            }
+            free(cluster_ze);
+        } else {
+            /* Heteroskedastic optimal weighting matrix: Z'diag(e²)Z */
+            for (i = 0; i < N; i++) {
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                ST_double e2 = w * resid[i] * resid[i];
+                for (j = 0; j < K_iv; j++) {
+                    for (k = 0; k <= j; k++) {
+                        ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                        ZOmegaZ[j * K_iv + k] += contrib;
+                        if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+                    }
+                }
+            }
+        }
+
+        /* Invert Z'ΩZ */
+        memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
+        if (cholesky(ZOmegaZ_inv, K_iv) != 0) {
+            SF_error("civreghdfe: GMM2S optimal weighting matrix is singular\n");
+            free(ZOmegaZ); free(ZOmegaZ_inv);
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+            if (XtX) free(XtX); if (Xty) free(Xty);
+            free(XkX); free(Xky);
+            return 198;
+        }
+        if (invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv) != 0) {
+            SF_error("civreghdfe: Failed to invert GMM2S weighting matrix\n");
+            free(ZOmegaZ); free(ZOmegaZ_inv);
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+            if (XtX) free(XtX); if (Xty) free(Xty);
+            free(XkX); free(Xky);
+            return 198;
+        }
+
+        /*
+            GMM estimator: β = (X'ZWZ'X)^-1 X'ZWZ'y
+            where W = (Z'ΩZ)^-1
+
+            Compute step by step:
+            1. WZtX = W * Z'X  (K_iv x K_total)
+            2. XZW = (Z'X)' * W = X'Z * W  (K_total x K_iv)
+            3. XZWZX = XZW * Z'X  (K_total x K_total)
+            4. XZWZy = XZW * Z'y  (K_total x 1)
+        */
+
+        /* 1. Compute W * Z'X */
+        ST_double *WZtX = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
+        matmul_ab(ZOmegaZ_inv, ZtX, K_iv, K_iv, K_total, WZtX);
+
+        /* 2. Compute (Z'X)' * W = X'Z * W (K_total x K_iv) */
+        ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
+        for (i = 0; i < K_total; i++) {
+            for (j = 0; j < K_iv; j++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    /* ZtX[k,i] * W[k,j] = ZtX[i*K_iv + k] * W[j*K_iv + k] */
+                    sum += ZtX[i * K_iv + k] * ZOmegaZ_inv[j * K_iv + k];
+                }
+                XZW[j * K_total + i] = sum;
+            }
+        }
+
+        /* 3. Compute X'ZWZ'X = XZW * Z'X */
+        ST_double *XZWZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        for (i = 0; i < K_total; i++) {
+            for (j = 0; j < K_total; j++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    /* XZW[i,k] * ZtX[k,j] */
+                    sum += XZW[k * K_total + i] * ZtX[j * K_iv + k];
+                }
+                XZWZX[j * K_total + i] = sum;
+            }
+        }
+
+        /* 4. Compute X'ZWZ'y = XZW * Z'y */
+        ST_double *XZWZy = (ST_double *)calloc(K_total, sizeof(ST_double));
+        for (i = 0; i < K_total; i++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K_iv; k++) {
+                sum += XZW[k * K_total + i] * Zty[k];
+            }
+            XZWZy[i] = sum;
+        }
+
+        /* 5. Solve XZWZX * beta = XZWZy */
+        ST_double *XZWZX_L = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+        memcpy(XZWZX_L, XZWZX, K_total * K_total * sizeof(ST_double));
+
+        if (cholesky(XZWZX_L, K_total) != 0) {
+            SF_error("civreghdfe: GMM2S X'ZWZ'X matrix is singular\n");
+            free(ZOmegaZ); free(ZOmegaZ_inv);
+            free(WZtX); free(XZW); free(XZWZX); free(XZWZy); free(XZWZX_L);
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+            if (XtX) free(XtX); if (Xty) free(Xty);
+            free(XkX); free(Xky);
+            return 198;
+        }
+
+        /* Forward substitution */
+        for (i = 0; i < K_total; i++) {
+            ST_double sum = XZWZy[i];
+            for (j = 0; j < i; j++) {
+                sum -= XZWZX_L[i * K_total + j] * beta_temp[j];
+            }
+            beta_temp[i] = sum / XZWZX_L[i * K_total + i];
+        }
+
+        /* Backward substitution */
+        for (i = K_total - 1; i >= 0; i--) {
+            ST_double sum = beta_temp[i];
+            for (j = i + 1; j < K_total; j++) {
+                sum -= XZWZX_L[j * K_total + i] * beta[j];
+            }
+            beta[i] = sum / XZWZX_L[i * K_total + i];
+        }
+
+        if (verbose) {
+            char buf[256];
+            SF_display("civreghdfe: GMM2S second step estimates:\n");
+            for (i = 0; i < K_total; i++) {
+                snprintf(buf, sizeof(buf), "  beta[%d] = %g\n", (int)i, beta[i]);
+                SF_display(buf);
+            }
+        }
+
+        /* Update residuals with new beta */
+        for (i = 0; i < N; i++) {
+            ST_double pred = 0.0;
+            for (k = 0; k < K_total; k++) {
+                pred += X_all[k * N + i] * beta[k];
+            }
+            resid[i] = y[i] - pred;
+        }
+
+        /* Store XkX_inv as XZWZX inverse for VCE computation */
+        /* XkX_inv is used below for VCE, so update it */
+        free(XkX_copy);
+        XkX_copy = XZWZX_L;  /* Reuse the Cholesky factor */
+        memcpy(XkX, XZWZX, K_total * K_total * sizeof(ST_double));
+
+        free(ZOmegaZ);
+        free(ZOmegaZ_inv);
+        free(WZtX);
+        free(XZW);
+        free(XZWZX);
+        free(XZWZy);
+    }
+
     /* Step 9: Compute VCE */
-    /* For 2SLS, the VCE is: sigma^2 * (X'P_Z X)^-1 */
+    /* For k-class estimators, the VCE is: sigma^2 * (XkX)^-1 */
     /* where sigma^2 = RSS / (N - K) using actual residuals */
 
-    /* First, invert X'P_Z X */
-    memcpy(XtPzX_copy, XtPzX, K_total * K_total * sizeof(ST_double));
-    if (cholesky(XtPzX_copy, K_total) != 0) {
-        SF_error("civreghdfe: Cannot compute VCE\n");
+    /* First, invert XkX (the k-class weighted matrix) */
+    memcpy(XkX_copy, XkX, K_total * K_total * sizeof(ST_double));
+    if (cholesky(XkX_copy, K_total) != 0) {
+        SF_error("civreghdfe: Cannot compute VCE (XkX singular)\n");
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
-        free(ZtZ_inv_Zty); free(XtPzX_copy); free(beta_temp);
+        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+        if (XtX) free(XtX); if (Xty) free(Xty);
+        free(XkX); free(Xky);
         return 198;
     }
 
-    ST_double *XtPzX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    invert_from_cholesky(XtPzX_copy, K_total, XtPzX_inv);
+    ST_double *XkX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    invert_from_cholesky(XkX_copy, K_total, XkX_inv);
 
     /* Compute RSS */
     ST_double rss = 0.0;
@@ -406,19 +1062,19 @@ ST_retcode compute_2sls(
         }
     }
 
-    ST_int df_r = N - K_total - 1 - df_a;  /* -1 for constant, -df_a for absorbed */
+    ST_int df_r = N - K_total - df_a;  /* df_a already includes constant absorbed by FE */
     if (df_r <= 0) df_r = 1;
 
     ST_double sigma2 = rss / df_r;
 
     if (vce_type == 0) {
-        /* Unadjusted VCE: sigma^2 * (X'P_Z X)^-1 */
+        /* Unadjusted VCE: sigma^2 * (XkX)^-1 */
         for (i = 0; i < K_total * K_total; i++) {
-            V[i] = sigma2 * XtPzX_inv[i];
+            V[i] = sigma2 * XkX_inv[i];
         }
     } else if (vce_type == 1) {
-        /* Robust VCE for 2SLS */
-        /* V = (X'P_Z X)^-1 X'P_Z Omega P_Z X (X'P_Z X)^-1 */
+        /* Robust VCE for k-class */
+        /* V = (XkX)^-1 X'Z(Z'Z)^-1 Omega (Z'Z)^-1 Z'X (XkX)^-1 */
         /* where Omega = diag(e^2) */
         /* Simplified: Use sandwich estimator with projected X */
 
@@ -453,10 +1109,10 @@ ST_retcode compute_2sls(
         /* HC1 adjustment */
         ST_double dof_adj = (ST_double)N / (ST_double)df_r;
 
-        /* V = XtPzX_inv * meat * XtPzX_inv * dof_adj */
+        /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        matmul_ab(XtPzX_inv, meat, K_total, K_total, K_total, temp_v);
-        matmul_ab(temp_v, XtPzX_inv, K_total, K_total, K_total, V);
+        matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+        matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
 
         for (i = 0; i < K_total * K_total; i++) {
             V[i] *= dof_adj;
@@ -508,13 +1164,36 @@ ST_retcode compute_2sls(
             }
         }
 
-        /* Cluster adjustment: (G / (G-1)) * ((N-1) / (N-K)) */
+        /* Cluster adjustment formula from ivreghdfe/ivreg2:
+           dof_adj = (N - 1) / (N - K - sdofminus) * N_clust / (N_clust - 1)
+           where K = K_total (number of regressors), sdofminus = df_a (absorbed DOF)
+           Note: df_a already excludes nested FE levels (they don't reduce DOF)
+
+           Match ivreghdfe line 670: if (`absorb_ct'==0) loc absorb_ct 1
+           When all FE is nested in cluster (df_a=0), use 1 instead of 0 */
         ST_double G = (ST_double)num_clusters;
-        ST_double dof_adj = (G / (G - 1.0)) * ((ST_double)(N - 1) / (ST_double)df_r);
+        ST_int effective_df_a = df_a;
+        if (df_a == 0 && nested_adj == 1) {
+            effective_df_a = 1;
+        }
+        ST_double denom = (ST_double)(N - K_total - effective_df_a);
+        if (denom <= 0) denom = 1.0;  /* Safety check */
+        ST_double dof_adj = ((ST_double)(N - 1) / denom) * (G / (G - 1.0));
+
+        if (verbose) {
+            char buf[512];
+            snprintf(buf, sizeof(buf),
+                "civreghdfe: Cluster VCE DOF: N=%d, K_total=%d, df_a=%d, effective_df_a=%d, G=%d\n",
+                (int)N, (int)K_total, (int)df_a, (int)effective_df_a, (int)num_clusters);
+            SF_display(buf);
+            snprintf(buf, sizeof(buf),
+                "civreghdfe: denom=%.4f, dof_adj=%.10f\n", denom, dof_adj);
+            SF_display(buf);
+        }
 
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        matmul_ab(XtPzX_inv, meat, K_total, K_total, K_total, temp_v);
-        matmul_ab(temp_v, XtPzX_inv, K_total, K_total, K_total, V);
+        matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+        matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
 
         for (i = 0; i < K_total * K_total; i++) {
             V[i] *= dof_adj;
@@ -595,9 +1274,13 @@ ST_retcode compute_2sls(
     free(X_all);
     free(resid);
     free(ZtZ_inv_Zty);
-    free(XtPzX_copy);
+    free(XkX_copy);
     free(beta_temp);
-    free(XtPzX_inv);
+    free(XkX_inv);
+    if (XtX) free(XtX);
+    if (Xty) free(Xty);
+    free(XkX);
+    free(Xky);
 
     return STATA_OK;
 }
@@ -641,6 +1324,15 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_maxiter", &dval); maxiter = (ST_int)dval;
     SF_scal_use("__civreghdfe_tolerance", &dval); tolerance = dval;
     SF_scal_use("__civreghdfe_verbose", &dval); verbose = (ST_int)dval;
+    ST_int nested_fe_index;
+    SF_scal_use("__civreghdfe_nested_fe_index", &dval); nested_fe_index = (ST_int)dval;
+
+    /* New scalars for estimation method */
+    ST_int est_method = 0;
+    ST_double kclass_user = 0, fuller_alpha = 0;
+    SF_scal_use("__civreghdfe_est_method", &dval); est_method = (ST_int)dval;
+    SF_scal_use("__civreghdfe_kclass", &dval); kclass_user = dval;
+    SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
 
     if (verbose) {
         char buf[512];
@@ -686,10 +1378,29 @@ static ST_retcode do_iv_regression(void)
         return 920;
     }
 
-    /* Read data from Stata */
+    /* Count observations that pass the if/in condition */
+    ST_int N_ifobs = 0;
+    for (ST_int obs = in1; obs <= in2; obs++) {
+        if (SF_ifobs(obs)) N_ifobs++;
+    }
+
+    if (N_ifobs == 0) {
+        SF_error("civreghdfe: No observations selected\n");
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 2001;
+    }
+
+    /* Reallocate arrays to actual size based on if/in condition */
+    N_total = N_ifobs;
+
+    /* Read data from Stata - only include observations where SF_ifobs() is true */
     ST_double val;
-    for (ST_int i = 0; i < N_total; i++) {
-        ST_int obs = in1 + i;
+    ST_int i = 0;
+    for (ST_int obs = in1; obs <= in2; obs++) {
+        if (!SF_ifobs(obs)) continue;  /* Skip observations not in sample */
 
         /* y */
         SF_vdata(var_y, obs, &val);
@@ -698,19 +1409,19 @@ static ST_retcode do_iv_regression(void)
         /* X_endog */
         for (ST_int k = 0; k < K_endog; k++) {
             SF_vdata(var_endog_start + k, obs, &val);
-            X_endog[k * N_total + i] = val;
+            X_endog[k * N_ifobs + i] = val;
         }
 
         /* X_exog */
         for (ST_int k = 0; k < K_exog; k++) {
             SF_vdata(var_exog_start + k, obs, &val);
-            X_exog[k * N_total + i] = val;
+            X_exog[k * N_ifobs + i] = val;
         }
 
         /* Z (instruments) */
         for (ST_int k = 0; k < K_iv; k++) {
             SF_vdata(var_iv_start + k, obs, &val);
-            Z[k * N_total + i] = val;
+            Z[k * N_ifobs + i] = val;
         }
 
         /* FE levels */
@@ -730,13 +1441,15 @@ static ST_retcode do_iv_regression(void)
             SF_vdata(var_weight, obs, &val);
             weights[i] = val;
         }
+
+        i++;
     }
 
     /* Drop observations with missing values */
     ST_int *valid_mask = (ST_int *)calloc(N_total, sizeof(ST_int));
     ST_int N_valid = 0;
 
-    for (ST_int i = 0; i < N_total; i++) {
+    for (i = 0; i < N_total; i++) {
         int is_valid = 1;
 
         /* Check y */
@@ -757,20 +1470,16 @@ static ST_retcode do_iv_regression(void)
             if (SF_is_missing(Z[k * N_total + i])) is_valid = 0;
         }
 
-        /* Check FE */
-        for (ST_int g = 0; g < G && is_valid; g++) {
-            if (fe_levels[g][i] <= 0) is_valid = 0;
-        }
+        /* Check FE - already loaded and converted to int, check for very large negative values
+           (which could indicate missing - Stata missing values become very large when cast to int) */
+        /* Note: FE values were already validated as non-missing during the data load */
 
         /* Check weights */
         if (has_weights && is_valid) {
             if (SF_is_missing(weights[i]) || weights[i] <= 0) is_valid = 0;
         }
 
-        /* Check cluster */
-        if (has_cluster && is_valid) {
-            if (cluster_ids[i] <= 0) is_valid = 0;
-        }
+        /* Check cluster - already loaded as int, was already validated during data load */
 
         valid_mask[i] = is_valid;
         if (is_valid) N_valid++;
@@ -836,6 +1545,155 @@ static ST_retcode do_iv_regression(void)
 
     ST_int N = N_valid;
 
+    /* Singleton detection: iteratively drop observations with unique FE levels */
+    ST_int num_singletons_total = 0;
+    ST_int max_singleton_iter = 100;  /* Safety limit */
+
+    {
+        /* Create temporary counts arrays for singleton detection */
+        ST_int **temp_counts = (ST_int **)malloc(G * sizeof(ST_int *));
+        ST_int *max_levels = (ST_int *)malloc(G * sizeof(ST_int));
+
+        for (ST_int g = 0; g < G; g++) {
+            /* Find max level for this factor */
+            max_levels[g] = 0;
+            for (ST_int i = 0; i < N; i++) {
+                if (fe_levels_c[g][i] > max_levels[g]) {
+                    max_levels[g] = fe_levels_c[g][i];
+                }
+            }
+            temp_counts[g] = (ST_int *)calloc(max_levels[g] + 1, sizeof(ST_int));
+
+            /* Initial counts */
+            for (ST_int i = 0; i < N; i++) {
+                temp_counts[g][fe_levels_c[g][i]]++;
+            }
+        }
+
+        /* Create singleton mask (1 = keep, 0 = drop) */
+        ST_int *singleton_mask = (ST_int *)malloc(N * sizeof(ST_int));
+        for (ST_int i = 0; i < N; i++) singleton_mask[i] = 1;
+
+        /* Iterate until no more singletons found */
+        ST_int iter = 0;
+        ST_int num_singletons_iter;
+
+        do {
+            num_singletons_iter = 0;
+
+            /* Find singletons in each factor */
+            for (ST_int g = 0; g < G; g++) {
+                for (ST_int i = 0; i < N; i++) {
+                    if (singleton_mask[i] == 0) continue;  /* Already dropped */
+                    ST_int lev = fe_levels_c[g][i];
+                    if (temp_counts[g][lev] == 1) {
+                        singleton_mask[i] = 0;  /* Mark for dropping */
+                        num_singletons_iter++;
+                    }
+                }
+            }
+
+            if (num_singletons_iter > 0) {
+                num_singletons_total += num_singletons_iter;
+
+                /* Update counts for all factors */
+                for (ST_int g = 0; g < G; g++) {
+                    memset(temp_counts[g], 0, (max_levels[g] + 1) * sizeof(ST_int));
+                    for (ST_int i = 0; i < N; i++) {
+                        if (singleton_mask[i]) {
+                            temp_counts[g][fe_levels_c[g][i]]++;
+                        }
+                    }
+                }
+            }
+
+            iter++;
+        } while (num_singletons_iter > 0 && iter < max_singleton_iter);
+
+        /* Free temporary counts */
+        for (ST_int g = 0; g < G; g++) {
+            free(temp_counts[g]);
+        }
+        free(temp_counts);
+        free(max_levels);
+
+        /* If singletons were found, compact data again */
+        if (num_singletons_total > 0) {
+            ST_int N_after_singletons = N - num_singletons_total;
+
+            if (verbose) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "civreghdfe: Dropped %d singletons in %d iterations\n",
+                         (int)num_singletons_total, iter);
+                SF_display(buf);
+            }
+
+            /* Reallocate and compact */
+            ST_double *y_new = (ST_double *)malloc(N_after_singletons * sizeof(ST_double));
+            ST_double *X_endog_new = (K_endog > 0) ? (ST_double *)malloc(N_after_singletons * K_endog * sizeof(ST_double)) : NULL;
+            ST_double *X_exog_new = (K_exog > 0) ? (ST_double *)malloc(N_after_singletons * K_exog * sizeof(ST_double)) : NULL;
+            ST_double *Z_new = (ST_double *)malloc(N_after_singletons * K_iv * sizeof(ST_double));
+            ST_double *weights_new = has_weights ? (ST_double *)malloc(N_after_singletons * sizeof(ST_double)) : NULL;
+            ST_int *cluster_ids_new = has_cluster ? (ST_int *)malloc(N_after_singletons * sizeof(ST_int)) : NULL;
+            ST_int **fe_levels_new = (ST_int **)malloc(G * sizeof(ST_int *));
+            for (ST_int g = 0; g < G; g++) {
+                fe_levels_new[g] = (ST_int *)malloc(N_after_singletons * sizeof(ST_int));
+            }
+
+            ST_int new_idx = 0;
+            for (ST_int i = 0; i < N; i++) {
+                if (!singleton_mask[i]) continue;
+
+                y_new[new_idx] = y_c[i];
+                for (ST_int k = 0; k < K_endog; k++) {
+                    X_endog_new[k * N_after_singletons + new_idx] = X_endog_c[k * N + i];
+                }
+                for (ST_int k = 0; k < K_exog; k++) {
+                    X_exog_new[k * N_after_singletons + new_idx] = X_exog_c[k * N + i];
+                }
+                for (ST_int k = 0; k < K_iv; k++) {
+                    Z_new[k * N_after_singletons + new_idx] = Z_c[k * N + i];
+                }
+                for (ST_int g = 0; g < G; g++) {
+                    fe_levels_new[g][new_idx] = fe_levels_c[g][i];
+                }
+                if (has_weights) weights_new[new_idx] = weights_c[i];
+                if (has_cluster) cluster_ids_new[new_idx] = cluster_ids_c[i];
+
+                new_idx++;
+            }
+
+            /* Free old arrays and swap in new ones */
+            free(y_c); y_c = y_new;
+            if (X_endog_c) free(X_endog_c); X_endog_c = X_endog_new;
+            if (X_exog_c) free(X_exog_c); X_exog_c = X_exog_new;
+            free(Z_c); Z_c = Z_new;
+            if (weights_c) free(weights_c); weights_c = weights_new;
+            if (cluster_ids_c) free(cluster_ids_c); cluster_ids_c = cluster_ids_new;
+            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            free(fe_levels_c);
+            fe_levels_c = fe_levels_new;
+
+            N = N_after_singletons;
+        }
+
+        free(singleton_mask);
+    }
+
+    if (verbose && num_singletons_total == 0) {
+        SF_display("civreghdfe: No singletons found\n");
+    }
+
+    /* Check we still have enough observations */
+    if (N < K_total + K_iv + 1) {
+        SF_error("civreghdfe: Insufficient observations after singleton removal\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 2001;
+    }
+
     /* Initialize HDFE state (reuse creghdfe infrastructure) */
     /* This requires setting up FE_Factor structures */
     HDFE_State *state = (HDFE_State *)calloc(1, sizeof(HDFE_State));
@@ -848,33 +1706,60 @@ static ST_retcode do_iv_regression(void)
     state->weight_type = weight_type;
     state->weights = weights_c;
     state->maxiter = maxiter;
-    state->tolerance = (ST_int)(tolerance * 1e10);  /* Convert to int representation */
+    state->tolerance = tolerance;
     state->verbose = verbose;
 
     /* Set up factors */
     state->factors = (FE_Factor *)calloc(G, sizeof(FE_Factor));
     for (ST_int g = 0; g < G; g++) {
-        /* Count levels */
+        /* Find max level value for remapping */
         ST_int max_level = 0;
         for (ST_int i = 0; i < N; i++) {
             if (fe_levels_c[g][i] > max_level) max_level = fe_levels_c[g][i];
         }
 
-        state->factors[g].num_levels = max_level;
-        state->factors[g].has_intercept = 1;
-        state->factors[g].levels = fe_levels_c[g];
-        state->factors[g].counts = (ST_double *)calloc(max_level + 1, sizeof(ST_double));
-        state->factors[g].weighted_counts = has_weights ? (ST_double *)calloc(max_level + 1, sizeof(ST_double)) : NULL;
-        state->factors[g].means = (ST_double *)calloc(max_level + 1, sizeof(ST_double));
+        /* Remap FE levels to contiguous 1-based indices
+           The CG solver expects levels to be 1, 2, 3, ..., num_levels
+           so it can use levels[i] - 1 as array indices */
+        ST_int *remap = (ST_int *)calloc(max_level + 1, sizeof(ST_int));
+        if (!remap) {
+            SF_error("civreghdfe: Memory allocation failed for level remap\n");
+            return 920;
+        }
 
-        /* Count observations per level */
+        /* First pass: assign contiguous level IDs starting from 1 */
+        ST_int next_level = 1;
         for (ST_int i = 0; i < N; i++) {
-            ST_int lev = fe_levels_c[g][i];
-            state->factors[g].counts[lev] += 1.0;
-            if (has_weights) {
-                state->factors[g].weighted_counts[lev] += weights_c[i];
+            ST_int old_level = fe_levels_c[g][i];
+            if (remap[old_level] == 0) {
+                remap[old_level] = next_level++;
             }
         }
+
+        ST_int num_levels = next_level - 1;  /* Total unique levels */
+
+        /* Allocate factor arrays with correct size */
+        state->factors[g].has_intercept = 1;
+        state->factors[g].levels = fe_levels_c[g];  /* Will be remapped in place */
+        state->factors[g].num_levels = num_levels;
+        state->factors[g].max_level = num_levels;  /* After remapping, max_level == num_levels */
+        state->factors[g].counts = (ST_double *)calloc(num_levels, sizeof(ST_double));
+        state->factors[g].weighted_counts = has_weights ? (ST_double *)calloc(num_levels, sizeof(ST_double)) : NULL;
+        state->factors[g].means = (ST_double *)calloc(num_levels, sizeof(ST_double));
+
+        /* Second pass: remap levels in place and count */
+        for (ST_int i = 0; i < N; i++) {
+            ST_int old_level = fe_levels_c[g][i];
+            ST_int new_level = remap[old_level];  /* 1-based */
+            fe_levels_c[g][i] = new_level;        /* Remap in place */
+
+            state->factors[g].counts[new_level - 1] += 1.0;  /* 0-based index */
+            if (has_weights) {
+                state->factors[g].weighted_counts[new_level - 1] += weights_c[i];
+            }
+        }
+
+        free(remap);
     }
 
     /* Allocate CG solver buffers */
@@ -885,19 +1770,21 @@ static ST_retcode do_iv_regression(void)
     state->thread_cg_u = (ST_double **)malloc(num_threads * sizeof(ST_double *));
     state->thread_cg_v = (ST_double **)malloc(num_threads * sizeof(ST_double *));
     state->thread_proj = (ST_double **)malloc(num_threads * sizeof(ST_double *));
-    state->thread_fe_means = (ST_double **)malloc(num_threads * sizeof(ST_double *));
 
-    ST_int total_levels = 0;
-    for (ST_int g = 0; g < G; g++) {
-        total_levels += state->factors[g].num_levels + 1;
-    }
+    /* thread_fe_means needs num_threads * G arrays, one per (thread, factor) combination */
+    state->thread_fe_means = (ST_double **)calloc(num_threads * G, sizeof(ST_double *));
 
     for (ST_int t = 0; t < num_threads; t++) {
         state->thread_cg_r[t] = (ST_double *)malloc(N * sizeof(ST_double));
         state->thread_cg_u[t] = (ST_double *)malloc(N * sizeof(ST_double));
         state->thread_cg_v[t] = (ST_double *)malloc(N * sizeof(ST_double));
         state->thread_proj[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        state->thread_fe_means[t] = (ST_double *)malloc(total_levels * sizeof(ST_double));
+
+        /* Allocate mean arrays for each factor - use num_levels (contiguous after remapping) */
+        for (ST_int g = 0; g < G; g++) {
+            state->thread_fe_means[t * G + g] = (ST_double *)malloc(
+                state->factors[g].num_levels * sizeof(ST_double));
+        }
     }
 
     state->factors_initialized = 1;
@@ -949,21 +1836,62 @@ static ST_retcode do_iv_regression(void)
     ST_double *Z_dem = all_data + N * (1 + K_endog + K_exog);
 
     /* Compute df_a (absorbed degrees of freedom) */
-    /* For simplicity, use sum of (levels - 1) for each FE */
+    /* Single FE: df_a = num_levels (constant absorbed by FE)
+       Multi-FE: df_a = sum(num_levels) - (G - 1) for redundant levels */
     ST_int df_a = 0;
+    ST_int df_a_nested = 0;  /* Levels from FE nested within cluster */
     for (ST_int g = 0; g < G; g++) {
-        df_a += state->factors[g].num_levels - 1;
+        df_a += state->factors[g].num_levels;
+        /* Check if this FE is nested in cluster (1-indexed) */
+        if (nested_fe_index > 0 && g == (nested_fe_index - 1)) {
+            df_a_nested = state->factors[g].num_levels;
+        }
     }
-    if (G > 1) df_a += 1;  /* Adjust for multiple FEs */
+    if (G > 1) df_a -= (G - 1);  /* Subtract redundant levels for multi-way FE */
 
-    /* Count clusters if needed */
+    /* For VCE calculation when FE is nested in cluster:
+       - nested FE levels don't contribute to df_a for VCE
+       - nested_adj = 1 to account for the constant */
+    ST_int df_a_for_vce = df_a - df_a_nested;
+    ST_int nested_adj = (df_a_nested > 0) ? 1 : 0;
+
+    if (verbose && has_cluster) {
+        char buf[512];
+        snprintf(buf, sizeof(buf),
+            "civreghdfe: nested_fe_index=%d, df_a=%d, df_a_nested=%d, df_a_for_vce=%d, nested_adj=%d\n",
+            (int)nested_fe_index, (int)df_a, (int)df_a_nested, (int)df_a_for_vce, (int)nested_adj);
+        SF_display(buf);
+    }
+
+    /* Count unique clusters and remap to contiguous IDs if needed */
     ST_int num_clusters = 0;
     if (has_cluster) {
+        /* Find max cluster ID to size the mapping array */
         ST_int max_cluster = 0;
         for (ST_int i = 0; i < N; i++) {
             if (cluster_ids_c[i] > max_cluster) max_cluster = cluster_ids_c[i];
         }
-        num_clusters = max_cluster;
+        /* Remap cluster IDs to contiguous 1-based indices */
+        ST_int *cluster_remap = (ST_int *)calloc(max_cluster + 1, sizeof(ST_int));
+        if (cluster_remap) {
+            /* First pass: assign new contiguous IDs */
+            ST_int next_id = 1;
+            for (ST_int i = 0; i < N; i++) {
+                ST_int old_id = cluster_ids_c[i];
+                if (cluster_remap[old_id] == 0) {
+                    cluster_remap[old_id] = next_id++;
+                }
+            }
+            num_clusters = next_id - 1;
+            /* Second pass: remap in place */
+            for (ST_int i = 0; i < N; i++) {
+                cluster_ids_c[i] = cluster_remap[cluster_ids_c[i]];
+            }
+            free(cluster_remap);
+        } else {
+            /* Fallback: use max if allocation fails */
+            num_clusters = max_cluster;
+        }
     }
 
     /* Allocate output arrays */
@@ -971,14 +1899,17 @@ static ST_retcode do_iv_regression(void)
     ST_double *V = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     ST_double *first_stage_F = (ST_double *)calloc(K_endog, sizeof(ST_double));
 
-    /* Compute 2SLS */
+    /* Compute k-class IV estimation (2SLS, LIML, Fuller, etc.) */
+    /* For cluster VCE, pass df_a_for_vce (excluding nested FE levels) and nested_adj */
+    ST_double lambda = 1.0;
     ST_retcode rc = compute_2sls(
         y_dem, X_exog_dem, X_endog_dem, Z_dem,
         weights_c, weight_type,
         N, K_exog, K_endog, K_iv,
         beta, V, first_stage_F,
         vce_type, cluster_ids_c, num_clusters,
-        df_a, verbose
+        df_a_for_vce, nested_adj, verbose,
+        est_method, kclass_user, fuller_alpha, &lambda
     );
 
     if (rc != STATA_OK) {
@@ -990,7 +1921,10 @@ static ST_retcode do_iv_regression(void)
         for (ST_int t = 0; t < num_threads; t++) {
             free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
             free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-            free(state->thread_fe_means[t]);
+            for (ST_int g = 0; g < G; g++) {
+                if (state->thread_fe_means[t * G + g])
+                    free(state->thread_fe_means[t * G + g]);
+            }
         }
         free(state->thread_cg_r); free(state->thread_cg_u);
         free(state->thread_cg_v); free(state->thread_proj);
@@ -1009,12 +1943,17 @@ static ST_retcode do_iv_regression(void)
     /* Store results to Stata */
     /* Scalars */
     SF_scal_save("__civreghdfe_N", (ST_double)N);
-    SF_scal_save("__civreghdfe_df_r", (ST_double)(N - K_total - 1 - df_a));
+    SF_scal_save("__civreghdfe_df_r", (ST_double)(N - K_total - df_a));
     SF_scal_save("__civreghdfe_df_a", (ST_double)df_a);
     SF_scal_save("__civreghdfe_K", (ST_double)K_total);
 
     if (has_cluster) {
         SF_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
+    }
+
+    /* Store lambda for LIML/Fuller */
+    if (est_method == 1 || est_method == 2) {
+        SF_scal_save("__civreghdfe_lambda", lambda);
     }
 
     /* Matrices: e(b) and e(V) */
@@ -1046,7 +1985,10 @@ static ST_retcode do_iv_regression(void)
     for (ST_int t = 0; t < num_threads; t++) {
         free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
         free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-        free(state->thread_fe_means[t]);
+        for (ST_int g = 0; g < G; g++) {
+            if (state->thread_fe_means[t * G + g])
+                free(state->thread_fe_means[t * G + g]);
+        }
     }
     free(state->thread_cg_r); free(state->thread_cg_u);
     free(state->thread_cg_v); free(state->thread_proj);

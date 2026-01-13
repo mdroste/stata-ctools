@@ -25,16 +25,20 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cmerge.do 
+. do validation/validate_civreghdfe.do 
 
-. *============================================================================
-> ===
-. * PROGRAM: validate_cmerge.do
-. * PURPOSE: Validation of -cmerge- vs. -merge-
-. *============================================================================
-> ===
+. /****************************************************************************
+> ***
+>  * validate_civreghdfe.do
+>  *
+>  * Comprehensive validation tests for civreghdfe vs ivreghdfe
+>  * Tests IV/2SLS regression with HDFE across various scenarios
+>  *
+>  * Requires ivreghdfe to be installed (ssc install ivreghdfe)
+>  * Tolerance: 1e-8 for coefficient/VCE matching
+>  ****************************************************************************
+> **/
 . 
-. * Load helper programs
 . do "validate_setup.do"
 file validate_setup.do not found
 r(601);

@@ -177,29 +177,29 @@ static ST_int load_data(cqreg_state *state,
         return -1;
     }
 
-    /* Copy independent variable columns from stata_data */
+    /* Copy independent variable columns from stata_data
+     * Parallelize across columns for large K, use memcpy for efficiency */
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K_x > 2)
+    #endif
     for (k = 0; k < K_x; k++) {
         if (state->data->vars[k + 1].type != STATA_TYPE_DOUBLE) {
-            ctools_error("cqreg", "Independent variable %d must be numeric", k + 1);
-            return -1;
+            /* Note: error handling in parallel region is tricky,
+             * but type check should never fail if Stata passed correct vars */
+            continue;
         }
         ST_double *src = state->data->vars[k + 1].data.dbl;
         ST_double *dst = &state->X[k * N];
 
-        /* Fast copy with 8x unrolling */
-        ST_int N8 = N - (N % 8);
-        for (i = 0; i < N8; i += 8) {
-            dst[i]     = src[i];
-            dst[i + 1] = src[i + 1];
-            dst[i + 2] = src[i + 2];
-            dst[i + 3] = src[i + 3];
-            dst[i + 4] = src[i + 4];
-            dst[i + 5] = src[i + 5];
-            dst[i + 6] = src[i + 6];
-            dst[i + 7] = src[i + 7];
-        }
-        for (; i < N; i++) {
-            dst[i] = src[i];
+        /* Use memcpy - typically highly optimized by compiler/runtime */
+        memcpy(dst, src, N * sizeof(ST_double));
+    }
+
+    /* Verify all columns were numeric (outside parallel region) */
+    for (k = 0; k < K_x; k++) {
+        if (state->data->vars[k + 1].type != STATA_TYPE_DOUBLE) {
+            ctools_error("cqreg", "Independent variable %d must be numeric", k + 1);
+            return -1;
         }
     }
 
