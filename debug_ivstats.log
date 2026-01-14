@@ -527,7 +527,7 @@ Residual SS             =  545772312.9                Root MSE      =     2773
 -------------+----------------------------------------------------------------
          mpg |  -504.0671   95.99555    -5.25   0.000    -695.4768   -312.6574
 ------------------------------------------------------------------------------
-Underidentification test (Kleibergen-Paap rk LM statistic):          10765.059
+Underidentification test (Kleibergen-Paap rk LM statistic):             20.723
                                                    Chi-sq(1) P-val =    0.0000
 ------------------------------------------------------------------------------
 Weak identification test (Cragg-Donald Wald F statistic):              106.920
@@ -565,7 +565,7 @@ Absorbed degrees of freedom:
 civreghdfe results (robust):
 
 . di as text "  idstat = " e(idstat)
-  idstat = 10765.059
+  idstat = 20.72311
 
 . di as text "  cd_f = " e(cd_f)
   cd_f = 106.9201
@@ -592,7 +592,7 @@ COMPARISON:
 
 . di as text "  underid stat: ivreghdfe=" `iv_idstat' " civreghdfe=" `civ_idsta
 > t' " diff=" (`iv_idstat' - `civ_idstat')
-  underid stat: ivreghdfe=21.298751 civreghdfe=10765.059 diff=-10743.76
+  underid stat: ivreghdfe=21.298751 civreghdfe=20.72311 diff=.57564193
 
 . di as text "  weak ID F (KP): ivreghdfe=" `iv_widstat' " civreghdfe=" `civ_wi
 > dstat' " diff=" (`iv_widstat' - `civ_widstat')

@@ -1199,7 +1199,7 @@ ST_retcode compute_2sls(
                     /* No division by N */
                 }
 
-                /* Invert shat0 */
+                /* Invert shat0 (computed with first-stage residuals v) for Wald statistic */
                 ST_double *shat0_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
                 memcpy(shat0_inv, shat0, K_iv * K_iv * sizeof(ST_double));
                 ST_int shat_ok = (cholesky(shat0_inv, K_iv) == 0);
@@ -1207,10 +1207,77 @@ ST_retcode compute_2sls(
                     shat_ok = (invert_from_cholesky(shat0_inv, K_iv, shat0_inv) == 0);
                 }
 
+                /* =============================================================
+                   Compute shat0_lm using X_endog directly (for LM statistic)
+                   Following ranktest.ado: LM uses vhat = Y (endogenous vars),
+                   while Wald uses vhat = Y - Z*pihat (first-stage residuals).
+                   =============================================================
+                */
+                ST_double *shat0_lm = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+                if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+                    /* Cluster-robust: shat0_lm = sum_g (Z_g' * X_endog_g)(Z_g' * X_endog_g)' */
+                    ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+
+                    /* Sum Z_i * X_endog_i within each cluster */
+                    for (i = 0; i < N; i++) {
+                        ST_int c = cluster_ids[i] - 1;
+                        if (c < 0 || c >= num_clusters) continue;
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        for (k = 0; k < K_iv; k++) {
+                            cluster_Zy[c * K_iv + k] += w * Z[k * N + i] * X_endog[i];
+                        }
+                    }
+
+                    /* shat0_lm = sum_g (cluster_Zy_g)(cluster_Zy_g)' */
+                    for (ST_int c = 0; c < num_clusters; c++) {
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                shat0_lm[kj * K_iv + ki] +=
+                                    cluster_Zy[c * K_iv + ki] * cluster_Zy[c * K_iv + kj];
+                            }
+                        }
+                    }
+
+                    free(cluster_Zy);
+                } else {
+                    /* HC robust: shat0_lm = Z' * diag(X_endog²) * Z */
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        ST_double y2w = w * X_endog[i] * X_endog[i];
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                shat0_lm[kj * K_iv + ki] += y2w * Z[ki * N + i] * Z[kj * N + i];
+                            }
+                        }
+                    }
+                }
+
+                /* Invert shat0_lm for LM statistic */
+                ST_double *shat0_lm_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+                memcpy(shat0_lm_inv, shat0_lm, K_iv * K_iv * sizeof(ST_double));
+                ST_int shat_lm_ok = (cholesky(shat0_lm_inv, K_iv) == 0);
+                if (shat_lm_ok) {
+                    shat_lm_ok = (invert_from_cholesky(shat0_lm_inv, K_iv, shat0_lm_inv) == 0);
+                }
+
                 if (shat_ok) {
-                    /* Small-sample adjustment following ranktest methodology */
-                    ST_int Nminus = N - df_a - 1;
-                    if (Nminus <= 0) Nminus = 1;
+                    /* Small-sample adjustments following ranktest methodology:
+                       - LM: Nminus_lm = N - K3 where K3 = partialled out vars
+                       - Wald: Nminus_wald = N - K3 - max(K1,K2)
+                       In our case with HDFE already absorbed:
+                       - K3 ≈ 1 (constant) since FE are pre-absorbed
+                       - For single endog: max(K1,K2) = max(K_endog, L) = max(1, L)
+                    */
+                    ST_int Nminus_wald = N - df_a - 1;
+                    if (Nminus_wald <= 0) Nminus_wald = 1;
+                    /* For LM: Nminus = N - K3 where K3 = partialled out vars.
+                       In ivreghdfe context with HDFE, K3 includes:
+                       - Partialled out constant (1)
+                       - One additional dof subtracted (1)
+                       This matches ivreghdfe e(partial_ct) = 2
+                    */
+                    ST_int Nminus_lm = N - 2;
+                    if (Nminus_lm <= 0) Nminus_lm = 1;
 
                     /* ===============================================
                        KP rk Wald F statistic (for weak instruments)
@@ -1220,84 +1287,97 @@ ST_retcode compute_2sls(
                        So: Wald = pi' * Z'Z * inv(shat0) * Z'Z * pi
                     */
 
-                    /* Compute ZtZ * pi */
-                    ST_double *ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    /* Compute ZtZ * pi = Z'X_endog (the moment condition) */
+                    ST_double *ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
                     for (ST_int ki = 0; ki < K_iv; ki++) {
                         ST_double sum = 0.0;
                         for (ST_int kj = 0; kj < K_iv; kj++) {
                             sum += ZtZ[kj * K_iv + ki] * pi[kj];
                         }
-                        ZtZ_pi[ki] = sum;
+                        ZtX[ki] = sum;
                     }
 
-                    /* Compute shat0_inv * ZtZ * pi */
-                    ST_double *shat0_inv_ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    /* Compute shat0_inv * ZtX (for Wald) */
+                    ST_double *shat0_inv_ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
                     for (ST_int ki = 0; ki < K_iv; ki++) {
                         ST_double sum = 0.0;
                         for (ST_int kj = 0; kj < K_iv; kj++) {
-                            sum += shat0_inv[kj * K_iv + ki] * ZtZ_pi[kj];
+                            sum += shat0_inv[kj * K_iv + ki] * ZtX[kj];
                         }
-                        shat0_inv_ZtZ_pi[ki] = sum;
+                        shat0_inv_ZtX[ki] = sum;
                     }
 
-                    /* Compute ZtZ * shat0_inv * ZtZ * pi */
-                    ST_double *ZtZ_shat0_inv_ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    /* Compute ZtZ * shat0_inv * ZtX */
+                    ST_double *ZtZ_shat0_inv_ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
                     for (ST_int ki = 0; ki < K_iv; ki++) {
                         ST_double sum = 0.0;
                         for (ST_int kj = 0; kj < K_iv; kj++) {
-                            sum += ZtZ[kj * K_iv + ki] * shat0_inv_ZtZ_pi[kj];
+                            sum += ZtZ[kj * K_iv + ki] * shat0_inv_ZtX[kj];
                         }
-                        ZtZ_shat0_inv_ZtZ_pi[ki] = sum;
+                        ZtZ_shat0_inv_ZtX[ki] = sum;
                     }
 
                     /* Compute kp_wald = pi' * ZtZ * shat0_inv * ZtZ * pi */
                     ST_double kp_wald_raw = 0.0;
                     for (ST_int ki = 0; ki < K_iv; ki++) {
-                        kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtZ_pi[ki];
+                        kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtX[ki];
                     }
 
-                    /* KP rk Wald F = (Nminus / N) * kp_wald_raw / L */
-                    ST_double kp_wald = kp_wald_raw * (ST_double)Nminus / (ST_double)N;
+                    /* KP rk Wald F = (Nminus_wald / N) * kp_wald_raw / L */
+                    ST_double kp_wald = kp_wald_raw * (ST_double)Nminus_wald / (ST_double)N;
                     kp_f = kp_wald / (ST_double)L;
 
                     /* ===============================================
                        KP rk LM statistic (for underidentification)
                        ===============================================
-                       Following ranktest.ado: the LM statistic is computed
-                       directly from the moment conditions.
+                       Following ranktest.ado: LM uses shat0_lm computed with
+                       X_endog (not residuals), because under H0: pi=0, the
+                       "residual" in the first stage is just X_endog itself.
 
-                       The variance of gbar = Z'X / N is:
-                       Var(gbar) = (1/N²) * shat0
-
-                       So the inverse variance is:
-                       inv(Var(gbar)) = N² * inv(shat0)
-
-                       The LM statistic is:
-                       LM = Nminus * gbar' * inv(Var(gbar)) * gbar
-                          = Nminus * (Z'X/N)' * N² * inv(shat0) * (Z'X/N)
-                          = Nminus * (Z'X)' * inv(shat0) * (Z'X)
-
-                       Since Z'X = Z'Z * pi (because pi = (Z'Z)^-1 * Z'X):
-                       LM = Nminus * (ZtZ_pi)' * inv(shat0) * (ZtZ_pi)
+                       LM = Nminus_lm * gbar' * inv(shat0_lm) * gbar
+                          = Nminus_lm * (Z'X/N)' * inv(shat0_lm/N²) * (Z'X/N)
+                          = Nminus_lm * (Z'X)' * inv(shat0_lm) * (Z'X)
                     */
+                    if (shat_lm_ok) {
+                        /* Compute shat0_lm_inv * ZtX */
+                        ST_double *shat0_lm_inv_ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            ST_double sum = 0.0;
+                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                sum += shat0_lm_inv[kj * K_iv + ki] * ZtX[kj];
+                            }
+                            shat0_lm_inv_ZtX[ki] = sum;
+                        }
 
-                    /* Compute ZtZ_pi' * shat0_inv * ZtZ_pi */
-                    ST_double quad_lm = 0.0;
-                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                        quad_lm += ZtZ_pi[ki] * shat0_inv_ZtZ_pi[ki];
+                        /* Compute ZtX' * shat0_lm_inv * ZtX */
+                        ST_double quad_lm = 0.0;
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            quad_lm += ZtX[ki] * shat0_lm_inv_ZtX[ki];
+                        }
+
+                        /* KP LM = Nminus_lm * quad_lm / N
+
+                           In ranktest, the variance shat0 = m_omega(vcvo) appears to
+                           be normalized by N internally, so the final formula is:
+                           j = gbar' * inv(shat0) * gbar * Nminus
+                             = (Z'Y/N)' * inv(shat0/N) * (Z'Y/N) * Nminus
+                             = (Z'Y)' * inv(shat0) * (Z'Y) / N * Nminus
+                        */
+                        ST_double kp_lm = (ST_double)Nminus_lm * quad_lm / (ST_double)N;
+
+                        /* For robust VCE, use KP LM as the underidentification test */
+                        underid_stat = kp_lm;
+
+                        free(shat0_lm_inv_ZtX);
                     }
 
-                    /* KP LM = Nminus * quad_lm (no N² division!) */
-                    ST_double kp_lm = (ST_double)Nminus * quad_lm;
-
-                    /* For robust VCE, use KP LM as the underidentification test */
-                    underid_stat = kp_lm;
-
-                    free(ZtZ_pi);
-                    free(shat0_inv_ZtZ_pi);
-                    free(ZtZ_shat0_inv_ZtZ_pi);
+                    free(ZtX);
+                    free(shat0_inv_ZtX);
+                    free(ZtZ_shat0_inv_ZtX);
                 }
 
+                free(shat0_lm_inv);
+                free(shat0_lm);
                 free(shat0_inv);
                 free(shat0);
                 free(v);
