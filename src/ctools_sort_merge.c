@@ -56,18 +56,10 @@
    Utility Functions
    ============================================================================ */
 
-static void *merge_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
+/*
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+*/
 
 static inline uint64_t merge_double_to_sortable(double d)
 {
@@ -486,8 +478,8 @@ static stata_retcode parallel_merge_sort_numeric(size_t * MERGE_RESTRICT order,
     size_t block_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate buffers */
-    size_t *temp = (size_t *)merge_aligned_alloc(64, nobs * sizeof(size_t));
-    size_t *merge_temp = (size_t *)merge_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *merge_temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t **thread_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
@@ -597,8 +589,8 @@ static stata_retcode parallel_merge_sort_numeric(size_t * MERGE_RESTRICT order,
     }
 
 cleanup:
-    free(temp);
-    free(merge_temp);
+    ctools_aligned_free(temp);
+    ctools_aligned_free(merge_temp);
     free(block_starts);
     free(block_lens);
     if (thread_temps) {
@@ -623,8 +615,8 @@ static stata_retcode parallel_merge_sort_string(size_t * MERGE_RESTRICT order,
     size_t block_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate buffers */
-    size_t *temp = (size_t *)merge_aligned_alloc(64, nobs * sizeof(size_t));
-    size_t *merge_temp = (size_t *)merge_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *merge_temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t **thread_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
@@ -725,8 +717,8 @@ static stata_retcode parallel_merge_sort_string(size_t * MERGE_RESTRICT order,
     }
 
 cleanup:
-    free(temp);
-    free(merge_temp);
+    ctools_aligned_free(temp);
+    ctools_aligned_free(merge_temp);
     free(block_starts);
     free(block_lens);
     if (thread_temps) {
@@ -750,7 +742,7 @@ static stata_retcode merge_sort_by_numeric_var(stata_data *data, int var_idx)
     int num_threads;
     stata_retcode rc;
 
-    keys = (uint64_t *)merge_aligned_alloc(64, data->nobs * sizeof(uint64_t));
+    keys = (uint64_t *)ctools_aligned_alloc(64, data->nobs * sizeof(uint64_t));
     if (keys == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -777,7 +769,7 @@ static stata_retcode merge_sort_by_numeric_var(stata_data *data, int var_idx)
         /* Sequential radix sort */
         size_t *temp = (size_t *)malloc(data->nobs * sizeof(size_t));
         if (temp == NULL) {
-            free(keys);
+            ctools_aligned_free(keys);
             return STATA_ERR_MEMORY;
         }
         block_radix_sort_numeric(data->sort_order, keys, 0, data->nobs, temp);
@@ -787,7 +779,7 @@ static stata_retcode merge_sort_by_numeric_var(stata_data *data, int var_idx)
         rc = parallel_merge_sort_numeric(data->sort_order, keys, data->nobs, num_threads);
     }
 
-    free(keys);
+    ctools_aligned_free(keys);
     return rc;
 }
 
@@ -853,7 +845,7 @@ static stata_retcode merge_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)merge_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -861,12 +853,12 @@ static stata_retcode merge_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.dbl = new_data;
             }
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)malloc(nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -874,7 +866,7 @@ static stata_retcode merge_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.str = new_data;
             }
         }

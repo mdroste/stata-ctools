@@ -61,6 +61,8 @@ ST_retcode civreghdfe_main(const char *args);
     - kclass_user: user-specified k for kclass method
     - fuller_alpha: Fuller modification parameter
     - lambda_out: output for LIML lambda value (may be NULL)
+    - kernel_type: 0=none, 1=Bartlett, 2=Parzen, 3=QS, 4=truncated, 5=Tukey
+    - bw: bandwidth for HAC kernel
 
     Returns STATA_OK on success.
 */
@@ -87,7 +89,9 @@ ST_retcode compute_2sls(
     ST_int est_method,
     ST_double kclass_user,
     ST_double fuller_alpha,
-    ST_double *lambda_out
+    ST_double *lambda_out,
+    ST_int kernel_type,
+    ST_int bw
 );
 
 #endif /* CIVREGHDFE_IMPL_H */

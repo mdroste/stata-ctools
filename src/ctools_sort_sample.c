@@ -52,18 +52,10 @@
    Utility Functions
    ============================================================================ */
 
-static void *sample_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
+/*
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+*/
 
 /*
     Convert IEEE 754 double to sortable uint64.
@@ -421,11 +413,11 @@ static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
     uint64_t *all_samples = (uint64_t *)malloc(total_samples * sizeof(uint64_t));
     uint64_t *sample_temp = (uint64_t *)malloc(total_samples * sizeof(uint64_t));
     uint64_t *splitters = (uint64_t *)malloc(num_splitters * sizeof(uint64_t));
-    size_t *temp_order = (size_t *)sample_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
 
     /* Per-thread bucket counts: use cache-line padding to avoid false sharing */
     size_t padded_buckets = ((num_threads + 7) / 8) * 8;  /* Round up to 8 */
-    size_t *bucket_counts = (size_t *)sample_aligned_alloc(64,
+    size_t *bucket_counts = (size_t *)ctools_aligned_alloc(64,
                                 num_threads * padded_buckets * sizeof(size_t));
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
@@ -603,8 +595,8 @@ cleanup:
     free(all_samples);
     free(sample_temp);
     free(splitters);
-    free(temp_order);
-    free(bucket_counts);
+    ctools_aligned_free(temp_order);
+    ctools_aligned_free(bucket_counts);
     free(bucket_sizes);
     free(bucket_offsets);
     if (thread_temps) {
@@ -639,10 +631,10 @@ static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
     /* Allocate buffers */
     char **all_samples = (char **)malloc(total_samples * sizeof(char *));
     char **splitters = (char **)malloc(num_splitters * sizeof(char *));
-    size_t *temp_order = (size_t *)sample_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
 
     size_t padded_buckets = ((num_threads + 7) / 8) * 8;
-    size_t *bucket_counts = (size_t *)sample_aligned_alloc(64,
+    size_t *bucket_counts = (size_t *)ctools_aligned_alloc(64,
                                 num_threads * padded_buckets * sizeof(size_t));
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
@@ -798,8 +790,8 @@ static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
 cleanup:
     free(all_samples);
     free(splitters);
-    free(temp_order);
-    free(bucket_counts);
+    ctools_aligned_free(temp_order);
+    ctools_aligned_free(bucket_counts);
     free(bucket_sizes);
     free(bucket_offsets);
     if (thread_temps) {
@@ -823,7 +815,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
     int num_threads;
     stata_retcode rc;
 
-    keys = (uint64_t *)sample_aligned_alloc(64, data->nobs * sizeof(uint64_t));
+    keys = (uint64_t *)ctools_aligned_alloc(64, data->nobs * sizeof(uint64_t));
     if (keys == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -850,7 +842,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
         /* Sequential radix sort for small data */
         size_t *temp = (size_t *)malloc(data->nobs * sizeof(size_t));
         if (temp == NULL) {
-            free(keys);
+            ctools_aligned_free(keys);
             return STATA_ERR_MEMORY;
         }
         radix_sort_bucket_numeric(data->sort_order, temp, keys, 0, data->nobs);
@@ -860,7 +852,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
         rc = sample_sort_numeric_impl(data->sort_order, keys, data->nobs, num_threads);
     }
 
-    free(keys);
+    ctools_aligned_free(keys);
     return rc;
 }
 
@@ -926,7 +918,7 @@ static stata_retcode sample_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)sample_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -934,12 +926,12 @@ static stata_retcode sample_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.dbl = new_data;
             }
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)malloc(nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -947,7 +939,7 @@ static stata_retcode sample_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.str = new_data;
             }
         }

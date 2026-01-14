@@ -56,20 +56,9 @@
    ============================================================================ */
 
 /*
-    Aligned memory allocation wrapper.
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
 */
-static void *msd_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
 
 /*
     Convert IEEE 754 double to sortable uint64.
@@ -614,14 +603,14 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
     int b;
 
     order_a = data->sort_order;
-    order_b = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
+    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                            data->nobs * sizeof(size_t));
-    keys = (uint64_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
+    keys = (uint64_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                           data->nobs * sizeof(uint64_t));
 
     if (order_b == NULL || keys == NULL) {
-        free(order_b);
-        free(keys);
+        ctools_aligned_free(order_b);
+        ctools_aligned_free(keys);
         return STATA_ERR_MEMORY;
     }
 
@@ -647,8 +636,8 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
     if (use_parallel) {
         ctx = msd_context_alloc(num_threads);
         if (ctx == NULL) {
-            free(order_b);
-            free(keys);
+            ctools_aligned_free(order_b);
+            ctools_aligned_free(keys);
             return STATA_ERR_MEMORY;
         }
 
@@ -704,8 +693,8 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
         msd_sort_numeric_recursive(order_a, order_b, keys, 0, data->nobs, 7, 1);
     }
 
-    free(order_b);
-    free(keys);
+    ctools_aligned_free(order_b);
+    ctools_aligned_free(keys);
     return STATA_OK;
 }
 
@@ -895,7 +884,7 @@ static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     /* Allocate temporary order array */
-    order_b = (size_t *)msd_aligned_alloc(CACHE_LINE_SIZE,
+    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                            data->nobs * sizeof(size_t));
     if (order_b == NULL) {
         free(str_lengths);
@@ -906,7 +895,7 @@ static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
     msd_sort_string_recursive(order_a, order_b, str_data, str_lengths,
                               0, data->nobs, 0, 1);  /* 1 = data starts in order_a */
 
-    free(order_b);
+    ctools_aligned_free(order_b);
     free(str_lengths);
     return STATA_OK;
 }
@@ -937,7 +926,7 @@ static void *msd_apply_permute_thread(void *arg)
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
-        double *new_data = (double *)msd_aligned_alloc(CACHE_LINE_SIZE,
+        double *new_data = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                                         nobs * sizeof(double));
         if (new_data == NULL) {
             args->success = 0;
@@ -948,11 +937,11 @@ static void *msd_apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        free(old_data);
+        ctools_aligned_free(old_data);
         args->var->data.dbl = new_data;
     } else {
         char **old_data = args->var->data.str;
-        char **new_data = (char **)malloc(nobs * sizeof(char *));
+        char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
         if (new_data == NULL) {
             args->success = 0;
             return NULL;
@@ -962,7 +951,7 @@ static void *msd_apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        free(old_data);
+        ctools_aligned_free(old_data);
         args->var->data.str = new_data;
     }
 

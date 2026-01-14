@@ -50,22 +50,10 @@
 #include "ctools_config.h"
 
 /*
-    Aligned memory allocation wrapper.
-    Falls back to regular malloc if posix_memalign unavailable.
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+    On Windows, _aligned_malloc requires _aligned_free - using regular free() causes heap corruption.
 */
-static void *aligned_alloc_wrapper(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    /* Fallback for systems without posix_memalign */
-    return malloc(size);
-#endif
-}
 
 /*
     Convert IEEE 754 double to uint64 that sorts correctly with unsigned comparison.
@@ -798,14 +786,14 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 
     /* Allocate temporary order array */
     order_a = data->sort_order;
-    order_b = (size_t *)aligned_alloc_wrapper(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
+    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
 
     /* Allocate aligned keys array */
-    keys = (uint64_t *)aligned_alloc_wrapper(CACHE_LINE_SIZE, data->nobs * sizeof(uint64_t));
+    keys = (uint64_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(uint64_t));
 
     if (order_b == NULL || keys == NULL) {
-        free(order_b);
-        free(keys);
+        ctools_aligned_free(order_b);
+        ctools_aligned_free(keys);
         return STATA_ERR_MEMORY;
     }
 
@@ -829,8 +817,8 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
     if (use_parallel) {
         ctx = radix_context_alloc(num_threads);
         if (ctx == NULL) {
-            free(order_b);
-            free(keys);
+            ctools_aligned_free(order_b);
+            ctools_aligned_free(keys);
             return STATA_ERR_MEMORY;
         }
     }
@@ -866,8 +854,8 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
     }
 
     radix_context_free(ctx);
-    free(order_b);
-    free(keys);
+    ctools_aligned_free(order_b);
+    ctools_aligned_free(keys);
     return STATA_OK;
 }
 
@@ -925,7 +913,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 
     /* Allocate temporary order array - aligned for cache efficiency */
     order_a = data->sort_order;
-    order_b = (size_t *)aligned_alloc_wrapper(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
+    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
     if (order_b == NULL) {
         free(str_lengths);
         return STATA_ERR_MEMORY;
@@ -944,7 +932,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
     if (use_parallel) {
         ctx = string_context_alloc(num_threads);
         if (ctx == NULL) {
-            free(order_b);
+            ctools_aligned_free(order_b);
             free(str_lengths);
             return STATA_ERR_MEMORY;
         }
@@ -979,7 +967,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
     }
 
     string_context_free(ctx);
-    free(order_b);
+    ctools_aligned_free(order_b);
     free(str_lengths);
     return STATA_OK;
 }
@@ -1013,7 +1001,7 @@ static void *apply_permute_thread(void *arg)
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
-        double *new_data = (double *)aligned_alloc_wrapper(CACHE_LINE_SIZE, nobs * sizeof(double));
+        double *new_data = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
         if (new_data == NULL) {
             args->success = 0;
             return NULL;
@@ -1024,13 +1012,13 @@ static void *apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        /* Replace old data with new */
-        free(old_data);
+        /* Replace old data with new (old_data was aligned-allocated) */
+        ctools_aligned_free(old_data);
         args->var->data.dbl = new_data;
     } else {
         /* String variable */
         char **old_data = args->var->data.str;
-        char **new_data = (char **)malloc(nobs * sizeof(char *));
+        char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
         if (new_data == NULL) {
             args->success = 0;
             return NULL;
@@ -1041,8 +1029,8 @@ static void *apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        /* Replace old data with new (don't free strings, just the array) */
-        free(old_data);
+        /* Replace old data with new (old_data was aligned-allocated, don't free strings) */
+        ctools_aligned_free(old_data);
         args->var->data.str = new_data;
     }
 

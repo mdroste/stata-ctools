@@ -6,21 +6,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ctools_types.h"
+#include "ctools_config.h"
 
 /*
-    Platform-specific aligned memory free.
-    Matches aligned_alloc_cacheline() in ctools_data_io.c
-    On POSIX, posix_memalign memory can be freed with regular free().
-    On Windows, _aligned_malloc requires _aligned_free.
+    NOTE: Use ctools_aligned_free() from ctools_config.h for freeing aligned memory.
+    This ensures consistent behavior across all platforms including Windows.
 */
-static inline void aligned_free_internal(void *ptr)
-{
-#if defined(_WIN32)
-    _aligned_free(ptr);
-#else
-    free(ptr);
-#endif
-}
+#define aligned_free_internal ctools_aligned_free
 
 void stata_data_init(stata_data *data)
 {

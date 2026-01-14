@@ -55,18 +55,10 @@
    Utility Functions
    ============================================================================ */
 
-static void *ips4o_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
+/*
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+*/
 
 /* Branchless double to sortable uint64 conversion */
 static IPS4O_INLINE uint64_t ips4o_double_to_sortable(double d)
@@ -360,7 +352,7 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
     free(samples);
 
     /* Build classifier tree */
-    uint64_t *tree = (uint64_t *)ips4o_aligned_alloc(64, 2 * num_buckets * sizeof(uint64_t));
+    uint64_t *tree = (uint64_t *)ctools_aligned_alloc(64, 2 * num_buckets * sizeof(uint64_t));
     if (!tree) { free(splitters); radix_sort_numeric(order, temp, keys, start, len); return; }
     memset(tree, 0, 2 * num_buckets * sizeof(uint64_t));
     build_tree(tree, splitters, 1, 0, num_buckets - 2);
@@ -370,7 +362,7 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
     size_t *bucket_sizes = (size_t *)calloc(num_buckets, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc((num_buckets + 1) * sizeof(size_t));
     if (!bucket_sizes || !bucket_offsets) {
-        free(tree); free(bucket_sizes); free(bucket_offsets);
+        ctools_aligned_free(tree); free(bucket_sizes); free(bucket_offsets);
         radix_sort_numeric(order, temp, keys, start, len);
         return;
     }
@@ -391,7 +383,7 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
     /* Scatter */
     size_t *write_pos = (size_t *)malloc(num_buckets * sizeof(size_t));
     if (!write_pos) {
-        free(tree); free(bucket_sizes); free(bucket_offsets);
+        ctools_aligned_free(tree); free(bucket_sizes); free(bucket_offsets);
         radix_sort_numeric(order, temp, keys, start, len);
         return;
     }
@@ -403,7 +395,7 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
     }
     memcpy(order + start, temp, len * sizeof(size_t));
 
-    free(tree);
+    ctools_aligned_free(tree);
     free(write_pos);
 
     /* Recurse on buckets */
@@ -529,7 +521,7 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
     /* Allocate global temp buffer */
-    size_t *temp = (size_t *)ips4o_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     /* Use thread count as bucket count for top-level partition */
@@ -567,7 +559,7 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
     free(samples);
 
     /* Build tree */
-    uint64_t *tree = (uint64_t *)ips4o_aligned_alloc(64, 2 * num_buckets * sizeof(uint64_t));
+    uint64_t *tree = (uint64_t *)ctools_aligned_alloc(64, 2 * num_buckets * sizeof(uint64_t));
     if (!tree) { free(splitters); free(temp); return STATA_ERR_MEMORY; }
     memset(tree, 0, 2 * num_buckets * sizeof(uint64_t));
     build_tree(tree, splitters, 1, 0, num_buckets - 2);
@@ -745,7 +737,7 @@ static stata_retcode ips4o_parallel_string(size_t * IPS4O_RESTRICT order,
     int num_threads = omp_get_max_threads();
     if (num_threads > 16) num_threads = 16;
 
-    size_t *temp = (size_t *)ips4o_aligned_alloc(64, nobs * sizeof(size_t));
+    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     int log_buckets = 0;
@@ -867,7 +859,7 @@ static stata_retcode ips4o_sort_by_numeric_var(stata_data *data, int var_idx)
     size_t nobs = data->nobs;
 
     /* Allocate keys */
-    uint64_t *keys = (uint64_t *)ips4o_aligned_alloc(64, nobs * sizeof(uint64_t));
+    uint64_t *keys = (uint64_t *)ctools_aligned_alloc(64, nobs * sizeof(uint64_t));
     if (!keys) return STATA_ERR_MEMORY;
 
     /* Parallel key conversion */
@@ -885,20 +877,20 @@ static stata_retcode ips4o_sort_by_numeric_var(stata_data *data, int var_idx)
         rc = ips4o_parallel_numeric(data->sort_order, keys, nobs);
     } else {
         size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
-        if (!temp) { free(keys); return STATA_ERR_MEMORY; }
+        if (!temp) { ctools_aligned_free(keys); return STATA_ERR_MEMORY; }
         ips4o_sequential_numeric(data->sort_order, temp, keys, 0, nobs, 0);
         free(temp);
         rc = STATA_OK;
     }
 #else
     size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
-    if (!temp) { free(keys); return STATA_ERR_MEMORY; }
+    if (!temp) { ctools_aligned_free(keys); return STATA_ERR_MEMORY; }
     ips4o_sequential_numeric(data->sort_order, temp, keys, 0, nobs, 0);
     free(temp);
     rc = STATA_OK;
 #endif
 
-    free(keys);
+    ctools_aligned_free(keys);
     return rc;
 }
 
@@ -976,7 +968,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ips4o_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (!new_data) {
                 #pragma omp atomic write
                 success = 0;
@@ -987,11 +979,11 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
                 new_data[i] = old_data[perm[i]];
             }
 
-            free(old_data);
+            ctools_aligned_free(old_data);
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)malloc(nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
             if (!new_data) {
                 #pragma omp atomic write
                 success = 0;
@@ -1002,7 +994,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
                 new_data[i] = old_data[perm[i]];
             }
 
-            free(old_data);
+            ctools_aligned_free(old_data);
             var->data.str = new_data;
         }
     }
@@ -1014,25 +1006,25 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ips4o_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (!new_data) return STATA_ERR_MEMORY;
 
             for (size_t i = 0; i < nobs; i++) {
                 new_data[i] = old_data[perm[i]];
             }
 
-            free(old_data);
+            ctools_aligned_free(old_data);
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)malloc(nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
             if (!new_data) return STATA_ERR_MEMORY;
 
             for (size_t i = 0; i < nobs; i++) {
                 new_data[i] = old_data[perm[i]];
             }
 
-            free(old_data);
+            ctools_aligned_free(old_data);
             var->data.str = new_data;
         }
     }

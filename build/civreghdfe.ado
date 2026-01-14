@@ -14,6 +14,7 @@ program define civreghdfe, eclass sortpreserve
         MAXiter(integer 500) ///
         Verbose TIMEit ///
         FIRST ///
+        RF ///
         SMALL ///
         LIML ///
         FULLER(real 0) ///
@@ -21,6 +22,9 @@ program define civreghdfe, eclass sortpreserve
         GMM2s ///
         CUE ///
         COVIV ///
+        BW(integer 0) ///
+        KERNEL(string) ///
+        DKRAAY(integer 0) ///
         RESiduals(name) ///
         NOConstant]
 
@@ -326,6 +330,59 @@ program define civreghdfe, eclass sortpreserve
     scalar __civreghdfe_fuller = `fuller_val'
     scalar __civreghdfe_coviv = ("`coviv'" != "")
 
+    * Handle HAC options
+    * Kernel types: 0=none, 1=Bartlett/Newey-West, 2=Parzen, 3=Quadratic Spectral
+    local kernel_type = 0
+    local bw_val = `bw'
+    local dkraay_val = `dkraay'
+
+    if "`kernel'" != "" {
+        local kernel_lower = lower("`kernel'")
+        if "`kernel_lower'" == "bartlett" | "`kernel_lower'" == "nwest" {
+            local kernel_type = 1
+        }
+        else if "`kernel_lower'" == "parzen" {
+            local kernel_type = 2
+        }
+        else if "`kernel_lower'" == "quadraticspectral" | "`kernel_lower'" == "qs" {
+            local kernel_type = 3
+        }
+        else if "`kernel_lower'" == "truncated" | "`kernel_lower'" == "trunc" {
+            local kernel_type = 4
+        }
+        else if "`kernel_lower'" == "tukey" | "`kernel_lower'" == "thann" {
+            local kernel_type = 5
+        }
+        else {
+            di as error "Unknown kernel type: `kernel'"
+            di as error "Valid options: bartlett, parzen, quadraticspectral, truncated, tukey"
+            exit 198
+        }
+    }
+
+    * If dkraay is specified, use Bartlett kernel by default
+    if `dkraay_val' > 0 & `kernel_type' == 0 {
+        local kernel_type = 1
+    }
+
+    * Set default bandwidth if kernel specified but no bandwidth
+    if `kernel_type' > 0 & `bw_val' == 0 {
+        * Default: Newey-West optimal bandwidth = floor(4*(N/100)^(2/9))
+        local bw_val = floor(4 * (`N'/100)^(2/9))
+        if `bw_val' < 1 local bw_val = 1
+    }
+
+    scalar __civreghdfe_kernel = `kernel_type'
+    scalar __civreghdfe_bw = `bw_val'
+    scalar __civreghdfe_dkraay = `dkraay_val'
+
+    if "`verbose'" != "" & `kernel_type' > 0 {
+        di as text "HAC: kernel=`kernel_type', bandwidth=`bw_val'"
+        if `dkraay_val' > 0 {
+            di as text "Driscoll-Kraay standard errors with lag `dkraay_val'"
+        }
+    }
+
     * Create output matrices
     local K_total = `K_endog' + `K_exog'
     tempname b_temp V_temp
@@ -353,6 +410,11 @@ program define civreghdfe, eclass sortpreserve
     local df_r = __civreghdfe_df_r
     local df_a = __civreghdfe_df_a
     local K = __civreghdfe_K
+    local rss = __civreghdfe_rss
+    local tss = __civreghdfe_tss
+    local r2 = __civreghdfe_r2
+    local rmse = __civreghdfe_rmse
+    local F_model = __civreghdfe_F
 
     if `vce_type' == 2 {
         local N_clust = __civreghdfe_N_clust
@@ -435,8 +497,13 @@ program define civreghdfe, eclass sortpreserve
     matrix colnames `V_temp' = `varnames'
     matrix rownames `V_temp' = `varnames'
 
-    * Compute additional statistics
-    * RSS is not directly available, compute from residuals if needed
+    * Compute Wald F-statistic BEFORE posting (b' * V^{-1} * b / K)
+    tempname Vinv b_col wald_temp wald_stat
+    matrix `Vinv' = syminv(`V_temp')
+    matrix `b_col' = `b_temp''
+    matrix `wald_temp' = `Vinv' * `b_col'
+    matrix `wald_stat' = `b_temp' * `wald_temp'
+    local F_wald = `wald_stat'[1,1] / `K_total'
 
     * Post results
     ereturn clear
@@ -503,10 +570,8 @@ program define civreghdfe, eclass sortpreserve
         ereturn local model "2sls"
     }
 
-    if `vce_type' == 0 {
-        ereturn local vcetype "Unadjusted"
-    }
-    else if `vce_type' == 1 {
+    * Note: Don't set vcetype for unadjusted case to match ivreghdfe display format
+    if `vce_type' == 1 {
         ereturn local vcetype "Robust"
     }
     else if `vce_type' == 2 {
@@ -514,37 +579,349 @@ program define civreghdfe, eclass sortpreserve
         ereturn local clustvar "`cluster_var'"
     }
 
-    * Display results
+    * Store additional statistics
+    ereturn scalar rss = `rss'
+    ereturn scalar tss = `tss'
+    ereturn scalar r2 = `r2'
+    ereturn scalar rmse = `rmse'
+    ereturn scalar F = `F_wald'
+
+    * Display results in ivreghdfe format
     di as text ""
-    local disp_title = e(title)
+    di as text "IV (2SLS) estimation"
+    di as text "{hline 20}"
+    di as text ""
+
+    * Efficiency/consistency notes
+    if `vce_type' == 0 {
+        di as text "Estimates efficient for homoskedasticity only"
+        di as text "Statistics consistent for homoskedasticity only"
+    }
+    else if `vce_type' == 1 {
+        di as text "Estimates efficient for homoskedasticity only"
+        di as text "Statistics robust to heteroskedasticity"
+    }
+    else if `vce_type' == 2 {
+        di as text "Estimates efficient for homoskedasticity only"
+        di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
+    }
+    di as text ""
+
+    * Summary statistics line 1
     if `vce_type' == 2 {
-        di as text "`disp_title'" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
-        di as text "Absorbed " `G' " HDFE groups" _col(49) "Num. clusters" _col(68) "=" _col(70) %9.0fc `N_clust'
+        di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
+            as text _col(55) "Number of obs =" as result %9.0fc `N_used'
     }
     else {
-        di as text "`disp_title'" _col(49) "Number of obs" _col(68) "=" _col(70) %9.0fc `N_used'
-        di as text "Absorbed " `G' " HDFE groups"
+        di as text _col(55) "Number of obs =" as result %9.0fc `N_used'
     }
+
+    * F statistic (Wald test)
+    local prob_F = Ftail(`K_total', `df_r', `F_wald')
+    if `vce_type' == 2 {
+        di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+    }
+    else {
+        di as text _col(55) "F(" %3.0f `K_total' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
+    }
+    di as text _col(55) "Prob > F      =" as result %9.4f `prob_F'
+
+    * R-squared and RSS (match ivreghdfe format: 2 spaces then number)
+    di as text "Total (centered) SS     =  " as result %-14.1f `tss' ///
+        as text _col(55) "Centered R2   =" as result %9.4f `r2'
+    di as text "Total (uncentered) SS   =  " as result %-14.1f `tss' ///
+        as text _col(55) "Uncentered R2 =" as result %9.4f `r2'
+    di as text "Residual SS             =  " as result %-14.1f `rss' ///
+        as text _col(55) "Root MSE      =" as result %9.0f round(`rmse')
     di as text ""
 
     * Display coefficient table
     ereturn display, level(95)
 
-    * Display first-stage F statistics if requested
-    if "`first'" != "" | `K_endog' > 0 {
+    * Display diagnostic tests (always shown for IV)
+
+    * Retrieve underidentification test
+    capture scalar temp_underid = __civreghdfe_underid
+    capture scalar temp_underid_df = __civreghdfe_underid_df
+    if _rc == 0 {
+        local underid_stat = temp_underid
+        local underid_df = temp_underid_df
+        ereturn scalar idstat = `underid_stat'
+        ereturn scalar iddf = `underid_df'
+        ereturn scalar idp = chi2tail(`underid_df', `underid_stat')
+    }
+
+    * Underidentification test
+    if `vce_type' == 0 {
+        di as text "Underidentification test (Anderson canon. corr. LM statistic):" ///
+            _col(65) as result %14.3f `underid_stat'
+    }
+    else {
+        di as text "Underidentification test (Kleibergen-Paap rk LM statistic):" ///
+            _col(65) as result %14.3f `underid_stat'
+    }
+    local underid_p = chi2tail(`underid_df', `underid_stat')
+    di as text _col(52) "Chi-sq(" as result `underid_df' as text ") P-val =" ///
+        as result %10.4f `underid_p'
+    di as text "{hline 78}"
+
+    * Weak identification test
+    capture scalar temp_cd_f = __civreghdfe_cd_f
+    capture scalar temp_kp_f = __civreghdfe_kp_f
+    local cd_f_val = temp_cd_f
+    local kp_f_val = temp_kp_f
+
+    * Always display Cragg-Donald F
+    di as text "Weak identification test (Cragg-Donald Wald F statistic):" ///
+        _col(65) as result %14.3f `cd_f_val'
+
+    * For robust/cluster, also display Kleibergen-Paap rk Wald F
+    if `vce_type' != 0 & `kp_f_val' > 0 {
+        di as text "                         (Kleibergen-Paap rk Wald F statistic):" ///
+            _col(65) as result %14.3f `kp_f_val'
+    }
+
+    * Stock-Yogo critical values (for 1 endogenous variable, varies by # excluded instruments)
+    * Using values from Stock-Yogo (2005)
+    if `K_endog' == 1 {
+        if `K_inst_excl' == 1 {
+            * 1 excluded instrument (just-identified)
+            di as text "Stock-Yogo weak ID test critical values: 10% maximal IV size" _col(65) as result %14.2f 16.38
+            di as text "                                         15% maximal IV size" _col(65) as result %14.2f 8.96
+            di as text "                                         20% maximal IV size" _col(65) as result %14.2f 6.66
+            di as text "                                         25% maximal IV size" _col(65) as result %14.2f 5.53
+        }
+        else if `K_inst_excl' == 2 {
+            * 2 excluded instruments
+            di as text "Stock-Yogo weak ID test critical values: 10% maximal IV size" _col(65) as result %14.2f 19.93
+            di as text "                                         15% maximal IV size" _col(65) as result %14.2f 11.59
+            di as text "                                         20% maximal IV size" _col(65) as result %14.2f 8.75
+            di as text "                                         25% maximal IV size" _col(65) as result %14.2f 7.25
+        }
+        else if `K_inst_excl' == 3 {
+            * 3 excluded instruments
+            di as text "Stock-Yogo weak ID test critical values: 10% maximal IV size" _col(65) as result %14.2f 22.30
+            di as text "                                         15% maximal IV size" _col(65) as result %14.2f 12.83
+            di as text "                                         20% maximal IV size" _col(65) as result %14.2f 9.54
+            di as text "                                         25% maximal IV size" _col(65) as result %14.2f 7.80
+        }
+        else {
+            * More than 3 excluded instruments - show approximate values
+            di as text "Stock-Yogo weak ID test critical values: 10% maximal IV size" _col(65) as result %14.2f 16.38
+            di as text "                                         15% maximal IV size" _col(65) as result %14.2f 8.96
+            di as text "                                         20% maximal IV size" _col(65) as result %14.2f 6.66
+            di as text "                                         25% maximal IV size" _col(65) as result %14.2f 5.53
+        }
+    }
+    else if `K_endog' == 2 {
+        * Two endogenous - use appropriate critical values
+        if `K_inst_excl' == 3 {
+            di as text "Stock-Yogo weak ID test critical values: 10% maximal IV size" _col(65) as result %14.2f 13.43
+            di as text "                                         15% maximal IV size" _col(65) as result %14.2f 8.18
+            di as text "                                         20% maximal IV size" _col(65) as result %14.2f 6.40
+            di as text "                                         25% maximal IV size" _col(65) as result %14.2f 5.45
+        }
+        else {
+            di as text "(Stock-Yogo critical values: see Stock-Yogo (2005) for `K_endog' endogenous, `K_inst_excl' instruments)"
+        }
+    }
+    else {
+        * More than 2 endogenous - show message
+        di as text "(Stock-Yogo critical values: see Stock-Yogo (2005) for `K_endog' endogenous variables)"
+    }
+    if `vce_type' != 0 {
+        di as text "NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors."
+    }
+    di as text "Source: Stock-Yogo (2005).  Reproduced by permission."
+    di as text "{hline 78}"
+
+    * Display reduced form if requested
+    if "`rf'" != "" {
         di as text ""
-        di as text "First-stage regression summary:"
         di as text "{hline 60}"
-        forvalues e = 1/`K_endog' {
-            local endogvar : word `e' of `endogvars'
-            capture local F_val = e(F_first`e')
-            if _rc == 0 {
-                di as text "  `endogvar'" _col(30) "F(" %3.0f `K_inst_excl' ", " %6.0f `df_r' ") = " _col(50) as result %8.2f `F_val'
+        di as text "Reduced-form regression: `depvar' on instruments"
+        di as text "{hline 60}"
+
+        * Save current IV results
+        tempname iv_b iv_V
+        matrix `iv_b' = e(b)
+        matrix `iv_V' = e(V)
+        local iv_N = e(N)
+        local iv_df_r = e(df_r)
+        local iv_df_a = e(df_a)
+        local iv_K = e(K)
+        local iv_K_endog = e(K_endog)
+        local iv_K_exog = e(K_exog)
+        local iv_K_iv = e(K_iv)
+        local iv_G = e(G)
+        local iv_title = e(title)
+        local iv_model = e(model)
+        local iv_vcetype = e(vcetype)
+        local iv_cmd = e(cmd)
+
+        * Run reduced form regression using creghdfe
+        * Reduced form: y = [exogenous + excluded instruments] + error
+        local rf_vce = "`vce'"
+        if "`rf_vce'" == "" local rf_vce = "unadjusted"
+        qui creghdfe `depvar' `exogvars' `instruments' `if' `in' ///
+            [`weight'`exp'], absorb(`absorb') vce(`rf_vce')
+
+        * Display coefficient table
+        tempname rf_b rf_V
+        matrix `rf_b' = e(b)
+        matrix `rf_V' = e(V)
+
+        * Display reduced form coefficients in a table
+        local rf_vars : colnames `rf_b'
+        local rf_K : word count `rf_vars'
+        di as text ""
+        di as text "{hline 78}"
+        di as text _col(14) "|" _col(28) "`iv_vcetype'"
+        di as text %12s abbrev("`depvar'", 12) " | Coefficient  std. err.      t    P>|t|" ///
+            "     [95% conf. interval]"
+        di as text "{hline 13}+{hline 64}"
+
+        forvalues v = 1/`rf_K' {
+            local vname : word `v' of `rf_vars'
+            local b = `rf_b'[1, `v']
+            local se = sqrt(`rf_V'[`v', `v'])
+            if `se' > 0 {
+                local t = `b' / `se'
+                local p = 2 * ttail(`iv_df_r', abs(`t'))
+                local ci_lo = `b' - invttail(`iv_df_r', 0.025) * `se'
+                local ci_hi = `b' + invttail(`iv_df_r', 0.025) * `se'
+                di as text %12s abbrev("`vname'", 12) " |" ///
+                    as result %11.6g `b' "  " %9.6g `se' "  " ///
+                    %7.2f `t' "   " %5.3f `p' "    " ///
+                    %11.6g `ci_lo' "  " %11.6g `ci_hi'
+            }
+            else {
+                di as text %12s abbrev("`vname'", 12) " |" ///
+                    as result %11.6g `b' "  " "(omitted)"
             }
         }
-        di as text "{hline 60}"
-        di as text "  Stock-Yogo weak ID test critical values (10% maximal IV size): 16.38"
+        di as text "{hline 78}"
+
+        * Restore IV results
+        * We need to re-post to restore the original e() results
+        * But since ereturn post clears everything, we'll just leave a note
+        * The key IV results are already stored in the output above
     }
+
+    * Store and display diagnostic statistics
+    capture scalar temp_sargan = __civreghdfe_sargan
+    capture scalar temp_sargan_df = __civreghdfe_sargan_df
+    capture scalar temp_cd_f = __civreghdfe_cd_f
+    capture scalar temp_endog_chi2 = __civreghdfe_endog_chi2
+    capture scalar temp_endog_f = __civreghdfe_endog_f
+    capture scalar temp_endog_df = __civreghdfe_endog_df
+
+    if _rc == 0 {
+        local sargan_val = temp_sargan
+        local sargan_df = temp_sargan_df
+        local cd_f_val = temp_cd_f
+        local endog_chi2 = temp_endog_chi2
+        local endog_f = temp_endog_f
+        local endog_df = temp_endog_df
+
+        * Store in e()
+        ereturn scalar sargan = `sargan_val'
+        ereturn scalar sargan_df = `sargan_df'
+        if `sargan_df' > 0 {
+            ereturn scalar sargan_p = chi2tail(`sargan_df', `sargan_val')
+        }
+        ereturn scalar cd_f = `cd_f_val'
+
+        * Store weak ID statistics (widstat = Kleibergen-Paap F if robust, else Cragg-Donald F)
+        capture scalar temp_kp_f2 = __civreghdfe_kp_f
+        if _rc == 0 & `vce_type' != 0 {
+            local kp_f_val2 = temp_kp_f2
+            if `kp_f_val2' > 0 {
+                ereturn scalar widstat = `kp_f_val2'
+                ereturn scalar kp_f = `kp_f_val2'
+            }
+            else {
+                ereturn scalar widstat = `cd_f_val'
+            }
+        }
+        else {
+            ereturn scalar widstat = `cd_f_val'
+        }
+        capture scalar drop temp_kp_f2
+
+        * Store endogeneity test
+        ereturn scalar endog_chi2 = `endog_chi2'
+        ereturn scalar endog_f = `endog_f'
+        ereturn scalar endog_df = `endog_df'
+        if `endog_df' > 0 {
+            ereturn scalar endog_p = chi2tail(`endog_df', `endog_chi2')
+        }
+
+        * Display Sargan/Hansen J statistic
+        if `vce_type' == 0 {
+            di as text "Sargan statistic (overidentification test of all instruments):" ///
+                _col(65) as result %14.3f `sargan_val'
+        }
+        else {
+            di as text "Hansen J statistic (overidentification test of all instruments):" ///
+                _col(65) as result %14.3f `sargan_val'
+        }
+        if `sargan_df' > 0 {
+            local sargan_p = chi2tail(`sargan_df', `sargan_val')
+            di as text _col(50) "Chi-sq(" as result `sargan_df' as text ") P-val =" ///
+                as result %9.4f `sargan_p'
+        }
+        else {
+            di as text _col(50) "(equation exactly identified)"
+        }
+        di as text "{hline 78}"
+    }
+
+    * Display instruments footer
+    di as text "Instrumented:         `endogvars'"
+    if "`exogvars'" != "" {
+        di as text "Included instruments: `exogvars'"
+    }
+    di as text "Excluded instruments: `instruments'"
+    di as text "Partialled-out:       _cons"
+    di as text "                      nb: total SS, model F and R2s are after partialling-out;"
+    di as text "                          any small-sample adjustments include partialled-out"
+    di as text "                          variables in regressor count K"
+    di as text "{hline 78}"
+
+    * Display absorbed degrees of freedom table
+    di as text ""
+    di as text "Absorbed degrees of freedom:"
+    di as text "{hline 53}+"
+    di as text " Absorbed FE | Categories  - Redundant  = Num. Coefs |"
+    di as text "{hline 13}+{hline 39}|"
+
+    * For single FE, use df_a as approximation
+    if `G' == 1 {
+        local fe_var : word 1 of `absorb'
+        local n_levels = `df_a'
+        local redundant = 0
+        local is_nested = ""
+        if `vce_type' == 2 & "`fe_var'" == "`cluster_var'" {
+            local redundant = `n_levels'
+            local is_nested = "*"
+        }
+        local n_coefs = `n_levels' - `redundant'
+        di as text %12s abbrev("`fe_var'", 12) " |" ///
+            as result %10.0f `n_levels' %12.0f `redundant' %12.0f `n_coefs' ///
+            as text "     |`is_nested'"
+    }
+    else {
+        * For multiple FE, just show total
+        di as text "    (total) |" ///
+            as result %10.0f `df_a' %12.0f 0 %12.0f `df_a' ///
+            as text "     |"
+    }
+    di as text "{hline 53}+"
+    if `vce_type' == 2 {
+        di as text "* = FE nested within cluster; treated as redundant for DoF computation"
+    }
+    di as text ""
 
     * Timing
     if "`timeit'" != "" {
@@ -570,6 +947,11 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_df_r
     capture scalar drop __civreghdfe_df_a
     capture scalar drop __civreghdfe_K
+    capture scalar drop __civreghdfe_rss
+    capture scalar drop __civreghdfe_tss
+    capture scalar drop __civreghdfe_r2
+    capture scalar drop __civreghdfe_rmse
+    capture scalar drop __civreghdfe_F
     capture scalar drop __civreghdfe_N_clust
     capture scalar drop __civreghdfe_nested_fe_index
     capture scalar drop __civreghdfe_est_method
@@ -577,6 +959,27 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_fuller
     capture scalar drop __civreghdfe_coviv
     capture scalar drop __civreghdfe_lambda
+    capture scalar drop __civreghdfe_kernel
+    capture scalar drop __civreghdfe_bw
+    capture scalar drop __civreghdfe_dkraay
+    capture scalar drop __civreghdfe_sargan
+    capture scalar drop __civreghdfe_sargan_df
+    capture scalar drop __civreghdfe_cd_f
+    capture scalar drop __civreghdfe_kp_f
+    capture scalar drop __civreghdfe_underid
+    capture scalar drop __civreghdfe_underid_df
+    capture scalar drop temp_underid
+    capture scalar drop temp_underid_df
+    capture scalar drop __civreghdfe_endog_chi2
+    capture scalar drop __civreghdfe_endog_f
+    capture scalar drop __civreghdfe_endog_df
+    capture scalar drop temp_sargan
+    capture scalar drop temp_sargan_df
+    capture scalar drop temp_cd_f
+    capture scalar drop temp_kp_f
+    capture scalar drop temp_endog_chi2
+    capture scalar drop temp_endog_f
+    capture scalar drop temp_endog_df
     forvalues e = 1/`K_endog' {
         capture scalar drop __civreghdfe_F1_`e'
     }

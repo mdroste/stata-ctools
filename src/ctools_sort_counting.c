@@ -55,18 +55,10 @@
    Utility Functions
    ============================================================================ */
 
-static void *counting_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
+/*
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+*/
 
 /* ============================================================================
    Sequential Counting Sort (for small datasets)
@@ -211,8 +203,8 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate thread-local min/max arrays (cache-line aligned) */
-    thread_min = (double *)counting_aligned_alloc(64, num_threads * sizeof(double));
-    thread_max = (double *)counting_aligned_alloc(64, num_threads * sizeof(double));
+    thread_min = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
+    thread_max = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
     thread_has_non_integer = (int *)calloc(num_threads, sizeof(int));
 
     if (!thread_min || !thread_max || !thread_has_non_integer) {
@@ -282,7 +274,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     global_counts = (size_t *)calloc(range + 1, sizeof(size_t));
     global_offsets = (size_t *)malloc((range + 1) * sizeof(size_t));
     thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
-    temp_order = (size_t *)counting_aligned_alloc(64, nobs * sizeof(size_t));
+    temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
 
     if (!local_counts || !global_counts || !global_offsets ||
         !thread_offsets || !temp_order) {
@@ -292,7 +284,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
 
     /* Pre-allocate all per-thread count arrays */
     for (t = 0; t < num_threads; t++) {
-        local_counts[t] = (size_t *)counting_aligned_alloc(64, padded_range * sizeof(size_t));
+        local_counts[t] = (size_t *)ctools_aligned_alloc(64, padded_range * sizeof(size_t));
         thread_offsets[t] = (size_t *)malloc((range + 1) * sizeof(size_t));
         if (!local_counts[t] || !thread_offsets[t]) {
             rc = STATA_ERR_MEMORY;
@@ -416,16 +408,16 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     memcpy(order, temp_order, nobs * sizeof(size_t));
 
 cleanup:
-    free(thread_min);
-    free(thread_max);
+    ctools_aligned_free(thread_min);
+    ctools_aligned_free(thread_max);
     free(thread_has_non_integer);
     free(global_counts);
     free(global_offsets);
-    free(temp_order);
+    ctools_aligned_free(temp_order);
 
     if (local_counts) {
         for (t = 0; t < num_threads; t++) {
-            free(local_counts[t]);
+            ctools_aligned_free(local_counts[t]);
         }
         free(local_counts);
     }
@@ -488,7 +480,7 @@ static stata_retcode counting_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)counting_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -496,12 +488,12 @@ static stata_retcode counting_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.dbl = new_data;
             }
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)malloc(nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
             if (new_data == NULL) {
                 #pragma omp atomic write
                 all_success = 0;
@@ -509,7 +501,7 @@ static stata_retcode counting_apply_permutation(stata_data *data)
                 for (size_t i = 0; i < nobs; i++) {
                     new_data[i] = old_data[perm[i]];
                 }
-                free(old_data);
+                ctools_aligned_free(old_data);
                 var->data.str = new_data;
             }
         }

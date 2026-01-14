@@ -75,18 +75,10 @@ typedef struct {
    Utility Functions
    ============================================================================ */
 
-static void *timsort_aligned_alloc(size_t alignment, size_t size)
-{
-    void *ptr = NULL;
-#if defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        return NULL;
-    }
-    return ptr;
-#else
-    return malloc(size);
-#endif
-}
+/*
+    NOTE: Aligned memory allocation is now provided by ctools_config.h
+    Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+*/
 
 /*
     Convert IEEE 754 double to sortable uint64.
@@ -712,7 +704,7 @@ static stata_retcode timsort_by_numeric_var(stata_data *data, int var_idx)
     double *dbl_data;
     stata_retcode rc;
 
-    keys = (uint64_t *)timsort_aligned_alloc(CACHE_LINE_SIZE,
+    keys = (uint64_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                               data->nobs * sizeof(uint64_t));
     if (keys == NULL) {
         return STATA_ERR_MEMORY;
@@ -729,7 +721,7 @@ static stata_retcode timsort_by_numeric_var(stata_data *data, int var_idx)
 
     rc = timsort_numeric(data->sort_order, keys, data->nobs);
 
-    free(keys);
+    ctools_aligned_free(keys);
     return rc;
 }
 
@@ -758,7 +750,7 @@ static void *timsort_apply_permute_thread(void *arg)
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
-        double *new_data = (double *)timsort_aligned_alloc(CACHE_LINE_SIZE,
+        double *new_data = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                                             nobs * sizeof(double));
         if (new_data == NULL) {
             args->success = 0;
@@ -769,11 +761,11 @@ static void *timsort_apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        free(old_data);
+        ctools_aligned_free(old_data);
         args->var->data.dbl = new_data;
     } else {
         char **old_data = args->var->data.str;
-        char **new_data = (char **)malloc(nobs * sizeof(char *));
+        char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
         if (new_data == NULL) {
             args->success = 0;
             return NULL;
@@ -783,7 +775,7 @@ static void *timsort_apply_permute_thread(void *arg)
             new_data[i] = old_data[perm[i]];
         }
 
-        free(old_data);
+        ctools_aligned_free(old_data);
         args->var->data.str = new_data;
     }
 

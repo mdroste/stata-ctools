@@ -163,13 +163,73 @@ static void matmul_atdb(const ST_double *A, const ST_double *B,
 }
 
 /*
+    HAC Kernel weight functions for Newey-West style standard errors.
+
+    Kernel types:
+    0 = None (not HAC)
+    1 = Bartlett / Newey-West (triangular)
+    2 = Parzen
+    3 = Quadratic Spectral
+    4 = Truncated
+    5 = Tukey-Hanning
+
+    Returns kernel weight for lag j given bandwidth bw.
+*/
+static ST_double kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
+{
+    if (j == 0) return 1.0;
+    if (bw <= 0) return 0.0;
+
+    ST_double x = (ST_double)j / (ST_double)(bw + 1);
+
+    switch (kernel_type) {
+        case 1:  /* Bartlett / Newey-West */
+            if (x <= 1.0) return 1.0 - x;
+            return 0.0;
+
+        case 2:  /* Parzen */
+            if (x <= 0.5) {
+                return 1.0 - 6.0 * x * x + 6.0 * x * x * x;
+            } else if (x <= 1.0) {
+                ST_double t = 1.0 - x;
+                return 2.0 * t * t * t;
+            }
+            return 0.0;
+
+        case 3:  /* Quadratic Spectral */
+            {
+                ST_double pi = 3.14159265358979323846;
+                ST_double z = 6.0 * pi * x / 5.0;
+                if (fabs(z) < 1e-10) return 1.0;
+                return 25.0 / (12.0 * pi * pi * x * x) *
+                       (sin(z) / z - cos(z));
+            }
+
+        case 4:  /* Truncated */
+            if (x <= 1.0) return 1.0;
+            return 0.0;
+
+        case 5:  /* Tukey-Hanning */
+            if (x <= 1.0) {
+                ST_double pi = 3.14159265358979323846;
+                return 0.5 * (1.0 + cos(pi * x));
+            }
+            return 0.0;
+
+        default:
+            return 0.0;
+    }
+}
+
+/*
     Jacobi eigenvalue algorithm for symmetric matrices.
     Computes all eigenvalues of a K x K symmetric matrix A.
-    Returns the minimum eigenvalue.
+    If eigenvalues is NULL, returns just the minimum eigenvalue.
+    If eigenvalues is provided, stores all K eigenvalues in it (sorted ascending).
 
     A is stored in column-major order and is modified in place.
 */
-static ST_double jacobi_min_eigenvalue(ST_double *A, ST_int K)
+static ST_double jacobi_eigenvalues(ST_double *A, ST_int K, ST_double *eigenvalues)
 {
     const ST_int max_iter = 100;
     const ST_double tol = 1e-12;
@@ -224,16 +284,43 @@ static ST_double jacobi_min_eigenvalue(ST_double *A, ST_int K)
         D[p * K + q] = 0.0;
     }
 
-    /* Find minimum eigenvalue (diagonal elements) */
+    /* Extract eigenvalues (diagonal elements) */
     ST_double min_eval = D[0];
-    for (i = 1; i < K; i++) {
-        if (D[i * K + i] < min_eval) {
-            min_eval = D[i * K + i];
+    if (eigenvalues) {
+        /* Store all eigenvalues */
+        for (i = 0; i < K; i++) {
+            eigenvalues[i] = D[i * K + i];
+        }
+        /* Sort eigenvalues in ascending order (simple bubble sort for small K) */
+        for (i = 0; i < K - 1; i++) {
+            for (ST_int j = i + 1; j < K; j++) {
+                if (eigenvalues[j] < eigenvalues[i]) {
+                    ST_double tmp = eigenvalues[i];
+                    eigenvalues[i] = eigenvalues[j];
+                    eigenvalues[j] = tmp;
+                }
+            }
+        }
+        min_eval = eigenvalues[0];
+    } else {
+        /* Just find minimum */
+        for (i = 1; i < K; i++) {
+            if (D[i * K + i] < min_eval) {
+                min_eval = D[i * K + i];
+            }
         }
     }
 
     free(D);
     return min_eval;
+}
+
+/*
+    Wrapper for backward compatibility: returns just the minimum eigenvalue.
+*/
+static ST_double jacobi_min_eigenvalue(ST_double *A, ST_int K)
+{
+    return jacobi_eigenvalues(A, K, NULL);
 }
 
 /*
@@ -542,7 +629,9 @@ ST_retcode compute_2sls(
     ST_int est_method,
     ST_double kclass_user,
     ST_double fuller_alpha,
-    ST_double *lambda_out
+    ST_double *lambda_out,
+    ST_int kernel_type,
+    ST_int bw
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
@@ -1031,6 +1120,207 @@ ST_retcode compute_2sls(
         free(XZWZy);
     }
 
+    /* Step 8c: CUE (Continuously Updated Estimator) */
+    if (est_method == 5) {
+        /*
+            CUE minimizes: Q(β) = g(β)' W(β)^-1 g(β)
+            where g(β) = Z'(y - Xβ) and W(β) = Z'Ω(β)Z
+
+            We use iterative re-weighting:
+            1. Start with 2SLS/GMM2S residuals
+            2. Iterate: update W based on current residuals, re-estimate β
+            3. Stop when β converges
+        */
+        const ST_int max_cue_iter = 100;
+        const ST_double cue_tol = 1e-8;
+        ST_double *beta_old = (ST_double *)malloc(K_total * sizeof(ST_double));
+        memcpy(beta_old, beta, K_total * sizeof(ST_double));
+
+        if (verbose) {
+            SF_display("civreghdfe: Computing CUE (iterative re-weighting)\n");
+        }
+
+        ST_int cue_iter;
+        for (cue_iter = 0; cue_iter < max_cue_iter; cue_iter++) {
+            /* Compute current residuals */
+            for (i = 0; i < N; i++) {
+                ST_double pred = 0.0;
+                for (k = 0; k < K_total; k++) {
+                    pred += X_all[k * N + i] * beta[k];
+                }
+                resid[i] = y[i] - pred;
+            }
+
+            /* Compute optimal weighting matrix based on current residuals */
+            ST_double *ZOmegaZ_cue = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+            ST_double *ZOmegaZ_inv_cue = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+
+            if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+                /* Cluster version */
+                ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                for (i = 0; i < N; i++) {
+                    ST_int c = cluster_ids[i] - 1;
+                    if (c < 0 || c >= num_clusters) continue;
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    ST_double we = w * resid[i];
+                    for (j = 0; j < K_iv; j++) {
+                        cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+                    }
+                }
+                for (ST_int c = 0; c < num_clusters; c++) {
+                    for (j = 0; j < K_iv; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                            ZOmegaZ_cue[j * K_iv + k] += contrib;
+                            if (k != j) ZOmegaZ_cue[k * K_iv + j] += contrib;
+                        }
+                    }
+                }
+                free(cluster_ze);
+            } else {
+                /* Heteroskedastic version */
+                for (i = 0; i < N; i++) {
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    ST_double e2 = w * resid[i] * resid[i];
+                    for (j = 0; j < K_iv; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                            ZOmegaZ_cue[j * K_iv + k] += contrib;
+                            if (k != j) ZOmegaZ_cue[k * K_iv + j] += contrib;
+                        }
+                    }
+                }
+            }
+
+            /* Invert Z'ΩZ */
+            memcpy(ZOmegaZ_inv_cue, ZOmegaZ_cue, K_iv * K_iv * sizeof(ST_double));
+            if (cholesky(ZOmegaZ_inv_cue, K_iv) != 0) {
+                if (verbose) SF_display("civreghdfe: CUE weighting matrix singular, stopping\n");
+                free(ZOmegaZ_cue); free(ZOmegaZ_inv_cue);
+                break;
+            }
+            invert_from_cholesky(ZOmegaZ_inv_cue, K_iv, ZOmegaZ_inv_cue);
+
+            /* Compute W * Z'X */
+            ST_double *WZtX_cue = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
+            matmul_ab(ZOmegaZ_inv_cue, ZtX, K_iv, K_iv, K_total, WZtX_cue);
+
+            /* Compute (Z'X)' * W = X'Z * W */
+            ST_double *XZW_cue = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
+            for (i = 0; i < K_total; i++) {
+                for (j = 0; j < K_iv; j++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        sum += ZtX[i * K_iv + k] * ZOmegaZ_inv_cue[j * K_iv + k];
+                    }
+                    XZW_cue[j * K_total + i] = sum;
+                }
+            }
+
+            /* Compute X'ZWZ'X */
+            ST_double *XZWZX_cue = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+            for (i = 0; i < K_total; i++) {
+                for (j = 0; j < K_total; j++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        sum += XZW_cue[k * K_total + i] * ZtX[j * K_iv + k];
+                    }
+                    XZWZX_cue[j * K_total + i] = sum;
+                }
+            }
+
+            /* Compute X'ZWZ'y */
+            ST_double *XZWZy_cue = (ST_double *)calloc(K_total, sizeof(ST_double));
+            for (i = 0; i < K_total; i++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    sum += XZW_cue[k * K_total + i] * Zty[k];
+                }
+                XZWZy_cue[i] = sum;
+            }
+
+            /* Solve for new beta */
+            ST_double *XZWZX_L_cue = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+            memcpy(XZWZX_L_cue, XZWZX_cue, K_total * K_total * sizeof(ST_double));
+
+            if (cholesky(XZWZX_L_cue, K_total) != 0) {
+                if (verbose) SF_display("civreghdfe: CUE X'ZWZ'X singular, stopping\n");
+                free(ZOmegaZ_cue); free(ZOmegaZ_inv_cue);
+                free(WZtX_cue); free(XZW_cue); free(XZWZX_cue);
+                free(XZWZy_cue); free(XZWZX_L_cue);
+                break;
+            }
+
+            /* Forward substitution */
+            ST_double *beta_new = (ST_double *)calloc(K_total, sizeof(ST_double));
+            for (i = 0; i < K_total; i++) {
+                ST_double sum = XZWZy_cue[i];
+                for (j = 0; j < i; j++) {
+                    sum -= XZWZX_L_cue[i * K_total + j] * beta_temp[j];
+                }
+                beta_temp[i] = sum / XZWZX_L_cue[i * K_total + i];
+            }
+
+            /* Backward substitution */
+            for (i = K_total - 1; i >= 0; i--) {
+                ST_double sum = beta_temp[i];
+                for (j = i + 1; j < K_total; j++) {
+                    sum -= XZWZX_L_cue[j * K_total + i] * beta_new[j];
+                }
+                beta_new[i] = sum / XZWZX_L_cue[i * K_total + i];
+            }
+
+            /* Check convergence */
+            ST_double max_diff = 0.0;
+            for (i = 0; i < K_total; i++) {
+                ST_double diff = fabs(beta_new[i] - beta[i]);
+                if (diff > max_diff) max_diff = diff;
+            }
+
+            /* Update beta */
+            memcpy(beta_old, beta, K_total * sizeof(ST_double));
+            memcpy(beta, beta_new, K_total * sizeof(ST_double));
+
+            free(ZOmegaZ_cue); free(ZOmegaZ_inv_cue);
+            free(WZtX_cue); free(XZW_cue); free(XZWZX_cue);
+            free(XZWZy_cue); free(XZWZX_L_cue); free(beta_new);
+
+            if (max_diff < cue_tol) {
+                if (verbose) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "civreghdfe: CUE converged in %d iterations (diff=%.2e)\n",
+                             cue_iter + 1, max_diff);
+                    SF_display(buf);
+                }
+                break;
+            }
+        }
+
+        if (cue_iter == max_cue_iter && verbose) {
+            SF_display("civreghdfe: CUE reached max iterations\n");
+        }
+
+        free(beta_old);
+
+        /* Update residuals with final CUE estimates */
+        for (i = 0; i < N; i++) {
+            ST_double pred = 0.0;
+            for (k = 0; k < K_total; k++) {
+                pred += X_all[k * N + i] * beta[k];
+            }
+            resid[i] = y[i] - pred;
+        }
+
+        if (verbose) {
+            char buf[256];
+            SF_display("civreghdfe: CUE final estimates:\n");
+            for (i = 0; i < K_total; i++) {
+                snprintf(buf, sizeof(buf), "  beta[%d] = %g\n", (int)i, beta[i]);
+                SF_display(buf);
+            }
+        }
+    }
+
     /* Step 9: Compute VCE */
     /* For k-class estimators, the VCE is: sigma^2 * (XkX)^-1 */
     /* where sigma^2 = RSS / (N - K) using actual residuals */
@@ -1072,10 +1362,24 @@ ST_retcode compute_2sls(
         for (i = 0; i < K_total * K_total; i++) {
             V[i] = sigma2 * XkX_inv[i];
         }
+    } else if (vce_type == 1 && est_method == 4) {
+        /*
+           Efficient GMM2S with robust VCE:
+           When using optimal weights W = (Z'ΩZ)^-1, the VCE is:
+           V = (X'ZWZ'X)^-1
+
+           The sandwich is not needed because optimal weighting already
+           accounts for heteroskedasticity. This is the efficiency gain of GMM.
+
+           XkX already contains X'ZWZ'X for GMM2S, so just use its inverse.
+        */
+        for (i = 0; i < K_total * K_total; i++) {
+            V[i] = XkX_inv[i];
+        }
     } else if (vce_type == 1) {
-        /* Robust VCE for k-class */
+        /* Robust VCE for k-class (non-GMM2S) */
         /* V = (XkX)^-1 X'Z(Z'Z)^-1 Omega (Z'Z)^-1 Z'X (XkX)^-1 */
-        /* where Omega = diag(e^2) */
+        /* where Omega = diag(e^2) for HC, or HAC covariance for kernel > 0 */
         /* Simplified: Use sandwich estimator with projected X */
 
         /* Compute P_Z X = Z(Z'Z)^-1 Z'X */
@@ -1092,16 +1396,80 @@ ST_retcode compute_2sls(
             }
         }
 
-        /* Compute meat: sum over i of (PzX_i * e_i) * (PzX_i * e_i)' */
+        /* Compute meat matrix */
         ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        for (i = 0; i < N; i++) {
-            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-            ST_double we = w * resid[i];
-            for (j = 0; j < K_total; j++) {
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = PzX[j * N + i] * we * PzX[k * N + i] * resid[i];
-                    meat[j * K_total + k] += contrib;
-                    if (k != j) meat[k * K_total + j] += contrib;
+
+        if (kernel_type > 0 && bw > 0) {
+            /*
+               HAC (Heteroskedasticity and Autocorrelation Consistent) estimator
+               Uses Newey-West style kernel weighting for cross-lag products
+
+               Omega = sum_{l=-bw}^{bw} k(l/bw) * sum_t (u_t * u_{t-l})
+               where u_t = PzX_t * e_t
+
+               For each lag l, add kernel-weighted outer products
+            */
+            if (verbose) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "civreghdfe: Computing HAC VCE (kernel=%d, bw=%d)\n",
+                         (int)kernel_type, (int)bw);
+                SF_display(buf);
+            }
+
+            /* Compute u_i = PzX_i * e_i for each observation */
+            ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+            for (i = 0; i < N; i++) {
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                ST_double we = w * resid[i];
+                for (j = 0; j < K_total; j++) {
+                    u[j * N + i] = PzX[j * N + i] * we;
+                }
+            }
+
+            /* Sum over all lag pairs with kernel weights */
+            for (ST_int lag = 0; lag <= bw; lag++) {
+                ST_double kw = kernel_weight(kernel_type, lag, bw);
+                if (kw < 1e-10) continue;
+
+                /* For lag 0, just add diagonal */
+                if (lag == 0) {
+                    for (i = 0; i < N; i++) {
+                        for (j = 0; j < K_total; j++) {
+                            for (k = 0; k <= j; k++) {
+                                ST_double contrib = kw * u[j * N + i] * u[k * N + i];
+                                meat[j * K_total + k] += contrib;
+                                if (k != j) meat[k * K_total + j] += contrib;
+                            }
+                        }
+                    }
+                } else {
+                    /* For lag > 0, add cross products: (i, i+lag) and (i+lag, i) */
+                    for (i = 0; i < N - lag; i++) {
+                        for (j = 0; j < K_total; j++) {
+                            for (k = 0; k < K_total; k++) {
+                                /* u_i * u_{i+lag}' (symmetric in the meat) */
+                                ST_double contrib = kw * (u[j * N + i] * u[k * N + (i + lag)] +
+                                                          u[j * N + (i + lag)] * u[k * N + i]);
+                                meat[k * K_total + j] += contrib;
+                            }
+                        }
+                    }
+                }
+            }
+
+            free(u);
+
+        } else {
+            /* Standard HC robust (no HAC) */
+            for (i = 0; i < N; i++) {
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                ST_double we = w * resid[i];
+                for (j = 0; j < K_total; j++) {
+                    for (k = 0; k <= j; k++) {
+                        ST_double contrib = PzX[j * N + i] * we * PzX[k * N + i] * resid[i];
+                        meat[j * K_total + k] += contrib;
+                        if (k != j) meat[k * K_total + j] += contrib;
+                    }
                 }
             }
         }
@@ -1122,8 +1490,18 @@ ST_retcode compute_2sls(
         free(meat);
         free(temp_v);
 
+    } else if (vce_type == 2 && est_method == 4 && cluster_ids && num_clusters > 0) {
+        /*
+           Efficient GMM2S with cluster VCE:
+           When using cluster-robust optimal weights W = (Z'ΩZ)^-1 where
+           Ω is the cluster-robust covariance, the VCE is (X'ZWZ'X)^-1.
+           XkX already contains X'ZWZ'X for GMM2S.
+        */
+        for (i = 0; i < K_total * K_total; i++) {
+            V[i] = XkX_inv[i];
+        }
     } else if (vce_type == 2 && cluster_ids && num_clusters > 0) {
-        /* Clustered VCE for 2SLS */
+        /* Clustered VCE for 2SLS (non-GMM2S) */
         /* Similar to robust but sum within clusters */
 
         ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
@@ -1245,10 +1623,10 @@ ST_retcode compute_2sls(
             if (r2 > 1.0) r2 = 1.0;
             if (r2 < 0.0) r2 = 0.0;
 
-            /* F-stat: (R^2 / q) / ((1 - R^2) / (N - K_iv - 1)) */
+            /* F-stat: (R^2 / q) / ((1 - R^2) / (N - K_iv - df_a)) */
             ST_int q = K_iv - K_exog;  /* Number of excluded instruments */
             if (q <= 0) q = 1;
-            ST_int denom_df = N - K_iv - 1 - df_a;
+            ST_int denom_df = N - K_iv - df_a;
             if (denom_df <= 0) denom_df = 1;
 
             first_stage_F[e] = (r2 / (ST_double)q) / ((1.0 - r2) / (ST_double)denom_df);
@@ -1262,6 +1640,553 @@ ST_retcode compute_2sls(
             }
         }
     }
+
+    /* Step 10b: Compute underidentification test (Anderson or Kleibergen-Paap) */
+    /* Tests whether the equation is identified (rank condition) */
+    ST_double underid_stat = 0.0;
+    ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
+    ST_int underid_df = L;
+
+    /* Also compute Cragg-Donald F and Kleibergen-Paap rk Wald F here */
+    ST_double cd_f = 0.0;       /* Cragg-Donald Wald F (homoskedastic) */
+    ST_double kp_f = 0.0;       /* Kleibergen-Paap rk Wald F (robust) */
+
+    if (K_endog > 0 && L > 0) {
+        /*
+           For K_endog = 1 (single endogenous variable):
+           - Anderson canonical correlation LM = N * partial_R²
+             where partial_R² = (L * F) / (L * F + df_resid)
+           - Cragg-Donald F = first-stage F
+
+           For K_endog > 1 (multiple endogenous variables):
+           - Need canonical correlations / eigenvalue computation
+           - TODO: implement proper formula using eigenvalues
+
+           For robust/cluster VCE:
+           - Use Kleibergen-Paap rk LM instead of Anderson
+           - Use Kleibergen-Paap rk Wald F instead of Cragg-Donald
+           - TODO: implement proper KP formulas
+        */
+
+        if (K_endog == 1 && first_stage_F) {
+            /* Single endogenous variable: use simple formulas */
+            ST_double F = first_stage_F[0];
+            ST_int df_resid = N - K_iv - df_a;
+            if (df_resid <= 0) df_resid = 1;
+
+            /* partial_R² = (L * F) / (L * F + df_resid) */
+            ST_double partial_r2 = ((ST_double)L * F) / ((ST_double)L * F + (ST_double)df_resid);
+
+            /* Anderson LM = N * partial_R² */
+            underid_stat = (ST_double)N * partial_r2;
+
+            /* Cragg-Donald F = first-stage F for single endogenous */
+            cd_f = F;
+
+            /* For robust/cluster VCE: compute Kleibergen-Paap rk statistics
+               Following the ranktest.ado methodology:
+
+               For K_endog = 1:
+               1. pi = first-stage coefficients (K_iv x 1)
+               2. v = first-stage residuals (N x 1)
+               3. shat0 = (1/N) * Z' * diag(v²) * Z for HC0
+                        = (1/N) * sum_g (Z_g'v_g)(Z_g'v_g)' for cluster
+               4. kp_wald = pi' * (Z'Z) * inv(shat0) * (Z'Z) * pi
+               5. kp_F = kp_wald / L
+            */
+            if (vce_type != 0) {
+                /* Extract first-stage coefficients for endogenous variable */
+                /* pi = (Z'Z)^{-1} Z'X_endog, stored in temp1 column K_exog */
+                const ST_double *pi = temp1 + K_exog * K_iv;  /* K_iv x 1 */
+
+                /* Compute first-stage residuals: v = X_endog - Z * pi */
+                ST_double *v = (ST_double *)calloc(N, sizeof(ST_double));
+                for (i = 0; i < N; i++) {
+                    ST_double pred = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        pred += Z[k * N + i] * pi[k];
+                    }
+                    v[i] = X_endog[i] - pred;
+                }
+
+                /* Compute shat0 = robust covariance of moment conditions */
+                /* shat0 = (1/N) * Z' * Omega * Z where Omega depends on VCE type */
+                ST_double *shat0 = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+
+                if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+                    /* Cluster-robust: shat0 = sum_g (Z_g'v_g)(Z_g'v_g)' (no 1/N scaling) */
+                    ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+
+                    /* Sum Z_i * v_i within each cluster */
+                    for (i = 0; i < N; i++) {
+                        ST_int c = cluster_ids[i] - 1;
+                        if (c < 0 || c >= num_clusters) continue;
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        for (k = 0; k < K_iv; k++) {
+                            cluster_Zv[c * K_iv + k] += w * Z[k * N + i] * v[i];
+                        }
+                    }
+
+                    /* shat0 = sum_g (cluster_Zv_g)(cluster_Zv_g)' */
+                    for (ST_int c = 0; c < num_clusters; c++) {
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                shat0[kj * K_iv + ki] +=
+                                    cluster_Zv[c * K_iv + ki] * cluster_Zv[c * K_iv + kj];
+                            }
+                        }
+                    }
+                    /* No division by N - we want Z' * Omega * Z, not (1/N) * Z' * Omega * Z */
+
+                    free(cluster_Zv);
+                } else {
+                    /* HC robust: shat0 = Z' * diag(v²) * Z (no 1/N scaling) */
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        ST_double v2w = w * v[i] * v[i];
+                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                shat0[kj * K_iv + ki] += v2w * Z[ki * N + i] * Z[kj * N + i];
+                            }
+                        }
+                    }
+                    /* No division by N */
+                }
+
+                /* Invert shat0 */
+                ST_double *shat0_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+                memcpy(shat0_inv, shat0, K_iv * K_iv * sizeof(ST_double));
+                ST_int shat_ok = (cholesky(shat0_inv, K_iv) == 0);
+                if (shat_ok) {
+                    shat_ok = (invert_from_cholesky(shat0_inv, K_iv, shat0_inv) == 0);
+                }
+
+                if (shat_ok) {
+                    /* Compute ZtZ = Z'Z (already have this, but need unscaled version) */
+                    /* Note: ZtZ in the code is Z'Z, not Z'Z/N */
+
+                    /* Compute ZtZ * pi */
+                    ST_double *ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                        ST_double sum = 0.0;
+                        for (ST_int kj = 0; kj < K_iv; kj++) {
+                            sum += ZtZ[kj * K_iv + ki] * pi[kj];
+                        }
+                        ZtZ_pi[ki] = sum;
+                    }
+
+                    /* Compute shat0_inv * ZtZ * pi */
+                    ST_double *shat0_inv_ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                        ST_double sum = 0.0;
+                        for (ST_int kj = 0; kj < K_iv; kj++) {
+                            sum += shat0_inv[kj * K_iv + ki] * ZtZ_pi[kj];
+                        }
+                        shat0_inv_ZtZ_pi[ki] = sum;
+                    }
+
+                    /* Compute ZtZ * shat0_inv * ZtZ * pi */
+                    ST_double *ZtZ_shat0_inv_ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                        ST_double sum = 0.0;
+                        for (ST_int kj = 0; kj < K_iv; kj++) {
+                            sum += ZtZ[kj * K_iv + ki] * shat0_inv_ZtZ_pi[kj];
+                        }
+                        ZtZ_shat0_inv_ZtZ_pi[ki] = sum;
+                    }
+
+                    /* Compute kp_wald = pi' * ZtZ * shat0_inv * ZtZ * pi */
+                    ST_double kp_wald_raw = 0.0;
+                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                        kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtZ_pi[ki];
+                    }
+
+                    /* Small-sample adjustment following ranktest methodology:
+                       Nminus = N - K3 where K3 = number of partialled-out vars
+                       For HDFE with df_a absorbed FE and constant:
+                       Nminus = N - df_a - 1 (approximately)
+
+                       The Wald F statistic uses: (N - L) / L as the dof adjustment
+                    */
+                    ST_int Nminus = N - df_a - 1;
+                    if (Nminus <= 0) Nminus = 1;
+
+                    /* KP rk Wald F = (Nminus / N) * kp_wald_raw / L
+                       Following the ranktest small-sample adjustment */
+                    ST_double kp_wald = kp_wald_raw * (ST_double)Nminus / (ST_double)N;
+                    kp_f = kp_wald / (ST_double)L;
+
+                    /* KP rk LM statistic for underidentification test
+                       The LM version is different from Wald. For robust case,
+                       we use a transformation based on the canonical correlations.
+
+                       For K_endog=1, KP LM ≈ N * r² where r² is the robust
+                       partial correlation. This can be derived from kp_wald:
+                       r² = kp_wald / (kp_wald + Nminus)
+                       KP LM = Nminus * r²
+
+                       Alternative: use the score form which gives:
+                       KP LM = kp_wald * (Nminus - L) / Nminus for Wald->LM conversion
+                    */
+                    ST_double robust_partial_r2 = kp_wald / (kp_wald + (ST_double)Nminus);
+                    ST_double kp_lm = (ST_double)Nminus * robust_partial_r2;
+
+                    /* For robust VCE, use KP LM as the underidentification test */
+                    underid_stat = kp_lm;
+
+                    free(ZtZ_pi);
+                    free(shat0_inv_ZtZ_pi);
+                    free(ZtZ_shat0_inv_ZtZ_pi);
+                }
+
+                free(shat0_inv);
+                free(shat0);
+                free(v);
+            }
+
+        } else if (K_endog > 1) {
+            /* Multiple endogenous variables: need eigenvalue-based computation.
+
+               The Cragg-Donald F statistic is based on the minimum eigenvalue
+               of the concentration matrix:
+               CD_F = min_eigenvalue(Theta) / K_endog
+
+               For now, use average first-stage F as a rough approximation.
+               TODO: Implement proper canonical correlation computation.
+            */
+            ST_double sum_f = 0.0;
+            ST_double min_f = first_stage_F ? first_stage_F[0] : 0.0;
+            for (ST_int e = 0; e < K_endog; e++) {
+                if (first_stage_F) {
+                    sum_f += first_stage_F[e];
+                    if (first_stage_F[e] < min_f) min_f = first_stage_F[e];
+                }
+            }
+
+            /* Rough approximation for underidentification test */
+            ST_int df_resid = N - K_iv - df_a;
+            if (df_resid <= 0) df_resid = 1;
+
+            ST_double avg_F = sum_f / K_endog;
+            ST_double partial_r2 = ((ST_double)L * min_f) / ((ST_double)L * min_f + (ST_double)df_resid);
+            underid_stat = (ST_double)N * partial_r2;
+
+            /* Use minimum first-stage F as approximation for CD_F */
+            cd_f = min_f;
+
+            if (vce_type != 0) {
+                kp_f = min_f;  /* Placeholder */
+            }
+        }
+    }
+
+    /* Store underidentification test result */
+    SF_scal_save("__civreghdfe_underid", underid_stat);
+    SF_scal_save("__civreghdfe_underid_df", (ST_double)underid_df);
+
+    /* Step 11: Compute Sargan/Hansen J overidentification test statistic */
+    /* Only for overidentified models: K_iv > K_total */
+    ST_double sargan_stat = 0.0;
+    ST_int overid_df = K_iv - K_total;
+
+    if (overid_df > 0) {
+        /*
+            Sargan statistic (homoskedastic): N * r'P_Z r / σ²
+            Hansen J (heteroskedastic): r'Z(Z'ΩZ)^-1 Z'r
+
+            For 2SLS with homoskedastic errors: Sargan = r'Z(Z'Z)^-1 Z'r / σ²
+            For GMM/robust: Hansen J = r'Z(Z'ΩZ)^-1 Z'r
+
+            The statistic is chi-squared with (K_iv - K_total) df under H0
+        */
+
+        /* Compute Z'r */
+        ST_double *Ztr = (ST_double *)calloc(K_iv, sizeof(ST_double));
+        for (k = 0; k < K_iv; k++) {
+            ST_double sum = 0.0;
+            const ST_double *z_col = Z + k * N;
+            if (weights && weight_type != 0) {
+                for (i = 0; i < N; i++) {
+                    sum += z_col[i] * weights[i] * resid[i];
+                }
+            } else {
+                for (i = 0; i < N; i++) {
+                    sum += z_col[i] * resid[i];
+                }
+            }
+            Ztr[k] = sum;
+        }
+
+        if (vce_type == 0) {
+            /* Sargan statistic: r'Z(Z'Z)^-1 Z'r / σ² */
+            /* Compute (Z'Z)^-1 Z'r */
+            ST_double *ZtZ_inv_Ztr = (ST_double *)calloc(K_iv, sizeof(ST_double));
+            for (i = 0; i < K_iv; i++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    sum += ZtZ_inv[k * K_iv + i] * Ztr[k];
+                }
+                ZtZ_inv_Ztr[i] = sum;
+            }
+
+            /* Compute Z'r' * (Z'Z)^-1 * Z'r */
+            ST_double quad_form = 0.0;
+            for (i = 0; i < K_iv; i++) {
+                quad_form += Ztr[i] * ZtZ_inv_Ztr[i];
+            }
+
+            sargan_stat = quad_form / sigma2;
+            free(ZtZ_inv_Ztr);
+
+        } else {
+            /* Hansen J: for robust/cluster, use the inverse of the meat matrix
+               In practice, for efficient GMM2S, J = 0 at the optimum.
+               For 2SLS with robust VCE, we need to compute the robust version.
+
+               Hansen J = r'Z * W * Z'r where W = (Z'ΩZ)^-1
+               This simplifies to N * (objective function at minimum) for GMM
+
+               For simplicity, compute using the robust formula:
+               J = (Z'r)' (Z'ΩZ)^-1 (Z'r)
+            */
+
+            /* Compute Z'ΩZ where Ω = diag(e²) or cluster sum */
+            ST_double *ZOmegaZ_j = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+
+            if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+                /* Cluster version */
+                ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                for (i = 0; i < N; i++) {
+                    ST_int c = cluster_ids[i] - 1;
+                    if (c < 0 || c >= num_clusters) continue;
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    ST_double we = w * resid[i];
+                    for (j = 0; j < K_iv; j++) {
+                        cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+                    }
+                }
+
+                for (ST_int c = 0; c < num_clusters; c++) {
+                    for (j = 0; j < K_iv; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                            ZOmegaZ_j[j * K_iv + k] += contrib;
+                            if (k != j) ZOmegaZ_j[k * K_iv + j] += contrib;
+                        }
+                    }
+                }
+                free(cluster_ze);
+            } else {
+                /* Robust version: Z'diag(e²)Z */
+                for (i = 0; i < N; i++) {
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    ST_double e2 = w * resid[i] * resid[i];
+                    for (j = 0; j < K_iv; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                            ZOmegaZ_j[j * K_iv + k] += contrib;
+                            if (k != j) ZOmegaZ_j[k * K_iv + j] += contrib;
+                        }
+                    }
+                }
+            }
+
+            /* Invert Z'ΩZ */
+            ST_double *ZOmegaZ_inv_j = (ST_double *)malloc(K_iv * K_iv * sizeof(ST_double));
+            memcpy(ZOmegaZ_inv_j, ZOmegaZ_j, K_iv * K_iv * sizeof(ST_double));
+
+            if (cholesky(ZOmegaZ_inv_j, K_iv) == 0) {
+                invert_from_cholesky(ZOmegaZ_inv_j, K_iv, ZOmegaZ_inv_j);
+
+                /* Compute Z'r' * (Z'ΩZ)^-1 * Z'r */
+                ST_double *temp_zr = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                for (i = 0; i < K_iv; i++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        sum += ZOmegaZ_inv_j[k * K_iv + i] * Ztr[k];
+                    }
+                    temp_zr[i] = sum;
+                }
+
+                ST_double quad_form = 0.0;
+                for (i = 0; i < K_iv; i++) {
+                    quad_form += Ztr[i] * temp_zr[i];
+                }
+
+                sargan_stat = quad_form;
+                free(temp_zr);
+            }
+
+            free(ZOmegaZ_j);
+            free(ZOmegaZ_inv_j);
+        }
+
+        free(Ztr);
+    }
+
+    /* Store diagnostic statistics as Stata scalars */
+    SF_scal_save("__civreghdfe_sargan", sargan_stat);
+    SF_scal_save("__civreghdfe_sargan_df", (ST_double)overid_df);
+
+    /* Store Cragg-Donald F and Kleibergen-Paap rk Wald F (computed earlier in Step 10b) */
+    /* cd_f, kp_f, kp_lm were computed during underidentification test */
+    SF_scal_save("__civreghdfe_cd_f", cd_f);
+    SF_scal_save("__civreghdfe_kp_f", kp_f);
+
+    /* Step 12: Compute Durbin-Wu-Hausman endogeneity test */
+    /* Tests whether endogenous regressors are actually endogenous */
+    /* Uses augmented regression approach:
+       1. Compute first-stage residuals: v = X_endog - Z * pi
+       2. Augmented OLS: y = [X_exog, X_endog, v] * [b1, b2, gamma] + error
+       3. Test H0: gamma = 0
+       Durbin chi2 ~ chi2(K_endog), Wu-Hausman F ~ F(K_endog, df)
+    */
+    ST_double endog_chi2 = 0.0;
+    ST_double endog_f = 0.0;
+    ST_int endog_df = K_endog;
+
+    if (K_endog > 0) {
+        /* Allocate first-stage residuals: N x K_endog */
+        ST_double *v_resid = (ST_double *)calloc(N * K_endog, sizeof(ST_double));
+
+        /* Compute first-stage residuals: v = X_endog - Z * pi_endog
+           pi_endog is in temp1[:, K_exog:K_total] */
+        for (ST_int e = 0; e < K_endog; e++) {
+            const ST_double *x_endog_col = X_endog + e * N;
+            ST_double *v_col = v_resid + e * N;
+
+            /* Compute Z * pi_e where pi_e = temp1[:, K_exog + e] */
+            const ST_double *pi_col = temp1 + (K_exog + e) * K_iv;
+
+            for (i = 0; i < N; i++) {
+                ST_double pred = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    pred += Z[k * N + i] * pi_col[k];
+                }
+                v_col[i] = x_endog_col[i] - pred;
+            }
+        }
+
+        /* Build augmented design matrix: [X_exog, X_endog, v] */
+        ST_int K_aug = K_total + K_endog;
+        ST_double *X_aug = (ST_double *)calloc(N * K_aug, sizeof(ST_double));
+        ST_double *XaXa = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
+        ST_double *Xay = (ST_double *)calloc(K_aug, sizeof(ST_double));
+
+        /* Copy X_exog columns */
+        if (X_exog) {
+            for (j = 0; j < K_exog; j++) {
+                for (i = 0; i < N; i++) {
+                    X_aug[j * N + i] = X_exog[j * N + i];
+                }
+            }
+        }
+
+        /* Copy X_endog columns */
+        if (X_endog) {
+            for (j = 0; j < K_endog; j++) {
+                for (i = 0; i < N; i++) {
+                    X_aug[(K_exog + j) * N + i] = X_endog[j * N + i];
+                }
+            }
+        }
+
+        /* Copy v_resid columns */
+        for (j = 0; j < K_endog; j++) {
+            for (i = 0; i < N; i++) {
+                X_aug[(K_total + j) * N + i] = v_resid[j * N + i];
+            }
+        }
+
+        /* Compute X_aug'X_aug */
+        matmul_atb(X_aug, X_aug, N, K_aug, K_aug, XaXa);
+
+        /* Compute X_aug'y */
+        for (j = 0; j < K_aug; j++) {
+            ST_double sum = 0.0;
+            const ST_double *xa_col = X_aug + j * N;
+            for (i = 0; i < N; i++) {
+                sum += xa_col[i] * y[i];
+            }
+            Xay[j] = sum;
+        }
+
+        /* Solve for augmented OLS coefficients */
+        ST_double *XaXa_L = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
+        ST_double *XaXa_inv = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
+        ST_double *beta_aug = (ST_double *)calloc(K_aug, sizeof(ST_double));
+
+        memcpy(XaXa_L, XaXa, K_aug * K_aug * sizeof(ST_double));
+        ST_int inv_ok = cholesky(XaXa_L, K_aug);
+
+        if (inv_ok == 0) {
+            invert_from_cholesky(XaXa_L, K_aug, XaXa_inv);
+            /* Compute beta_aug = XaXa_inv * Xay */
+            for (i = 0; i < K_aug; i++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_aug; k++) {
+                    sum += XaXa_inv[k * K_aug + i] * Xay[k];
+                }
+                beta_aug[i] = sum;
+            }
+
+            /* Compute residuals and sigma^2 for augmented regression */
+            ST_double sse_aug = 0.0;
+            for (i = 0; i < N; i++) {
+                ST_double fitted = 0.0;
+                for (j = 0; j < K_aug; j++) {
+                    fitted += X_aug[j * N + i] * beta_aug[j];
+                }
+                ST_double r = y[i] - fitted;
+                sse_aug += r * r;
+            }
+
+            ST_int df_aug = N - K_aug - df_a;
+            if (df_aug <= 0) df_aug = 1;
+            ST_double sigma2_aug = sse_aug / df_aug;
+
+            /* gamma = beta_aug[K_total:K_aug-1] (the v coefficients) */
+            /* V_gamma = sigma2_aug * XaXa_inv[K_total:K_aug-1, K_total:K_aug-1] */
+
+            /* Compute gamma' * V_gamma^-1 * gamma = gamma' * (XaXa block) * gamma / sigma2_aug */
+            /* Extract the K_endog x K_endog block for v from XaXa */
+            ST_double *gamma = beta_aug + K_total;  /* Last K_endog coefficients */
+            ST_double *XaXa_vv = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+
+            for (j = 0; j < K_endog; j++) {
+                for (i = 0; i < K_endog; i++) {
+                    XaXa_vv[j * K_endog + i] = XaXa[(K_total + j) * K_aug + (K_total + i)];
+                }
+            }
+
+            /* Compute chi2 = gamma' * XaXa_vv * gamma / sigma2_aug */
+            ST_double quad = 0.0;
+            for (j = 0; j < K_endog; j++) {
+                ST_double sum = 0.0;
+                for (i = 0; i < K_endog; i++) {
+                    sum += XaXa_vv[j * K_endog + i] * gamma[i];
+                }
+                quad += gamma[j] * sum;
+            }
+
+            endog_chi2 = quad / sigma2_aug;
+            endog_f = (endog_chi2 / K_endog);
+
+            free(XaXa_vv);
+        }
+
+        free(v_resid);
+        free(X_aug);
+        free(XaXa);
+        free(Xay);
+        free(XaXa_L);
+        free(XaXa_inv);
+        free(beta_aug);
+    }
+
+    SF_scal_save("__civreghdfe_endog_chi2", endog_chi2);
+    SF_scal_save("__civreghdfe_endog_f", endog_f);
+    SF_scal_save("__civreghdfe_endog_df", (ST_double)endog_df);
 
     /* Cleanup */
     free(ZtZ);
@@ -1333,6 +2258,12 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_est_method", &dval); est_method = (ST_int)dval;
     SF_scal_use("__civreghdfe_kclass", &dval); kclass_user = dval;
     SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
+
+    /* HAC parameters */
+    ST_int kernel_type = 0, bw = 0, dkraay = 0;
+    SF_scal_use("__civreghdfe_kernel", &dval); kernel_type = (ST_int)dval;
+    SF_scal_use("__civreghdfe_bw", &dval); bw = (ST_int)dval;
+    SF_scal_use("__civreghdfe_dkraay", &dval); dkraay = (ST_int)dval;
 
     if (verbose) {
         char buf[512];
@@ -1909,7 +2840,8 @@ static ST_retcode do_iv_regression(void)
         beta, V, first_stage_F,
         vce_type, cluster_ids_c, num_clusters,
         df_a_for_vce, nested_adj, verbose,
-        est_method, kclass_user, fuller_alpha, &lambda
+        est_method, kclass_user, fuller_alpha, &lambda,
+        kernel_type, bw
     );
 
     if (rc != STATA_OK) {
@@ -1940,12 +2872,65 @@ static ST_retcode do_iv_regression(void)
         return rc;
     }
 
+    /* Compute RSS, TSS, R-squared, Root MSE, and F-statistic */
+    /* These are computed on demeaned (partialled-out) data */
+    ST_double rss = 0.0;
+    ST_double tss = 0.0;
+    ST_double y_mean = 0.0;
+    ST_double sum_w = 0.0;
+
+    /* Compute weighted mean of y_dem */
+    for (ST_int i = 0; i < N; i++) {
+        ST_double w = (weights_c && weight_type != 0) ? weights_c[i] : 1.0;
+        y_mean += w * y_dem[i];
+        sum_w += w;
+    }
+    y_mean /= sum_w;
+
+    /* Compute TSS (centered) = sum(w * (y - ybar)^2) */
+    for (ST_int i = 0; i < N; i++) {
+        ST_double w = (weights_c && weight_type != 0) ? weights_c[i] : 1.0;
+        ST_double dev = y_dem[i] - y_mean;
+        tss += w * dev * dev;
+    }
+
+    /* Compute RSS = sum(w * resid^2) */
+    /* Compute fitted values: yhat = X_exog * beta[0:K_exog-1] + X_endog * beta[K_exog:K_total-1] */
+    for (ST_int i = 0; i < N; i++) {
+        ST_double fitted = 0.0;
+        for (ST_int j = 0; j < K_exog; j++) {
+            fitted += X_exog_dem[j * N + i] * beta[j];
+        }
+        for (ST_int j = 0; j < K_endog; j++) {
+            fitted += X_endog_dem[j * N + i] * beta[K_exog + j];
+        }
+        ST_double resid = y_dem[i] - fitted;
+        ST_double w = (weights_c && weight_type != 0) ? weights_c[i] : 1.0;
+        rss += w * resid * resid;
+    }
+
+    ST_double r2 = (tss > 0) ? 1.0 - rss / tss : 0.0;
+    ST_int df_r_val = N - K_total - df_a;
+    if (df_r_val <= 0) df_r_val = 1;
+    ST_double rmse = sqrt(rss / df_r_val);
+
+    /* Compute model F-statistic: (R2 / K) / ((1 - R2) / df_r) */
+    ST_double f_stat = 0.0;
+    if (K_total > 0 && r2 < 1.0) {
+        f_stat = (r2 / K_total) / ((1.0 - r2) / df_r_val);
+    }
+
     /* Store results to Stata */
     /* Scalars */
     SF_scal_save("__civreghdfe_N", (ST_double)N);
-    SF_scal_save("__civreghdfe_df_r", (ST_double)(N - K_total - df_a));
+    SF_scal_save("__civreghdfe_df_r", (ST_double)df_r_val);
     SF_scal_save("__civreghdfe_df_a", (ST_double)df_a);
     SF_scal_save("__civreghdfe_K", (ST_double)K_total);
+    SF_scal_save("__civreghdfe_rss", rss);
+    SF_scal_save("__civreghdfe_tss", tss);
+    SF_scal_save("__civreghdfe_r2", r2);
+    SF_scal_save("__civreghdfe_rmse", rmse);
+    SF_scal_save("__civreghdfe_F", f_stat);
 
     if (has_cluster) {
         SF_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);

@@ -564,7 +564,7 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
     }
 
     /* Memory barrier to ensure all thread-side effects are visible before returning */
-    __sync_synchronize();
+    ctools_memory_barrier();
 
     return STATA_OK;
 }
@@ -739,7 +739,7 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
     free(thread_args);
 
     /* Memory barrier to ensure all thread-side effects are visible before returning */
-    __sync_synchronize();
+    ctools_memory_barrier();
 
     return STATA_OK;
 }
@@ -857,7 +857,7 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
     }
 
     /* Memory barrier to ensure all thread-side effects are visible before returning */
-    __sync_synchronize();
+    ctools_memory_barrier();
 
     return STATA_OK;
 }

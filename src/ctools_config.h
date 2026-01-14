@@ -98,4 +98,67 @@
     #define CTOOLS_INLINE inline
 #endif
 
+/* ============================================================================
+   Cross-platform aligned memory allocation
+
+   IMPORTANT: On Windows, _aligned_malloc() requires _aligned_free().
+   On POSIX systems, posix_memalign() memory can be freed with regular free().
+   Always use ctools_aligned_free() for memory allocated with ctools_aligned_alloc().
+   ============================================================================ */
+
+#if defined(_WIN32)
+    #include <malloc.h>
+#else
+    #include <stdlib.h>
+#endif
+
+/*
+    Allocate memory aligned to specified boundary.
+    Returns NULL on failure.
+    MUST be freed with ctools_aligned_free().
+*/
+static inline void *ctools_aligned_alloc(size_t alignment, size_t size)
+{
+    void *ptr = NULL;
+#if defined(_WIN32)
+    ptr = _aligned_malloc(size, alignment);
+#else
+    if (posix_memalign(&ptr, alignment, size) != 0) {
+        return NULL;
+    }
+#endif
+    return ptr;
+}
+
+/*
+    Free memory allocated with ctools_aligned_alloc().
+    Safe to call with NULL.
+*/
+static inline void ctools_aligned_free(void *ptr)
+{
+    if (ptr == NULL) return;
+#if defined(_WIN32)
+    _aligned_free(ptr);
+#else
+    free(ptr);
+#endif
+}
+
+/* ============================================================================
+   Cross-platform memory barriers
+
+   IMPORTANT: __sync_synchronize() is a GCC builtin that may not work on
+   Windows with MSVC. Use ctools_memory_barrier() for portable code.
+   ============================================================================ */
+
+#if defined(_WIN32) && defined(_MSC_VER)
+    #include <intrin.h>
+    #define ctools_memory_barrier() _ReadWriteBarrier(); MemoryBarrier()
+#elif defined(__GNUC__) || defined(__clang__)
+    #define ctools_memory_barrier() __sync_synchronize()
+#else
+    /* Fallback: compiler barrier only */
+    #define ctools_memory_barrier() do { __asm__ __volatile__("" ::: "memory"); } while(0)
+#endif
+
 #endif /* CTOOLS_CONFIG_H */

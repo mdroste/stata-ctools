@@ -34,7 +34,9 @@
       "Bash(for f in validate_cmerge.log validate_cimport.log validate_cexport.log)",
       "Bash(do echo \"=== $f ===\" tail -30 \"$f\")",
       "Bash(do echo \"=== $f ===\" grep -E \"\\(SUMMARY|Tests passed|Tests failed|ALL TESTS|VALIDATION FAILED\\)\" \"$f\")",
-      "Bash(for f in validate_cmerge.log validate_cexport.log validate_cimport.log)"
+      "Bash(for f in validate_cmerge.log validate_cexport.log validate_cimport.log)",
+      "WebFetch(domain:fmwww.bc.edu)",
+      "WebFetch(domain:scholar.harvard.edu)"
     ]
   }
 }
