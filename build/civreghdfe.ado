@@ -729,10 +729,10 @@ program define civreghdfe, eclass sortpreserve
         * More than 2 endogenous - show message
         di as text "(Stock-Yogo critical values: see Stock-Yogo (2005) for `K_endog' endogenous variables)"
     }
+    di as text "Source: Stock-Yogo (2005).  Reproduced by permission."
     if `vce_type' != 0 {
         di as text "NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors."
     }
-    di as text "Source: Stock-Yogo (2005).  Reproduced by permission."
     di as text "{hline 78}"
 
     * Display reduced form if requested
@@ -868,8 +868,8 @@ program define civreghdfe, eclass sortpreserve
         }
         if `sargan_df' > 0 {
             local sargan_p = chi2tail(`sargan_df', `sargan_val')
-            di as text _col(50) "Chi-sq(" as result `sargan_df' as text ") P-val =" ///
-                as result %9.4f `sargan_p'
+            di as text _col(52) "Chi-sq(" as result `sargan_df' as text ") P-val =" ///
+                as result %10.4f `sargan_p'
         }
         else {
             di as text _col(50) "(equation exactly identified)"

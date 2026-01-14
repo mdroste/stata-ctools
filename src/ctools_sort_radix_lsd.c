@@ -53,44 +53,10 @@
     NOTE: Aligned memory allocation is now provided by ctools_config.h
     Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
     On Windows, _aligned_malloc requires _aligned_free - using regular free() causes heap corruption.
+
+    NOTE: Double-to-sortable conversion is now provided by ctools_types.h
+    Use ctools_double_to_sortable(d, SF_is_missing(d)) for sorting doubles.
 */
-
-/*
-    Convert IEEE 754 double to uint64 that sorts correctly with unsigned comparison.
-
-    Problem: Raw IEEE 754 bit patterns don't sort correctly as unsigned integers:
-    - Negative numbers have sign bit set (MSB=1), so they appear "larger"
-    - Negative magnitudes are inverted (e.g., -2.0 > -1.0 in raw bits)
-
-    Solution: Transform bits so unsigned comparison produces correct numeric order.
-    - Positive: flip sign bit only (0x8... → 0x0...)
-    - Negative: flip ALL bits (~bits)
-    - Missing: map to UINT64_MAX (sorts to end)
-
-    @param d  Input double value
-    @return   Sortable uint64 representation
-*/
-static uint64_t double_to_sortable_uint64(double d)
-{
-    uint64_t bits;
-    memcpy(&bits, &d, sizeof(bits));
-
-    /* Check if the value is a Stata missing value */
-    if (SF_is_missing(d)) {
-        /* Sort missing values to the end (largest possible value) */
-        return UINT64_MAX;
-    }
-
-    /* If negative (sign bit set), flip all bits */
-    /* If positive, flip only the sign bit */
-    if (bits & ((uint64_t)1 << 63)) {
-        bits = ~bits;
-    } else {
-        bits ^= ((uint64_t)1 << 63);
-    }
-
-    return bits;
-}
 
 /* ============================================================================
    Parallel radix sort structures and functions
@@ -800,7 +766,7 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
     /* Convert doubles to sortable uint64 keys */
     dbl_data = data->vars[var_idx].data.dbl;
     for (i = 0; i < data->nobs; i++) {
-        keys[i] = double_to_sortable_uint64(dbl_data[i]);
+        keys[i] = ctools_double_to_sortable(dbl_data[i], SF_is_missing(dbl_data[i]));
     }
 
     /* Decide whether to use parallel sort */

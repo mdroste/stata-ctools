@@ -145,6 +145,44 @@ static inline void ctools_aligned_free(void *ptr)
 }
 
 /* ============================================================================
+   I/O and CSV Processing Constants
+   ============================================================================ */
+
+/*
+    I/O buffer size for file operations.
+    Larger buffers reduce syscalls but use more memory.
+    64KB is optimal for most systems.
+*/
+#define CTOOLS_IO_BUFFER_SIZE    (64 * 1024)
+
+/*
+    Chunk sizes for parallel CSV processing.
+    CTOOLS_IMPORT_CHUNK_SIZE: bytes per parsing chunk (8MB default)
+    CTOOLS_EXPORT_CHUNK_SIZE: rows per formatting chunk (10K default)
+*/
+#define CTOOLS_IMPORT_CHUNK_SIZE (8 * 1024 * 1024)
+#define CTOOLS_EXPORT_CHUNK_SIZE 10000
+
+/*
+    Maximum threads for I/O operations.
+    May differ from NUM_THREADS for I/O-bound vs CPU-bound work.
+*/
+#define CTOOLS_IO_MAX_THREADS    16
+
+/*
+    Arena allocator block size for string pooling.
+    1MB blocks reduce allocation overhead for many small strings.
+*/
+#define CTOOLS_ARENA_BLOCK_SIZE  (1024 * 1024)
+
+/*
+    Stata variable limits.
+*/
+#define CTOOLS_MAX_VARNAME_LEN   32
+#define CTOOLS_MAX_STRING_LEN    2045
+#define CTOOLS_MAX_COLUMNS       32767
+
+/* ============================================================================
    Cross-platform memory barriers
 
    IMPORTANT: __sync_synchronize() is a GCC builtin that may not work on

@@ -118,6 +118,9 @@ CBINSCATTER_SRCS = $(SRC_DIR)/cbinscatter/cbinscatter_impl.c \
 
 # civreghdfe module
 CIVREGHDFE_SRCS = $(SRC_DIR)/civreghdfe/civreghdfe_matrix.c \
+                  $(SRC_DIR)/civreghdfe/civreghdfe_estimate.c \
+                  $(SRC_DIR)/civreghdfe/civreghdfe_vce.c \
+                  $(SRC_DIR)/civreghdfe/civreghdfe_tests.c \
                   $(SRC_DIR)/civreghdfe/civreghdfe_impl.c
 
 # All sources
@@ -167,6 +170,8 @@ CBINSCATTER_HEADERS = $(SRC_DIR)/cbinscatter/cbinscatter_types.h \
                       $(SRC_DIR)/cbinscatter/cbinscatter_impl.h
 
 CIVREGHDFE_HEADERS = $(SRC_DIR)/civreghdfe/civreghdfe_matrix.h \
+                     $(SRC_DIR)/civreghdfe/civreghdfe_estimate.h \
+                     $(SRC_DIR)/civreghdfe/civreghdfe_vce.h \
                      $(SRC_DIR)/civreghdfe/civreghdfe_tests.h \
                      $(SRC_DIR)/civreghdfe/civreghdfe_impl.h
 

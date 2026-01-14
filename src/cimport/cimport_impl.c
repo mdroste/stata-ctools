@@ -39,6 +39,8 @@
 #endif
 
 #include "stplugin.h"
+#include "ctools_types.h"
+#include "ctools_config.h"
 #include "ctools_timer.h"
 #include "cimport_impl.h"
 
@@ -56,14 +58,20 @@
 
 /* ============================================================================
  * Configuration Constants
+ * Use shared constants from ctools_config.h where applicable.
  * ============================================================================ */
 
-#define CIMPORT_MAX_COLUMNS      32767
-#define CIMPORT_MAX_VARNAME_LEN  32
-#define CIMPORT_MAX_STRING_LEN   2045
-#define CIMPORT_CHUNK_SIZE       (8*1024*1024)
+/* Shared constants (from ctools_config.h):
+   - CTOOLS_MAX_COLUMNS: max CSV columns (32767)
+   - CTOOLS_MAX_VARNAME_LEN: max variable name length (32)
+   - CTOOLS_MAX_STRING_LEN: max string variable length (2045)
+   - CTOOLS_IMPORT_CHUNK_SIZE: bytes per parsing chunk (8MB)
+   - CTOOLS_IO_MAX_THREADS: max threads for I/O (16)
+   - CTOOLS_ARENA_BLOCK_SIZE: arena allocator block size (1MB)
+*/
+
+/* Local: cimport may use more threads for parsing than general I/O */
 #define CIMPORT_MAX_THREADS      32
-#define CIMPORT_ARENA_BLOCK_SIZE (1024*1024)
 
 /* ============================================================================
  * Type Definitions
@@ -84,7 +92,7 @@ typedef enum {
 } CImportNumericSubtype;
 
 typedef struct {
-    char name[CIMPORT_MAX_VARNAME_LEN];
+    char name[CTOOLS_MAX_VARNAME_LEN];
     CImportColumnType type;
     int max_strlen;
     CImportNumericSubtype num_subtype;
@@ -191,7 +199,7 @@ static void *cimport_arena_alloc(CImportArena *arena, size_t size) {
     size = (size + 7) & ~7;
 
     if (!arena->current || arena->current->used + size > arena->current->capacity) {
-        size_t block_size = CIMPORT_ARENA_BLOCK_SIZE;
+        size_t block_size = CTOOLS_ARENA_BLOCK_SIZE;
         if (size > block_size - sizeof(CImportArenaBlock)) {
             block_size = size + sizeof(CImportArenaBlock);
         }
@@ -247,143 +255,10 @@ static inline bool cimport_is_whitespace(char c) {
 
 /* ============================================================================
  * Fast Float Parser
+ * NOTE: Fast double parsing is now provided by ctools_types.h:
+ *   - ctools_parse_double_fast(str, len, result, missval)
+ *   - ctools_pow10_table[]
  * ============================================================================ */
-
-static const double cimport_pow10_table[] = {
-    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,  1e8,  1e9,
-    1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19,
-    1e20, 1e21, 1e22
-};
-
-static inline bool cimport_fast_parse_double(const char *str, int len, double *result) {
-    const char *p = str;
-    const char *end = str + len;
-
-    while (p < end && (*p == ' ' || *p == '\t')) p++;
-    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
-
-    len = end - p;
-
-    if (len == 0) {
-        *result = SV_missval;
-        return true;
-    }
-
-    if (len == 1 && *p == '.') {
-        *result = SV_missval;
-        return true;
-    }
-    if (len == 2 && (p[0] == 'N' || p[0] == 'n') && (p[1] == 'A' || p[1] == 'a')) {
-        *result = SV_missval;
-        return true;
-    }
-    if (len == 3 && (p[0] == 'N' || p[0] == 'n') && (p[1] == 'a' || p[1] == 'A') && (p[2] == 'N' || p[2] == 'n')) {
-        *result = SV_missval;
-        return true;
-    }
-
-    bool negative = false;
-    if (*p == '-') {
-        negative = true;
-        p++;
-    } else if (*p == '+') {
-        p++;
-    }
-
-    if (p >= end) return false;
-
-    uint64_t mantissa = 0;
-    int decimal_pos = -1;
-    int digit_count = 0;
-    int total_digits = 0;
-    bool has_digits = false;
-
-    while (p < end) {
-        char c = *p;
-        if (c >= '0' && c <= '9') {
-            has_digits = true;
-            total_digits++;
-            if (digit_count < 18) {
-                mantissa = mantissa * 10 + (c - '0');
-                digit_count++;
-            }
-            p++;
-        } else if (c == '.' && decimal_pos < 0) {
-            decimal_pos = total_digits;
-            p++;
-        } else if (c == 'e' || c == 'E') {
-            p++;
-            if (p >= end) return false;
-
-            bool exp_negative = false;
-            if (*p == '-') {
-                exp_negative = true;
-                p++;
-            } else if (*p == '+') {
-                p++;
-            }
-
-            int exponent = 0;
-            while (p < end && *p >= '0' && *p <= '9') {
-                exponent = exponent * 10 + (*p - '0');
-                p++;
-            }
-
-            if (exp_negative) exponent = -exponent;
-
-            double value = (double)mantissa;
-            int decimal_shift = (decimal_pos >= 0) ? (total_digits - decimal_pos) : 0;
-            int extra_digits = (total_digits > 18) ? (total_digits - 18) : 0;
-            if (decimal_pos >= 0 && decimal_pos < total_digits) {
-                extra_digits -= (total_digits - decimal_pos);
-                if (extra_digits < 0) extra_digits = 0;
-            }
-
-            int final_exp = exponent - decimal_shift + extra_digits;
-
-            if (final_exp > 0 && final_exp <= 22) {
-                value *= cimport_pow10_table[final_exp];
-            } else if (final_exp < 0 && final_exp >= -22) {
-                value /= cimport_pow10_table[-final_exp];
-            } else if (final_exp != 0) {
-                value *= pow(10.0, final_exp);
-            }
-
-            *result = negative ? -value : value;
-            return (p == end);
-        } else {
-            break;
-        }
-    }
-
-    if (!has_digits) return false;
-    if (p != end) return false;
-
-    double value = (double)mantissa;
-
-    if (decimal_pos >= 0) {
-        int decimal_digits = total_digits - decimal_pos;
-        if (total_digits > 18 && decimal_pos < 18) {
-            decimal_digits -= (total_digits - 18);
-            if (decimal_digits < 0) decimal_digits = 0;
-        }
-        if (decimal_digits > 0 && decimal_digits <= 22) {
-            value /= cimport_pow10_table[decimal_digits];
-        } else if (decimal_digits > 22) {
-            value /= pow(10.0, decimal_digits);
-        }
-    } else if (total_digits > 18) {
-        int extra = total_digits - 18;
-        if (extra <= 22) {
-            value *= cimport_pow10_table[extra];
-        } else {
-            value *= pow(10.0, extra);
-        }
-    }
-
-    *result = negative ? -value : value;
-    return true;
-}
 
 /* ============================================================================
  * SIMD-Accelerated Scanning
@@ -656,7 +531,7 @@ static inline bool cimport_analyze_numeric_fast(const char *file_base, CImportFi
         (src[2] == 'N' || src[2] == 'n')) return false;
 
     double val;
-    if (!cimport_fast_parse_double(src, len, &val)) return false;
+    if (!ctools_parse_double_fast(src, len, &val, SV_missval)) return false;
 
     *out_value = val;
 
@@ -829,7 +704,7 @@ static void cimport_sanitize_varname(const char *input, int len, char *output) {
         len--;
     }
 
-    for (int i = 0; i < len && j < CIMPORT_MAX_VARNAME_LEN - 1; i++) {
+    for (int i = 0; i < len && j < CTOOLS_MAX_VARNAME_LEN - 1; i++) {
         char c = input[i];
         if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_') {
             output[j++] = c;
@@ -851,11 +726,11 @@ static void cimport_sanitize_varname(const char *input, int len, char *output) {
  * ============================================================================ */
 
 static int cimport_parse_header(CImportContext *ctx) {
-    CImportFieldRef fields[CIMPORT_MAX_COLUMNS];
+    CImportFieldRef fields[CTOOLS_MAX_COLUMNS];
     const char *end = cimport_find_next_row(ctx->file_data, ctx->file_data + ctx->file_size, ctx->quote_char);
 
     ctx->num_columns = cimport_parse_row_fast(ctx->file_data, end, ctx->delimiter, ctx->quote_char,
-                                               fields, CIMPORT_MAX_COLUMNS, ctx->file_data);
+                                               fields, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
     if (ctx->num_columns <= 0) {
         strcpy(ctx->error_message, "No columns found in header");
@@ -865,13 +740,13 @@ static int cimport_parse_header(CImportContext *ctx) {
     ctx->columns = calloc(ctx->num_columns, sizeof(CImportColumnInfo));
     if (!ctx->columns) return -1;
 
-    char name_buf[CIMPORT_MAX_STRING_LEN];
+    char name_buf[CTOOLS_MAX_STRING_LEN];
     for (int i = 0; i < ctx->num_columns; i++) {
         if (ctx->has_header) {
             cimport_extract_field_fast(ctx->file_data, &fields[i], name_buf, sizeof(name_buf), ctx->quote_char);
             cimport_sanitize_varname(name_buf, strlen(name_buf), ctx->columns[i].name);
         } else {
-            snprintf(ctx->columns[i].name, CIMPORT_MAX_VARNAME_LEN, "v%d", i + 1);
+            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1);
         }
         ctx->columns[i].type = CIMPORT_COL_UNKNOWN;
         ctx->columns[i].max_strlen = 0;
@@ -910,8 +785,8 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         if (is_string) {
             colinfo->type = CIMPORT_COL_STRING;
             colinfo->max_strlen = max_len > 0 ? max_len : 1;
-            if (colinfo->max_strlen > CIMPORT_MAX_STRING_LEN) {
-                colinfo->max_strlen = CIMPORT_MAX_STRING_LEN;
+            if (colinfo->max_strlen > CTOOLS_MAX_STRING_LEN) {
+                colinfo->max_strlen = CTOOLS_MAX_STRING_LEN;
             }
         } else {
             colinfo->type = CIMPORT_COL_NUMERIC;
@@ -971,8 +846,8 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         if (ctx->columns[i].type == CIMPORT_COL_STRING && ctx->columns[i].max_strlen == 0) {
             ctx->columns[i].max_strlen = 1;
         }
-        if (ctx->columns[i].max_strlen > CIMPORT_MAX_STRING_LEN) {
-            ctx->columns[i].max_strlen = CIMPORT_MAX_STRING_LEN;
+        if (ctx->columns[i].max_strlen > CTOOLS_MAX_STRING_LEN) {
+            ctx->columns[i].max_strlen = CTOOLS_MAX_STRING_LEN;
         }
 
         if (ctx->columns[i].type == CIMPORT_COL_NUMERIC) {
@@ -1093,7 +968,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         return NULL;
     }
 
-    CImportFieldRef field_buf[CIMPORT_MAX_COLUMNS];
+    CImportFieldRef field_buf[CTOOLS_MAX_COLUMNS];
     const char *ptr = task->start;
     const char *end = task->end;
 
@@ -1102,7 +977,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         if (row_end > end) row_end = end;
 
         int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
-                                                 field_buf, CIMPORT_MAX_COLUMNS, ctx->file_data);
+                                                 field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
         if (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0)) {
             ptr = row_end;
@@ -1235,7 +1110,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             return NULL;
         }
 
-        CImportFieldRef field_buf[CIMPORT_MAX_COLUMNS];
+        CImportFieldRef field_buf[CTOOLS_MAX_COLUMNS];
         const char *ptr = ctx->file_data;
         const char *end = ctx->file_data + ctx->file_size;
 
@@ -1243,7 +1118,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             const char *row_end = cimport_find_next_row(ptr, end, ctx->quote_char);
 
             int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
-                                                     field_buf, CIMPORT_MAX_COLUMNS, ctx->file_data);
+                                                     field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
             if (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0)) {
                 ptr = row_end;
@@ -1369,7 +1244,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
         for (int i = old_num; i < new_num; i++) {
             memset(&ctx->columns[i], 0, sizeof(CImportColumnInfo));
-            snprintf(ctx->columns[i].name, CIMPORT_MAX_VARNAME_LEN, "v%d", i + 1);
+            snprintf(ctx->columns[i].name, CTOOLS_MAX_VARNAME_LEN, "v%d", i + 1);
             ctx->columns[i].type = CIMPORT_COL_UNKNOWN;
             ctx->columns[i].max_strlen = 0;
         }
@@ -1402,7 +1277,7 @@ typedef struct {
 static void *cimport_build_cache_worker(void *arg) {
     CImportCacheBuildTask *task = (CImportCacheBuildTask *)arg;
     CImportContext *ctx = task->ctx;
-    char field_buf[CIMPORT_MAX_STRING_LEN + 1];
+    char field_buf[CTOOLS_MAX_STRING_LEN + 1];
 
     for (int col_idx = task->col_start; col_idx < task->col_end; col_idx++) {
         CImportColumnInfo *col = &ctx->columns[col_idx];
@@ -1426,9 +1301,9 @@ static void *cimport_build_cache_worker(void *arg) {
 
                         int len;
                         if (!cimport_field_contains_quote(src, field->length, ctx->quote_char)) {
-                            len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CIMPORT_MAX_STRING_LEN);
+                            len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN);
                         } else {
-                            len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CIMPORT_MAX_STRING_LEN, ctx->quote_char);
+                            len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN, ctx->quote_char);
                         }
                         field_buf[len] = '\0';
 
@@ -1459,7 +1334,7 @@ static void *cimport_build_cache_worker(void *arg) {
                         CImportFieldRef *field = &row->fields[col_idx];
                         const char *src = ctx->file_data + field->offset;
 
-                        if (!cimport_fast_parse_double(src, field->length, &val)) {
+                        if (!ctools_parse_double_fast(src, field->length, &val, missing)) {
                             val = missing;
                         }
                     } else {

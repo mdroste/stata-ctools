@@ -23,6 +23,9 @@
 
 #include "civreghdfe_impl.h"
 #include "civreghdfe_matrix.h"
+#include "civreghdfe_estimate.h"
+#include "civreghdfe_vce.h"
+#include "civreghdfe_tests.h"
 
 /* Debug flag */
 #define CIVREGHDFE_DEBUG 0
@@ -1270,14 +1273,8 @@ ST_retcode compute_2sls(
                     */
                     ST_int Nminus_wald = N - df_a - 1;
                     if (Nminus_wald <= 0) Nminus_wald = 1;
-                    /* For LM: Nminus = N - K3 where K3 = partialled out vars.
-                       In ivreghdfe context with HDFE, K3 includes:
-                       - Partialled out constant (1)
-                       - One additional dof subtracted (1)
-                       This matches ivreghdfe e(partial_ct) = 2
-                    */
-                    ST_int Nminus_lm = N - 2;
-                    if (Nminus_lm <= 0) Nminus_lm = 1;
+                    /* For LM: Nminus = N (no subtraction since HDFE already absorbed) */
+                    ST_int Nminus_lm = N;
 
                     /* ===============================================
                        KP rk Wald F statistic (for weak instruments)
@@ -1355,15 +1352,20 @@ ST_retcode compute_2sls(
                             quad_lm += ZtX[ki] * shat0_lm_inv_ZtX[ki];
                         }
 
-                        /* KP LM = Nminus_lm * quad_lm / N
+                        /* KP LM = Nminus_lm * quad_lm / Nminus_lm = quad_lm
 
-                           In ranktest, the variance shat0 = m_omega(vcvo) appears to
-                           be normalized by N internally, so the final formula is:
+                           The formula in ranktest is:
                            j = gbar' * inv(shat0) * gbar * Nminus
-                             = (Z'Y/N)' * inv(shat0/N) * (Z'Y/N) * Nminus
-                             = (Z'Y)' * inv(shat0) * (Z'Y) / N * Nminus
+                           where gbar = Z'Y / N and shat0 = m_omega(vcvo)
+
+                           m_omega normalizes by N internally, so the effective formula is:
+                           j = (Z'Y)' * inv(N * shat0_raw) * (Z'Y) * Nminus / N²
+                             = quad_lm_raw * Nminus / (N² * shat0_scaling)
+
+                           For our implementation where shat0_lm is raw (not normalized):
+                           kp_lm = quad_lm (no additional scaling needed since Nminus/N cancels)
                         */
-                        ST_double kp_lm = (ST_double)Nminus_lm * quad_lm / (ST_double)N;
+                        ST_double kp_lm = quad_lm;
 
                         /* For robust VCE, use KP LM as the underidentification test */
                         underid_stat = kp_lm;
@@ -1384,38 +1386,227 @@ ST_retcode compute_2sls(
             }
 
         } else if (K_endog > 1) {
-            /* Multiple endogenous variables: need eigenvalue-based computation.
+            /* Multiple endogenous variables: compute canonical correlations.
 
-               The Cragg-Donald F statistic is based on the minimum eigenvalue
-               of the concentration matrix:
-               CD_F = min_eigenvalue(Theta) / K_endog
+               For the Anderson LM and Cragg-Donald F with K_endog > 1:
+               1. Compute Y'Y (K_endog x K_endog) - variance of endogenous
+               2. Compute Zexcl'Zexcl (L x L) - variance of excluded instruments
+               3. Compute Zexcl'Y (L x K_endog) - covariance
+               4. Concentration matrix: C = inv(Y'Y) * (Y'Z) * inv(Z'Z) * (Z'Y)
+               5. Eigenvalues of C = squared canonical correlations
 
-               For now, use average first-stage F as a rough approximation.
-               TODO: Implement proper canonical correlation computation.
+               The excluded instruments are columns K_exog to K_iv-1 of Z.
             */
-            ST_double sum_f = 0.0;
-            ST_double min_f = first_stage_F ? first_stage_F[0] : 0.0;
-            for (ST_int e = 0; e < K_endog; e++) {
-                if (first_stage_F) {
-                    sum_f += first_stage_F[e];
-                    if (first_stage_F[e] < min_f) min_f = first_stage_F[e];
+
+            /* Compute Y'Y where Y is all endogenous variables (N x K_endog)
+               X_endog is stored as N x K_endog matrix, column e at offset e * N */
+            ST_double *YtY = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+            for (ST_int e1 = 0; e1 < K_endog; e1++) {
+                for (ST_int e2 = 0; e2 < K_endog; e2++) {
+                    ST_double sum = 0.0;
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        ST_double y1 = X_endog[e1 * N + i];
+                        ST_double y2 = X_endog[e2 * N + i];
+                        sum += w * y1 * y2;
+                    }
+                    YtY[e2 * K_endog + e1] = sum;
                 }
             }
 
-            /* Rough approximation for underidentification test */
-            ST_int df_resid = N - K_iv - df_a;
-            if (df_resid <= 0) df_resid = 1;
+            /* The excluded instruments start at column K_exog of Z
+               For HDFE context, Z contains ALL instruments (K_iv total):
+               - Columns 0 to K_exog-1: exogenous regressors
+               - Columns K_exog to K_iv-1: excluded instruments (L = K_iv - K_exog)
 
-            ST_double avg_F = sum_f / K_endog;
-            ST_double partial_r2 = ((ST_double)L * min_f) / ((ST_double)L * min_f + (ST_double)df_resid);
-            underid_stat = (ST_double)N * partial_r2;
+               Since we've already partialled out exogenous via HDFE, we can use
+               the full instrument matrix. The concentration matrix is:
+               Theta = (Y'M_Z*Y)^{-1} * (Y'Z) * (Z'Z)^{-1} * (Z'Y)
 
-            /* Use minimum first-stage F as approximation for CD_F */
-            cd_f = min_f;
+               But for canonical correlations, we want the eigenvalues of:
+               (Y'Y)^{-1} * (Y'Z_excl) * (Z_excl'Z_excl)^{-1} * (Z_excl'Y)
 
-            if (vce_type != 0) {
-                kp_f = min_f;  /* Placeholder */
+               where Z_excl are only the excluded instruments.
+            */
+
+            /* Extract Z_excl'Z_excl from ZtZ (L x L submatrix) */
+            ST_double *ZeZe = (ST_double *)calloc(L * L, sizeof(ST_double));
+            for (ST_int l1 = 0; l1 < L; l1++) {
+                for (ST_int l2 = 0; l2 < L; l2++) {
+                    /* ZtZ is K_iv x K_iv, excluded instruments start at K_exog */
+                    ZeZe[l2 * L + l1] = ZtZ[(K_exog + l2) * K_iv + (K_exog + l1)];
+                }
             }
+
+            /* Compute Z_excl'Y (L x K_endog) directly */
+            ST_double *ZeY = (ST_double *)calloc(L * K_endog, sizeof(ST_double));
+            for (ST_int l = 0; l < L; l++) {
+                for (ST_int e = 0; e < K_endog; e++) {
+                    ST_double sum = 0.0;
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        ST_double z_val = Z[(K_exog + l) * N + i];  /* excluded instrument */
+                        ST_double y_val = X_endog[e * N + i];       /* endogenous */
+                        sum += w * z_val * y_val;
+                    }
+                    ZeY[e * L + l] = sum;
+                }
+            }
+
+            /* Invert YtY */
+            ST_double *YtY_inv = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+            memcpy(YtY_inv, YtY, K_endog * K_endog * sizeof(ST_double));
+            ST_int yy_ok = (cholesky(YtY_inv, K_endog) == 0);
+            if (yy_ok) yy_ok = (invert_from_cholesky(YtY_inv, K_endog, YtY_inv) == 0);
+
+            /* Invert ZeZe */
+            ST_double *ZeZe_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
+            memcpy(ZeZe_inv, ZeZe, L * L * sizeof(ST_double));
+            ST_int zz_ok = (cholesky(ZeZe_inv, L) == 0);
+            if (zz_ok) zz_ok = (invert_from_cholesky(ZeZe_inv, L, ZeZe_inv) == 0);
+
+            if (verbose) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "  Multiple endog: K_endog=%d, L=%d, K_exog=%d\n",
+                         K_endog, L, K_exog);
+                SF_display(buf);
+                snprintf(buf, sizeof(buf), "  YtY[0,0]=%g, ZeZe[0,0]=%g, ZeY[0,0]=%g\n",
+                         YtY[0], ZeZe[0], ZeY[0]);
+                SF_display(buf);
+                snprintf(buf, sizeof(buf), "  yy_ok=%d, zz_ok=%d\n", yy_ok, zz_ok);
+                SF_display(buf);
+            }
+
+            if (yy_ok && zz_ok) {
+                /* For canonical correlations, we need eigenvalues of the SYMMETRIC matrix:
+                   M = (Y'Y)^{-1/2} * (Y'Z) * (Z'Z)^{-1} * (Z'Y) * (Y'Y)^{-1/2}
+                   The eigenvalues are the squared canonical correlations.
+                */
+
+                /* Step 1: Compute (Y'Y)^{-1/2} */
+                ST_double *YtY_inv_half = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+                matpowersym_neg_half(YtY, K_endog, YtY_inv_half);
+
+                /* Step 2: Compute temp1 = inv(ZeZe) * ZeY (L x K_endog) */
+                ST_double *temp1_mat = (ST_double *)calloc(L * K_endog, sizeof(ST_double));
+                for (ST_int e = 0; e < K_endog; e++) {
+                    for (ST_int l1 = 0; l1 < L; l1++) {
+                        ST_double sum = 0.0;
+                        for (ST_int l2 = 0; l2 < L; l2++) {
+                            sum += ZeZe_inv[l2 * L + l1] * ZeY[e * L + l2];
+                        }
+                        temp1_mat[e * L + l1] = sum;
+                    }
+                }
+
+                /* Step 3: temp2 = ZeY' * temp1 = Y'Ze * inv(ZeZe) * ZeY (K_endog x K_endog) */
+                ST_double *temp2_mat = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+                for (ST_int e1 = 0; e1 < K_endog; e1++) {
+                    for (ST_int e2 = 0; e2 < K_endog; e2++) {
+                        ST_double sum = 0.0;
+                        for (ST_int l = 0; l < L; l++) {
+                            sum += ZeY[e1 * L + l] * temp1_mat[e2 * L + l];
+                        }
+                        temp2_mat[e2 * K_endog + e1] = sum;
+                    }
+                }
+
+                /* Step 4: Compute M = YtY_inv_half * temp2 * YtY_inv_half (symmetric)
+                   First: temp3 = temp2 * YtY_inv_half */
+                ST_double *temp3_mat = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+                for (ST_int e1 = 0; e1 < K_endog; e1++) {
+                    for (ST_int e2 = 0; e2 < K_endog; e2++) {
+                        ST_double sum = 0.0;
+                        for (ST_int e3 = 0; e3 < K_endog; e3++) {
+                            sum += temp2_mat[e3 * K_endog + e1] * YtY_inv_half[e2 * K_endog + e3];
+                        }
+                        temp3_mat[e2 * K_endog + e1] = sum;
+                    }
+                }
+
+                /* M = YtY_inv_half * temp3 */
+                ST_double *M = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
+                for (ST_int e1 = 0; e1 < K_endog; e1++) {
+                    for (ST_int e2 = 0; e2 < K_endog; e2++) {
+                        ST_double sum = 0.0;
+                        for (ST_int e3 = 0; e3 < K_endog; e3++) {
+                            sum += YtY_inv_half[e3 * K_endog + e1] * temp3_mat[e2 * K_endog + e3];
+                        }
+                        M[e2 * K_endog + e1] = sum;
+                    }
+                }
+
+                if (verbose) {
+                    char buf[256];
+                    snprintf(buf, sizeof(buf), "  M[0,0]=%g, M[0,1]=%g, M[1,0]=%g, M[1,1]=%g\n",
+                             M[0], M[K_endog], M[1], M[K_endog + 1]);
+                    SF_display(buf);
+                }
+
+                /* Step 5: Compute eigenvalues of symmetric M */
+                ST_double *eigenvalues = (ST_double *)calloc(K_endog, sizeof(ST_double));
+                jacobi_eigenvalues(M, K_endog, eigenvalues);
+
+                if (verbose) {
+                    char buf[256];
+                    for (ST_int e = 0; e < K_endog; e++) {
+                        snprintf(buf, sizeof(buf), "  eigenvalue[%d] = %g\n", e, eigenvalues[e]);
+                        SF_display(buf);
+                    }
+                }
+
+                /* Find minimum eigenvalue */
+                ST_double min_eval = eigenvalues[0];
+                for (ST_int e = 1; e < K_endog; e++) {
+                    if (eigenvalues[e] < min_eval) min_eval = eigenvalues[e];
+                }
+
+                /* Anderson canonical correlation LM statistic for testing rank=0:
+                   LM = N * min_eigenvalue (the minimum squared canonical correlation)
+                   Reference: Anderson (1984), Cragg & Donald (1993) */
+                underid_stat = (ST_double)N * min_eval;
+
+                /* Degrees of freedom = (L - K_endog + 1) */
+                underid_df = L - K_endog + 1;
+                if (underid_df < 1) underid_df = 1;
+
+                /* Cragg-Donald Wald F statistic for multiple endogenous:
+                   From ivreg2.ado line 1688:
+                   cdf = cd * (N - sdofminus - iv1_ct - dofminus) / exex1_ct
+                   where cd = min_eval / (1 - min_eval) (transformed eigenvalue)
+
+                   In our notation:
+                   - sdofminus = df_a (absorbed FE degrees of freedom)
+                   - iv1_ct = K_iv (total instruments)
+                   - dofminus = 0 for homoskedastic case
+                   - exex1_ct = L (excluded instruments)
+
+                   So: cdf = (min_eval / (1 - min_eval)) * (N - df_a - K_iv) / L
+                */
+                ST_int df_cd = N - df_a - K_iv;
+                if (df_cd <= 0) df_cd = 1;
+                if (min_eval > 0.0 && min_eval < 1.0) {
+                    ST_double cd = min_eval / (1.0 - min_eval);
+                    cd_f = cd * ((ST_double)df_cd / (ST_double)L);
+                }
+
+                if (vce_type != 0) {
+                    kp_f = cd_f;  /* Placeholder */
+                }
+
+                free(eigenvalues);
+                free(M);
+                free(temp3_mat);
+                free(temp2_mat);
+                free(temp1_mat);
+                free(YtY_inv_half);
+            }
+
+            free(ZeZe_inv);
+            free(ZeZe);
+            free(ZeY);
+            free(YtY_inv);
+            free(YtY);
         }
     }
 
@@ -1457,7 +1648,9 @@ ST_retcode compute_2sls(
         }
 
         if (vce_type == 0) {
-            /* Sargan statistic: r'Z(Z'Z)^-1 Z'r / σ² */
+            /* Sargan statistic: N * r'Z(Z'Z)^-1 Z'r / e'e
+               Reference: Sargan (1958), ivreg2 implementation
+               Note: Uses N / rss, not 1 / sigma2 (df_r / rss) */
             /* Compute (Z'Z)^-1 Z'r */
             ST_double *ZtZ_inv_Ztr = (ST_double *)calloc(K_iv, sizeof(ST_double));
             for (i = 0; i < K_iv; i++) {
@@ -1468,13 +1661,14 @@ ST_retcode compute_2sls(
                 ZtZ_inv_Ztr[i] = sum;
             }
 
-            /* Compute Z'r' * (Z'Z)^-1 * Z'r */
+            /* Compute Z'r' * (Z'Z)^-1 * Z'r = r'P_Z r */
             ST_double quad_form = 0.0;
             for (i = 0; i < K_iv; i++) {
                 quad_form += Ztr[i] * ZtZ_inv_Ztr[i];
             }
 
-            sargan_stat = quad_form / sigma2;
+            /* Sargan = N * r'P_Z r / rss */
+            sargan_stat = (ST_double)N * quad_form / rss;
             free(ZtZ_inv_Ztr);
 
         } else {

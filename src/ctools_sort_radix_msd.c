@@ -58,29 +58,10 @@
 /*
     NOTE: Aligned memory allocation is now provided by ctools_config.h
     Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+
+    NOTE: Double-to-sortable conversion is now provided by ctools_types.h
+    Use ctools_double_to_sortable(d, SF_is_missing(d)) for sorting doubles.
 */
-
-/*
-    Convert IEEE 754 double to sortable uint64.
-    Same transformation as LSD for consistency.
-*/
-static inline uint64_t msd_double_to_sortable(double d)
-{
-    uint64_t bits;
-    memcpy(&bits, &d, sizeof(bits));
-
-    if (SF_is_missing(d)) {
-        return UINT64_MAX;
-    }
-
-    if (bits & ((uint64_t)1 << 63)) {
-        bits = ~bits;
-    } else {
-        bits ^= ((uint64_t)1 << 63);
-    }
-
-    return bits;
-}
 
 /* ============================================================================
    Reusable Context for Parallel MSD Sort
@@ -620,7 +601,7 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
     #pragma omp parallel for if(data->nobs >= MSD_PARALLEL_HIST_THRESHOLD)
     #endif
     for (i = 0; i < data->nobs; i++) {
-        keys[i] = msd_double_to_sortable(dbl_data[i]);
+        keys[i] = ctools_double_to_sortable(dbl_data[i], SF_is_missing(dbl_data[i]));
     }
 
     /* Decide on parallel sort */

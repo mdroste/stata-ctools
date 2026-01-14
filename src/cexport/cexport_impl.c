@@ -40,16 +40,22 @@
 
 #include "stplugin.h"
 #include "ctools_types.h"
+#include "ctools_config.h"
 #include "ctools_timer.h"
 #include "cexport_impl.h"
 
 /* ========================================================================
    Configuration Constants
+   Use shared constants from ctools_config.h where applicable.
    ======================================================================== */
 
-#define CEXPORT_IO_BUFFER_SIZE   (64 * 1024)   /* 64KB I/O buffer */
-#define CEXPORT_CHUNK_SIZE       10000          /* Rows per parallel chunk */
-#define CEXPORT_MAX_THREADS      16             /* Maximum formatting threads */
+/* Shared constants (from ctools_config.h):
+   - CTOOLS_IO_BUFFER_SIZE: I/O buffer size (64KB)
+   - CTOOLS_EXPORT_CHUNK_SIZE: rows per parallel chunk (10K)
+   - CTOOLS_IO_MAX_THREADS: max threads for I/O (16)
+*/
+
+/* Local constants specific to cexport */
 #define CEXPORT_DBL_BUFFER_SIZE  32             /* Buffer for double formatting */
 #define CEXPORT_INITIAL_ROW_BUF  4096           /* Initial row buffer size */
 
@@ -113,50 +119,16 @@ static inline bool is_stata_missing(double val)
 }
 
 /*
-    Fast unsigned integer to string conversion.
-    Writes digits in reverse order then reverses.
-    Returns: number of characters written
+    NOTE: Integer-to-string conversion functions are now provided by ctools_types.h:
+    - ctools_uctools_int64_to_str()
+    - ctools_ctools_int64_to_str()
+    - ctools_ctools_uint64_to_str_fast()
 */
-static inline int uint64_to_str(uint64_t val, char *buf)
-{
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-
-    char tmp[24];
-    int len = 0;
-
-    while (val > 0) {
-        tmp[len++] = '0' + (val % 10);
-        val /= 10;
-    }
-
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
-    buf[len] = '\0';
-    return len;
-}
 
 /*
-    Fast signed integer to string conversion.
-    Returns: number of characters written
-*/
-static inline int int64_to_str(int64_t val, char *buf)
-{
-    if (val < 0) {
-        buf[0] = '-';
-        return 1 + uint64_to_str((uint64_t)(-val), buf + 1);
-    }
-    return uint64_to_str((uint64_t)val, buf);
-}
-
-/*
-    Two-digit lookup table for fast digit pair output.
+    Two-digit lookup table for fast digit pair output in format_decimal_fast.
     "00", "01", "02", ... "99"
+    Kept local for specialized fractional digit formatting.
 */
 static const char DIGIT_PAIRS[200] = {
     '0','0', '0','1', '0','2', '0','3', '0','4', '0','5', '0','6', '0','7', '0','8', '0','9',
@@ -170,46 +142,6 @@ static const char DIGIT_PAIRS[200] = {
     '8','0', '8','1', '8','2', '8','3', '8','4', '8','5', '8','6', '8','7', '8','8', '8','9',
     '9','0', '9','1', '9','2', '9','3', '9','4', '9','5', '9','6', '9','7', '9','8', '9','9'
 };
-
-/*
-    Fast unsigned integer to string using digit pair table.
-    Returns: number of characters written
-*/
-static inline int uint64_to_str_fast(uint64_t val, char *buf)
-{
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-
-    char tmp[24];
-    int len = 0;
-
-    /* Process two digits at a time using lookup table */
-    while (val >= 100) {
-        int idx = (val % 100) * 2;
-        val /= 100;
-        tmp[len++] = DIGIT_PAIRS[idx + 1];
-        tmp[len++] = DIGIT_PAIRS[idx];
-    }
-
-    /* Handle remaining 1-2 digits */
-    if (val >= 10) {
-        int idx = val * 2;
-        tmp[len++] = DIGIT_PAIRS[idx + 1];
-        tmp[len++] = DIGIT_PAIRS[idx];
-    } else {
-        tmp[len++] = '0' + val;
-    }
-
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
-    buf[len] = '\0';
-    return len;
-}
 
 /*
     Fast decimal formatting with full double precision (15 significant digits).
@@ -238,7 +170,7 @@ static int format_decimal_fast(double val, char *buf)
     uint64_t int_part = (uint64_t)int_part_d;
 
     /* Format integer part */
-    pos += uint64_to_str_fast(int_part, buf + pos);
+    pos += ctools_uint64_to_str_fast(int_part, buf + pos);
 
     /* Handle fractional part - use 15 decimal places for full precision */
     if (frac_part > 5e-16) {
@@ -331,7 +263,7 @@ static int double_to_str(double val, char *buf, int buf_size, bool missing_as_do
      * This handles ~80% of typical Stata data (IDs, counts, years, etc.)
      */
     if (val == (double)(int64_t)val && val >= -9007199254740992.0 && val <= 9007199254740992.0) {
-        return int64_to_str((int64_t)val, buf);
+        return ctools_int64_to_str((int64_t)val, buf);
     }
 
     /* FAST DECIMAL PATH: Use custom formatter for normal-range decimals
@@ -875,7 +807,7 @@ ST_retcode cexport_main(const char *args)
     }
 
     /* Set large buffer for better I/O performance */
-    setvbuf(g_ctx.fp, NULL, _IOFBF, CEXPORT_IO_BUFFER_SIZE);
+    setvbuf(g_ctx.fp, NULL, _IOFBF, CTOOLS_IO_BUFFER_SIZE);
 
     if (g_ctx.write_header) {
         if (write_header(g_ctx.fp) != 0) {
@@ -891,17 +823,17 @@ ST_retcode cexport_main(const char *args)
     t_phase = ctools_timer_seconds();
 
     /* Determine number of chunks and threads */
-    size_t num_chunks = (nobs + CEXPORT_CHUNK_SIZE - 1) / CEXPORT_CHUNK_SIZE;
+    size_t num_chunks = (nobs + CTOOLS_EXPORT_CHUNK_SIZE - 1) / CTOOLS_EXPORT_CHUNK_SIZE;
     size_t num_threads = num_chunks;
-    if (num_threads > CEXPORT_MAX_THREADS) num_threads = CEXPORT_MAX_THREADS;
+    if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
     if (num_threads < 1) num_threads = 1;
 
     /* Estimate buffer size per chunk (generous estimate) */
     size_t avg_row_size = nvars * 20 + nvars; /* ~20 chars per field + delimiters */
-    size_t chunk_buffer_size = CEXPORT_CHUNK_SIZE * avg_row_size * 2; /* 2x safety margin */
+    size_t chunk_buffer_size = CTOOLS_EXPORT_CHUNK_SIZE * avg_row_size * 2; /* 2x safety margin */
 
     /* For small datasets, use single-threaded approach */
-    if (nobs < CEXPORT_CHUNK_SIZE || num_threads == 1) {
+    if (nobs < CTOOLS_EXPORT_CHUNK_SIZE || num_threads == 1) {
         /* Single-threaded: format and write directly */
         char *row_buf = (char *)malloc(avg_row_size * 4);
         if (row_buf == NULL) {
@@ -980,8 +912,8 @@ ST_retcode cexport_main(const char *args)
             /* Launch threads for this batch */
             for (size_t t = 0; t < batch_size; t++) {
                 size_t c = chunk_idx + t;
-                chunk_args[t].start_row = c * CEXPORT_CHUNK_SIZE;
-                chunk_args[t].end_row = (c + 1) * CEXPORT_CHUNK_SIZE;
+                chunk_args[t].start_row = c * CTOOLS_EXPORT_CHUNK_SIZE;
+                chunk_args[t].end_row = (c + 1) * CTOOLS_EXPORT_CHUNK_SIZE;
                 if (chunk_args[t].end_row > nobs) chunk_args[t].end_row = nobs;
                 chunk_args[t].output_buffer = chunk_buffers[t];
                 chunk_args[t].buffer_size = chunk_buffer_size;

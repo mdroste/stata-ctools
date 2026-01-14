@@ -1,0 +1,489 @@
+/*
+    civreghdfe_vce.c
+    Variance-Covariance Estimation for IV Regression
+
+    Implements unadjusted, robust (HC), clustered, and HAC VCE
+    for k-class IV estimators.
+*/
+
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <omp.h>
+
+#include "civreghdfe_vce.h"
+#include "civreghdfe_matrix.h"
+
+/* Forward declarations from creghdfe_solver */
+extern int cholesky(double *A, int K);
+extern int invert_from_cholesky(const double *L, int K, double *A_inv);
+
+/*
+    Compute unadjusted VCE for k-class estimator.
+*/
+void ivvce_compute_unadjusted(
+    const ST_double *XkX_inv,
+    ST_double rss,
+    ST_int df_r,
+    ST_int K_total,
+    ST_double *V
+)
+{
+    ST_int i;
+    ST_double sigma2 = rss / df_r;
+
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = sigma2 * XkX_inv[i];
+    }
+}
+
+/*
+    Compute robust (HC1) VCE for k-class estimator.
+*/
+void ivvce_compute_robust(
+    IVEstContext *ctx,
+    const ST_double *resid,
+    const ST_double *XkX_inv,
+    ST_int df_a,
+    ST_double *V
+)
+{
+    ST_int N = ctx->N;
+    ST_int K_total = ctx->K_total;
+    ST_int K_iv = ctx->K_iv;
+    ST_int i, j, k;
+
+    ST_int df_r = N - K_total - df_a;
+    if (df_r <= 0) df_r = 1;
+
+    /* HC1 DOF adjustment */
+    ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+
+    /* Compute P_Z X = Z(Z'Z)^-1 Z'X using pre-computed matrices */
+    /* PzX = Z * temp_kiv_ktotal where temp = (Z'Z)^-1 Z'X */
+    /* Note: This requires Z matrix - for now, compute meat directly */
+
+    /* Allocate meat matrix */
+    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!meat) return;
+
+    /* For robust VCE without Z, we use the sandwich with X'P_Z X */
+    /* This is an approximation - full implementation needs Z */
+
+    /* Compute temp = XkX_inv * meat */
+    ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!temp_v) {
+        free(meat);
+        return;
+    }
+
+    /* For now, use scaled unadjusted VCE as approximation */
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = XkX_inv[i] * dof_adj;
+    }
+
+    free(meat);
+    free(temp_v);
+}
+
+/*
+    Compute clustered VCE for k-class estimator.
+*/
+void ivvce_compute_cluster(
+    IVEstContext *ctx,
+    const ST_double *resid,
+    const ST_double *XkX_inv,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_int df_a,
+    ST_int nested_adj,
+    ST_double *V
+)
+{
+    ST_int N = ctx->N;
+    ST_int K_total = ctx->K_total;
+    ST_int i, j, k;
+
+    /* Cluster DOF adjustment:
+       dof_adj = (N-1)/(N - K_total - effective_df_a) * G/(G-1) */
+    ST_int effective_df_a = df_a;
+    if (df_a == 0 && nested_adj == 1) {
+        effective_df_a = 1;
+    }
+    ST_double denom = (ST_double)(N - K_total - effective_df_a);
+    if (denom <= 0) denom = 1.0;
+    ST_double G = (ST_double)num_clusters;
+    ST_double dof_adj = ((ST_double)(N - 1) / denom) * (G / (G - 1.0));
+
+    /* Allocate cluster sums and meat matrix */
+    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!meat) return;
+
+    /* Note: Full implementation requires Z matrix for P_Z X computation */
+    /* For now, provide scaled approximation */
+
+    /* Compute V = XkX_inv * meat * XkX_inv * dof_adj */
+    ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!temp_v) {
+        free(meat);
+        return;
+    }
+
+    /* Approximate with scaled unadjusted */
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = XkX_inv[i] * dof_adj;
+    }
+
+    free(meat);
+    free(temp_v);
+}
+
+/*
+    Compute HAC VCE.
+*/
+void ivvce_compute_hac(
+    IVEstContext *ctx,
+    const ST_double *resid,
+    const ST_double *XkX_inv,
+    ST_int kernel_type,
+    ST_int bw,
+    ST_int df_a,
+    ST_double *V
+)
+{
+    ST_int N = ctx->N;
+    ST_int K_total = ctx->K_total;
+    ST_int i;
+
+    ST_int df_r = N - K_total - df_a;
+    if (df_r <= 0) df_r = 1;
+    ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+
+    /* HAC requires time-series data structure */
+    /* Full implementation deferred - use robust approximation */
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = XkX_inv[i] * dof_adj;
+    }
+}
+
+/*
+    Compute efficient GMM2S VCE.
+*/
+void ivvce_compute_gmm2s(
+    const ST_double *XZWZX_inv,
+    ST_int K_total,
+    ST_double *V
+)
+{
+    ST_int i;
+    /* For efficient GMM, V = (X'ZWZ'X)^-1 */
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = XZWZX_inv[i];
+    }
+}
+
+/*
+    Compute Z'ΩZ matrix for heteroskedastic case.
+*/
+void ivvce_compute_ZOmegaZ_robust(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_iv,
+    ST_double *ZOmegaZ
+)
+{
+    ST_int i, j, k;
+
+    memset(ZOmegaZ, 0, K_iv * K_iv * sizeof(ST_double));
+
+    for (i = 0; i < N; i++) {
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        ST_double e2 = w * resid[i] * resid[i];
+        for (j = 0; j < K_iv; j++) {
+            for (k = 0; k <= j; k++) {
+                ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                ZOmegaZ[j * K_iv + k] += contrib;
+                if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+            }
+        }
+    }
+}
+
+/*
+    Compute Z'ΩZ matrix for cluster case.
+*/
+void ivvce_compute_ZOmegaZ_cluster(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *weights,
+    ST_int weight_type,
+    const ST_int *cluster_ids,
+    ST_int N,
+    ST_int K_iv,
+    ST_int num_clusters,
+    ST_double *ZOmegaZ
+)
+{
+    ST_int i, j, k, c;
+
+    memset(ZOmegaZ, 0, K_iv * K_iv * sizeof(ST_double));
+
+    /* Allocate per-cluster Z'e sums */
+    ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+    if (!cluster_ze) return;
+
+    /* Sum Z_i * e_i within each cluster */
+    for (i = 0; i < N; i++) {
+        c = cluster_ids[i] - 1;  /* 1-indexed to 0-indexed */
+        if (c < 0 || c >= num_clusters) continue;
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        ST_double we = w * resid[i];
+        for (j = 0; j < K_iv; j++) {
+            cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+        }
+    }
+
+    /* Compute outer products: Z'ΩZ = sum_c (ze_c)(ze_c)' */
+    for (c = 0; c < num_clusters; c++) {
+        for (j = 0; j < K_iv; j++) {
+            for (k = 0; k <= j; k++) {
+                ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                ZOmegaZ[j * K_iv + k] += contrib;
+                if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+            }
+        }
+    }
+
+    free(cluster_ze);
+}
+
+/*
+    Full VCE computation with P_Z X calculation.
+
+    This is the main entry point for VCE computation when Z is available.
+
+    Parameters:
+    - Z: Instruments (N x K_iv)
+    - resid: Residuals (N x 1)
+    - temp_kiv_ktotal: (Z'Z)^-1 Z'X (K_iv x K_total)
+    - XkX_inv: Inverse of k-class matrix (K_total x K_total)
+    - weights, weight_type: Weighting
+    - N, K_total, K_iv: Dimensions
+    - vce_type: CIVREGHDFE_VCE_* constant
+    - cluster_ids, num_clusters: Clustering info
+    - df_a, nested_adj: DOF adjustments
+    - kernel_type, bw: HAC parameters
+    - V: Output VCE matrix (K_total x K_total)
+*/
+void ivvce_compute_full(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *temp_kiv_ktotal,
+    const ST_double *XkX_inv,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_total,
+    ST_int K_iv,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_int df_a,
+    ST_int nested_adj,
+    ST_int kernel_type,
+    ST_int bw,
+    ST_double *V
+)
+{
+    ST_int i, j, k;
+
+    /* Compute residual sum of squares */
+    ST_double rss = 0.0;
+    if (weights && weight_type != 0) {
+        for (i = 0; i < N; i++) {
+            rss += weights[i] * resid[i] * resid[i];
+        }
+    } else {
+        for (i = 0; i < N; i++) {
+            rss += resid[i] * resid[i];
+        }
+    }
+
+    ST_int df_r = N - K_total - df_a;
+    if (df_r <= 0) df_r = 1;
+
+    if (vce_type == CIVREGHDFE_VCE_UNADJUSTED) {
+        /* Unadjusted: V = sigma^2 * XkX_inv */
+        ST_double sigma2 = rss / df_r;
+        for (i = 0; i < K_total * K_total; i++) {
+            V[i] = sigma2 * XkX_inv[i];
+        }
+        return;
+    }
+
+    /* Compute P_Z X = Z * (Z'Z)^-1 Z'X = Z * temp_kiv_ktotal */
+    ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+    if (!PzX) return;
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < K_total; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K_iv; k++) {
+                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
+            }
+            PzX[j * N + i] = sum;
+        }
+    }
+
+    /* Compute meat matrix based on VCE type */
+    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!meat) {
+        free(PzX);
+        return;
+    }
+
+    if (vce_type == CIVREGHDFE_VCE_CLUSTER && cluster_ids && num_clusters > 0) {
+        /* Clustered VCE */
+        ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
+        if (!cluster_sums) {
+            free(PzX); free(meat);
+            return;
+        }
+
+        /* Sum (PzX_i * e_i) within each cluster */
+        for (i = 0; i < N; i++) {
+            ST_int c = cluster_ids[i] - 1;
+            if (c < 0 || c >= num_clusters) continue;
+            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+            ST_double we = w * resid[i];
+            for (j = 0; j < K_total; j++) {
+                cluster_sums[c * K_total + j] += PzX[j * N + i] * we;
+            }
+        }
+
+        /* Compute meat: sum over clusters of outer products */
+        for (ST_int c = 0; c < num_clusters; c++) {
+            for (j = 0; j < K_total; j++) {
+                for (k = 0; k <= j; k++) {
+                    ST_double contrib = cluster_sums[c * K_total + j] * cluster_sums[c * K_total + k];
+                    meat[j * K_total + k] += contrib;
+                    if (k != j) meat[k * K_total + j] += contrib;
+                }
+            }
+        }
+
+        free(cluster_sums);
+
+        /* DOF adjustment */
+        ST_int effective_df_a = df_a;
+        if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
+        ST_double denom = (ST_double)(N - K_total - effective_df_a);
+        if (denom <= 0) denom = 1.0;
+        ST_double G = (ST_double)num_clusters;
+        ST_double dof_adj = ((ST_double)(N - 1) / denom) * (G / (G - 1.0));
+
+        /* V = XkX_inv * meat * XkX_inv * dof_adj */
+        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (temp_v) {
+            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            for (i = 0; i < K_total * K_total; i++) {
+                V[i] *= dof_adj;
+            }
+            free(temp_v);
+        }
+
+    } else if (kernel_type > 0 && bw > 0) {
+        /* HAC VCE */
+        ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+        if (!u) {
+            free(PzX); free(meat);
+            return;
+        }
+
+        /* Compute u_i = PzX_i * e_i */
+        for (i = 0; i < N; i++) {
+            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+            ST_double we = w * resid[i];
+            for (j = 0; j < K_total; j++) {
+                u[j * N + i] = PzX[j * N + i] * we;
+            }
+        }
+
+        /* Sum over all lag pairs with kernel weights */
+        for (ST_int lag = 0; lag <= bw; lag++) {
+            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+            if (kw < 1e-10) continue;
+
+            if (lag == 0) {
+                for (i = 0; i < N; i++) {
+                    for (j = 0; j < K_total; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = kw * u[j * N + i] * u[k * N + i];
+                            meat[j * K_total + k] += contrib;
+                            if (k != j) meat[k * K_total + j] += contrib;
+                        }
+                    }
+                }
+            } else {
+                for (i = 0; i < N - lag; i++) {
+                    for (j = 0; j < K_total; j++) {
+                        for (k = 0; k < K_total; k++) {
+                            ST_double contrib = kw * (u[j * N + i] * u[k * N + (i + lag)] +
+                                                      u[j * N + (i + lag)] * u[k * N + i]);
+                            meat[k * K_total + j] += contrib;
+                        }
+                    }
+                }
+            }
+        }
+
+        free(u);
+
+        /* HC1 adjustment and sandwich */
+        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (temp_v) {
+            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            for (i = 0; i < K_total * K_total; i++) {
+                V[i] *= dof_adj;
+            }
+            free(temp_v);
+        }
+
+    } else {
+        /* Standard HC robust */
+        for (i = 0; i < N; i++) {
+            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+            ST_double we = w * resid[i];
+            for (j = 0; j < K_total; j++) {
+                for (k = 0; k <= j; k++) {
+                    ST_double contrib = PzX[j * N + i] * we * PzX[k * N + i] * resid[i];
+                    meat[j * K_total + k] += contrib;
+                    if (k != j) meat[k * K_total + j] += contrib;
+                }
+            }
+        }
+
+        /* HC1 adjustment */
+        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+
+        /* V = XkX_inv * meat * XkX_inv * dof_adj */
+        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (temp_v) {
+            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            for (i = 0; i < K_total * K_total; i++) {
+                V[i] *= dof_adj;
+            }
+            free(temp_v);
+        }
+    }
+
+    free(PzX);
+    free(meat);
+}

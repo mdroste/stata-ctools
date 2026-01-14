@@ -365,8 +365,8 @@ Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
                                          25% maximal IV size              7.25
 Source: Stock-Yogo (2005).  Reproduced by permission.
 ------------------------------------------------------------------------------
-Sargan statistic (overidentification test of all instruments):           9.005
-                                                 Chi-sq(1) P-val =   0.0027
+Sargan statistic (overidentification test of all instruments):           9.386
+                                                   Chi-sq(1) P-val =    0.0022
 ------------------------------------------------------------------------------
 Instrumented:         mpg
 Excluded instruments: weight length
@@ -527,7 +527,7 @@ Residual SS             =  545772312.9                Root MSE      =     2773
 -------------+----------------------------------------------------------------
          mpg |  -504.0671   95.99555    -5.25   0.000    -695.4768   -312.6574
 ------------------------------------------------------------------------------
-Underidentification test (Kleibergen-Paap rk LM statistic):             20.723
+Underidentification test (Kleibergen-Paap rk LM statistic):             21.299
                                                    Chi-sq(1) P-val =    0.0000
 ------------------------------------------------------------------------------
 Weak identification test (Cragg-Donald Wald F statistic):              106.920
@@ -536,8 +536,8 @@ Stock-Yogo weak ID test critical values: 10% maximal IV size             16.38
                                          15% maximal IV size              8.96
                                          20% maximal IV size              6.66
                                          25% maximal IV size              5.53
-NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
 Source: Stock-Yogo (2005).  Reproduced by permission.
+NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
 ------------------------------------------------------------------------------
 Hansen J statistic (overidentification test of all instruments):         0.000
                                                  (equation exactly identified)
@@ -565,7 +565,7 @@ Absorbed degrees of freedom:
 civreghdfe results (robust):
 
 . di as text "  idstat = " e(idstat)
-  idstat = 20.72311
+  idstat = 21.298751
 
 . di as text "  cd_f = " e(cd_f)
   cd_f = 106.9201
@@ -592,7 +592,7 @@ COMPARISON:
 
 . di as text "  underid stat: ivreghdfe=" `iv_idstat' " civreghdfe=" `civ_idsta
 > t' " diff=" (`iv_idstat' - `civ_idstat')
-  underid stat: ivreghdfe=21.298751 civreghdfe=20.72311 diff=.57564193
+  underid stat: ivreghdfe=21.298751 civreghdfe=21.298751 diff=3.908e-14
 
 . di as text "  weak ID F (KP): ivreghdfe=" `iv_widstat' " civreghdfe=" `civ_wi
 > dstat' " diff=" (`iv_widstat' - `civ_widstat')
@@ -708,18 +708,18 @@ Residual SS             =  2219486457.9               Root MSE      =     5631
          mpg |   1540.245   1460.649     1.05   0.295    -1372.927    4453.417
       weight |   13.69941   10.09124     1.36   0.179    -6.426925    33.82574
 ------------------------------------------------------------------------------
-Underidentification test (Anderson canon. corr. LM statistic):          43.860
-                                                   Chi-sq(3) P-val =    0.0000
+Underidentification test (Anderson canon. corr. LM statistic):           1.331
+                                                   Chi-sq(2) P-val =    0.5141
 ------------------------------------------------------------------------------
-Weak identification test (Cragg-Donald Wald F statistic):               33.470
+Weak identification test (Cragg-Donald Wald F statistic):                0.421
 Stock-Yogo weak ID test critical values: 10% maximal IV size             13.43
                                          15% maximal IV size              8.18
                                          20% maximal IV size              6.40
                                          25% maximal IV size              5.45
 Source: Stock-Yogo (2005).  Reproduced by permission.
 ------------------------------------------------------------------------------
-Sargan statistic (overidentification test of all instruments):           0.071
-                                                 Chi-sq(1) P-val =   0.7905
+Sargan statistic (overidentification test of all instruments):           0.075
+                                                   Chi-sq(1) P-val =    0.7847
 ------------------------------------------------------------------------------
 Instrumented:         mpg weight
 Excluded instruments: length turn displacement
@@ -744,10 +744,10 @@ Absorbed degrees of freedom:
 civreghdfe results (2 endog):
 
 . di as text "  idstat = " e(idstat)
-  idstat = 43.860052
+  idstat = 1.3307097
 
 . di as text "  cd_f = " e(cd_f)
-  cd_f = 33.469906
+  cd_f = .42117274
 
 . 
 . local civ_idstat = e(idstat)
@@ -763,11 +763,11 @@ COMPARISON:
 
 . di as text "  underid stat: ivreghdfe=" `iv_idstat' " civreghdfe=" `civ_idsta
 > t' " diff=" (`iv_idstat' - `civ_idstat')
-  underid stat: ivreghdfe=1.3307097 civreghdfe=43.860052 diff=-42.529343
+  underid stat: ivreghdfe=1.3307097 civreghdfe=1.3307097 diff=3.109e-15
 
 . di as text "  weak ID F:    ivreghdfe=" `iv_widstat' " civreghdfe=" `civ_cd_f
 > ' " diff=" (`iv_widstat' - `civ_cd_f')
-  weak ID F:    ivreghdfe=.42117274 civreghdfe=33.469906 diff=-33.048733
+  weak ID F:    ivreghdfe=.42117274 civreghdfe=.42117274 diff=9.437e-16
 
 . 
 . di as text ""

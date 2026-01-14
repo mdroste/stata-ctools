@@ -16,6 +16,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+#include <string.h>
 
 /*
     Return codes for all Stata-C operations.
@@ -196,5 +198,102 @@ typedef enum {
 // Wrapper function that dispatches to the appropriate sort implementation
 stata_retcode ctools_sort(stata_data *data, int *sort_vars, size_t nsort,
                           sort_algorithm_t algorithm);
+
+/* ---------------------------------------------------------------------------
+   Type Conversion Utilities
+
+   Shared functions for fast numeric/string conversion used across ctools.
+   These avoid sprintf/sscanf overhead for performance-critical code paths.
+   --------------------------------------------------------------------------- */
+
+/*
+    Convert double to sortable uint64 for radix sort.
+
+    IEEE 754 doubles don't sort correctly as raw bit patterns because:
+    - Negative numbers have sign bit set but are "less than" positive
+    - Negative numbers sort in reverse order when compared as unsigned
+
+    This function transforms the bit pattern so that:
+    - Positive numbers: flip sign bit (0x8000... becomes 0x0000...)
+    - Negative numbers: flip all bits (preserves ordering)
+    - Missing values: map to UINT64_MAX (sort to end)
+
+    @param d  Input double value
+    @param is_missing  If true, treat as Stata missing value
+    @return   Sortable uint64 representation
+*/
+static inline uint64_t ctools_double_to_sortable(double d, bool is_missing)
+{
+    uint64_t bits;
+    memcpy(&bits, &d, sizeof(bits));
+
+    /* Sort missing values to the end (largest possible value) */
+    if (is_missing) {
+        return UINT64_MAX;
+    }
+
+    /* If negative (sign bit set), flip all bits */
+    /* If positive, flip only the sign bit */
+    if (bits & ((uint64_t)1 << 63)) {
+        bits = ~bits;
+    } else {
+        bits ^= ((uint64_t)1 << 63);
+    }
+
+    return bits;
+}
+
+/*
+    Fast unsigned integer to string conversion.
+    Writes digits in reverse order then reverses.
+
+    @param val  Value to convert
+    @param buf  Output buffer (must hold at least 21 chars)
+    @return     Number of characters written (not including null terminator)
+*/
+int ctools_uint64_to_str(uint64_t val, char *buf);
+
+/*
+    Fast signed integer to string conversion.
+
+    @param val  Value to convert
+    @param buf  Output buffer (must hold at least 22 chars for sign + digits)
+    @return     Number of characters written (not including null terminator)
+*/
+int ctools_int64_to_str(int64_t val, char *buf);
+
+/*
+    Fast unsigned integer to string using digit pair lookup table.
+    Processes two digits at a time for ~2x speedup on large numbers.
+
+    @param val  Value to convert
+    @param buf  Output buffer (must hold at least 21 chars)
+    @return     Number of characters written (not including null terminator)
+*/
+int ctools_uint64_to_str_fast(uint64_t val, char *buf);
+
+/*
+    Fast string to double parser.
+    Handles integers, decimals, scientific notation, and common missing values.
+    Much faster than strtod/atof for typical numeric data.
+
+    Recognized missing value representations:
+    - Empty string or whitespace only
+    - "." (Stata missing)
+    - "NA", "na", "NaN", "nan"
+
+    @param str     Input string (not necessarily null-terminated)
+    @param len     Length of input string
+    @param result  Output: parsed double value (SV_missval for missing)
+    @param missval The value to use for missing (typically SV_missval from stplugin.h)
+    @return        true if successfully parsed, false if invalid format
+*/
+bool ctools_parse_double_fast(const char *str, int len, double *result, double missval);
+
+/*
+    Power of 10 lookup table for fast float parsing/formatting.
+    Covers 10^0 through 10^22 (full double precision range without overflow).
+*/
+extern const double ctools_pow10_table[23];
 
 #endif /* CTOOLS_TYPES_H */

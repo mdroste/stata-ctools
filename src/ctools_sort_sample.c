@@ -55,28 +55,10 @@
 /*
     NOTE: Aligned memory allocation is now provided by ctools_config.h
     Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+
+    NOTE: Double-to-sortable conversion is now provided by ctools_types.h
+    Use ctools_double_to_sortable(d, SF_is_missing(d)) for sorting doubles.
 */
-
-/*
-    Convert IEEE 754 double to sortable uint64.
-*/
-static inline uint64_t sample_double_to_sortable(double d)
-{
-    uint64_t bits;
-    memcpy(&bits, &d, sizeof(bits));
-
-    if (SF_is_missing(d)) {
-        return UINT64_MAX;
-    }
-
-    if (bits & ((uint64_t)1 << 63)) {
-        bits = ~bits;
-    } else {
-        bits ^= ((uint64_t)1 << 63);
-    }
-
-    return bits;
-}
 
 /* ============================================================================
    Optimized Radix Sort for Samples (replaces qsort)
@@ -824,7 +806,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
     dbl_data = data->vars[var_idx].data.dbl;
     #pragma omp parallel for
     for (size_t i = 0; i < data->nobs; i++) {
-        keys[i] = sample_double_to_sortable(dbl_data[i]);
+        keys[i] = ctools_double_to_sortable(dbl_data[i], SF_is_missing(dbl_data[i]));
     }
 
     /* Determine thread count */

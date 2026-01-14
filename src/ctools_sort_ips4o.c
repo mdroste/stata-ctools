@@ -58,22 +58,10 @@
 /*
     NOTE: Aligned memory allocation is now provided by ctools_config.h
     Use ctools_aligned_alloc() and ctools_aligned_free() for cross-platform support.
+
+    NOTE: Double-to-sortable conversion is now provided by ctools_types.h
+    Use ctools_double_to_sortable(d, SF_is_missing(d)) for sorting doubles.
 */
-
-/* Branchless double to sortable uint64 conversion */
-static IPS4O_INLINE uint64_t ips4o_double_to_sortable(double d)
-{
-    uint64_t bits;
-    memcpy(&bits, &d, sizeof(bits));
-
-    if (IPS4O_UNLIKELY(SF_is_missing(d))) {
-        return UINT64_MAX;
-    }
-
-    /* Branchless: mask = all 1s for negative, all 0s for positive */
-    uint64_t mask = (uint64_t)((int64_t)bits >> 63);
-    return bits ^ (mask | ((uint64_t)1 << 63));
-}
 
 /* ============================================================================
    Branchless Classifier
@@ -867,7 +855,7 @@ static stata_retcode ips4o_sort_by_numeric_var(stata_data *data, int var_idx)
     #pragma omp parallel for schedule(static)
     #endif
     for (size_t i = 0; i < nobs; i++) {
-        keys[i] = ips4o_double_to_sortable(dbl_data[i]);
+        keys[i] = ctools_double_to_sortable(dbl_data[i], SF_is_missing(dbl_data[i]));
     }
 
     stata_retcode rc;
