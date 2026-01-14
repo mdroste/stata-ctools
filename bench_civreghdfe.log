@@ -1,0 +1,169 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark/bench_civreghdfe.do 
+
+. * Benchmark script for civreghdfe optimization
+. * Tests with 10 million observations
+. 
+. clear all
+
+. set more off
+
+. set seed 12345
+
+. 
+. * Configuration
+. local N = 10000000  // 10 million observations
+
+. local n_fe = 10000  // Number of fixed effect groups
+
+. 
+. di as text "=============================================="
+==============================================
+
+. di as text "civreghdfe Benchmark"
+civreghdfe Benchmark
+
+. di as text "Observations: `N'"
+Observations: 10000000
+
+. di as text "FE groups: `n_fe'"
+FE groups: 10000
+
+. di as text "=============================================="
+==============================================
+
+. 
+. * Generate random data
+. di as text _n "Generating data..."
+
+Generating data...
+
+. timer clear 1
+
+. timer on 1
+
+. 
+. set obs `N'
+Number of observations (_N) was 0, now 10,000,000.
+
+. 
+. * Exogenous variables
+. gen x1 = rnormal()
+
+. gen x2 = rnormal()
+
+. 
+. * Instruments (for endogenous variable)
+. gen z1 = rnormal()
+
+. gen z2 = rnormal()
+
+. 
+. * Endogenous variable (correlated with error through omitted var)
+. gen omitted = rnormal()
+
+. gen endog = 0.5*z1 + 0.5*z2 + 0.3*omitted + rnormal()*0.5
+
+. 
+. * Fixed effects
+. gen fe1 = ceil(runiform() * `n_fe')
+
+. 
+. * Dependent variable
+. gen y = 1 + 2*x1 + 3*x2 + 4*endog + fe1/`n_fe' + omitted + rnormal()
+
+. 
+. timer off 1
+
+. timer list 1
+   1:      2.46 /        1 =       2.4600
+
+. di as text "Data generation time: " r(t1) " seconds"
+Data generation time: 2.46 seconds
+
+. 
+. * Compress to minimize memory
+. compress
+  variable fe1 was float now int
+  (20,000,000 bytes saved)
+
+. 
+. di as text _n "Data summary:"
+
+Data summary:
+
+. summarize y x1 x2 endog z1 z2 fe1
+
+    Variable |        Obs        Mean    Std. dev.       Min        Max
+-------------+---------------------------------------------------------
+           y | 10,000,000     1.49776    5.560673  -27.35102   30.49886
+          x1 | 10,000,000   -.0001634     .999707  -5.318903   5.008522
+          x2 | 10,000,000    .0001498     .999852  -5.307859   5.497898
+       endog | 10,000,000   -.0004325    .9165338  -4.817209   4.863731
+          z1 | 10,000,000    .0001645    .9998924  -4.950283    5.01095
+-------------+---------------------------------------------------------
+          z2 | 10,000,000   -.0002432    1.000188  -5.074681   5.366971
+         fe1 | 10,000,000    5001.195    2886.731          1      10000
+
+. 
+. * ============================================
+. * Benchmark civreghdfe
+. * ============================================
+. 
+. di as text _n "=============================================="
+
+==============================================
+
+. di as text "Running civreghdfe benchmark"
+Running civreghdfe benchmark
+
+. di as text "=============================================="
+==============================================
+
+. 
+. * Warm-up run (to load plugin)
+. di as text _n "Warm-up run (1M obs subset)..."
+
+Warm-up run (1M obs subset)...
+
+. preserve
+
+. keep if _n <= 1000000
+(9,000,000 observations deleted)
+
+. timer clear 2
+
+. timer on 2
+
+. quietly civreghdfe y x1 x2 (endog = z1 z2), absorb(fe1) verbose
+command civreghdfe is unrecognized
+r(199);
+
+end of do-file
+r(199);

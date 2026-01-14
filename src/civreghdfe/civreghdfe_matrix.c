@@ -4,13 +4,18 @@
 
     Helper functions for matrix multiplication, decomposition,
     eigenvalue computation, and linear algebra operations.
+
+    OPTIMIZED: Uses ctools_dot_unrolled for K-way unrolled dot products,
+    OpenMP parallelization, and restrict pointers for better performance.
 */
 
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <omp.h>
 
 #include "civreghdfe_matrix.h"
+#include "../ctools_unroll.h"
 
 /* Forward declarations for functions from creghdfe_solver */
 extern int cholesky(double *A, int K);
@@ -19,24 +24,25 @@ extern int invert_from_cholesky(const double *L, int K, double *A_inv);
 /*
     Matrix multiply C = A' * B
     A is N x K1, B is N x K2, Result C is K1 x K2
+
+    OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
 */
-void civreghdfe_matmul_atb(const ST_double *A, const ST_double *B,
+void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
                            ST_int N, ST_int K1, ST_int K2,
-                           ST_double *C)
+                           ST_double * restrict C)
 {
-    ST_int i, j, k;
+    ST_int i, j;
 
     memset(C, 0, K1 * K2 * sizeof(ST_double));
 
+    /* Parallelize over output columns when K2 is large enough */
+    #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
     for (j = 0; j < K2; j++) {
+        const ST_double * restrict b_col = B + j * N;
         for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            const ST_double *a_col = A + i * N;
-            const ST_double *b_col = B + j * N;
-            for (k = 0; k < N; k++) {
-                sum += a_col[k] * b_col[k];
-            }
-            C[j * K1 + i] = sum;  /* Column-major storage */
+            const ST_double * restrict a_col = A + i * N;
+            /* Use K-way unrolled dot product for the inner loop */
+            C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
         }
     }
 }
@@ -44,10 +50,12 @@ void civreghdfe_matmul_atb(const ST_double *A, const ST_double *B,
 /*
     Matrix multiply C = A * B
     A is K1 x K2, B is K2 x K3, Result C is K1 x K3
+
+    OPTIMIZED: Uses cache-friendly loop order and OpenMP parallelization
 */
-void civreghdfe_matmul_ab(const ST_double *A, const ST_double *B,
+void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restrict B,
                           ST_int K1, ST_int K2, ST_int K3,
-                          ST_double *C)
+                          ST_double * restrict C)
 {
     ST_int i, j, k;
 
@@ -57,43 +65,89 @@ void civreghdfe_matmul_ab(const ST_double *A, const ST_double *B,
     /* A is K1 x K2, stored column-major: A[i,k] = A[k*K1 + i] */
     /* B is K2 x K3, stored column-major: B[k,j] = B[j*K2 + k] */
     /* C is K1 x K3, stored column-major: C[i,j] = C[j*K1 + i] */
+
+    /* Reorder loops for better cache locality: k-j-i instead of j-i-k */
+    /* This allows sequential access to A columns and B columns */
+    #pragma omp parallel for schedule(static) if(K1 * K3 > 16)
     for (j = 0; j < K3; j++) {
-        for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K2; k++) {
-                sum += A[k * K1 + i] * B[j * K2 + k];
+        const ST_double * restrict b_col = B + j * K2;
+        ST_double * restrict c_col = C + j * K1;
+        for (k = 0; k < K2; k++) {
+            ST_double b_kj = b_col[k];
+            const ST_double * restrict a_col = A + k * K1;
+            #pragma omp simd
+            for (i = 0; i < K1; i++) {
+                c_col[i] += a_col[i] * b_kj;
             }
-            C[j * K1 + i] = sum;
         }
     }
 }
 
 /*
     Weighted matrix multiply C = A' * diag(w) * B
+
+    OPTIMIZED: Uses K-way unrolled weighted dot products and OpenMP parallelization
 */
-void civreghdfe_matmul_atdb(const ST_double *A, const ST_double *B,
-                            const ST_double *w, ST_int N, ST_int K1, ST_int K2,
-                            ST_double *C)
+void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
+                            const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
+                            ST_double * restrict C)
 {
-    ST_int i, j, k;
+    ST_int i, j;
 
     memset(C, 0, K1 * K2 * sizeof(ST_double));
 
-    for (j = 0; j < K2; j++) {
-        for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            const ST_double *a_col = A + i * N;
-            const ST_double *b_col = B + j * N;
-            if (w) {
-                for (k = 0; k < N; k++) {
-                    sum += a_col[k] * w[k] * b_col[k];
+    if (w) {
+        /* Weighted case: use unrolled weighted dot product */
+        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
+        for (j = 0; j < K2; j++) {
+            const ST_double * restrict b_col = B + j * N;
+            for (i = 0; i < K1; i++) {
+                const ST_double * restrict a_col = A + i * N;
+                /* K-way unrolled weighted dot product */
+                ST_int k;
+                CTOOLS_DECLARE_ACCUM(sum);
+                ST_int N_main = N - (N % CTOOLS_UNROLL_K);
+
+                for (k = 0; k < N_main; k += CTOOLS_UNROLL_K) {
+                    #if CTOOLS_UNROLL_K >= 4
+                    sum0 += a_col[k]     * w[k]     * b_col[k];
+                    sum1 += a_col[k + 1] * w[k + 1] * b_col[k + 1];
+                    sum2 += a_col[k + 2] * w[k + 2] * b_col[k + 2];
+                    sum3 += a_col[k + 3] * w[k + 3] * b_col[k + 3];
+                    #endif
+                    #if CTOOLS_UNROLL_K >= 8
+                    sum4 += a_col[k + 4] * w[k + 4] * b_col[k + 4];
+                    sum5 += a_col[k + 5] * w[k + 5] * b_col[k + 5];
+                    sum6 += a_col[k + 6] * w[k + 6] * b_col[k + 6];
+                    sum7 += a_col[k + 7] * w[k + 7] * b_col[k + 7];
+                    #endif
+                    #if CTOOLS_UNROLL_K >= 16
+                    sum8  += a_col[k + 8]  * w[k + 8]  * b_col[k + 8];
+                    sum9  += a_col[k + 9]  * w[k + 9]  * b_col[k + 9];
+                    sum10 += a_col[k + 10] * w[k + 10] * b_col[k + 10];
+                    sum11 += a_col[k + 11] * w[k + 11] * b_col[k + 11];
+                    sum12 += a_col[k + 12] * w[k + 12] * b_col[k + 12];
+                    sum13 += a_col[k + 13] * w[k + 13] * b_col[k + 13];
+                    sum14 += a_col[k + 14] * w[k + 14] * b_col[k + 14];
+                    sum15 += a_col[k + 15] * w[k + 15] * b_col[k + 15];
+                    #endif
                 }
-            } else {
-                for (k = 0; k < N; k++) {
-                    sum += a_col[k] * b_col[k];
+                /* Handle remainder */
+                for (; k < N; k++) {
+                    sum0 += a_col[k] * w[k] * b_col[k];
                 }
+                C[j * K1 + i] = CTOOLS_TREE_REDUCE(sum);
             }
-            C[j * K1 + i] = sum;
+        }
+    } else {
+        /* Unweighted case: use standard unrolled dot product */
+        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
+        for (j = 0; j < K2; j++) {
+            const ST_double * restrict b_col = B + j * N;
+            for (i = 0; i < K1; i++) {
+                const ST_double * restrict a_col = A + i * N;
+                C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
+            }
         }
     }
 }

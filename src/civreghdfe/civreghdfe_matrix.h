@@ -15,28 +15,34 @@
     Matrix multiply C = A' * B
     A is N x K1, B is N x K2, Result C is K1 x K2
     All matrices stored in column-major order.
+
+    OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
 */
-void civreghdfe_matmul_atb(const ST_double *A, const ST_double *B,
+void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
                            ST_int N, ST_int K1, ST_int K2,
-                           ST_double *C);
+                           ST_double * restrict C);
 
 /*
     Matrix multiply C = A * B
     A is K1 x K2, B is K2 x K3, Result C is K1 x K3
     All matrices stored in column-major order.
+
+    OPTIMIZED: Uses cache-friendly loop order and OpenMP parallelization
 */
-void civreghdfe_matmul_ab(const ST_double *A, const ST_double *B,
+void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restrict B,
                           ST_int K1, ST_int K2, ST_int K3,
-                          ST_double *C);
+                          ST_double * restrict C);
 
 /*
     Weighted matrix multiply C = A' * diag(w) * B
     A is N x K1, B is N x K2, w is N x 1 (weights, may be NULL)
     Result C is K1 x K2
+
+    OPTIMIZED: Uses K-way unrolled weighted dot products and OpenMP parallelization
 */
-void civreghdfe_matmul_atdb(const ST_double *A, const ST_double *B,
-                            const ST_double *w, ST_int N, ST_int K1, ST_int K2,
-                            ST_double *C);
+void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
+                            const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
+                            ST_double * restrict C);
 
 /*
     Solve linear system Ax = b using Cholesky decomposition

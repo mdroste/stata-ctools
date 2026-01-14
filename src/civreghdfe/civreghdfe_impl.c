@@ -26,6 +26,7 @@
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
+#include "../ctools_unroll.h"
 
 /* Debug flag */
 #define CIVREGHDFE_DEBUG 0
@@ -361,8 +362,11 @@ ST_retcode compute_2sls(
 
     /* Step 8: Compute residuals using original X (not projected) */
     /* resid = y - X * beta */
+    /* OPTIMIZED: Parallelized with OpenMP */
+    #pragma omp parallel for schedule(static) if(N > 10000)
     for (i = 0; i < N; i++) {
         ST_double pred = 0.0;
+        #pragma omp simd reduction(+:pred)
         for (k = 0; k < K_total; k++) {
             pred += X_all[k * N + i] * beta[k];
         }
@@ -416,12 +420,16 @@ ST_retcode compute_2sls(
             free(cluster_ze);
         } else {
             /* Heteroskedastic optimal weighting matrix: Z'diag(e²)Z */
+            /* OPTIMIZED: OpenMP parallel reduction over observations */
+            #pragma omp parallel for reduction(+:ZOmegaZ[:K_iv*K_iv]) schedule(static) if(N > 10000)
             for (i = 0; i < N; i++) {
                 ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
                 ST_double e2 = w * resid[i] * resid[i];
                 for (j = 0; j < K_iv; j++) {
+                    ST_double z_j = Z[j * N + i];
+                    ST_double z_j_e2 = z_j * e2;
                     for (k = 0; k <= j; k++) {
-                        ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                        ST_double contrib = z_j_e2 * Z[k * N + i];
                         ZOmegaZ[j * K_iv + k] += contrib;
                         if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
                     }
@@ -547,8 +555,11 @@ ST_retcode compute_2sls(
         }
 
         /* Update residuals with new beta */
+        /* OPTIMIZED: Parallelized with OpenMP */
+        #pragma omp parallel for schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             ST_double pred = 0.0;
+            #pragma omp simd reduction(+:pred)
             for (k = 0; k < K_total; k++) {
                 pred += X_all[k * N + i] * beta[k];
             }
@@ -628,12 +639,16 @@ ST_retcode compute_2sls(
                 free(cluster_ze);
             } else {
                 /* Heteroskedastic version */
+                /* OPTIMIZED: OpenMP parallel reduction over observations */
+                #pragma omp parallel for reduction(+:ZOmegaZ_cue[:K_iv*K_iv]) schedule(static) if(N > 10000)
                 for (i = 0; i < N; i++) {
                     ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
                     ST_double e2 = w * resid[i] * resid[i];
                     for (j = 0; j < K_iv; j++) {
+                        ST_double z_j = Z[j * N + i];
+                        ST_double z_j_e2 = z_j * e2;
                         for (k = 0; k <= j; k++) {
-                            ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
+                            ST_double contrib = z_j_e2 * Z[k * N + i];
                             ZOmegaZ_cue[j * K_iv + k] += contrib;
                             if (k != j) ZOmegaZ_cue[k * K_iv + j] += contrib;
                         }
@@ -752,8 +767,11 @@ ST_retcode compute_2sls(
         free(beta_old);
 
         /* Update residuals with final CUE estimates */
+        /* OPTIMIZED: Parallelized with OpenMP */
+        #pragma omp parallel for schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             ST_double pred = 0.0;
+            #pragma omp simd reduction(+:pred)
             for (k = 0; k < K_total; k++) {
                 pred += X_all[k * N + i] * beta[k];
             }
@@ -790,12 +808,15 @@ ST_retcode compute_2sls(
     invert_from_cholesky(XkX_copy, K_total, XkX_inv);
 
     /* Compute RSS */
+    /* OPTIMIZED: Parallelized with OpenMP reduction */
     ST_double rss = 0.0;
     if (weights && weight_type != 0) {
+        #pragma omp parallel for reduction(+:rss) schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             rss += weights[i] * resid[i] * resid[i];
         }
     } else {
+        #pragma omp parallel for reduction(+:rss) schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             rss += resid[i] * resid[i];
         }
@@ -910,12 +931,16 @@ ST_retcode compute_2sls(
 
         } else {
             /* Standard HC robust (no HAC) */
+            /* OPTIMIZED: OpenMP parallel reduction over observations */
+            #pragma omp parallel for reduction(+:meat[:K_total*K_total]) schedule(static) if(N > 10000)
             for (i = 0; i < N; i++) {
                 ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                ST_double we = w * resid[i];
+                ST_double we2 = w * resid[i] * resid[i];
                 for (j = 0; j < K_total; j++) {
+                    ST_double pzx_j = PzX[j * N + i];
+                    ST_double pzx_j_we2 = pzx_j * we2;
                     for (k = 0; k <= j; k++) {
-                        ST_double contrib = PzX[j * N + i] * we * PzX[k * N + i] * resid[i];
+                        ST_double contrib = pzx_j_we2 * PzX[k * N + i];
                         meat[j * K_total + k] += contrib;
                         if (k != j) meat[k * K_total + j] += contrib;
                     }
