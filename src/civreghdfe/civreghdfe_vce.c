@@ -50,8 +50,10 @@ void ivvce_compute_robust(
 {
     ST_int N = ctx->N;
     ST_int K_total = ctx->K_total;
-    ST_int K_iv = ctx->K_iv;
-    ST_int i, j, k;
+    ST_int i;
+
+    /* Note: This is a stub - full implementation requires Z matrix */
+    (void)resid;  /* Will be used in full implementation */
 
     ST_int df_r = N - K_total - df_a;
     if (df_r <= 0) df_r = 1;
@@ -102,7 +104,11 @@ void ivvce_compute_cluster(
 {
     ST_int N = ctx->N;
     ST_int K_total = ctx->K_total;
-    ST_int i, j, k;
+    ST_int i;
+
+    /* Note: This is a stub - full implementation requires Z matrix */
+    (void)resid;       /* Will be used in full implementation */
+    (void)cluster_ids; /* Will be used in full implementation */
 
     /* Cluster DOF adjustment:
        dof_adj = (N-1)/(N - K_total - effective_df_a) * G/(G-1) */
@@ -154,6 +160,11 @@ void ivvce_compute_hac(
     ST_int N = ctx->N;
     ST_int K_total = ctx->K_total;
     ST_int i;
+
+    /* Note: This is a stub - full implementation requires Z matrix */
+    (void)resid;       /* Will be used in full implementation */
+    (void)kernel_type; /* Will be used in full implementation */
+    (void)bw;          /* Will be used in full implementation */
 
     ST_int df_r = N - K_total - df_a;
     if (df_r <= 0) df_r = 1;

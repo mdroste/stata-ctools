@@ -110,7 +110,10 @@ void civreghdfe_compute_underid_test(
 )
 {
     ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
-    ST_int i, j, k;
+    ST_int i, k;
+
+    /* ZtZ_inv reserved for potential robust formula implementation */
+    (void)ZtZ_inv;
 
     *underid_stat = 0.0;
     *underid_df = L;
@@ -512,7 +515,7 @@ void civreghdfe_compute_sargan_j(
 )
 {
     ST_int K_total = K_exog + K_endog;
-    ST_int i, j, k;
+    ST_int i, k;
 
     *overid_df = K_iv - K_total;
     *sargan_stat = 0.0;
