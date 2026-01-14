@@ -22,574 +22,20 @@
 #include <omp.h>
 
 #include "civreghdfe_impl.h"
+#include "civreghdfe_matrix.h"
 
 /* Debug flag */
 #define CIVREGHDFE_DEBUG 0
 
-/*
-    Helper: Matrix multiply C = A' * B where A is N x K1, B is N x K2
-    Result C is K1 x K2
-*/
-static void matmul_atb(const ST_double *A, const ST_double *B,
-                       ST_int N, ST_int K1, ST_int K2,
-                       ST_double *C)
-{
-    ST_int i, j, k;
-
-    /* Initialize C to zero */
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
-
-    /* Compute C[i,j] = sum_k A[k,i] * B[k,j] */
-    for (j = 0; j < K2; j++) {
-        for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            const ST_double *a_col = A + i * N;
-            const ST_double *b_col = B + j * N;
-            for (k = 0; k < N; k++) {
-                sum += a_col[k] * b_col[k];
-            }
-            C[j * K1 + i] = sum;  /* Column-major storage */
-        }
-    }
-}
-
-/*
-    Helper: Matrix multiply C = A * B where A is K1 x K2, B is K2 x K3
-    Result C is K1 x K3
-*/
-static void matmul_ab(const ST_double *A, const ST_double *B,
-                      ST_int K1, ST_int K2, ST_int K3,
-                      ST_double *C)
-{
-    ST_int i, j, k;
-
-    /* Initialize C to zero */
-    memset(C, 0, K1 * K3 * sizeof(ST_double));
-
-    /* C[i,j] = sum_k A[i,k] * B[k,j] */
-    /* A is K1 x K2, stored column-major: A[i,k] = A[k*K1 + i] */
-    /* B is K2 x K3, stored column-major: B[k,j] = B[j*K2 + k] */
-    /* C is K1 x K3, stored column-major: C[i,j] = C[j*K1 + i] */
-    for (j = 0; j < K3; j++) {
-        for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K2; k++) {
-                sum += A[k * K1 + i] * B[j * K2 + k];
-            }
-            C[j * K1 + i] = sum;
-        }
-    }
-}
-
-/*
-    Helper: Solve linear system Ax = b using Cholesky decomposition
-    A is K x K symmetric positive definite
-    b is K x 1
-    x is K x 1 (output, can be same as b for in-place)
-    Returns 0 on success, -1 if not positive definite
-*/
-static __attribute__((unused)) ST_int solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x)
-{
-    ST_int i, j;
-    ST_double *L = (ST_double *)malloc(K * K * sizeof(ST_double));
-    if (!L) return -1;
-
-    /* Copy A to L */
-    memcpy(L, A, K * K * sizeof(ST_double));
-
-    /* Cholesky decomposition: L*L' = A */
-    if (cholesky(L, K) != 0) {
-        free(L);
-        return -1;
-    }
-
-    /* Forward substitution: solve Ly = b */
-    ST_double *y = (ST_double *)malloc(K * sizeof(ST_double));
-    if (!y) {
-        free(L);
-        return -1;
-    }
-
-    for (i = 0; i < K; i++) {
-        ST_double sum = b[i];
-        for (j = 0; j < i; j++) {
-            sum -= L[i * K + j] * y[j];
-        }
-        y[i] = sum / L[i * K + i];
-    }
-
-    /* Backward substitution: solve L'x = y */
-    for (i = K - 1; i >= 0; i--) {
-        ST_double sum = y[i];
-        for (j = i + 1; j < K; j++) {
-            sum -= L[j * K + i] * x[j];
-        }
-        x[i] = sum / L[i * K + i];
-    }
-
-    free(L);
-    free(y);
-    return 0;
-}
-
-/*
-    Helper: Weighted matrix multiply C = A' * diag(w) * B
-*/
-static void matmul_atdb(const ST_double *A, const ST_double *B,
-                        const ST_double *w, ST_int N, ST_int K1, ST_int K2,
-                        ST_double *C)
-{
-    ST_int i, j, k;
-
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
-
-    for (j = 0; j < K2; j++) {
-        for (i = 0; i < K1; i++) {
-            ST_double sum = 0.0;
-            const ST_double *a_col = A + i * N;
-            const ST_double *b_col = B + j * N;
-            if (w) {
-                for (k = 0; k < N; k++) {
-                    sum += a_col[k] * w[k] * b_col[k];
-                }
-            } else {
-                for (k = 0; k < N; k++) {
-                    sum += a_col[k] * b_col[k];
-                }
-            }
-            C[j * K1 + i] = sum;
-        }
-    }
-}
-
-/*
-    HAC Kernel weight functions for Newey-West style standard errors.
-
-    Kernel types:
-    0 = None (not HAC)
-    1 = Bartlett / Newey-West (triangular)
-    2 = Parzen
-    3 = Quadratic Spectral
-    4 = Truncated
-    5 = Tukey-Hanning
-
-    Returns kernel weight for lag j given bandwidth bw.
-*/
-static ST_double kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
-{
-    if (j == 0) return 1.0;
-    if (bw <= 0) return 0.0;
-
-    ST_double x = (ST_double)j / (ST_double)(bw + 1);
-
-    switch (kernel_type) {
-        case 1:  /* Bartlett / Newey-West */
-            if (x <= 1.0) return 1.0 - x;
-            return 0.0;
-
-        case 2:  /* Parzen */
-            if (x <= 0.5) {
-                return 1.0 - 6.0 * x * x + 6.0 * x * x * x;
-            } else if (x <= 1.0) {
-                ST_double t = 1.0 - x;
-                return 2.0 * t * t * t;
-            }
-            return 0.0;
-
-        case 3:  /* Quadratic Spectral */
-            {
-                ST_double pi = 3.14159265358979323846;
-                ST_double z = 6.0 * pi * x / 5.0;
-                if (fabs(z) < 1e-10) return 1.0;
-                return 25.0 / (12.0 * pi * pi * x * x) *
-                       (sin(z) / z - cos(z));
-            }
-
-        case 4:  /* Truncated */
-            if (x <= 1.0) return 1.0;
-            return 0.0;
-
-        case 5:  /* Tukey-Hanning */
-            if (x <= 1.0) {
-                ST_double pi = 3.14159265358979323846;
-                return 0.5 * (1.0 + cos(pi * x));
-            }
-            return 0.0;
-
-        default:
-            return 0.0;
-    }
-}
-
-/*
-    Jacobi eigenvalue algorithm for symmetric matrices.
-    Computes all eigenvalues of a K x K symmetric matrix A.
-    If eigenvalues is NULL, returns just the minimum eigenvalue.
-    If eigenvalues is provided, stores all K eigenvalues in it (sorted ascending).
-
-    A is stored in column-major order and is modified in place.
-*/
-static ST_double jacobi_eigenvalues(ST_double *A, ST_int K, ST_double *eigenvalues)
-{
-    const ST_int max_iter = 100;
-    const ST_double tol = 1e-12;
-    ST_int iter, p, q, i;
-
-    /* Work with a copy */
-    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
-    memcpy(D, A, K * K * sizeof(ST_double));
-
-    for (iter = 0; iter < max_iter; iter++) {
-        /* Find largest off-diagonal element */
-        ST_double max_off = 0.0;
-        p = 0; q = 1;
-        for (i = 0; i < K; i++) {
-            for (ST_int j = i + 1; j < K; j++) {
-                ST_double val = fabs(D[j * K + i]);
-                if (val > max_off) {
-                    max_off = val;
-                    p = i;
-                    q = j;
-                }
-            }
-        }
-
-        /* Check convergence */
-        if (max_off < tol) break;
-
-        /* Compute rotation */
-        ST_double app = D[p * K + p];
-        ST_double aqq = D[q * K + q];
-        ST_double apq = D[q * K + p];
-
-        ST_double theta = 0.5 * atan2(2.0 * apq, aqq - app);
-        ST_double c = cos(theta);
-        ST_double s = sin(theta);
-
-        /* Apply rotation */
-        for (i = 0; i < K; i++) {
-            if (i != p && i != q) {
-                ST_double dip = D[p * K + i];
-                ST_double diq = D[q * K + i];
-                D[p * K + i] = c * dip - s * diq;
-                D[i * K + p] = D[p * K + i];
-                D[q * K + i] = s * dip + c * diq;
-                D[i * K + q] = D[q * K + i];
-            }
-        }
-
-        D[p * K + p] = c * c * app - 2 * s * c * apq + s * s * aqq;
-        D[q * K + q] = s * s * app + 2 * s * c * apq + c * c * aqq;
-        D[q * K + p] = 0.0;
-        D[p * K + q] = 0.0;
-    }
-
-    /* Extract eigenvalues (diagonal elements) */
-    ST_double min_eval = D[0];
-    if (eigenvalues) {
-        /* Store all eigenvalues */
-        for (i = 0; i < K; i++) {
-            eigenvalues[i] = D[i * K + i];
-        }
-        /* Sort eigenvalues in ascending order (simple bubble sort for small K) */
-        for (i = 0; i < K - 1; i++) {
-            for (ST_int j = i + 1; j < K; j++) {
-                if (eigenvalues[j] < eigenvalues[i]) {
-                    ST_double tmp = eigenvalues[i];
-                    eigenvalues[i] = eigenvalues[j];
-                    eigenvalues[j] = tmp;
-                }
-            }
-        }
-        min_eval = eigenvalues[0];
-    } else {
-        /* Just find minimum */
-        for (i = 1; i < K; i++) {
-            if (D[i * K + i] < min_eval) {
-                min_eval = D[i * K + i];
-            }
-        }
-    }
-
-    free(D);
-    return min_eval;
-}
-
-/*
-    Wrapper for backward compatibility: returns just the minimum eigenvalue.
-*/
-static ST_double jacobi_min_eigenvalue(ST_double *A, ST_int K)
-{
-    return jacobi_eigenvalues(A, K, NULL);
-}
-
-/*
-    Compute matrix square root inverse: M^(-1/2)
-    For a symmetric positive definite matrix M, compute M^(-1/2)
-    using eigendecomposition.
-
-    Result is stored in Minv_sqrt (K x K, column-major)
-*/
-static ST_int matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *Minv_sqrt)
-{
-    /* For small matrices, use direct eigendecomposition via Jacobi */
-    /* This is a simplified version - for production, use LAPACK */
-
-    const ST_int max_iter = 100;
-    const ST_double tol = 1e-12;
-    ST_int iter, p, q, i, j;
-
-    /* Work matrices */
-    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
-    ST_double *V = (ST_double *)malloc(K * K * sizeof(ST_double));
-
-    memcpy(D, M, K * K * sizeof(ST_double));
-
-    /* Initialize V as identity */
-    memset(V, 0, K * K * sizeof(ST_double));
-    for (i = 0; i < K; i++) V[i * K + i] = 1.0;
-
-    /* Jacobi iteration to diagonalize D, accumulate eigenvectors in V */
-    for (iter = 0; iter < max_iter; iter++) {
-        /* Find largest off-diagonal element */
-        ST_double max_off = 0.0;
-        p = 0; q = 1;
-        for (i = 0; i < K; i++) {
-            for (j = i + 1; j < K; j++) {
-                ST_double val = fabs(D[j * K + i]);
-                if (val > max_off) {
-                    max_off = val;
-                    p = i;
-                    q = j;
-                }
-            }
-        }
-
-        if (max_off < tol) break;
-
-        ST_double app = D[p * K + p];
-        ST_double aqq = D[q * K + q];
-        ST_double apq = D[q * K + p];
-
-        ST_double theta = 0.5 * atan2(2.0 * apq, aqq - app);
-        ST_double c = cos(theta);
-        ST_double s = sin(theta);
-
-        /* Apply rotation to D */
-        for (i = 0; i < K; i++) {
-            if (i != p && i != q) {
-                ST_double dip = D[p * K + i];
-                ST_double diq = D[q * K + i];
-                D[p * K + i] = c * dip - s * diq;
-                D[i * K + p] = D[p * K + i];
-                D[q * K + i] = s * dip + c * diq;
-                D[i * K + q] = D[q * K + i];
-            }
-        }
-        D[p * K + p] = c * c * app - 2 * s * c * apq + s * s * aqq;
-        D[q * K + q] = s * s * app + 2 * s * c * apq + c * c * aqq;
-        D[q * K + p] = 0.0;
-        D[p * K + q] = 0.0;
-
-        /* Apply rotation to V */
-        for (i = 0; i < K; i++) {
-            ST_double vip = V[p * K + i];
-            ST_double viq = V[q * K + i];
-            V[p * K + i] = c * vip - s * viq;
-            V[q * K + i] = s * vip + c * viq;
-        }
-    }
-
-    /* Now D has eigenvalues on diagonal, V has eigenvectors as columns */
-    /* Compute V * diag(1/sqrt(eigenvalues)) * V' */
-
-    /* First compute V * diag(1/sqrt(eigenvalues)) */
-    ST_double *VD = (ST_double *)malloc(K * K * sizeof(ST_double));
-    for (j = 0; j < K; j++) {
-        ST_double eval = D[j * K + j];
-        if (eval <= 0) {
-            free(D); free(V); free(VD);
-            return -1;  /* Not positive definite */
-        }
-        ST_double inv_sqrt_eval = 1.0 / sqrt(eval);
-        for (i = 0; i < K; i++) {
-            VD[j * K + i] = V[j * K + i] * inv_sqrt_eval;
-        }
-    }
-
-    /* Compute VD * V' */
-    for (i = 0; i < K; i++) {
-        for (j = 0; j < K; j++) {
-            ST_double sum = 0.0;
-            for (ST_int k = 0; k < K; k++) {
-                sum += VD[k * K + i] * V[k * K + j];
-            }
-            Minv_sqrt[j * K + i] = sum;
-        }
-    }
-
-    free(D);
-    free(V);
-    free(VD);
-    return 0;
-}
-
-/*
-    Compute LIML lambda (minimum eigenvalue for k-class)
-
-    Y = [y, X_endog]  (N x (1 + K_endog))
-    Z = all instruments (N x K_iv)
-    Z2 = included instruments only (exogenous regressors) (N x K_exog)
-
-    Computes:
-    QWW = Y'(I - Z(Z'Z)^-1 Z')Y / N = Y'M_Z Y / N
-    QWW1 = Y'(I - Z2(Z2'Z2)^-1 Z2')Y / N = Y'M_{Z2} Y / N
-    lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2)
-*/
-static ST_double compute_liml_lambda(
-    const ST_double *y,
-    const ST_double *X_endog,
-    const ST_double *X_exog,
-    const ST_double *Z,
-    ST_int N,
-    ST_int K_exog,
-    ST_int K_endog,
-    ST_int K_iv)
-{
-    ST_int K_Y = 1 + K_endog;  /* Columns in Y = [y, X_endog] */
-    ST_int i, j;
-
-    /* Allocate Y = [y, X_endog] */
-    ST_double *Y = (ST_double *)malloc(N * K_Y * sizeof(ST_double));
-    memcpy(Y, y, N * sizeof(ST_double));
-    if (K_endog > 0) {
-        memcpy(Y + N, X_endog, N * K_endog * sizeof(ST_double));
-    }
-
-    /* Compute Z'Z and its inverse */
-    ST_double *ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ST_double *ZtZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
-
-    /* Invert Z'Z using Cholesky */
-    ST_double *ZtZ_L = (ST_double *)malloc(K_iv * K_iv * sizeof(ST_double));
-    memcpy(ZtZ_L, ZtZ, K_iv * K_iv * sizeof(ST_double));
-    if (cholesky(ZtZ_L, K_iv) != 0) {
-        /* Fallback: return 1.0 (equivalent to 2SLS) */
-        free(Y); free(ZtZ); free(ZtZ_inv); free(ZtZ_L);
-        return 1.0;
-    }
-    invert_from_cholesky(ZtZ_L, K_iv, ZtZ_inv);
-    free(ZtZ_L);
-
-    /* Compute Z'Y */
-    ST_double *ZtY = (ST_double *)calloc(K_iv * K_Y, sizeof(ST_double));
-    matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
-
-    /* Compute Y'Y */
-    ST_double *YtY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-    matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
-
-    /* Compute (Z'Z)^-1 * Z'Y */
-    ST_double *ZtZ_inv_ZtY = (ST_double *)calloc(K_iv * K_Y, sizeof(ST_double));
-    matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
-
-    /* Compute QWW = Y'Y - (Z'Y)'(Z'Z)^-1(Z'Y) = Y'M_Z Y */
-    ST_double *QWW = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-    ST_double *ZtY_t_ZtZ_inv_ZtY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-
-    /* (Z'Y)' * (Z'Z)^-1 * Z'Y */
-    for (i = 0; i < K_Y; i++) {
-        for (j = 0; j < K_Y; j++) {
-            ST_double sum = 0.0;
-            for (ST_int k = 0; k < K_iv; k++) {
-                sum += ZtY[i * K_iv + k] * ZtZ_inv_ZtY[j * K_iv + k];
-            }
-            ZtY_t_ZtZ_inv_ZtY[j * K_Y + i] = sum;
-        }
-    }
-
-    for (i = 0; i < K_Y * K_Y; i++) {
-        QWW[i] = YtY[i] - ZtY_t_ZtZ_inv_ZtY[i];
-    }
-
-    /* Now compute QWW1 = Y'M_{Z2} Y where Z2 = included instruments (exogenous) */
-    ST_double *QWW1 = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-
-    if (K_exog > 0) {
-        /* Z2 = X_exog (the included instruments / exogenous regressors) */
-        ST_double *Z2tZ2 = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
-        ST_double *Z2tZ2_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
-        ST_double *Z2tZ2_L = (ST_double *)malloc(K_exog * K_exog * sizeof(ST_double));
-        matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
-
-        memcpy(Z2tZ2_L, Z2tZ2, K_exog * K_exog * sizeof(ST_double));
-        if (cholesky(Z2tZ2_L, K_exog) != 0) {
-            free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
-            free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY); free(QWW1);
-            free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
-            return 1.0;
-        }
-        invert_from_cholesky(Z2tZ2_L, K_exog, Z2tZ2_inv);
-        free(Z2tZ2_L);
-
-        ST_double *Z2tY = (ST_double *)calloc(K_exog * K_Y, sizeof(ST_double));
-        matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
-
-        ST_double *Z2tZ2_inv_Z2tY = (ST_double *)calloc(K_exog * K_Y, sizeof(ST_double));
-        matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
-
-        ST_double *Z2tY_t_Z2tZ2_inv_Z2tY = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-        for (i = 0; i < K_Y; i++) {
-            for (j = 0; j < K_Y; j++) {
-                ST_double sum = 0.0;
-                for (ST_int k = 0; k < K_exog; k++) {
-                    sum += Z2tY[i * K_exog + k] * Z2tZ2_inv_Z2tY[j * K_exog + k];
-                }
-                Z2tY_t_Z2tZ2_inv_Z2tY[j * K_Y + i] = sum;
-            }
-        }
-
-        for (i = 0; i < K_Y * K_Y; i++) {
-            QWW1[i] = YtY[i] - Z2tY_t_Z2tZ2_inv_Z2tY[i];
-        }
-
-        free(Z2tZ2); free(Z2tZ2_inv); free(Z2tY);
-        free(Z2tZ2_inv_Z2tY); free(Z2tY_t_Z2tZ2_inv_Z2tY);
-    }
-    else {
-        /* No exogenous regressors: QWW1 = Y'Y */
-        memcpy(QWW1, YtY, K_Y * K_Y * sizeof(ST_double));
-    }
-
-    /* Compute lambda = min eigenvalue of QWW^(-1/2) * QWW1 * QWW^(-1/2) */
-    ST_double *QWW_inv_sqrt = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-    if (matpowersym_neg_half(QWW, K_Y, QWW_inv_sqrt) != 0) {
-        /* QWW not positive definite, fallback to 2SLS */
-        free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
-        free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY);
-        free(QWW1); free(QWW_inv_sqrt);
-        return 1.0;
-    }
-
-    /* Compute QWW^(-1/2) * QWW1 */
-    ST_double *temp1 = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-    matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
-
-    /* Compute (QWW^(-1/2) * QWW1) * QWW^(-1/2) */
-    ST_double *M_for_eigen = (ST_double *)calloc(K_Y * K_Y, sizeof(ST_double));
-    matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
-
-    /* Find minimum eigenvalue */
-    ST_double lambda = jacobi_min_eigenvalue(M_for_eigen, K_Y);
-
-    /* Cleanup */
-    free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
-    free(ZtZ_inv_ZtY); free(QWW); free(ZtY_t_ZtZ_inv_ZtY);
-    free(QWW1); free(QWW_inv_sqrt); free(temp1); free(M_for_eigen);
-
-    return lambda;
-}
+/* Convenience aliases for the matrix functions */
+#define matmul_atb  civreghdfe_matmul_atb
+#define matmul_ab   civreghdfe_matmul_ab
+#define matmul_atdb civreghdfe_matmul_atdb
+#define kernel_weight civreghdfe_kernel_weight
+#define jacobi_eigenvalues civreghdfe_jacobi_eigenvalues
+#define jacobi_min_eigenvalue civreghdfe_jacobi_min_eigenvalue
+#define matpowersym_neg_half civreghdfe_matpowersym_neg_half
+#define compute_liml_lambda civreghdfe_compute_liml_lambda
 
 /*
     Compute k-class IV estimation (includes 2SLS, LIML, Fuller, etc.)
@@ -1762,8 +1208,17 @@ ST_retcode compute_2sls(
                 }
 
                 if (shat_ok) {
-                    /* Compute ZtZ = Z'Z (already have this, but need unscaled version) */
-                    /* Note: ZtZ in the code is Z'Z, not Z'Z/N */
+                    /* Small-sample adjustment following ranktest methodology */
+                    ST_int Nminus = N - df_a - 1;
+                    if (Nminus <= 0) Nminus = 1;
+
+                    /* ===============================================
+                       KP rk Wald F statistic (for weak instruments)
+                       ===============================================
+                       Wald = pi' * Var(pi)^{-1} * pi
+                       where Var(pi) = (Z'Z)^{-1} * shat0 * (Z'Z)^{-1}
+                       So: Wald = pi' * Z'Z * inv(shat0) * Z'Z * pi
+                    */
 
                     /* Compute ZtZ * pi */
                     ST_double *ZtZ_pi = (ST_double *)calloc(K_iv, sizeof(ST_double));
@@ -1801,35 +1256,39 @@ ST_retcode compute_2sls(
                         kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtZ_pi[ki];
                     }
 
-                    /* Small-sample adjustment following ranktest methodology:
-                       Nminus = N - K3 where K3 = number of partialled-out vars
-                       For HDFE with df_a absorbed FE and constant:
-                       Nminus = N - df_a - 1 (approximately)
-
-                       The Wald F statistic uses: (N - L) / L as the dof adjustment
-                    */
-                    ST_int Nminus = N - df_a - 1;
-                    if (Nminus <= 0) Nminus = 1;
-
-                    /* KP rk Wald F = (Nminus / N) * kp_wald_raw / L
-                       Following the ranktest small-sample adjustment */
+                    /* KP rk Wald F = (Nminus / N) * kp_wald_raw / L */
                     ST_double kp_wald = kp_wald_raw * (ST_double)Nminus / (ST_double)N;
                     kp_f = kp_wald / (ST_double)L;
 
-                    /* KP rk LM statistic for underidentification test
-                       The LM version is different from Wald. For robust case,
-                       we use a transformation based on the canonical correlations.
+                    /* ===============================================
+                       KP rk LM statistic (for underidentification)
+                       ===============================================
+                       Following ranktest.ado: the LM statistic is computed
+                       directly from the moment conditions.
 
-                       For K_endog=1, KP LM ≈ N * r² where r² is the robust
-                       partial correlation. This can be derived from kp_wald:
-                       r² = kp_wald / (kp_wald + Nminus)
-                       KP LM = Nminus * r²
+                       The variance of gbar = Z'X / N is:
+                       Var(gbar) = (1/N²) * shat0
 
-                       Alternative: use the score form which gives:
-                       KP LM = kp_wald * (Nminus - L) / Nminus for Wald->LM conversion
+                       So the inverse variance is:
+                       inv(Var(gbar)) = N² * inv(shat0)
+
+                       The LM statistic is:
+                       LM = Nminus * gbar' * inv(Var(gbar)) * gbar
+                          = Nminus * (Z'X/N)' * N² * inv(shat0) * (Z'X/N)
+                          = Nminus * (Z'X)' * inv(shat0) * (Z'X)
+
+                       Since Z'X = Z'Z * pi (because pi = (Z'Z)^-1 * Z'X):
+                       LM = Nminus * (ZtZ_pi)' * inv(shat0) * (ZtZ_pi)
                     */
-                    ST_double robust_partial_r2 = kp_wald / (kp_wald + (ST_double)Nminus);
-                    ST_double kp_lm = (ST_double)Nminus * robust_partial_r2;
+
+                    /* Compute ZtZ_pi' * shat0_inv * ZtZ_pi */
+                    ST_double quad_lm = 0.0;
+                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                        quad_lm += ZtZ_pi[ki] * shat0_inv_ZtZ_pi[ki];
+                    }
+
+                    /* KP LM = Nminus * quad_lm (no N² division!) */
+                    ST_double kp_lm = (ST_double)Nminus * quad_lm;
 
                     /* For robust VCE, use KP LM as the underidentification test */
                     underid_stat = kp_lm;

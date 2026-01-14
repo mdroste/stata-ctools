@@ -1,0 +1,187 @@
+/*
+    civreghdfe_tests.h
+    Diagnostic test statistics for IV regression
+
+    Implements test statistics for instrument validity and endogeneity:
+    - First-stage F statistics
+    - Anderson canonical correlation / Kleibergen-Paap rk LM (underidentification)
+    - Cragg-Donald / Kleibergen-Paap rk Wald F (weak instruments)
+    - Sargan / Hansen J (overidentification)
+    - Durbin-Wu-Hausman (endogeneity)
+*/
+
+#ifndef CIVREGHDFE_TESTS_H
+#define CIVREGHDFE_TESTS_H
+
+#include "../stplugin.h"
+
+/*
+    Structure to hold all IV diagnostic test results.
+    Populated by civreghdfe_compute_diagnostics().
+*/
+typedef struct {
+    /* First-stage statistics */
+    ST_double *first_stage_F;   /* Array of K_endog F-statistics */
+
+    /* Underidentification test (rank condition) */
+    ST_double underid_stat;     /* Anderson LM or KP rk LM statistic (chi-sq) */
+    ST_int underid_df;          /* Degrees of freedom */
+
+    /* Weak instruments test */
+    ST_double cd_f;             /* Cragg-Donald Wald F (homoskedastic) */
+    ST_double kp_f;             /* Kleibergen-Paap rk Wald F (robust) */
+
+    /* Overidentification test */
+    ST_double sargan_stat;      /* Sargan/Hansen J statistic (chi-sq) */
+    ST_int overid_df;           /* Degrees of freedom */
+
+    /* Endogeneity test (Durbin-Wu-Hausman) */
+    ST_double endog_chi2;       /* DWH chi-squared statistic */
+    ST_double endog_f;          /* DWH F statistic */
+    ST_int endog_df;            /* Degrees of freedom */
+} civreghdfe_diagnostics_t;
+
+/*
+    Compute first-stage F statistics for each endogenous variable.
+
+    Parameters:
+    - X_endog: Endogenous regressors (N x K_endog, column-major)
+    - Z: All instruments including exogenous (N x K_iv, column-major)
+    - ZtZ_inv: Precomputed (Z'Z)^-1 (K_iv x K_iv)
+    - ZtX: Precomputed Z'X for all X (K_iv x K_total)
+    - weights: Optional weights (may be NULL)
+    - weight_type: 0=none, 1=aweight, 2=fweight, 3=pweight
+    - N, K_exog, K_endog, K_iv: Dimensions
+    - df_a: Absorbed degrees of freedom
+    - first_stage_F: Output array (K_endog elements, must be preallocated)
+*/
+void civreghdfe_compute_first_stage_F(
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *ZtZ_inv,
+    const ST_double *ZtX,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_int df_a,
+    ST_double *first_stage_F
+);
+
+/*
+    Compute underidentification test (Anderson LM / Kleibergen-Paap rk LM).
+
+    For homoskedastic VCE: Anderson canonical correlation LM
+    For robust/cluster VCE: Kleibergen-Paap rk LM
+
+    Parameters:
+    - X_endog: Endogenous regressors (N x K_endog)
+    - Z: All instruments (N x K_iv)
+    - ZtZ: Precomputed Z'Z (K_iv x K_iv)
+    - ZtZ_inv: Precomputed (Z'Z)^-1 (K_iv x K_iv)
+    - temp1: First-stage coefficients (K_iv x K_total)
+    - first_stage_F: First-stage F statistics (K_endog)
+    - weights, weight_type, N, K_exog, K_endog, K_iv, df_a: Parameters
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster
+    - cluster_ids: Cluster identifiers (may be NULL)
+    - num_clusters: Number of clusters
+    - underid_stat: Output - underidentification test statistic
+    - underid_df: Output - degrees of freedom
+    - cd_f: Output - Cragg-Donald F statistic
+    - kp_f: Output - Kleibergen-Paap rk Wald F statistic
+*/
+void civreghdfe_compute_underid_test(
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *ZtZ,
+    const ST_double *ZtZ_inv,
+    const ST_double *temp1,
+    const ST_double *first_stage_F,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_int df_a,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_double *underid_stat,
+    ST_int *underid_df,
+    ST_double *cd_f,
+    ST_double *kp_f
+);
+
+/*
+    Compute Sargan/Hansen J overidentification test.
+
+    For homoskedastic VCE: Sargan statistic
+    For robust/cluster VCE: Hansen J statistic
+
+    Parameters:
+    - resid: 2SLS residuals (N x 1)
+    - Z: All instruments (N x K_iv)
+    - ZtZ_inv: Precomputed (Z'Z)^-1 (K_iv x K_iv)
+    - sigma2: Residual variance
+    - weights, weight_type, N, K_exog, K_endog, K_iv: Parameters
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster
+    - cluster_ids: Cluster identifiers (may be NULL)
+    - num_clusters: Number of clusters
+    - sargan_stat: Output - overidentification test statistic
+    - overid_df: Output - degrees of freedom (L - K_endog)
+*/
+void civreghdfe_compute_sargan_j(
+    const ST_double *resid,
+    const ST_double *Z,
+    const ST_double *ZtZ_inv,
+    ST_double sigma2,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_double *sargan_stat,
+    ST_int *overid_df
+);
+
+/*
+    Compute Durbin-Wu-Hausman endogeneity test.
+
+    Tests H0: X_endog are exogenous (no endogeneity)
+    Uses augmented regression approach with first-stage residuals.
+
+    Parameters:
+    - y: Dependent variable (N x 1)
+    - X_exog: Exogenous regressors (N x K_exog, may be NULL)
+    - X_endog: Endogenous regressors (N x K_endog)
+    - Z: All instruments (N x K_iv)
+    - temp1: First-stage coefficients (K_iv x K_total)
+    - N, K_exog, K_endog, K_iv, df_a: Parameters
+    - endog_chi2: Output - DWH chi-squared statistic
+    - endog_f: Output - DWH F statistic
+    - endog_df: Output - degrees of freedom
+*/
+void civreghdfe_compute_dwh_test(
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *temp1,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_int df_a,
+    ST_double *endog_chi2,
+    ST_double *endog_f,
+    ST_int *endog_df
+);
+
+#endif /* CIVREGHDFE_TESTS_H */

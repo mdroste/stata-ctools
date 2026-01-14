@@ -509,19 +509,46 @@ program define cbinscatter, eclass sortpreserve
         }
 
         * Execute graph (matching binscatter format)
-        * Preserve and drop to tiny dataset to avoid twoway overhead on large data
-        preserve
-        qui keep in 1/1
+        * Use temporary frame to avoid twoway overhead on large datasets
+        * (twoway speed depends on dataset size in memory, even for scatteri)
+        local _use_frame = 0
+        if c(stata_version) >= 16 {
+            local _use_frame = 1
+        }
 
-        twoway `scatters' `fits', ///
-            graphregion(fcolor(white)) ///
-            ytitle(`"`ytitle'"') ///
-            xtitle(`"`xtitle'"') ///
-            `legend_opt' ///
-            `title_opt' ///
-            `options'
+        if `_use_frame' {
+            * Stata 16+: use frames for speed (no preserve/restore overhead)
+            local _orig_frame = c(frame)
+            capture frame drop _ctools_graph_frame
+            frame create _ctools_graph_frame
+            frame change _ctools_graph_frame
 
-        restore
+            twoway `scatters' `fits', ///
+                graphregion(fcolor(white)) ///
+                ytitle(`"`ytitle'"') ///
+                xtitle(`"`xtitle'"') ///
+                `legend_opt' ///
+                `title_opt' ///
+                `options'
+
+            frame change `_orig_frame'
+            frame drop _ctools_graph_frame
+        }
+        else {
+            * Stata 14-15: fall back to preserve/keep/restore
+            preserve
+            qui keep in 1/1
+
+            twoway `scatters' `fits', ///
+                graphregion(fcolor(white)) ///
+                ytitle(`"`ytitle'"') ///
+                xtitle(`"`xtitle'"') ///
+                `legend_opt' ///
+                `title_opt' ///
+                `options'
+
+            restore
+        }
     }
 
     * Post e() results

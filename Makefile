@@ -117,7 +117,8 @@ CBINSCATTER_SRCS = $(SRC_DIR)/cbinscatter/cbinscatter_impl.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_fit.c
 
 # civreghdfe module
-CIVREGHDFE_SRCS = $(SRC_DIR)/civreghdfe/civreghdfe_impl.c
+CIVREGHDFE_SRCS = $(SRC_DIR)/civreghdfe/civreghdfe_matrix.c \
+                  $(SRC_DIR)/civreghdfe/civreghdfe_impl.c
 
 # All sources
 SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS)
@@ -165,7 +166,9 @@ CBINSCATTER_HEADERS = $(SRC_DIR)/cbinscatter/cbinscatter_types.h \
                       $(SRC_DIR)/cbinscatter/cbinscatter_fit.h \
                       $(SRC_DIR)/cbinscatter/cbinscatter_impl.h
 
-CIVREGHDFE_HEADERS = $(SRC_DIR)/civreghdfe/civreghdfe_impl.h
+CIVREGHDFE_HEADERS = $(SRC_DIR)/civreghdfe/civreghdfe_matrix.h \
+                     $(SRC_DIR)/civreghdfe/civreghdfe_tests.h \
+                     $(SRC_DIR)/civreghdfe/civreghdfe_impl.h
 
 HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS) $(CQREG_HEADERS) $(CBINSCATTER_HEADERS) $(CIVREGHDFE_HEADERS)
 
