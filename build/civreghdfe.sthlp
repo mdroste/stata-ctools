@@ -59,6 +59,15 @@
 {synopt:{opt v:erbose}}display progress information{p_end}
 {synopt:{opt timeit}}display timing breakdown{p_end}
 
+{syntab:Display}
+{synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
+{synopt:{opt nohead:er}}suppress output header{p_end}
+{synopt:{opt nofoot:er}}suppress output footer (diagnostic tests){p_end}
+{synopt:{opt noout:put}}suppress coefficient table{p_end}
+{synopt:{opt ti:tle(string)}}custom title for output{p_end}
+{synopt:{opt depn:ame(string)}}custom label for dependent variable in output{p_end}
+{synopt:{opt noid}}suppress underidentification test display{p_end}
+
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
 {synoptline}
@@ -195,6 +204,37 @@ variable directly on all instruments).
 {phang}
 {opt timeit} displays a timing breakdown of computational phases.
 
+{dlgtab:Display}
+
+{phang}
+{opt level(#)} specifies the confidence level, as a percentage, for confidence
+intervals. The default is {cmd:level(95)} or as set by {helpb set level}.
+
+{phang}
+{opt noheader} suppresses the output header, which includes the estimation
+method, sample size, R-squared, and other summary statistics.
+
+{phang}
+{opt nofooter} suppresses the output footer, which includes the diagnostic
+tests (underidentification test, weak identification test, Sargan/Hansen test,
+Stock-Yogo critical values, and instruments list).
+
+{phang}
+{opt nooutput} suppresses the coefficient table. The estimation is still
+performed and results are stored in {cmd:e()}.
+
+{phang}
+{opt title(string)} replaces the default title "IV (2SLS) estimation" with
+a custom title in the output.
+
+{phang}
+{opt depname(string)} specifies a custom label for the dependent variable
+in the coefficient table output and stored results.
+
+{phang}
+{opt noid} suppresses the underidentification test display in the footer.
+The test is still computed and stored in {cmd:e(idstat)}.
+
 {dlgtab:Save Results}
 
 {phang}
@@ -265,6 +305,7 @@ variable named {it:newvar}.
 {synopt:{cmd:e(rss)}}residual sum of squares{p_end}
 {synopt:{cmd:e(tss)}}total sum of squares{p_end}
 {synopt:{cmd:e(rmse)}}root mean squared error{p_end}
+{synopt:{cmd:e(level)}}confidence level{p_end}
 
 {p2col 5 20 24 2: First-stage scalars}{p_end}
 {synopt:{cmd:e(F_first1)}}first-stage F-stat for 1st endogenous var{p_end}

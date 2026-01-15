@@ -337,6 +337,91 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 16: Display options
+ ******************************************************************************/
+noi print_section "Display Options"
+
+* Test level()
+sysuse auto, clear
+civreghdfe price (mpg = weight), absorb(foreign) level(90)
+if e(level) == 90 {
+    noi test_pass "level(90) sets correct confidence level"
+}
+else {
+    noi test_fail "level(90)" "e(level) = `e(level)' instead of 90"
+}
+
+* Test noheader - just verify it runs without error
+sysuse auto, clear
+capture civreghdfe price (mpg = weight), absorb(foreign) noheader
+if _rc == 0 {
+    noi test_pass "noheader option accepted"
+}
+else {
+    noi test_fail "noheader" "returned error `=_rc'"
+}
+
+* Test nofooter - just verify it runs without error
+sysuse auto, clear
+capture civreghdfe price (mpg = weight), absorb(foreign) nofooter
+if _rc == 0 {
+    noi test_pass "nofooter option accepted"
+}
+else {
+    noi test_fail "nofooter" "returned error `=_rc'"
+}
+
+* Test nooutput - verify it runs and stores results
+sysuse auto, clear
+capture civreghdfe price (mpg = weight), absorb(foreign) nooutput
+if _rc == 0 & e(N) > 0 {
+    noi test_pass "nooutput option accepted and stores e(N)"
+}
+else {
+    noi test_fail "nooutput" "returned error or missing e(N)"
+}
+
+* Test title() - verify it runs without error
+sysuse auto, clear
+capture civreghdfe price (mpg = weight), absorb(foreign) title("Custom Title Test")
+if _rc == 0 {
+    noi test_pass "title() option accepted"
+}
+else {
+    noi test_fail "title()" "returned error `=_rc'"
+}
+
+* Test depname() - verify it sets e(depvar)
+sysuse auto, clear
+civreghdfe price (mpg = weight), absorb(foreign) depname("outcome_var")
+if "`e(depvar)'" == "outcome_var" {
+    noi test_pass "depname() sets e(depvar) correctly"
+}
+else {
+    noi test_fail "depname()" "e(depvar) = `e(depvar)' instead of outcome_var"
+}
+
+* Test noid - verify underid test is suppressed but e(idstat) still stored
+sysuse auto, clear
+civreghdfe price (mpg = weight length), absorb(foreign) noid
+if e(idstat) != . {
+    noi test_pass "noid suppresses display but e(idstat) still computed"
+}
+else {
+    noi test_fail "noid" "e(idstat) not stored"
+}
+
+* Test combined options
+sysuse auto, clear
+capture civreghdfe price (mpg = weight), absorb(foreign) noheader nofooter level(99)
+if _rc == 0 & e(level) == 99 {
+    noi test_pass "combined display options work together"
+}
+else {
+    noi test_fail "combined options" "returned error or wrong level"
+}
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 
