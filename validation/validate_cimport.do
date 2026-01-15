@@ -37,13 +37,14 @@ file write fh "4,Delta,400.1,C" _n
 file write fh "5,Epsilon,500.9,B" _n
 file close fh
 
-* Tab-delimited file
+* Tab-delimited file - use char(9) to ensure actual tab characters
+local tab = char(9)
 file open fh using "temp/tabfile.tsv", write replace
-file write fh "id	name	score	group" _n
-file write fh "1	John	85.5	X" _n
-file write fh "2	Jane	92.3	Y" _n
-file write fh "3	Bob	78.1	X" _n
-file write fh "4	Alice	95.7	Z" _n
+file write fh "id`tab'name`tab'score`tab'group" _n
+file write fh "1`tab'John`tab'85.5`tab'X" _n
+file write fh "2`tab'Jane`tab'92.3`tab'Y" _n
+file write fh "3`tab'Bob`tab'78.1`tab'X" _n
+file write fh "4`tab'Alice`tab'95.7`tab'Z" _n
 file close fh
 
 * Semicolon-delimited file

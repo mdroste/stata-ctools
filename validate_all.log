@@ -68,7 +68,7 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 Running comprehensive validation tests for all ctools commands.
 Each command is compared against its native Stata equivalent.
 
-Date: 14 Jan 2026 16:58:52
+Date: 14 Jan 2026 17:29:03
 Stata version: 18.5
 Platform: Unix Mac (Apple Silicon)
 
@@ -305,10 +305,7 @@ m:1 Merge Tests
 ----------------------------------------------------------------------
 m:m Merge Tests
 ----------------------------------------------------------------------
-
->>> [FAIL] m:m basic
->>>        merged data differs from Stata merge
-
+[PASS] m:m basic (N=100)
 
 ----------------------------------------------------------------------
 keep() Option Tests
@@ -396,27 +393,17 @@ nolabel/nonotes Options
 [PASS] nonotes option accepted
 
 ----------------------------------------------------------------------
-FAILED TESTS DETAIL:
-----------------------------------------------------------------------
-  1. m:m basic: merged data differs from Stata merge
-----------------------------------------------------------------------
-
-
-----------------------------------------------------------------------
 SUMMARY: cmerge
 ----------------------------------------------------------------------
-Tests passed: 38 / 39
-Tests failed: 1
+Tests passed: 39 / 39
+Tests failed: 0
 ----------------------------------------------------------------------
-VALIDATION FAILED - See failed tests above
+ALL TESTS PASSED
 ----------------------------------------------------------------------
---Break--
---Break--
---Break--
-r(1);
 
+. 
 end of do-file
-cmerge: FAILED (1 of 39 tests failed)
+cmerge: ALL TESTS PASSED (39/39)
 
 ======================================================================
   Running: cimport validation tests
@@ -460,10 +447,7 @@ Basic Comma-Delimited Import
 ----------------------------------------------------------------------
 Tab-Delimited Import
 ----------------------------------------------------------------------
-
->>> [FAIL] tab-delimited
->>>        dimensions differ
-
+[PASS] tab-delimited dimensions match
 
 ----------------------------------------------------------------------
 Semicolon-Delimited Import
@@ -533,27 +517,17 @@ Round-Trip Tests
 [PASS] census dataset round-trip
 
 ----------------------------------------------------------------------
-FAILED TESTS DETAIL:
-----------------------------------------------------------------------
-  1. tab-delimited: dimensions differ
-----------------------------------------------------------------------
-
-
-----------------------------------------------------------------------
 SUMMARY: cimport
 ----------------------------------------------------------------------
-Tests passed: 22 / 23
-Tests failed: 1
+Tests passed: 23 / 23
+Tests failed: 0
 ----------------------------------------------------------------------
-VALIDATION FAILED - See failed tests above
+ALL TESTS PASSED
 ----------------------------------------------------------------------
---Break--
---Break--
---Break--
-r(1);
 
+. 
 end of do-file
-cimport: FAILED (1 of 23 tests failed)
+cimport: ALL TESTS PASSED (23/23)
 
 ======================================================================
   Running: cexport validation tests
@@ -1073,51 +1047,35 @@ civreghdfe: ALL TESTS PASSED (33/33)
 #                     VALIDATION SUMMARY                             #
 ######################################################################
 
-----------------------------------------------------------------------
-ALL FAILED TESTS:
-----------------------------------------------------------------------
-
-  [cmerge] m:m basic: merged data differs from Stata merge
-  [cimport] tab-del
-> imited: dimensions differ
-----------------------------------------------------------------------
-
 Component Results:
 -------------------------------------------------------
   Command       Passed   Failed   Total    Status
 -------------------------------------------------------
   csort            80       0      80    PASS
-  cmerge           38       1      39    FAIL
-  cimport          22       1      23    FAIL
+  cmerge           39       0      39    PASS
+  cimport          23       0      23    PASS
   cexport          24       0      24    PASS
   creghdfe         36       0      36    PASS
   cqreg            35       0      35    PASS
   civreghdfe       33       0      33    PASS
 -------------------------------------------------------
-  TOTAL           268       2     270
+  TOTAL           270       0     270
 -------------------------------------------------------
 
 ######################################################################
 #                                                                    #
-#                   SOME VALIDATION TESTS FAILED                     #
+#                   ALL VALIDATION TESTS PASSED                      #
 #                                                                    #
 ######################################################################
 
-See 'ALL FAILED TESTS' section above for details.
-
-Completed: 14 Jan 2026 16:58:57
+Completed: 14 Jan 2026 17:29:08
 
 
 . 
 . * Return error code if any tests failed
 . if `total_failed' > 0 {
 .     exit 1
---Break--
-r(1);
 . }
---Break--
-r(1);
 
+. 
 end of do-file
---Break--
-r(1);

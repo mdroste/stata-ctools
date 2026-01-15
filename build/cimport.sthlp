@@ -39,9 +39,6 @@
 {synopt:{opt enc:oding(encoding)}}file encoding; currently only UTF-8 supported{p_end}
 {synopt:{opt rowr:ange([start][:end])}}range of rows to import{p_end}
 
-{syntab:Performance}
-{synopt:{opt fast}}use fast DTA mode (writes temp DTA file){p_end}
-
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
 {synoptline}
@@ -107,13 +104,6 @@ is supported.
 Use {opt rowrange(100:200)} to import rows 100-200, or {opt rowrange(100:)}
 to import from row 100 to the end.
 
-{dlgtab:Performance}
-
-{phang}
-{opt fast} uses a faster import method that writes a temporary DTA file and
-then loads it using Stata's native {cmd:use} command. This can be significantly
-faster for large files.
-
 {dlgtab:Reporting}
 
 {phang}
@@ -131,10 +121,6 @@ breakdown and throughput in MB/s.
 {p 8 12 2}2. {bf:Create:} Create variables with appropriate Stata types{p_end}
 {p 8 12 2}3. {bf:Load:} Load data into variables using parallel processing{p_end}
 
-{pstd}
-For very large files, the {opt fast} option can provide additional speed
-improvements by writing a temporary DTA file.
-
 
 {marker examples}{...}
 {title:Examples}
@@ -150,9 +136,6 @@ improvements by writing a temporary DTA file.
 
 {pstd}Import only rows 1000-2000:{p_end}
 {phang2}{cmd:. cimport delimited using bigdata.csv, clear rowrange(1000:2000)}{p_end}
-
-{pstd}Fast import for large files:{p_end}
-{phang2}{cmd:. cimport delimited using bigdata.csv, clear fast verbose}{p_end}
 
 
 {marker results}{...}

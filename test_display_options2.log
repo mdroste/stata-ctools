@@ -25,6 +25,50 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cimport.do 
-file validation/validate_cimport.do not found
-r(601);
+. do /tmp/test_display_options2.do 
+
+. * Test display options
+. clear all
+
+. set more off
+
+. adopath + "/Users/Mike/Documents/GitHub/stata-ctools/build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "/Users/Mike/Documents/GitHub/stata-ctools/build"
+
+. 
+. set seed 12345
+
+. set obs 500
+Number of observations (_N) was 0, now 500.
+
+. gen firm = ceil(_n/10)
+
+. gen z1 = rnormal()
+
+. gen z2 = rnormal()
+
+. gen x = rnormal()
+
+. gen u = rnormal()
+
+. gen endog_x = 0.5*z1 + 0.3*z2 + 0.2*u
+
+. gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
+
+. 
+. di _n "=== Test 1: level(90) ==="
+
+=== Test 1: level(90) ===
+
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm) level(90)
+civreghdfe: Z'Z is singular (instruments may be collinear)
+r(198);
+
+end of do-file
+r(198);

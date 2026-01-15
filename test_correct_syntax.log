@@ -25,8 +25,9 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_basic.do 
+. do /tmp/test_correct_syntax.do 
 
+. * Test with correct syntax
 . clear all
 
 . set more off
@@ -61,8 +62,9 @@ Number of observations (_N) was 0, now 500.
 . gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
 
 . 
-. di "Running basic test..."
-Running basic test...
+. * Correct syntax: depvar (endogvars = instruments) exogvars
+. di "Testing civreghdfe with correct syntax..."
+Testing civreghdfe with correct syntax...
 
 . civreghdfe y (endog_x = z1 z2) x, absorb(firm)
 

@@ -45,6 +45,7 @@ where {it:merge_type} is one of
 {synopt:{opt force}}allow string/numeric variable type mismatches{p_end}
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
+{synopt:{opt time:it}}display timing breakdown{p_end}
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
 {synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
@@ -109,6 +110,10 @@ numeric) in master and using datasets.
 during the merge operation.
 
 {phang}
+{opt timeit} displays a timing breakdown showing time spent in each phase of
+the merge operation.
+
+{phang}
 {opt nolabel} prevents value labels from being copied from the using dataset.
 By default, value labels attached to variables in the using dataset are copied
 to the merged result.
@@ -145,6 +150,13 @@ The algorithm uses:
 {pstd}
 For large datasets (millions of observations), {cmd:cmerge} can be 3-5x faster
 than the native {cmd:merge} command.
+
+{pstd}
+Due to the overhead of reading data from Stata into C memory and writing results
+back, the largest speedups occur when both the master and using datasets (or the
+variables specified in {opt keepusing()} if used) have relatively few variables
+and the dataset has many observations. For merges involving many variables,
+the data transfer overhead may reduce the relative performance advantage.
 
 
 {marker examples}{...}

@@ -36,6 +36,7 @@
 {syntab:SE/Robust}
 {synopt:{opt vce(vcetype)}}variance estimation method; {it:vcetype} may be
     {opt iid}, {opt robust}, or {opt cl:uster} {it:clustvar}{p_end}
+{synopt:{opt den:method(method)}}density estimation: {opt fitted}, {opt residual}, or {opt kernel}{p_end}
 {synopt:{opt bwmethod(method)}}bandwidth selection: {opt hsheather}, {opt bofinger}, or {opt chamberlain}{p_end}
 
 {syntab:Reporting}
@@ -44,7 +45,7 @@
 
 {syntab:Optimization}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-8)}{p_end}
-{synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(50)}{p_end}
+{synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
 {synopt:{opt nopreprocess(#)}}disable preprocessing algorithm; default is {cmd:nopreprocess(0)}{p_end}
 {synoptline}
 
@@ -109,6 +110,20 @@ Powell sandwich estimator.
 clustered on {it:clustvar}.
 
 {phang}
+{opt denmethod(method)} specifies the density estimation method for computing
+standard errors.
+
+{phang2}
+{opt denmethod(fitted)} (the default) uses the fitted (Siddiqui) method based on
+the difference quotient of the quantile function.
+
+{phang2}
+{opt denmethod(residual)} uses residual-based kernel density estimation.
+
+{phang2}
+{opt denmethod(kernel)} uses a full kernel density estimation approach.
+
+{phang}
 {opt bwmethod(method)} specifies the bandwidth selection method for kernel
 density estimation used in computing standard errors.
 
@@ -138,7 +153,7 @@ The default is {cmd:tolerance(1e-8)}.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default
-is {cmd:maxiter(50)}.
+is {cmd:maxiter(200)}.
 
 {phang}
 {opt nopreprocess(#)} controls the preprocessing algorithm from Chernozhukov,

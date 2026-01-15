@@ -83,6 +83,32 @@ program define cmerge, rclass
         }
     }
 
+    * Validate keep() option values upfront (before any data manipulation)
+    if "`keep'" != "" {
+        foreach k of local keep {
+            if "`k'" != "match" & "`k'" != "matched" & "`k'" != "3" ///
+             & "`k'" != "master" & "`k'" != "1" ///
+             & "`k'" != "using" & "`k'" != "2" {
+                di as error "cmerge: invalid keep() value: `k'"
+                di as error "  valid values: match (3), master (1), using (2)"
+                exit 198
+            }
+        }
+    }
+
+    * Validate assert() option values upfront (before any data manipulation)
+    if "`assert'" != "" {
+        foreach a of local assert {
+            if "`a'" != "match" & "`a'" != "matched" & "`a'" != "3" ///
+             & "`a'" != "master" & "`a'" != "1" ///
+             & "`a'" != "using" & "`a'" != "2" {
+                di as error "cmerge: invalid assert() value: `a'"
+                di as error "  valid values: match (3), master (1), using (2)"
+                exit 198
+            }
+        }
+    }
+
     * Validate using file exists (skip check for web URLs)
     local is_url = 0
     if substr(`"`using'"', 1, 7) == "http://" | substr(`"`using'"', 1, 8) == "https://" {
@@ -641,7 +667,7 @@ program define cmerge, rclass
     * Phase 3: Apply keep/assert options and display results
     * =========================================================================
 
-    * Handle keep option
+    * Handle keep option (already validated upfront)
     if "`keep'" != "" {
         local keep_codes ""
         foreach k of local keep {
@@ -653,10 +679,6 @@ program define cmerge, rclass
             }
             else if "`k'" == "using" | "`k'" == "2" {
                 local keep_codes "`keep_codes' 2"
-            }
-            else {
-                di as error "cmerge: invalid keep() value: `k'"
-                exit 198
             }
         }
 

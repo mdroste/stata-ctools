@@ -29,6 +29,12 @@ typedef struct {
     ST_int weight_type;      /* 0=none, 1=aweight, 2=fweight, 3=pweight, 4=iweight */
     ST_int verbose;          /* Verbose output */
     ST_int reportreg;        /* Report regression underlying binscatter */
+    /*
+     * Residualization method (following Cattaneo et al. "On Binscatter")
+     * 0 = classic: residualize both Y and X, bin on residualized X
+     * 1 = binsreg: bin on raw X, residualize Y only (conditional means)
+     */
+    ST_int method;
     /* HDFE parameters (if absorb specified) */
     ST_int maxiter;          /* CG solver max iterations */
     ST_double tolerance;     /* CG solver tolerance */

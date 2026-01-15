@@ -23,19 +23,31 @@
 {opt a:bsorb(varlist)}
 [{it:options}]
 
-{synoptset 24 tabbed}{...}
+{synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Model}
 {synopt:{opt a:bsorb(varlist)}}categorical variables representing fixed effects to absorb; required{p_end}
 
 {syntab:SE/Robust}
-{synopt:{opt vce(vcetype)}}variance-covariance estimator; currently supports {opt cluster} {it:varlist}{p_end}
+{synopt:{opt vce(vcetype)}}variance estimator; {opt robust} or {opt cluster} {it:clustvar}{p_end}
+
+{syntab:Convergence}
+{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:1e-8}{p_end}
+{synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:10000}{p_end}
+{synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
+
+{syntab:Residuals}
+{synopt:{opt resid}}create residual variable named {cmd:_creghdfe_resid}{p_end}
+{synopt:{opt resid2(newvar)}}create residual variable with specified name{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
-{synopt:{opt timeit}}display timing information{p_end}
+{synopt:{opt time:it}}display timing breakdown{p_end}
 {synoptline}
+
+{pstd}
+{it:weight}s are allowed; {opt aweight}s, {opt fweight}s, and {opt pweight}s are supported.
 
 
 {marker description}{...}
@@ -64,8 +76,33 @@ effects are to be absorbed. This option is required.
 {dlgtab:SE/Robust}
 
 {phang}
-{opt vce(cluster varlist)} computes cluster-robust standard errors, clustering
-on the specified variables.
+{opt vce(robust)} computes heteroskedasticity-robust standard errors.
+
+{phang}
+{opt vce(cluster clustvar)} computes cluster-robust standard errors, clustering
+on the specified variable.
+
+{dlgtab:Convergence}
+
+{phang}
+{opt tolerance(#)} specifies the convergence tolerance for the iterative
+demeaning algorithm. The default is {cmd:1e-8}.
+
+{phang}
+{opt maxiter(#)} specifies the maximum number of iterations for the
+demeaning algorithm. The default is {cmd:10000}.
+
+{phang}
+{opt nostandardize} specifies that variables should not be standardized
+before the iterative algorithm. This may affect convergence speed.
+
+{dlgtab:Residuals}
+
+{phang}
+{opt resid} stores residuals in a new variable named {cmd:_creghdfe_resid}.
+
+{phang}
+{opt resid2(newvar)} stores residuals in a new variable with the specified name.
 
 {dlgtab:Reporting}
 
@@ -74,7 +111,7 @@ on the specified variables.
 including timing for each stage of the computation.
 
 {phang}
-{opt timeit} displays total elapsed time for the estimation.
+{opt timeit} displays timing breakdown for the estimation.
 
 
 {marker examples}{...}

@@ -25,8 +25,9 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_basic.do 
+. do /tmp/test_cluster.do 
 
+. * Test with clustering
 . clear all
 
 . set more off
@@ -48,6 +49,8 @@ Number of observations (_N) was 0, now 500.
 
 . gen firm = ceil(_n/10)
 
+. gen year = mod(_n-1, 10) + 2000
+
 . gen z1 = rnormal()
 
 . gen z2 = rnormal()
@@ -61,42 +64,53 @@ Number of observations (_N) was 0, now 500.
 . gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
 
 . 
-. di "Running basic test..."
-Running basic test...
+. di _n "===================="
 
-. civreghdfe y (endog_x = z1 z2) x, absorb(firm)
+====================
+
+. di "Test: Two FEs with clustering on firm (FE nested in cluster)"
+Test: Two FEs with clustering on firm (FE nested in cluster)
+
+. di "===================="
+====================
+
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm year) vce(cluster firm)
 
 IV (2SLS) estimation
 --------------------
 
 Estimates efficient for homoskedasticity only
-Statistics consistent for homoskedasticity only
+Statistics robust to heteroskedasticity and clustering on firm
 
-                                                      Number of obs =      500
-                                                      F(  2,   448) =   669.93
+Number of clusters (firm) =        50                 Number of obs =      500
+                                                      F(  2,    49) =   734.38
                                                       Prob > F      =   0.0000
-Total (centered) SS     =  2308.9                     Centered R2   =   0.7747
-Total (uncentered) SS   =  2308.9                     Uncentered R2 =   0.7747
-Residual SS             =  520.1                      Root MSE      =        1
+Total (centered) SS     =  2237.9                     Centered R2   =   0.7717
+Total (uncentered) SS   =  2237.9                     Uncentered R2 =   0.7717
+Residual SS             =  511.0                      Root MSE      =        1
 
+                                  (Std. err. adjusted for 50 clusters in firm)
 ------------------------------------------------------------------------------
-           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+             |               Cluster
+           y | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
 -------------+----------------------------------------------------------------
-     endog_x |     2.0905   .0852746    24.51   0.000     1.922912    2.258088
-           x |   1.484181   .0498034    29.80   0.000     1.386304    1.582058
+     endog_x |   2.068094   .0878361    23.54   0.000     1.895462    2.240726
+           x |   1.481562    .054132    27.37   0.000     1.375172    1.587952
 ------------------------------------------------------------------------------
-Underidentification test (Anderson canon. corr. LM statistic):         451.991
+Underidentification test (Kleibergen-Paap rk LM statistic):             40.396
                                                    Chi-sq(2) P-val =    0.0000
 ------------------------------------------------------------------------------
-Weak identification test (Cragg-Donald Wald F statistic):             2104.192
+Weak identification test (Cragg-Donald Wald F statistic):             2341.137
+                         (Kleibergen-Paap rk Wald F statistic):       2664.186
 Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
                                          15% maximal IV size             11.59
                                          20% maximal IV size              8.75
                                          25% maximal IV size              7.25
 Source: Stock-Yogo (2005).  Reproduced by permission.
+NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
 ------------------------------------------------------------------------------
-Sargan statistic (overidentification test of all instruments):           0.001
-                                                   Chi-sq(1) P-val =    0.9814
+Hansen J statistic (overidentification test of all instruments):         0.050
+                                                   Chi-sq(1) P-val =    0.8230
 ------------------------------------------------------------------------------
 Instrumented:         endog_x
 Included instruments: x
@@ -111,12 +125,16 @@ Absorbed degrees of freedom:
 -----------------------------------------------------+
  Absorbed FE | Categories  - Redundant  = Num. Coefs |
 -------------+---------------------------------------|
-        firm |        50           0          50     |
+        firm |        50          50           0    *|
+        year |        10           1           9     |
 -----------------------------------------------------+
+* = FE nested within cluster; treated as redundant for DoF computation
 
 
-. di "Done!"
-Done!
+. 
+. di _n "Test passed!"
+
+Test passed!
 
 . 
 end of do-file

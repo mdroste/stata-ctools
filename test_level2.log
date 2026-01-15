@@ -25,7 +25,7 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_basic.do 
+. do /tmp/test_level2.do 
 
 . clear all
 
@@ -61,8 +61,8 @@ Number of observations (_N) was 0, now 500.
 . gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
 
 . 
-. di "Running basic test..."
-Running basic test...
+. di "Test 1: Basic (no level)"
+Test 1: Basic (no level)
 
 . civreghdfe y (endog_x = z1 z2) x, absorb(firm)
 
@@ -115,8 +115,88 @@ Absorbed degrees of freedom:
 -----------------------------------------------------+
 
 
-. di "Done!"
-Done!
+. di "Test 1 passed, e(level) = " e(level)
+Test 1 passed, e(level) = 95
+
+. 
+. clear all
+
+. set seed 12345
+
+. set obs 500
+Number of observations (_N) was 0, now 500.
+
+. gen firm = ceil(_n/10)
+
+. gen z1 = rnormal()
+
+. gen z2 = rnormal()
+
+. gen x = rnormal()
+
+. gen u = rnormal()
+
+. gen endog_x = 0.5*z1 + 0.3*z2 + 0.2*u
+
+. gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
+
+. 
+. di "Test 2: With level(90)"
+Test 2: With level(90)
+
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm) level(90)
+
+IV (2SLS) estimation
+--------------------
+
+Estimates efficient for homoskedasticity only
+Statistics consistent for homoskedasticity only
+
+                                                      Number of obs =      500
+                                                      F(  2,   448) =   669.93
+                                                      Prob > F      =   0.0000
+Total (centered) SS     =  2308.9                     Centered R2   =   0.7747
+Total (uncentered) SS   =  2308.9                     Uncentered R2 =   0.7747
+Residual SS             =  520.1                      Root MSE      =        1
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [90% conf. interval]
+-------------+----------------------------------------------------------------
+     endog_x |     2.0905   .0852746    24.51   0.000     1.949945    2.231055
+           x |   1.484181   .0498034    29.80   0.000     1.402092     1.56627
+------------------------------------------------------------------------------
+Underidentification test (Anderson canon. corr. LM statistic):         451.991
+                                                   Chi-sq(2) P-val =    0.0000
+------------------------------------------------------------------------------
+Weak identification test (Cragg-Donald Wald F statistic):             2104.192
+Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
+                                         15% maximal IV size             11.59
+                                         20% maximal IV size              8.75
+                                         25% maximal IV size              7.25
+Source: Stock-Yogo (2005).  Reproduced by permission.
+------------------------------------------------------------------------------
+Sargan statistic (overidentification test of all instruments):           0.001
+                                                   Chi-sq(1) P-val =    0.9814
+------------------------------------------------------------------------------
+Instrumented:         endog_x
+Included instruments: x
+Excluded instruments: z1 z2
+Partialled-out:       _cons
+                      nb: total SS, model F and R2s are after partialling-out;
+                          any small-sample adjustments include partialled-out
+                          variables in regressor count K
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+        firm |        50           0          50     |
+-----------------------------------------------------+
+
+
+. di "Test 2 passed, e(level) = " e(level)
+Test 2 passed, e(level) = 90
 
 . 
 end of do-file

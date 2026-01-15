@@ -39,6 +39,7 @@ program define cbinscatter, eclass sortpreserve
         [NOgraph] ///
         [Verbose] ///
         [TIMEit] ///
+        [METHod(string)] ///
         /* Graph options */ ///
         [TITLE(string)] ///
         [YTItle(string)] ///
@@ -48,6 +49,99 @@ program define cbinscatter, eclass sortpreserve
         [MSYMbols(string)] ///
         [MLAbels(string)] ///
         [*]
+
+    * =========================================================================
+    * UPFRONT VALIDATION - check all options before any data manipulation
+    * This ensures errors don't leave the dataset in a bad state
+    * =========================================================================
+
+    * Clean up any leftover frame from a previous failed run
+    capture frame drop _ctools_graph_frame
+
+    * Validate nquantiles early
+    if `nquantiles' < 2 | `nquantiles' > 1000 {
+        di as error "cbinscatter: nquantiles must be between 2 and 1000"
+        exit 198
+    }
+
+    * Validate linetype option early
+    local linetype_num = 1   // Default to linear
+    if "`linetype'" == "" {
+        local linetype = "linear"
+        local linetype_num = 1
+    }
+    else {
+        local linetype_lower = lower("`linetype'")
+        if "`linetype_lower'" == "none" | "`linetype_lower'" == "n" {
+            local linetype_num = 0
+        }
+        else if "`linetype_lower'" == "linear" | "`linetype_lower'" == "line" | "`linetype_lower'" == "lfit" {
+            local linetype_num = 1
+        }
+        else if "`linetype_lower'" == "quadratic" | "`linetype_lower'" == "qfit" {
+            local linetype_num = 2
+        }
+        else if "`linetype_lower'" == "cubic" {
+            local linetype_num = 3
+        }
+        else if "`linetype_lower'" == "connect" {
+            local linetype_num = 0  // No fit, just connected points
+        }
+        else {
+            di as error "cbinscatter: invalid linetype() option: `linetype'"
+            di as error "  valid options: none, linear, qfit, cubic, connect"
+            exit 198
+        }
+    }
+
+    * Validate method option early (Cattaneo et al. "On Binscatter")
+    * 0 = classic (default): residualize both Y and X, bin on residualized X
+    * 1 = binsreg: bin on raw X, residualize Y only (conditional means)
+    local method_num = 0   // Default to classic
+    if "`method'" != "" {
+        local method_lower = lower("`method'")
+        if "`method_lower'" == "classic" | "`method_lower'" == "c" | "`method_lower'" == "residualize" {
+            local method_num = 0
+        }
+        else if "`method_lower'" == "binsreg" | "`method_lower'" == "b" | "`method_lower'" == "conditional" {
+            local method_num = 1
+        }
+        else {
+            di as error "cbinscatter: invalid method() option: `method'"
+            di as error "  valid options: classic, binsreg"
+            exit 198
+        }
+    }
+
+    * Validate savedata filename if specified (check directory exists)
+    if "`savedata'" != "" {
+        * Extract directory path
+        local savedir = ""
+        local lastslash = max(strpos(reverse("`savedata'"), "/"), strpos(reverse("`savedata'"), "\"))
+        if `lastslash' > 0 {
+            local savedir = substr("`savedata'", 1, strlen("`savedata'") - `lastslash')
+        }
+        if "`savedir'" != "" {
+            capture confirm file "`savedir'/."
+            if _rc {
+                di as error "cbinscatter: directory does not exist for savedata(): `savedir'"
+                exit 601
+            }
+        }
+    }
+
+    * Validate genxq variable name if specified
+    if "`genxq'" != "" {
+        capture confirm new variable `genxq'
+        if _rc {
+            di as error "cbinscatter: genxq() variable already exists: `genxq'"
+            exit 110
+        }
+    }
+
+    * =========================================================================
+    * END UPFRONT VALIDATION - now proceed with data processing
+    * =========================================================================
 
     * Parse weight (before marksample to include weight var)
     local weight_var ""
@@ -75,41 +169,6 @@ program define cbinscatter, eclass sortpreserve
     gettoken depvar xvar : varlist
     local depvar = trim("`depvar'")
     local xvar = trim("`xvar'")
-
-    * Parse linetype option
-    local linetype_num = 1   // Default to linear
-    if "`linetype'" == "" {
-        local linetype = "linear"
-        local linetype_num = 1
-    }
-    else {
-        local linetype_lower = lower("`linetype'")
-        if "`linetype_lower'" == "none" | "`linetype_lower'" == "n" {
-            local linetype_num = 0
-        }
-        else if "`linetype_lower'" == "linear" | "`linetype_lower'" == "line" | "`linetype_lower'" == "lfit" {
-            local linetype_num = 1
-        }
-        else if "`linetype_lower'" == "quadratic" | "`linetype_lower'" == "qfit" {
-            local linetype_num = 2
-        }
-        else if "`linetype_lower'" == "cubic" {
-            local linetype_num = 3
-        }
-        else if "`linetype_lower'" == "connect" {
-            local linetype_num = 0  // No fit, just connected points
-        }
-        else {
-            di as error "cbinscatter: invalid linetype option"
-            exit 198
-        }
-    }
-
-    * Validate nquantiles
-    if `nquantiles' < 2 | `nquantiles' > 1000 {
-        di as error "cbinscatter: nquantiles must be between 2 and 1000"
-        exit 198
-    }
 
     * Count control and absorb variables
     local num_controls = 0
@@ -218,6 +277,7 @@ program define cbinscatter, eclass sortpreserve
     scalar __cbinscatter_weight_type = `weight_type'
     scalar __cbinscatter_verbose = ("`verbose'" != "")
     scalar __cbinscatter_reportreg = ("`reportreg'" != "")
+    scalar __cbinscatter_method = `method_num'
     scalar __cbinscatter_maxiter = 10000
     scalar __cbinscatter_tolerance = 1e-8
 
@@ -288,8 +348,8 @@ program define cbinscatter, eclass sortpreserve
         capture scalar drop __cbinscatter_has_absorb __cbinscatter_num_absorb
         capture scalar drop __cbinscatter_has_by __cbinscatter_has_weights
         capture scalar drop __cbinscatter_weight_type __cbinscatter_verbose
-        capture scalar drop __cbinscatter_reportreg __cbinscatter_maxiter
-        capture scalar drop __cbinscatter_tolerance
+        capture scalar drop __cbinscatter_reportreg __cbinscatter_method
+        capture scalar drop __cbinscatter_maxiter __cbinscatter_tolerance
         capture matrix drop __cbinscatter_bins
         capture matrix drop __cbinscatter_coefs
         capture matrix drop __cbinscatter_fit_stats
@@ -518,12 +578,13 @@ program define cbinscatter, eclass sortpreserve
 
         if `_use_frame' {
             * Stata 16+: use frames for speed (no preserve/restore overhead)
+            * Use capture to ensure proper cleanup if twoway fails
             local _orig_frame = c(frame)
             capture frame drop _ctools_graph_frame
             frame create _ctools_graph_frame
             frame change _ctools_graph_frame
 
-            twoway `scatters' `fits', ///
+            capture noisily twoway `scatters' `fits', ///
                 graphregion(fcolor(white)) ///
                 ytitle(`"`ytitle'"') ///
                 xtitle(`"`xtitle'"') ///
@@ -531,15 +592,24 @@ program define cbinscatter, eclass sortpreserve
                 `title_opt' ///
                 `options'
 
+            local _graph_rc = _rc
+
+            * Always clean up frame, even on error
             frame change `_orig_frame'
-            frame drop _ctools_graph_frame
+            capture frame drop _ctools_graph_frame
+
+            if `_graph_rc' {
+                di as error "cbinscatter: graph generation failed (rc=`_graph_rc')"
+                exit `_graph_rc'
+            }
         }
         else {
             * Stata 14-15: fall back to preserve/keep/restore
+            * Use capture to ensure restore happens even on error
             preserve
             qui keep in 1/1
 
-            twoway `scatters' `fits', ///
+            capture noisily twoway `scatters' `fits', ///
                 graphregion(fcolor(white)) ///
                 ytitle(`"`ytitle'"') ///
                 xtitle(`"`xtitle'"') ///
@@ -547,7 +617,13 @@ program define cbinscatter, eclass sortpreserve
                 `title_opt' ///
                 `options'
 
+            local _graph_rc = _rc
             restore
+
+            if `_graph_rc' {
+                di as error "cbinscatter: graph generation failed (rc=`_graph_rc')"
+                exit `_graph_rc'
+            }
         }
     }
 
@@ -584,8 +660,8 @@ program define cbinscatter, eclass sortpreserve
     capture scalar drop __cbinscatter_has_absorb __cbinscatter_num_absorb
     capture scalar drop __cbinscatter_has_by __cbinscatter_has_weights
     capture scalar drop __cbinscatter_weight_type __cbinscatter_verbose
-    capture scalar drop __cbinscatter_reportreg __cbinscatter_maxiter
-    capture scalar drop __cbinscatter_tolerance
+    capture scalar drop __cbinscatter_reportreg __cbinscatter_method
+    capture scalar drop __cbinscatter_maxiter __cbinscatter_tolerance
     capture scalar drop __cbinscatter_N __cbinscatter_N_dropped __cbinscatter_num_groups
     capture scalar drop __cbinscatter_time_load __cbinscatter_time_resid
     capture scalar drop __cbinscatter_time_bins __cbinscatter_time_fit __cbinscatter_time_total

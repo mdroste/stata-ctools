@@ -49,6 +49,7 @@ void cbinscatter_config_init(BinscatterConfig *config) {
     config->weight_type = 0;
     config->verbose = 0;
     config->reportreg = 0;
+    config->method = 0;  /* 0=classic, 1=binsreg */
     config->maxiter = 10000;
     config->tolerance = 1e-8;
 }
@@ -140,6 +141,9 @@ static ST_retcode read_config(BinscatterConfig *config) {
     }
     if (SF_scal_use("__cbinscatter_reportreg", &val) == 0) {
         config->reportreg = (ST_int)val;
+    }
+    if (SF_scal_use("__cbinscatter_method", &val) == 0) {
+        config->method = (ST_int)val;
     }
     if (SF_scal_use("__cbinscatter_maxiter", &val) == 0) {
         config->maxiter = (ST_int)val;
@@ -534,20 +538,53 @@ static ST_retcode do_compute_bins(void) {
     if (config.has_controls || config.has_absorb) {
         ST_int dropped = 0;
 
-        if (config.has_absorb && config.has_controls) {
-            rc = combined_residualize(y, x, controls, fe_vars, N_valid,
-                                      config.num_controls, config.num_absorb,
+        if (config.verbose) {
+            if (config.method == 1) {
+                SF_display("cbinscatter: using binsreg method (bin on raw X, residualize Y only)\n");
+            } else {
+                SF_display("cbinscatter: using classic method (residualize both X and Y)\n");
+            }
+        }
+
+        /*
+         * Method 0 (classic): Residualize both Y and X, bin on residualized X
+         * Method 1 (binsreg): Only residualize Y, bin on raw X
+         *   (Cattaneo et al. "On Binscatter" approach)
+         */
+        if (config.method == 1) {
+            /* Binsreg method: Y-only residualization */
+            if (config.has_absorb && config.has_controls) {
+                rc = combined_residualize_y_only(y, controls, fe_vars, N_valid,
+                                                  config.num_controls, config.num_absorb,
+                                                  weights, config.weight_type,
+                                                  config.maxiter, config.tolerance,
+                                                  config.verbose, &dropped);
+            } else if (config.has_absorb) {
+                rc = hdfe_residualize_y_only(y, fe_vars, N_valid, config.num_absorb,
+                                              weights, config.weight_type,
+                                              config.maxiter, config.tolerance,
+                                              config.verbose, &dropped);
+            } else {
+                rc = ols_residualize_y_only(y, controls, N_valid, config.num_controls,
+                                             weights, config.weight_type);
+            }
+        } else {
+            /* Classic method: Residualize both Y and X */
+            if (config.has_absorb && config.has_controls) {
+                rc = combined_residualize(y, x, controls, fe_vars, N_valid,
+                                          config.num_controls, config.num_absorb,
+                                          weights, config.weight_type,
+                                          config.maxiter, config.tolerance,
+                                          config.verbose, &dropped);
+            } else if (config.has_absorb) {
+                rc = hdfe_residualize(y, x, fe_vars, N_valid, config.num_absorb,
                                       weights, config.weight_type,
                                       config.maxiter, config.tolerance,
                                       config.verbose, &dropped);
-        } else if (config.has_absorb) {
-            rc = hdfe_residualize(y, x, fe_vars, N_valid, config.num_absorb,
-                                  weights, config.weight_type,
-                                  config.maxiter, config.tolerance,
-                                  config.verbose, &dropped);
-        } else {
-            rc = ols_residualize(y, x, controls, N_valid, config.num_controls,
-                                 weights, config.weight_type);
+            } else {
+                rc = ols_residualize(y, x, controls, N_valid, config.num_controls,
+                                     weights, config.weight_type);
+            }
         }
 
         if (rc != CBINSCATTER_OK) {

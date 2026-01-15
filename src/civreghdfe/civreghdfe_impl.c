@@ -1144,6 +1144,10 @@ static ST_retcode do_iv_regression(void)
         if (nested_fe_index > 0 && g == (nested_fe_index - 1)) {
             df_a_nested = state->factors[g].num_levels;
         }
+        /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
+        char scalar_name[64];
+        snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_num_levels_%d", (int)(g + 1));
+        SF_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
     }
     if (G > 1) df_a -= (G - 1);  /* Subtract redundant levels for multi-way FE */
 

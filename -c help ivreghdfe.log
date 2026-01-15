@@ -25,6 +25,6 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do validation/validate_cimport.do 
-file validation/validate_cimport.do not found
+. do -c help ivreghdfe 
+file -c.do not found
 r(601);

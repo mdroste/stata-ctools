@@ -16,6 +16,53 @@ program define csort
 
     syntax varlist [if] [in], [Verbose TIMEit ALGorithm(string)]
 
+    * =========================================================================
+    * UPFRONT VALIDATION - check all options before any data manipulation
+    * =========================================================================
+
+    * Count variables for the sort
+    local nvars : word count `varlist'
+    if (`nvars' == 0) {
+        di as error "csort: no sort variables specified"
+        exit 198
+    }
+
+    * Validate algorithm option early (before any data operations)
+    local alg_code ""
+    if "`algorithm'" != "" {
+        local algorithm = lower("`algorithm'")
+        if "`algorithm'" == "lsd" | "`algorithm'" == "0" {
+            local alg_code "alg=lsd"
+        }
+        else if "`algorithm'" == "msd" | "`algorithm'" == "1" {
+            local alg_code "alg=msd"
+        }
+        else if "`algorithm'" == "timsort" | "`algorithm'" == "tim" | "`algorithm'" == "2" {
+            local alg_code "alg=timsort"
+        }
+        else if "`algorithm'" == "sample" | "`algorithm'" == "3" {
+            local alg_code "alg=sample"
+        }
+        else if "`algorithm'" == "counting" | "`algorithm'" == "count" | "`algorithm'" == "4" {
+            local alg_code "alg=counting"
+        }
+        else if "`algorithm'" == "merge" | "`algorithm'" == "5" {
+            local alg_code "alg=merge"
+        }
+        else if "`algorithm'" == "ips4o" | "`algorithm'" == "6" {
+            local alg_code "alg=ips4o"
+        }
+        else {
+            di as error "csort: invalid algorithm '`algorithm''"
+            di as error "Valid options: lsd (default), msd, timsort, sample, counting, merge, ips4o"
+            exit 198
+        }
+    }
+
+    * =========================================================================
+    * END UPFRONT VALIDATION
+    * =========================================================================
+
     * Start overall wall-clock timer
     local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
     if `__do_timing' {
@@ -29,14 +76,6 @@ program define csort
 
     * Mark sample
     marksample touse, novarlist
-
-    * Count variables for the sort
-    local nvars : word count `varlist'
-
-    if (`nvars' == 0) {
-        di as error "csort: no sort variables specified"
-        exit 198
-    }
 
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
@@ -110,38 +149,6 @@ program define csort
                 continue, break
             }
             local ++idx
-        }
-    }
-
-    * Parse algorithm option
-    local alg_code ""
-    if "`algorithm'" != "" {
-        local algorithm = lower("`algorithm'")
-        if "`algorithm'" == "lsd" | "`algorithm'" == "0" {
-            local alg_code "alg=lsd"
-        }
-        else if "`algorithm'" == "msd" | "`algorithm'" == "1" {
-            local alg_code "alg=msd"
-        }
-        else if "`algorithm'" == "timsort" | "`algorithm'" == "tim" | "`algorithm'" == "2" {
-            local alg_code "alg=timsort"
-        }
-        else if "`algorithm'" == "sample" | "`algorithm'" == "3" {
-            local alg_code "alg=sample"
-        }
-        else if "`algorithm'" == "counting" | "`algorithm'" == "count" | "`algorithm'" == "4" {
-            local alg_code "alg=counting"
-        }
-        else if "`algorithm'" == "merge" | "`algorithm'" == "5" {
-            local alg_code "alg=merge"
-        }
-        else if "`algorithm'" == "ips4o" | "`algorithm'" == "6" {
-            local alg_code "alg=ips4o"
-        }
-        else {
-            di as error "csort: invalid algorithm '`algorithm''"
-            di as error "Valid options: lsd (default), msd, timsort, sample, counting, merge, ips4o"
-            exit 198
         }
     }
 

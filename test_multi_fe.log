@@ -25,8 +25,9 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_basic.do 
+. do /tmp/test_multi_fe.do 
 
+. * Test with multiple FEs
 . clear all
 
 . set more off
@@ -46,7 +47,9 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 . set obs 500
 Number of observations (_N) was 0, now 500.
 
-. gen firm = ceil(_n/10)
+. gen firm = ceil(_n/10)     // 50 firms
+
+. gen year = mod(_n-1, 10) + 2000  // 10 years
 
 . gen z1 = rnormal()
 
@@ -61,8 +64,15 @@ Number of observations (_N) was 0, now 500.
 . gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
 
 . 
-. di "Running basic test..."
-Running basic test...
+. di _n "===================="
+
+====================
+
+. di "Test 1: Single FE (firm)"
+Test 1: Single FE (firm)
+
+. di "===================="
+====================
 
 . civreghdfe y (endog_x = z1 z2) x, absorb(firm)
 
@@ -115,8 +125,83 @@ Absorbed degrees of freedom:
 -----------------------------------------------------+
 
 
-. di "Done!"
-Done!
+. 
+. di _n "===================="
+
+====================
+
+. di "Test 2: Two FEs (firm year)"
+Test 2: Two FEs (firm year)
+
+. di "===================="
+====================
+
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm year)
+
+IV (2SLS) estimation
+--------------------
+
+Estimates efficient for homoskedasticity only
+Statistics consistent for homoskedasticity only
+
+                                                      Number of obs =      500
+                                                      F(  2,   439) =   646.96
+                                                      Prob > F      =   0.0000
+Total (centered) SS     =  2237.9                     Centered R2   =   0.7717
+Total (uncentered) SS   =  2237.9                     Uncentered R2 =   0.7717
+Residual SS             =  511.0                      Root MSE      =        1
+
+------------------------------------------------------------------------------
+           y | Coefficient  Std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+     endog_x |   2.068094   .0862356    23.98   0.000     1.898608     2.23758
+           x |   1.481562   .0504569    29.36   0.000     1.382395    1.580729
+------------------------------------------------------------------------------
+Underidentification test (Anderson canon. corr. LM statistic):         452.807
+                                                   Chi-sq(2) P-val =    0.0000
+------------------------------------------------------------------------------
+Weak identification test (Cragg-Donald Wald F statistic):             2101.267
+Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
+                                         15% maximal IV size             11.59
+                                         20% maximal IV size              8.75
+                                         25% maximal IV size              7.25
+Source: Stock-Yogo (2005).  Reproduced by permission.
+------------------------------------------------------------------------------
+Sargan statistic (overidentification test of all instruments):           0.046
+                                                   Chi-sq(1) P-val =    0.8296
+------------------------------------------------------------------------------
+Instrumented:         endog_x
+Included instruments: x
+Excluded instruments: z1 z2
+Partialled-out:       _cons
+                      nb: total SS, model F and R2s are after partialling-out;
+                          any small-sample adjustments include partialled-out
+                          variables in regressor count K
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+        firm |        50           0          50     |
+        year |        10           1           9     |
+-----------------------------------------------------+
+
 
 . 
+. di _n "===================="
+
+====================
+
+. di "Test 3: Two FEs with clustering on firm"
+Test 3: Two FEs with clustering on firm
+
+. di "===================="
+====================
+
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm year) cluster(firm)
+option cluster() not allowed
+r(198);
+
 end of do-file
+r(198);

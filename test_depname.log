@@ -25,7 +25,7 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do /tmp/test_basic.do 
+. do /tmp/test_depname.do 
 
 . clear all
 
@@ -61,10 +61,7 @@ Number of observations (_N) was 0, now 500.
 . gen y = 1 + 2*endog_x + 1.5*x + 0.5*u + rnormal()
 
 . 
-. di "Running basic test..."
-Running basic test...
-
-. civreghdfe y (endog_x = z1 z2) x, absorb(firm)
+. civreghdfe y (endog_x = z1 z2) x, absorb(firm) depname("outcome")
 
 IV (2SLS) estimation
 --------------------
@@ -115,8 +112,58 @@ Absorbed degrees of freedom:
 -----------------------------------------------------+
 
 
-. di "Done!"
-Done!
+. di "e(depvar) = `e(depvar)'"
+e(depvar) = y
+
+. ereturn list
+
+scalars:
+                  e(N) =  500
+               e(df_r) =  448
+               e(df_a) =  50
+                  e(K) =  2
+              e(level) =  95
+            e(K_endog) =  1
+             e(K_exog) =  1
+               e(K_iv) =  3
+                  e(G) =  1
+           e(F_first1) =  2104.191976078934
+                e(rss) =  520.1053911974843
+                e(tss) =  2308.945364994116
+                 e(r2) =  .7747433096153794
+               e(rmse) =  1.077473681313356
+                  e(F) =  669.9253386913067
+             e(idstat) =  451.9910704902432
+               e(iddf) =  2
+                e(idp) =  7.10208896566e-99
+             e(sargan) =  .0005413500708867
+          e(sargan_df) =  1
+            e(endog_p) =  2.49637164442e-20
+           e(endog_df) =  1
+            e(endog_f) =  85.35257122458653
+         e(endog_chi2) =  85.35257122458653
+            e(widstat) =  2104.191976078934
+               e(cd_f) =  2104.191976078934
+           e(sargan_p) =  .9814373499329541
+
+macros:
+              e(model) : "2sls"
+              e(title) : "IV (2SLS) regression with HDFE"
+             e(absorb) : "firm"
+        e(instruments) : "z1 z2"
+           e(exogvars) : "x"
+          e(endogvars) : "endog_x"
+             e(depvar) : "y"
+            e(cmdline) : "civreghdfe y (endog_x = z1 z2) x"
+                e(cmd) : "civreghdfe"
+         e(properties) : "b V"
+
+matrices:
+                  e(b) :  1 x 2
+                  e(V) :  2 x 2
+
+functions:
+             e(sample)   
 
 . 
 end of do-file

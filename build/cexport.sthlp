@@ -35,6 +35,7 @@
 {synopt:{opt quote}}quote all string fields{p_end}
 {synopt:{opt noquoteif}}do not automatically quote strings containing delimiters{p_end}
 {synopt:{opt datafmt}}use display formats for numeric variables (not yet implemented){p_end}
+{synopt:{opt nolabel}}export values instead of value labels{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -86,6 +87,10 @@ contain the delimiter character.
 {phang}
 {opt datafmt} specifies that numeric variables should be formatted according
 to their display format. (Not yet implemented.)
+
+{phang}
+{opt nolabel} specifies that numeric values should be exported as raw values
+instead of their value labels.
 
 {dlgtab:Reporting}
 

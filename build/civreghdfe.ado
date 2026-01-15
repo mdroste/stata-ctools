@@ -26,7 +26,14 @@ program define civreghdfe, eclass sortpreserve
         KERNEL(string) ///
         DKRAAY(integer 0) ///
         RESiduals(name) ///
-        NOConstant]
+        NOConstant ///
+        Level(cilevel) ///
+        noHEADer ///
+        noFOOTer ///
+        noOUTput ///
+        TItle(string) ///
+        DEPname(string) ///
+        noid]
 
     * Start timing
     if "`timeit'" != "" {
@@ -416,6 +423,36 @@ program define civreghdfe, eclass sortpreserve
     local rmse = __civreghdfe_rmse
     local F_model = __civreghdfe_F
 
+    * Get number of levels for each FE (for absorbed DOF table)
+    forval g = 1/`G' {
+        capture local fe_levels_`g' = __civreghdfe_num_levels_`g'
+        if _rc != 0 local fe_levels_`g' = .
+        local fe_nested_`g' = 0
+    }
+
+    * Detect FEs nested within cluster variable (for df_a adjustment)
+    if `vce_type' == 2 & "`cluster_var'" != "" {
+        forval g = 1/`G' {
+            local fevar : word `g' of `absorb'
+            * Check if this absorbed FE variable is the same as the cluster variable
+            if "`fevar'" == "`cluster_var'" {
+                * This FE is identical to the cluster variable - all its levels are nested
+                local fe_nested_`g' = 1
+            }
+            else {
+                * Check if FE is nested within cluster (every FE level maps to exactly one cluster)
+                tempvar fe_clust_check
+                qui bysort `fevar' (`cluster_var'): gen byte `fe_clust_check' = (`cluster_var'[1] != `cluster_var'[_N]) if `touse'
+                qui summ `fe_clust_check' if `touse', meanonly
+                if r(max) == 0 {
+                    * Each FE level maps to exactly one cluster - FE is nested within cluster
+                    local fe_nested_`g' = 1
+                }
+                drop `fe_clust_check'
+            }
+        }
+    }
+
     if `vce_type' == 2 {
         local N_clust = __civreghdfe_N_clust
     }
@@ -507,13 +544,15 @@ program define civreghdfe, eclass sortpreserve
 
     * Post results
     ereturn clear
-    ereturn post `b_temp' `V_temp', esample(`touse') depname(`depvar')
+    local depname_use = cond("`depname'" != "", "`depname'", "`depvar'")
+    ereturn post `b_temp' `V_temp', esample(`touse') depname(`depname_use')
 
     * Store scalars
     ereturn scalar N = `N_used'
     ereturn scalar df_r = `df_r'
     ereturn scalar df_a = `df_a'
     ereturn scalar K = `K'
+    ereturn scalar level = `level'
     ereturn scalar K_endog = `K_endog'
     ereturn scalar K_exog = `K_exog'
     ereturn scalar K_iv = `K_iv'
@@ -534,7 +573,7 @@ program define civreghdfe, eclass sortpreserve
     * Store macros
     ereturn local cmd "civreghdfe"
     ereturn local cmdline `"civreghdfe `0'"'
-    ereturn local depvar "`depvar'"
+    ereturn local depvar "`depname_use'"
     ereturn local endogvars "`endogvars'"
     ereturn local exogvars "`exogvars'"
     ereturn local instruments "`instruments'"
@@ -586,59 +625,69 @@ program define civreghdfe, eclass sortpreserve
     ereturn scalar rmse = `rmse'
     ereturn scalar F = `F_wald'
 
-    * Display results in ivreghdfe format
-    di as text ""
-    di as text "IV (2SLS) estimation"
-    di as text "{hline 20}"
-    di as text ""
+    * Display results in ivreghdfe format (if header not suppressed)
+    if "`header'" == "" {
+        di as text ""
+        if "`title'" != "" {
+            di as text "`title'"
+        }
+        else {
+            di as text "IV (2SLS) estimation"
+        }
+        di as text "{hline 20}"
+        di as text ""
 
-    * Efficiency/consistency notes
-    if `vce_type' == 0 {
-        di as text "Estimates efficient for homoskedasticity only"
-        di as text "Statistics consistent for homoskedasticity only"
-    }
-    else if `vce_type' == 1 {
-        di as text "Estimates efficient for homoskedasticity only"
-        di as text "Statistics robust to heteroskedasticity"
-    }
-    else if `vce_type' == 2 {
-        di as text "Estimates efficient for homoskedasticity only"
-        di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
-    }
-    di as text ""
+        * Efficiency/consistency notes
+        if `vce_type' == 0 {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics consistent for homoskedasticity only"
+        }
+        else if `vce_type' == 1 {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics robust to heteroskedasticity"
+        }
+        else if `vce_type' == 2 {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
+        }
+        di as text ""
 
-    * Summary statistics line 1
-    if `vce_type' == 2 {
-        di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
-            as text _col(55) "Number of obs =" as result %9.0fc `N_used'
-    }
-    else {
-        di as text _col(55) "Number of obs =" as result %9.0fc `N_used'
+        * Summary statistics line 1
+        if `vce_type' == 2 {
+            di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
+                as text _col(55) "Number of obs =" as result %9.0fc `N_used'
+        }
+        else {
+            di as text _col(55) "Number of obs =" as result %9.0fc `N_used'
+        }
+
+        * F statistic (Wald test)
+        local prob_F = Ftail(`K_total', `df_r', `F_wald')
+        if `vce_type' == 2 {
+            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+        }
+        else {
+            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
+        }
+        di as text _col(55) "Prob > F      =" as result %9.4f `prob_F'
+
+        * R-squared and RSS (match ivreghdfe format: 2 spaces then number)
+        di as text "Total (centered) SS     =  " as result %-14.1f `tss' ///
+            as text _col(55) "Centered R2   =" as result %9.4f `r2'
+        di as text "Total (uncentered) SS   =  " as result %-14.1f `tss' ///
+            as text _col(55) "Uncentered R2 =" as result %9.4f `r2'
+        di as text "Residual SS             =  " as result %-14.1f `rss' ///
+            as text _col(55) "Root MSE      =" as result %9.0f round(`rmse')
+        di as text ""
     }
 
-    * F statistic (Wald test)
-    local prob_F = Ftail(`K_total', `df_r', `F_wald')
-    if `vce_type' == 2 {
-        di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+    * Display coefficient table (if output not suppressed)
+    if "`output'" == "" {
+        ereturn display, level(`level')
     }
-    else {
-        di as text _col(55) "F(" %3.0f `K_total' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
-    }
-    di as text _col(55) "Prob > F      =" as result %9.4f `prob_F'
 
-    * R-squared and RSS (match ivreghdfe format: 2 spaces then number)
-    di as text "Total (centered) SS     =  " as result %-14.1f `tss' ///
-        as text _col(55) "Centered R2   =" as result %9.4f `r2'
-    di as text "Total (uncentered) SS   =  " as result %-14.1f `tss' ///
-        as text _col(55) "Uncentered R2 =" as result %9.4f `r2'
-    di as text "Residual SS             =  " as result %-14.1f `rss' ///
-        as text _col(55) "Root MSE      =" as result %9.0f round(`rmse')
-    di as text ""
-
-    * Display coefficient table
-    ereturn display, level(95)
-
-    * Display diagnostic tests (always shown for IV)
+    * Display diagnostic tests (if footer not suppressed)
+    if "`footer'" == "" {
 
     * Retrieve underidentification test
     capture scalar temp_underid = __civreghdfe_underid
@@ -651,19 +700,21 @@ program define civreghdfe, eclass sortpreserve
         ereturn scalar idp = chi2tail(`underid_df', `underid_stat')
     }
 
-    * Underidentification test
-    if `vce_type' == 0 {
-        di as text "Underidentification test (Anderson canon. corr. LM statistic):" ///
-            _col(65) as result %14.3f `underid_stat'
+    * Underidentification test (if noid not specified)
+    if "`id'" == "" {
+        if `vce_type' == 0 {
+            di as text "Underidentification test (Anderson canon. corr. LM statistic):" ///
+                _col(65) as result %14.3f `underid_stat'
+        }
+        else {
+            di as text "Underidentification test (Kleibergen-Paap rk LM statistic):" ///
+                _col(65) as result %14.3f `underid_stat'
+        }
+        local underid_p = chi2tail(`underid_df', `underid_stat')
+        di as text _col(52) "Chi-sq(" as result `underid_df' as text ") P-val =" ///
+            as result %10.4f `underid_p'
+        di as text "{hline 78}"
     }
-    else {
-        di as text "Underidentification test (Kleibergen-Paap rk LM statistic):" ///
-            _col(65) as result %14.3f `underid_stat'
-    }
-    local underid_p = chi2tail(`underid_df', `underid_stat')
-    di as text _col(52) "Chi-sq(" as result `underid_df' as text ") P-val =" ///
-        as result %10.4f `underid_p'
-    di as text "{hline 78}"
 
     * Weak identification test
     capture scalar temp_cd_f = __civreghdfe_cd_f
@@ -896,32 +947,52 @@ program define civreghdfe, eclass sortpreserve
     di as text " Absorbed FE | Categories  - Redundant  = Num. Coefs |"
     di as text "{hline 13}+{hline 39}|"
 
-    * For single FE, use df_a as approximation
-    if `G' == 1 {
-        local fe_var : word 1 of `absorb'
-        local n_levels = `df_a'
-        local redundant = 0
-        local is_nested = ""
-        if `vce_type' == 2 & "`fe_var'" == "`cluster_var'" {
-            local redundant = `n_levels'
-            local is_nested = "*"
+    * Display each FE with its components
+    local total_coefs = 0
+    local has_nested = 0
+    forval g = 1/`G' {
+        local fevar : word `g' of `absorb'
+        local cats = `fe_levels_`g''
+        * For nested FEs: all levels are redundant
+        * For first non-nested FE: no redundant
+        * For subsequent non-nested FEs: 1 redundant (identification)
+        if `fe_nested_`g'' == 1 {
+            local redundant = `cats'
+            local has_nested = 1
+            local nested_marker "*"
         }
-        local n_coefs = `n_levels' - `redundant'
-        di as text %12s abbrev("`fe_var'", 12) " |" ///
-            as result %10.0f `n_levels' %12.0f `redundant' %12.0f `n_coefs' ///
-            as text "     |`is_nested'"
-    }
-    else {
-        * For multiple FE, just show total
-        di as text "    (total) |" ///
-            as result %10.0f `df_a' %12.0f 0 %12.0f `df_a' ///
-            as text "     |"
+        else {
+            if `g' == 1 | (`has_nested' == 0 & `g' == 1) {
+                * First non-nested FE: check if any prior FE was nested
+                local first_nonnested = 1
+                forval prev = 1/`=`g'-1' {
+                    if `fe_nested_`prev'' == 0 {
+                        local first_nonnested = 0
+                    }
+                }
+                if `first_nonnested' {
+                    local redundant = 0
+                }
+                else {
+                    local redundant = 1
+                }
+            }
+            else {
+                local redundant = 1
+            }
+            local nested_marker " "
+        }
+        local coefs = `cats' - `redundant'
+        local total_coefs = `total_coefs' + `coefs'
+        di as text %12s abbrev("`fevar'", 12) " |" as result %10.0f `cats' as text "  " as result %10.0f `redundant' as text "  " as result %10.0f `coefs' as text "    `nested_marker'|"
     }
     di as text "{hline 53}+"
-    if `vce_type' == 2 {
+    if `has_nested' {
         di as text "* = FE nested within cluster; treated as redundant for DoF computation"
     }
     di as text ""
+
+    } /* End of if "`footer'" == "" */
 
     * Timing
     if "`timeit'" != "" {
@@ -946,6 +1017,9 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_N
     capture scalar drop __civreghdfe_df_r
     capture scalar drop __civreghdfe_df_a
+    forval g = 1/20 {
+        capture scalar drop __civreghdfe_num_levels_`g'
+    }
     capture scalar drop __civreghdfe_K
     capture scalar drop __civreghdfe_rss
     capture scalar drop __civreghdfe_tss

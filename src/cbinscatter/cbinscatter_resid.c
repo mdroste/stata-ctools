@@ -441,6 +441,176 @@ cleanup:
 }
 
 /* ========================================================================
+ * Y-only OLS Residualization (binsreg method)
+ * ======================================================================== */
+
+ST_retcode ols_residualize_y_only(
+    ST_double *y,
+    const ST_double *controls,
+    ST_int N,
+    ST_int K,
+    const ST_double *weights,
+    ST_int weight_type
+) {
+    ST_double *XtX = NULL;
+    ST_double *Xty = NULL;
+    ST_double *beta_y = NULL;
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int i, j;
+    ST_double w, xj;
+
+    (void)weight_type;  /* Currently unused, reserved for future */
+
+    /* Allocate working arrays */
+    XtX = (ST_double *)malloc(K * K * sizeof(ST_double));
+    Xty = (ST_double *)calloc(K, sizeof(ST_double));
+    beta_y = (ST_double *)malloc(K * sizeof(ST_double));
+
+    if (!XtX || !Xty || !beta_y) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto cleanup;
+    }
+
+    /* Compute X'X */
+    rc = compute_xtx_weighted(controls, N, K, weights, XtX);
+    if (rc != CBINSCATTER_OK) goto cleanup;
+
+    /* Compute X'y */
+    for (i = 0; i < N; i++) {
+        w = (weights != NULL) ? weights[i] : 1.0;
+        ST_double wy = w * y[i];
+        for (j = 0; j < K; j++) {
+            xj = controls[j * N + i];
+            Xty[j] += xj * wy;
+        }
+    }
+
+    /* Cholesky decomposition of X'X */
+    rc = cholesky_decompose(XtX, K);
+    if (rc != CBINSCATTER_OK) goto cleanup;
+
+    /* Solve for beta_y: (X'X) * beta_y = X'y */
+    memcpy(beta_y, Xty, K * sizeof(ST_double));
+    rc = cholesky_solve(XtX, K, beta_y);
+    if (rc != CBINSCATTER_OK) goto cleanup;
+
+    /* Compute residuals: y - X*beta_y */
+    for (i = 0; i < N; i++) {
+        ST_double fitted_y = 0.0;
+        for (j = 0; j < K; j++) {
+            xj = controls[j * N + i];
+            fitted_y += xj * beta_y[j];
+        }
+        y[i] -= fitted_y;
+    }
+
+cleanup:
+    free(XtX);
+    free(Xty);
+    free(beta_y);
+
+    return rc;
+}
+
+/* ========================================================================
+ * Y-only HDFE Residualization (binsreg method)
+ * ======================================================================== */
+
+ST_retcode hdfe_residualize_y_only(
+    ST_double *y,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int G,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose,
+    ST_int *dropped
+) {
+    FE_Factor_Simple *factors = NULL;
+    ST_double *y_prev = NULL;
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int g, iter;
+    ST_double norm_y_prev;
+    ST_double change_y;
+
+    (void)weight_type;  /* Currently unused */
+    *dropped = 0;
+
+    /* Allocate factors */
+    factors = (FE_Factor_Simple *)calloc(G, sizeof(FE_Factor_Simple));
+    if (!factors) return CBINSCATTER_ERR_MEMORY;
+
+    /* Initialize each factor */
+    for (g = 0; g < G; g++) {
+        rc = init_factor(&factors[g], &fe_vars[g * N], weights, N);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+    }
+
+    /* Allocate previous iteration buffer */
+    y_prev = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!y_prev) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto cleanup;
+    }
+
+    /* Iterative demeaning (Gauss-Seidel / alternating projections) */
+    for (iter = 0; iter < maxiter; iter++) {
+        /* Save previous values */
+        memcpy(y_prev, y, N * sizeof(ST_double));
+        norm_y_prev = vec_norm(y, N);
+
+        /* Forward and backward sweep for symmetric Kaczmarz */
+        kaczmarz_sweep(y, factors, G, weights, N, 1);  /* Forward */
+        kaczmarz_sweep(y, factors, G, weights, N, 0);  /* Backward */
+
+        /* Check convergence - compute relative change */
+        if (norm_y_prev > 0) {
+            ST_double diff_y = 0.0;
+            for (ST_int i = 0; i < N; i++) {
+                ST_double d = y[i] - y_prev[i];
+                diff_y += d * d;
+            }
+            change_y = sqrt(diff_y) / norm_y_prev;
+        } else {
+            change_y = 0.0;
+        }
+
+        if (verbose && (iter % 100 == 0 || iter < 10)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg), "cbinscatter HDFE (y-only) iter %d: change_y=%.2e\n",
+                     iter, change_y);
+            SF_display(msg);
+        }
+
+        if (change_y < tolerance) {
+            if (verbose) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "cbinscatter HDFE (y-only) converged in %d iterations\n", iter + 1);
+                SF_display(msg);
+            }
+            break;
+        }
+    }
+
+    if (iter == maxiter && verbose) {
+        SF_display("cbinscatter HDFE (y-only): max iterations reached\n");
+    }
+
+cleanup:
+    if (factors) {
+        for (g = 0; g < G; g++) {
+            free_factor(&factors[g]);
+        }
+        free(factors);
+    }
+    free(y_prev);
+
+    return rc;
+}
+
+/* ========================================================================
  * Combined Residualization
  * ======================================================================== */
 
@@ -479,6 +649,49 @@ ST_retcode combined_residualize(
 
     /* Step 3: OLS residualize partialled y,x on partialled controls */
     rc = ols_residualize(y, x, controls, N, K_ctrl, weights, weight_type);
+
+    return rc;
+}
+
+/* ========================================================================
+ * Combined Y-only Residualization (binsreg method)
+ * ======================================================================== */
+
+ST_retcode combined_residualize_y_only(
+    ST_double *y,
+    ST_double *controls,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int K_ctrl,
+    ST_int G,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose,
+    ST_int *dropped
+) {
+    ST_retcode rc;
+
+    /* Strategy: First HDFE residualize y and controls, then OLS on residuals */
+
+    /* Step 1: HDFE residualize y only */
+    rc = hdfe_residualize_y_only(y, fe_vars, N, G, weights, weight_type,
+                                  maxiter, tolerance, verbose, dropped);
+    if (rc != CBINSCATTER_OK) return rc;
+
+    /* Step 2: HDFE residualize each control variable */
+    for (ST_int k = 0; k < K_ctrl; k++) {
+        ST_double *ctrl_col = &controls[k * N];
+        ST_int dummy_dropped;
+        /* Use y_only version but pass ctrl_col for both - it only modifies first arg */
+        rc = hdfe_residualize_y_only(ctrl_col, fe_vars, N, G, weights,
+                                      weight_type, maxiter, tolerance, 0, &dummy_dropped);
+        if (rc != CBINSCATTER_OK) return rc;
+    }
+
+    /* Step 3: OLS residualize partialled y on partialled controls (y only) */
+    rc = ols_residualize_y_only(y, controls, N, K_ctrl, weights, weight_type);
 
     return rc;
 }

@@ -30,6 +30,7 @@
 {synopt:{opt c:ontrols(varlist)}}control variables to partial out via OLS{p_end}
 {synopt:{opt a:bsorb(varlist)}}fixed effects to absorb via HDFE{p_end}
 {synopt:{opt by(varname)}}create separate series by group{p_end}
+{synopt:{opt meth:od(method)}}residualization method: {opt classic} (default) or {opt binsreg}{p_end}
 
 {syntab:Line Fitting}
 {synopt:{opt line:type(type)}}fit line type: {opt none}, {opt linear} (default), {opt qfit}, {opt cubic}{p_end}
@@ -46,6 +47,8 @@
 {synopt:{opt xt:itle(string)}}x-axis title (default: xvar name){p_end}
 {synopt:{opt legend(string)}}legend options{p_end}
 {synopt:{opt colors(string)}}colors for series{p_end}
+{synopt:{opt msymbols(string)}}marker symbols for series{p_end}
+{synopt:{opt mlabels(string)}}marker labels for series{p_end}
 {synopt:{it:twoway_options}}additional twoway graph options{p_end}
 
 {syntab:Reporting}
@@ -110,6 +113,25 @@ to absorb from both x and y. Uses the same iterative demeaning algorithm as
 {opt by(varname)} creates separate scatter series for each level of the
 specified variable. Each group gets its own bins and optional fit line.
 
+{phang}
+{opt method(method)} specifies the residualization method when controls or
+fixed effects are specified. This follows the methodology discussion in
+Cattaneo, Crump, Farrell, and Feng (2024), "On Binscatter".
+
+{phang2}{opt classic} (the default) residualizes both x and y on the controls/FE,
+then creates bins based on the residualized x values. This is the traditional
+binscatter approach.{p_end}
+
+{phang2}{opt binsreg} creates bins based on the raw (non-residualized) x values,
+then computes the conditional mean of y within each bin after partialling out
+controls/FE. This is the approach recommended by Cattaneo et al. and implemented
+in their {cmd:binsreg} package. It avoids potential distortions that can occur
+when the conditional expectation function is nonlinear.{p_end}
+
+{pstd}
+When no controls or absorb variables are specified, both methods produce
+identical results.
+
 {dlgtab:Line Fitting}
 
 {phang}
@@ -151,6 +173,13 @@ graph and axis titles. Defaults for axis titles are the variable names.
 {phang}
 {opt colors(string)} specifies colors for the scatter series when using
 {opt by()}. Default colors match those used by {cmd:binscatter}.
+
+{phang}
+{opt msymbols(string)} specifies marker symbols for the scatter series.
+Default is filled circles (O).
+
+{phang}
+{opt mlabels(string)} specifies marker labels for the scatter series.
 
 {phang}
 {it:twoway_options} any other options are passed through to the underlying
@@ -196,6 +225,13 @@ computational phase (load, residualize, bin computation, line fitting).
 
 {pstd}Save bin data without displaying graph:{p_end}
 {phang2}{cmd:. cbinscatter price mpg, nograph savedata(mybins)}{p_end}
+
+{pstd}Using the binsreg method (Cattaneo et al.):{p_end}
+{phang2}{cmd:. cbinscatter price mpg, controls(weight) method(binsreg)}{p_end}
+
+{pstd}Compare classic vs binsreg methods:{p_end}
+{phang2}{cmd:. cbinscatter price mpg, controls(weight) method(classic) savedata(classic_bins)}{p_end}
+{phang2}{cmd:. cbinscatter price mpg, controls(weight) method(binsreg) savedata(binsreg_bins)}{p_end}
 
 
 {marker results}{...}
@@ -244,6 +280,19 @@ computational phase (load, residualize, bin computation, line fitting).
 
 {pstd}
 On a dataset with 25 million observations, {cmd:cbinscatter} completes in under 1 second including graph generation.
+
+
+{title:References}
+
+{phang}
+Cattaneo, M. D., R. K. Crump, M. H. Farrell, and Y. Feng. 2024. On Binscatter.
+{it:American Economic Review} 114(5): 1488-1514.
+{browse "https://doi.org/10.1257/aer.20221576"}
+
+{pstd}
+The {opt method(binsreg)} option implements the approach recommended in this paper,
+which avoids potential distortions in the classic binscatter method when the
+conditional expectation function is nonlinear.
 
 
 {title:Author}
