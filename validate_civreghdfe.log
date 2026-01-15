@@ -32,16 +32,79 @@ Running /Users/Mike/Documents/Stata/profile.do ...
 >  * validate_civreghdfe.do
 >  *
 >  * Comprehensive validation tests for civreghdfe vs ivreghdfe
->  * Tests IV/2SLS regression with HDFE across various scenarios
+>  * Tests all options: absorb, vce, weights, first, small, tolerance, maxiter
 >  *
 >  * Requires ivreghdfe to be installed (ssc install ivreghdfe)
->  * Tolerance: 1e-8 for coefficient/VCE matching
 >  ****************************************************************************
 > **/
 . 
-. do "validate_setup.do"
-file validate_setup.do not found
-r(601);
+. * Load setup (works from project root or validation dir)
+. capture do "validation/validate_setup.do"
+
+. if _rc != 0 {
+.     do "validate_setup.do"
+. }
+
+. 
+. quietly {
+
+----------------------------------------------------------------------
+Prerequisite Check
+----------------------------------------------------------------------
+[PASS] ivreghdfe is installed
+
+----------------------------------------------------------------------
+Plugin Check
+----------------------------------------------------------------------
+[PASS] civreghdfe plugin loads and runs
+
+----------------------------------------------------------------------
+Basic IV Tests (auto)
+----------------------------------------------------------------------
+[PASS] single endog, single instr
+[PASS] single endog, two instr
+[PASS] with exog var
+[PASS] with multiple exog
+
+----------------------------------------------------------------------
+Multiple Endogenous Variables
+----------------------------------------------------------------------
+[PASS] two endog
+[PASS] two endog, more instr
+
+----------------------------------------------------------------------
+VCE Options
+----------------------------------------------------------------------
+[PASS] vce(robust)
+[PASS] vce(cluster)
+[PASS] multi-instr + robust
+
+----------------------------------------------------------------------
+Two-Way Fixed Effects
+----------------------------------------------------------------------
+[PASS] two-way FE
+[PASS] two-way + robust
+
+----------------------------------------------------------------------
+Census Dataset
+----------------------------------------------------------------------
+[PASS] census basic
+[PASS] census two instr
+[PASS] census with exog
+
+----------------------------------------------------------------------
+Panel Data (nlswork)
+----------------------------------------------------------------------
+[PASS] nlswork basic
+[PASS] nlswork two instr
+[PASS] nlswork robust
+[PASS] nlswork cluster
+
+----------------------------------------------------------------------
+Large Dataset
+----------------------------------------------------------------------
+civreghdfe: Z'Z is singular (instruments may be collinear)
+r(198);
 
 end of do-file
-r(601);
+r(198);

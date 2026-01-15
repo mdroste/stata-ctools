@@ -1,0 +1,1153 @@
+-------------------------------------
+Translated Report (Full Report Below)
+-------------------------------------
+
+Process:               StataMP [99309]
+Path:                  /Applications/Stata/StataMP.app/Contents/MacOS/StataMP
+Identifier:            com.stata.stata18
+Version:               18.5.037 (18.5.037)
+Code Type:             ARM-64 (Native)
+Parent Process:        launchd [1]
+User ID:               501
+
+Date/Time:             2026-01-14 22:27:47.0802 -0800
+OS Version:            macOS 15.7.3 (24G419)
+Report Version:        12
+Anonymous UUID:        ACF0AFA6-BED7-4116-9CB0-F22324DCB0DF
+
+Sleep/Wake UUID:       67059E42-E283-4B69-84C0-C2B239C6370B
+
+Time Awake Since Boot: 30000 seconds
+Time Since Wake:       938 seconds
+
+System Integrity Protection: enabled
+
+Crashed Thread:        19
+
+Exception Type:        EXC_BAD_ACCESS (SIGABRT)
+Exception Codes:       KERN_INVALID_ADDRESS at 0x5a4a9e5c480b41b0 -> 0x00001e5c480b41b0 (possible pointer authentication failure)
+Exception Codes:       0x0000000000000001, 0x5a4a9e5c480b41b0
+
+Termination Reason:    Namespace SIGNAL, Code 6 Abort trap: 6
+Terminating Process:   StataMP [99309]
+
+VM Region Info: 0x1e5c480b41b0 is not in any region.  Bytes after previous region: 32865207927217  Bytes before following region: 72171421744720
+      REGION TYPE                    START - END         [ VSIZE] PRT/MAX SHRMOD  REGION DETAIL
+      VM_ALLOCATE                7840000000-7841000000   [ 16.0M] ---/rwx SM=NUL  
+--->  GAP OF 0x5f87bf000000 BYTES
+      MALLOC_NANO              600000000000-600020000000 [512.0M] rw-/rwx SM=PRV  
+
+Application Specific Information:
+abort() called
+
+
+Thread 0::  Dispatch queue: com.apple.main-thread
+0   libomp.dylib                  	       0x135f09bbc int __kmp_execute_tasks_32<false, false>(kmp_info*, int, kmp_flag_32<false, false>*, int, int*, void*, int) + 92
+1   libomp.dylib                  	       0x135f4703c __kmp_invoke_microtask + 156
+2   ???                           	               0x0 ???
+3   ???                           	            0x33e0 ???
+4   ???                           	          0xbecd9e ???
+
+Thread 1:: com.apple.NSEventThread
+0   libsystem_kernel.dylib        	       0x1942b5c34 mach_msg2_trap + 8
+1   libsystem_kernel.dylib        	       0x1942c83a0 mach_msg2_internal + 76
+2   libsystem_kernel.dylib        	       0x1942be764 mach_msg_overwrite + 484
+3   libsystem_kernel.dylib        	       0x1942b5fa8 mach_msg + 24
+4   CoreFoundation                	       0x1943e2c0c __CFRunLoopServiceMachPort + 160
+5   CoreFoundation                	       0x1943e1528 __CFRunLoopRun + 1208
+6   CoreFoundation                	       0x1943e09e8 CFRunLoopRunSpecific + 572
+7   AppKit                        	       0x19842578c _NSEventThread + 140
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 2:: Java: GC Thread#0
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 3:: Java: G1 Main Marker
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808edc os::PlatformMonitor::wait(long) + 152
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x1413c1bbc G1ConcurrentMarkThread::run_service() + 156
+5   libjvm.dylib                  	       0x1412e20f8 ConcurrentGCThread::run() + 52
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 4:: Java: G1 Conc#0
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 5:: Java: G1 Refine#0
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x1413c4568 G1ConcurrentRefineThread::run_service() + 112
+3   libjvm.dylib                  	       0x1412e20f8 ConcurrentGCThread::run() + 52
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 6:: Java: G1 Service
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x141403d3c G1ServiceThread::sleep_before_next_cycle() + 192
+5   libjvm.dylib                  	       0x141403f84 G1ServiceThread::run_service() + 92
+6   libjvm.dylib                  	       0x1412e20f8 ConcurrentGCThread::run() + 52
+7   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+8   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+9   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+10  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 7:: Java: VM Thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x141a67284 VMThread::wait_for_operation() + 432
+5   libjvm.dylib                  	       0x141a663f4 VMThread::run() + 196
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 8:: Java: Reference Handler
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808edc os::PlatformMonitor::wait(long) + 152
+3   libjvm.dylib                  	       0x1417cf378 Monitor::wait(long long) + 136
+4   libjvm.dylib                  	       0x14155eb54 JVM_WaitForReferencePendingList + 228
+5   ???                           	       0x32753d970 ???
+6   ???                           	       0x32753a00c ???
+7   ???                           	       0x32753a00c ???
+8   ???                           	       0x327534140 ???
+9   libjvm.dylib                  	       0x1414a5c20 JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*) + 924
+10  libjvm.dylib                  	       0x1414a4c2c JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*) + 284
+11  libjvm.dylib                  	       0x1414a4cf8 JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*) + 100
+12  libjvm.dylib                  	       0x14155c7c4 thread_entry(JavaThread*, JavaThread*) + 196
+13  libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+14  libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+15  libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+16  libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+17  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 9:: Java: Finalizer
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x1418081f4 os::PlatformEvent::park() + 164
+3   libjvm.dylib                  	       0x1417e9aac ObjectMonitor::wait(long, bool, JavaThread*) + 1632
+4   libjvm.dylib                  	       0x1419a1380 ObjectSynchronizer::wait(Handle, long, JavaThread*) + 300
+5   libjvm.dylib                  	       0x14154a580 JVM_MonitorWait + 432
+6   ???                           	       0x32753d970 ???
+7   ???                           	       0x32753a00c ???
+8   ???                           	       0x327539db0 ???
+9   ???                           	       0x327539db0 ???
+10  ???                           	       0x327534140 ???
+11  libjvm.dylib                  	       0x1414a5c20 JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*) + 924
+12  libjvm.dylib                  	       0x1414a4c2c JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*) + 284
+13  libjvm.dylib                  	       0x1414a4cf8 JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*) + 100
+14  libjvm.dylib                  	       0x14155c7c4 thread_entry(JavaThread*, JavaThread*) + 196
+15  libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+16  libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+17  libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+18  libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+19  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 10:: Java: Signal Dispatcher
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141918744 os::signal_wait() + 204
+3   libjvm.dylib                  	       0x1417fbf24 signal_thread_entry(JavaThread*, JavaThread*) + 76
+4   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+5   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+6   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+7   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+8   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 11:: Java: Service Thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808edc os::PlatformMonitor::wait(long) + 152
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x141894678 ServiceThread::service_thread_entry(JavaThread*, JavaThread*) + 496
+5   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 12:: Java: Monitor Deflation Thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x1417c4034 MonitorDeflationThread::monitor_deflation_thread_entry(JavaThread*, JavaThread*) + 264
+5   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 13:: Java: C2 CompilerThread0
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf378 Monitor::wait(long long) + 136
+4   libjvm.dylib                  	       0x1412ca074 CompileQueue::get() + 196
+5   libjvm.dylib                  	       0x1412cd9b4 CompileBroker::compiler_thread_loop() + 712
+6   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+7   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+8   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+9   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+10  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 14:: Java: C1 CompilerThread0
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf378 Monitor::wait(long long) + 136
+4   libjvm.dylib                  	       0x1412ca074 CompileQueue::get() + 196
+5   libjvm.dylib                  	       0x1412cd9b4 CompileBroker::compiler_thread_loop() + 712
+6   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+7   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+8   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+9   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+10  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 15:: Java: Sweeper thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x14199858c NMethodSweeper::sweeper_loop() + 164
+5   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 16:: Java: Notification Thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808edc os::PlatformMonitor::wait(long) + 152
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x1417e227c NotificationThread::notification_thread_entry(JavaThread*, JavaThread*) + 176
+5   libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 17:: Java: VM Periodic Task Thread
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808f4c os::PlatformMonitor::wait(long) + 264
+3   libjvm.dylib                  	       0x1417cf2d8 Monitor::wait_without_safepoint_check(long long) + 48
+4   libjvm.dylib                  	       0x1417e1b64 WatcherThread::sleep() const + 176
+5   libjvm.dylib                  	       0x1417e1c24 WatcherThread::run() + 96
+6   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+7   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 18:: Java: Common-Cleaner
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libjvm.dylib                  	       0x141808440 os::PlatformEvent::park(long) + 436
+3   libjvm.dylib                  	       0x1417e9a14 ObjectMonitor::wait(long, bool, JavaThread*) + 1480
+4   libjvm.dylib                  	       0x1419a1380 ObjectSynchronizer::wait(Handle, long, JavaThread*) + 300
+5   libjvm.dylib                  	       0x14154a580 JVM_MonitorWait + 432
+6   ???                           	       0x32753d970 ???
+7   ???                           	       0x32753a00c ???
+8   ???                           	       0x327539db0 ???
+9   ???                           	       0x32753a57c ???
+10  ???                           	       0x32753a00c ???
+11  ???                           	       0x327534140 ???
+12  libjvm.dylib                  	       0x1414a5c20 JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*) + 924
+13  libjvm.dylib                  	       0x1414a4c2c JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*) + 284
+14  libjvm.dylib                  	       0x1414a4cf8 JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*) + 100
+15  libjvm.dylib                  	       0x14155c7c4 thread_entry(JavaThread*, JavaThread*) + 196
+16  libjvm.dylib                  	       0x1419e534c JavaThread::thread_main_inner() + 348
+17  libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+18  libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+19  libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+20  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 19 Crashed:
+0   libsystem_kernel.dylib        	       0x1942be388 __pthread_kill + 8
+1   libsystem_pthread.dylib       	       0x1942f7848 pthread_kill + 296
+2   libsystem_c.dylib             	       0x1942009e4 abort + 124
+3   libjvm.dylib                  	       0x1418092d0 os::abort(bool, void*, void const*) + 56
+4   libjvm.dylib                  	       0x141a54b0c VMError::report_and_die(int, char const*, char const*, char*, Thread*, unsigned char*, void*, void*, char const*, int, unsigned long) + 2696
+5   libjvm.dylib                  	       0x141a54078 VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*, char const*, ...) + 72
+6   libjvm.dylib                  	       0x141a54c50 VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*) + 36
+7   libjvm.dylib                  	       0x141918aa0 JVM_handle_bsd_signal + 344
+8   libsystem_platform.dylib      	       0x1943316a4 _sigtramp + 56
+9   ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+10  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+11  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+12  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+13  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+14  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+15  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+16  ctools_mac_arm.plugin         	       0x16b1074e0 .omp_task_entry. + 64
+17  libomp.dylib                  	       0x135f0779c __kmp_invoke_task(int, kmp_task*, kmp_taskdata*) + 328
+18  libomp.dylib                  	       0x135f0a2a8 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 672
+19  libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+20  libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+21  libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+22  libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+23  libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+24  libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+25  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 20:
+0   libomp.dylib                  	       0x135efcd5c kmp_flag_native<unsigned long long, (flag_type)1, true>::done_check() + 0
+1   libomp.dylib                  	       0x135f0a3cc int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 964
+2   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+3   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+4   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+5   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+6   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+7   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+8   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 21:
+0   libomp.dylib                  	       0x135f0a238 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 560
+1   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+2   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+3   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+4   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+5   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 22:
+0   libsystem_kernel.dylib        	       0x1942b91c8 __semwait_signal + 8
+1   libsystem_c.dylib             	       0x1941956f4 nanosleep + 220
+2   libsystem_c.dylib             	       0x19419e6d0 sleep + 52
+3   libjvm.dylib                  	       0x141807288 os::infinite_sleep() + 16
+4   libjvm.dylib                  	       0x141a54460 VMError::report_and_die(int, char const*, char const*, char*, Thread*, unsigned char*, void*, void*, char const*, int, unsigned long) + 988
+5   libjvm.dylib                  	       0x141a54078 VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*, char const*, ...) + 72
+6   libjvm.dylib                  	       0x141a54c50 VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*) + 36
+7   libsystem_platform.dylib      	       0x1943316a4 _sigtramp + 56
+8   ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+9   ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+10  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+11  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+12  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+13  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+14  ctools_mac_arm.plugin         	       0x16b1068a8 msd_sort_numeric_recursive + 332
+15  ctools_mac_arm.plugin         	       0x16b1074e0 .omp_task_entry. + 64
+16  libomp.dylib                  	       0x135f0779c __kmp_invoke_task(int, kmp_task*, kmp_taskdata*) + 328
+17  libomp.dylib                  	       0x135f0a2a8 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 672
+18  libomp.dylib                  	       0x135f14f44 kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 448
+19  libomp.dylib                  	       0x135f13074 __kmp_hyper_barrier_gather(barrier_type, kmp_info*, int, int, void (*)(void*, void*), void*) + 436
+20  libomp.dylib                  	       0x135f126ac __kmp_join_barrier(int) + 608
+21  libomp.dylib                  	       0x135ef9f18 __kmp_launch_thread + 364
+22  libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+23  libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+24  libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 23:
+0   libomp.dylib                  	       0x135f15488 kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1796
+1   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+2   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+3   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+4   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+5   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+6   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 24:
+0   libomp.dylib                  	       0x135ef8e58 __kmp_get_random + 20
+1   libomp.dylib                  	       0x135f0a1f0 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 488
+2   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+3   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+4   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+5   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+6   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+7   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+8   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 25:
+0   libomp.dylib                  	       0x135f0a0bc int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 180
+1   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+2   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+3   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+4   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+5   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 26:
+0   libsystem_pthread.dylib       	       0x1942f2b6c start_wqthread + 0
+
+Thread 27:
+0   libsystem_pthread.dylib       	       0x1942f2b6c start_wqthread + 0
+
+Thread 28:: Java: GC Thread#1
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 29:: Java: GC Thread#2
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 30:: Java: GC Thread#3
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 31:: Java: GC Thread#4
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 32:: Java: GC Thread#5
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 33:: Java: GC Thread#6
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 34:: Java: GC Thread#7
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 35:: Java: GC Thread#8
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 36:: Java: GC Thread#9
+0   libsystem_kernel.dylib        	       0x1942b5bb0 semaphore_wait_trap + 8
+1   libjvm.dylib                  	       0x141893c3c OSXSemaphore::wait() + 24
+2   libjvm.dylib                  	       0x141a8f058 GangWorker::loop() + 52
+3   libjvm.dylib                  	       0x141a8f010 GangWorker::run() + 28
+4   libjvm.dylib                  	       0x1419e397c Thread::call_run() + 204
+5   libjvm.dylib                  	       0x141800904 thread_native_entry(Thread*) + 344
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 37:
+0   libsystem_pthread.dylib       	       0x1942f2b6c start_wqthread + 0
+
+Thread 38:
+0   libsystem_pthread.dylib       	       0x1942f2b6c start_wqthread + 0
+
+Thread 39:
+0   libsystem_pthread.dylib       	       0x1942f2b6c start_wqthread + 0
+
+Thread 40:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 41:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 42:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 43:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 44:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 45:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 46:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 47:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 48:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 49:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   libomp.dylib                  	       0x108f0ec44 __kmp_suspend_64 + 328
+3   libomp.dylib                  	       0x108ef97dc kmp_flag_64::wait(kmp_info*, int, void*) + 1812
+4   libomp.dylib                  	       0x108ef5c50 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 152
+5   libomp.dylib                  	       0x108ef8d88 __kmp_fork_barrier(int, int) + 496
+6   libomp.dylib                  	       0x108edcd94 __kmp_launch_thread + 316
+7   libomp.dylib                  	       0x108f0d7d4 __kmp_launch_worker(void*) + 280
+8   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+9   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 50:
+0   libsystem_kernel.dylib        	       0x1942b93cc __psynch_cvwait + 8
+1   libsystem_pthread.dylib       	       0x1942f809c _pthread_cond_wait + 984
+2   ???                           	0xffffb242e0000000 ???
+
+Thread 51:
+0   libomp.dylib                  	       0x135f0df54 __kmp_steal_task(int, int, kmp_task_team*, std::__1::atomic<int>*, int*, int) + 12
+1   libomp.dylib                  	       0x135f0a148 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 320
+2   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+3   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+4   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+5   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+6   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+7   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+8   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 52:
+0   libomp.dylib                  	       0x135f152e4 kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1376
+1   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+2   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+3   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+4   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+5   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+6   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 53:
+0   libomp.dylib                  	       0x135f0a240 int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 568
+1   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+2   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+3   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+4   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+5   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+Thread 54:
+0   libomp.dylib                  	       0x135f0a0bc int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int) + 180
+1   libomp.dylib                  	       0x135f1527c kmp_flag_64<false, true>::wait(kmp_info*, int, void*) + 1272
+2   libomp.dylib                  	       0x135f116e0 __kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*) + 164
+3   libomp.dylib                  	       0x135f14260 __kmp_fork_barrier(int, int) + 460
+4   libomp.dylib                  	       0x135ef9e88 __kmp_launch_thread + 220
+5   libomp.dylib                  	       0x135f2d2bc __kmp_launch_worker(void*) + 252
+6   libsystem_pthread.dylib       	       0x1942f7bc8 _pthread_start + 136
+7   libsystem_pthread.dylib       	       0x1942f2b80 thread_start + 8
+
+
+Thread 19 crashed with ARM Thread State (64-bit):
+    x0: 0x0000000000000000   x1: 0x0000000000000000   x2: 0x0000000000000000   x3: 0x0000000000000000
+    x4: 0x0000000000000001   x5: 0x0000000336c21838   x6: 0x000000000000002e   x7: 0x0000000000000000
+    x8: 0xd19c5b8df3a48d4f   x9: 0xd19c5b8ec5663d4f  x10: 0x0000000000000002  x11: 0x0000010000000000
+   x12: 0x00000000fffffffd  x13: 0x0000000000000000  x14: 0x0000000000000000  x15: 0x0000000000000000
+   x16: 0x0000000000000148  x17: 0x00000002032e5548  x18: 0x0000000000000000  x19: 0x0000000000000006
+   x20: 0x000000000000771f  x21: 0x0000000336c2b0e0  x22: 0x0000000141d08000  x23: 0x0000000141c7e000
+   x24: 0x0000000336c22fa0  x25: 0x0000000000000000  x26: 0x0000000000000000  x27: 0x0000000141cc0000
+   x28: 0x0000000141c68d08   fp: 0x0000000336c22c60   lr: 0x00000001942f7848
+    sp: 0x0000000336c22c40   pc: 0x00000001942be388 cpsr: 0x40000000
+   far: 0x0000000000000000  esr: 0x56000080  Address size fault
+
+Binary Images:
+       0x104d88000 -        0x107df7fff com.stata.stata18 (18.5.037) <5c5c333f-3944-3a3d-baf6-121c59c04459> /Applications/Stata/StataMP.app/Contents/MacOS/StataMP
+       0x10915c000 -        0x10920ffff com.sun.Scintilla (4.1.3) <1e307d78-4658-31d6-b19c-6eca4ba461a2> /Applications/Stata/StataMP.app/Contents/Frameworks/Scintilla.framework/Versions/A/Scintilla
+       0x108ec0000 -        0x108f2bfff libomp.dylib (*) <19de19c3-db27-35a8-bee8-8546bb23944b> /Applications/Stata/StataMP.app/Contents/Frameworks/libomp.dylib
+       0x115788000 -        0x115793fff libobjc-trampolines.dylib (*) <9a87f143-aa9d-3c46-b2e8-b3fb9215e33e> /usr/lib/libobjc-trampolines.dylib
+       0x12538c000 -        0x125abffff com.apple.AGXMetalG16X (329.2) <0ce453ff-9f17-321f-bc18-383573a48221> /System/Library/Extensions/AGXMetalG16X.bundle/Contents/MacOS/AGXMetalG16X
+       0x126d58000 -        0x126d6bfff libjli.dylib (*) <7f529b59-ad18-37d4-a0a4-7b936bc60211> /Applications/Stata/*/libjli.dylib
+       0x141024000 -        0x141b8bfff libjvm.dylib (*) <b51c839c-7674-38ea-a2df-89dc571d928a> /Applications/Stata/*/libjvm.dylib
+       0x126d44000 -        0x126d47fff libjimage.dylib (*) <e2b85dc1-382b-388a-b4b7-56a39e7fe3c6> /Applications/Stata/*/libjimage.dylib
+       0x126db4000 -        0x126dcbfff libjava.dylib (*) <07c1e8c8-d87b-34a5-8bdf-58c2c2a17f08> /Applications/Stata/*/libjava.dylib
+       0x136970000 -        0x13697bfff libnio.dylib (*) <f98c682a-0655-3551-a995-1e86f8c433fa> /Applications/Stata/*/libnio.dylib
+       0x136990000 -        0x13699ffff libnet.dylib (*) <28b7630c-0832-354f-a503-6e96aa57c361> /Applications/Stata/*/libnet.dylib
+       0x1369dc000 -        0x1369f3fff libzip.dylib (*) <f8854efd-3f5c-3da8-b10f-5268c26691c6> /Applications/Stata/*/libzip.dylib
+       0x1268e4000 -        0x1268e7fff libextnet.dylib (*) <f88476cf-8952-3e52-a34f-02a554960f0b> /Applications/Stata/*/libextnet.dylib
+       0x135edc000 -        0x135f53fff libomp.dylib (*) <0e12d2f4-7408-39bd-b6e9-d56a3dba63b3> /opt/homebrew/*/libomp.dylib
+       0x136b1c000 -        0x136b7bfff libawt.dylib (*) <2e171cb9-a524-3aad-8a76-ecccb8689a29> /Applications/Stata/*/libawt.dylib
+       0x13501c000 -        0x13507bfff libmlib_image.dylib (*) <bd6a9b14-36b7-39cb-9ddb-f412a6fcafdc> /Applications/Stata/*/libmlib_image.dylib
+       0x163234000 -        0x1632effff libawt_lwawt.dylib (*) <5099f311-b285-3aeb-abc5-f7bc2c5c8aa1> /Applications/Stata/*/libawt_lwawt.dylib
+       0x127bc8000 -        0x127bcffff libosxapp.dylib (*) <f5b5e513-379e-356f-a2fe-52627b44ee09> /Applications/Stata/*/libosxapp.dylib
+       0x163358000 -        0x163447fff libfontmanager.dylib (*) <83d54c4f-dd86-38d2-a1ad-4cb867b37c24> /Applications/Stata/*/libfontmanager.dylib
+       0x335734000 -        0x3357abfff libfreetype.dylib (*) <31d27d79-4e5f-347b-b4d0-6aee3d8b982c> /Applications/Stata/*/libfreetype.dylib
+       0x16b100000 -        0x16b15ffff ctools_mac_arm.plugin (*) <8b101309-df70-34e5-96e1-cd38b930d1b2> /Users/USER/Documents/*/ctools_mac_arm.plugin
+               0x0 - 0xffffffffffffffff ??? (*) <00000000-0000-0000-0000-000000000000> ???
+       0x1942b5000 -        0x1942f0663 libsystem_kernel.dylib (*) <1d4ffd44-8926-3746-924e-deef5b777588> /usr/lib/system/libsystem_kernel.dylib
+       0x194366000 -        0x1948a4fff com.apple.CoreFoundation (6.9) <37cebb20-0448-392c-9f01-f5bd87eb295e> /System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation
+       0x1982c7000 -        0x199757cff com.apple.AppKit (6.9) <00452387-9d4c-397a-a17d-cd14bb6ce9b4> /System/Library/Frameworks/AppKit.framework/Versions/C/AppKit
+       0x1942f1000 -        0x1942fda77 libsystem_pthread.dylib (*) <022dc315-cf35-38da-939e-03800b5beff2> /usr/lib/system/libsystem_pthread.dylib
+       0x1942fe000 -        0x19432dba3 libdyld.dylib (*) <e4fe35c9-8aee-3728-89b9-89a64239ed74> /usr/lib/system/libdyld.dylib
+       0x194188000 -        0x1942091f7 libsystem_c.dylib (*) <e098cb59-2c56-395c-ade1-6ef590e61199> /usr/lib/system/libsystem_c.dylib
+       0x19432e000 -        0x194335e0b libsystem_platform.dylib (*) <c26e58a4-34a1-3f9c-bdbc-ebc34426633a> /usr/lib/system/libsystem_platform.dylib
+
+External Modification Summary:
+  Calls made by other processes targeting this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by this process:
+    task_for_pid: 0
+    thread_create: 0
+    thread_set_state: 0
+  Calls made by all processes on this machine:
+    task_for_pid: 1
+    thread_create: 0
+    thread_set_state: 0
+
+VM Region Summary:
+ReadOnly portion of Libraries: Total=1.7G resident=0K(0%) swapped_out_or_unallocated=1.7G(100%)
+Writable regions: Total=8.0G written=4198K(0%) resident=4198K(0%) swapped_out=0K(0%) unallocated=8.0G(100%)
+
+                                VIRTUAL   REGION 
+REGION TYPE                        SIZE    COUNT (non-coalesced) 
+===========                     =======  ======= 
+Accelerate framework               384K        3 
+Activity Tracing                   256K        1 
+CG image                          13.6M       59 
+ColorSync                          704K       35 
+CoreAnimation                     39.8M      237 
+CoreGraphics                        32K        2 
+CoreImage                          816K       17 
+CoreUI image data                 5520K       43 
+Foundation                         144K        3 
+Kernel Alloc Once                   32K        1 
+MALLOC                             7.6G      180 
+MALLOC guard page                  288K       18 
+STACK GUARD                       1232K       55 
+Stack                            239.8M       55 
+Stack Guard                       56.2M       11 
+VM_ALLOCATE                        5.4G      207 
+VM_ALLOCATE (reserved)            34.1M        3         reserved VM address space (unallocated)
+__AUTH                            5447K      695 
+__AUTH_CONST                      76.5M      935 
+__CTF                               824        1 
+__DATA                            39.8M      939 
+__DATA_CONST                      28.5M      963 
+__DATA_DIRTY                      2763K      337 
+__FONT_DATA                        2352        1 
+__INFO_FILTER                         8        1 
+__LINKEDIT                       625.4M       22 
+__OBJC_RO                         61.4M        1 
+__OBJC_RW                         2397K        1 
+__TEXT                             1.1G      983 
+__TPRO_CONST                       128K        2 
+mapped file                      517.3M       61 
+page table in kernel              4198K        1 
+shared memory                      928K       17 
+===========                     =======  ======= 
+TOTAL                             15.9G     5890 
+TOTAL, minus reserved VM space    15.8G     5890 
+
+
+
+-----------
+Full Report
+-----------
+
+{"app_name":"StataMP","timestamp":"2026-01-14 22:27:47.00 -0800","app_version":"18.5.037","slice_uuid":"5c5c333f-3944-3a3d-baf6-121c59c04459","build_version":"18.5.037","platform":1,"bundleID":"com.stata.stata18","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"macOS 15.7.3 (24G419)","roots_installed":0,"name":"StataMP","incident_id":"866082D1-0935-4BCA-A24A-D685153ECB2B"}
+{
+  "uptime" : 30000,
+  "procRole" : "Foreground",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "Mac16,8",
+  "coalitionID" : 2836,
+  "osVersion" : {
+    "train" : "macOS 15.7.3",
+    "build" : "24G419",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-01-14 22:27:47.0802 -0800",
+  "codeSigningMonitor" : 2,
+  "incident" : "866082D1-0935-4BCA-A24A-D685153ECB2B",
+  "pid" : 99309,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "procLaunch" : "2026-01-14 19:55:40.9873 -0800",
+  "procStartAbsTime" : 593749564512,
+  "procExitAbsTime" : 730549904833,
+  "procName" : "StataMP",
+  "procPath" : "\/Applications\/Stata\/StataMP.app\/Contents\/MacOS\/StataMP",
+  "bundleInfo" : {"CFBundleShortVersionString":"18.5.037","CFBundleVersion":"18.5.037","CFBundleIdentifier":"com.stata.stata18"},
+  "storeInfo" : {"deviceIdentifierForVendor":"E75707B7-F602-5C1E-8368-E3EA16F1CA06","thirdParty":true},
+  "parentProc" : "launchd",
+  "parentPid" : 1,
+  "coalitionName" : "com.stata.stata18",
+  "crashReporterKey" : "ACF0AFA6-BED7-4116-9CB0-F22324DCB0DF",
+  "appleIntelligenceStatus" : {"state":"unavailable","reasons":["notOptedIn","assetIsNotReady","siriAssetIsNotReady"]},
+  "codeSigningID" : "com.stata.stata18",
+  "codeSigningTeamID" : "BH46GBF9RW",
+  "codeSigningFlags" : 570491649,
+  "codeSigningValidationCategory" : 6,
+  "codeSigningTrustLevel" : 4294967295,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"fyMD1f17v6n9AwCRm+D\/l78DAJH9e8Go\/w9f1sADX9YQKYDSARAA1A==","atPC":"AwEAVH8jA9X9e7+p\/QMAkZDg\/5e\/AwCR\/XvBqP8PX9bAA1\/WcAqA0g=="},
+  "bootSessionUUID" : "76196190-AF3C-4607-8975-DA8239B8AF76",
+  "wakeTime" : 938,
+  "sleepWakeUUID" : "67059E42-E283-4B69-84C0-C2B239C6370B",
+  "sip" : "enabled",
+  "vmRegionInfo" : "0x1e5c480b41b0 is not in any region.  Bytes after previous region: 32865207927217  Bytes before following region: 72171421744720\n      REGION TYPE                    START - END         [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      VM_ALLOCATE                7840000000-7841000000   [ 16.0M] ---\/rwx SM=NUL  \n--->  GAP OF 0x5f87bf000000 BYTES\n      MALLOC_NANO              600000000000-600020000000 [512.0M] rw-\/rwx SM=PRV  ",
+  "exception" : {"codes":"0x0000000000000001, 0x5a4a9e5c480b41b0","rawCodes":[1,6506186730872979888],"type":"EXC_BAD_ACCESS","signal":"SIGABRT","subtype":"KERN_INVALID_ADDRESS at 0x5a4a9e5c480b41b0 -> 0x00001e5c480b41b0 (possible pointer authentication failure)"},
+  "termination" : {"flags":0,"code":6,"namespace":"SIGNAL","indicator":"Abort trap: 6","byProc":"StataMP","byPid":99309},
+  "vmregioninfo" : "0x1e5c480b41b0 is not in any region.  Bytes after previous region: 32865207927217  Bytes before following region: 72171421744720\n      REGION TYPE                    START - END         [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      VM_ALLOCATE                7840000000-7841000000   [ 16.0M] ---\/rwx SM=NUL  \n--->  GAP OF 0x5f87bf000000 BYTES\n      MALLOC_NANO              600000000000-600020000000 [512.0M] rw-\/rwx SM=PRV  ",
+  "asi" : {"libsystem_c.dylib":["abort() called"]},
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":1},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 19,
+  "threads" : [{"id":585755,"threadState":{"x":[{"value":0},{"value":0},{"value":4930831104},{"value":4930831296},{"value":6090585340},{"value":1},{"value":1},{"value":6090581088},{"value":12},{"value":0},{"value":2654435761},{"value":1},{"value":0},{"value":4279107583},{"value":0},{"value":1},{"value":5199928160,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_32<false, false>(kmp_info*, int, kmp_flag_32<false, false>*, int, int*, void*, int)"},{"value":4931199744},{"value":0},{"value":5788251712},{"value":0},{"value":5788259904},{"value":0},{"value":5788251844},{"value":5200249360,"symbolLocation":0,"symbol":"__kmp_task_stealing_constraint"},{"value":5200286336,"symbolLocation":0,"symbol":"__kmp_threads"},{"value":5200261408,"symbolLocation":0,"symbol":"__kmp_itt_stack_caller_create_ptr__3_0"},{"value":4294967294},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199920700},"cpsr":{"value":536870912},"fp":{"value":6090585392},"sp":{"value":6090585104},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199928252},"far":{"value":0}},"queue":"com.apple.main-thread","frames":[{"imageOffset":187324,"symbol":"int __kmp_execute_tasks_32<false, false>(kmp_info*, int, kmp_flag_32<false, false>*, int, int*, void*, int)","symbolLocation":92,"imageIndex":13},{"imageOffset":438332,"symbol":"__kmp_invoke_microtask","symbolLocation":156,"imageIndex":13},{"imageOffset":0,"imageIndex":21},{"imageOffset":13280,"imageIndex":21},{"imageOffset":12504478,"imageIndex":21}]},{"id":585904,"name":"com.apple.NSEventThread","threadState":{"x":[{"value":268451845},{"value":21592279046},{"value":8589934592,"symbolLocation":0,"symbol":"(anonymous namespace)::swiftBacktraceOutputPath"},{"value":290283954634752},{"value":0},{"value":290283954634752},{"value":2},{"value":4294967295},{"value":0},{"value":17179869184},{"value":0},{"value":2},{"value":0},{"value":0},{"value":67587},{"value":0},{"value":18446744073709551569},{"value":8643304536},{"value":0},{"value":4294967295},{"value":2},{"value":290283954634752},{"value":0},{"value":290283954634752},{"value":6098051208},{"value":8589934592,"symbolLocation":0,"symbol":"(anonymous namespace)::swiftBacktraceOutputPath"},{"value":21592279046},{"value":18446744073709550527},{"value":4412409862}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6780912544},"cpsr":{"value":0},"fp":{"value":6098051056},"sp":{"value":6098050976},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836916},"far":{"value":0}},"frames":[{"imageOffset":3124,"symbol":"mach_msg2_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":78752,"symbol":"mach_msg2_internal","symbolLocation":76,"imageIndex":22},{"imageOffset":38756,"symbol":"mach_msg_overwrite","symbolLocation":484,"imageIndex":22},{"imageOffset":4008,"symbol":"mach_msg","symbolLocation":24,"imageIndex":22},{"imageOffset":510988,"symbol":"__CFRunLoopServiceMachPort","symbolLocation":160,"imageIndex":23},{"imageOffset":505128,"symbol":"__CFRunLoopRun","symbolLocation":1208,"imageIndex":23},{"imageOffset":502248,"symbol":"CFRunLoopRunSpecific","symbolLocation":572,"imageIndex":23},{"imageOffset":1435532,"symbol":"_NSEventThread","symbolLocation":140,"imageIndex":24},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585905,"name":"Java: GC Thread#0","threadState":{"x":[{"value":14},{"value":1},{"value":1},{"value":6100201040},{"value":6100201000},{"value":0},{"value":0},{"value":0},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":30408953442791},{"value":1296},{"value":16140901064495857664},{"value":3758097412},{"value":28254586010096685},{"value":18446744073709551580},{"value":105553117202176},{"value":0},{"value":105553161057360},{"value":1},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":6100201104},"sp":{"value":6100201088},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585906,"name":"Java: G1 Main Marker","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6102346984},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125689616},{"value":105553169658048},{"value":6102348000},{"value":0},{"value":0},{"value":0},{"value":1},{"value":256},{"value":5397110948,"symbolLocation":26962,"symbol":"hsdis_library_name"},{"value":5398482944,"symbolLocation":2448,"symbol":"Matcher::regName"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6102347104},"sp":{"value":6102346960},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277724,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":152,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":3791804,"symbol":"G1ConcurrentMarkThread::run_service()","symbolLocation":156,"imageIndex":6},{"imageOffset":2875640,"symbol":"ConcurrentGCThread::run()","symbolLocation":52,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585907,"name":"Java: G1 Conc#0","threadState":{"x":[{"value":14},{"value":35},{"value":0},{"value":6104494176},{"value":6104493752},{"value":15},{"value":13549708843631392},{"value":0},{"value":105553169614720},{"value":0},{"value":57},{"value":9},{"value":9},{"value":105553169614912},{"value":0},{"value":0},{"value":18446744073709551580},{"value":8643311256},{"value":0},{"value":105553161057408},{"value":2109440},{"value":105553160236800},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":6104493712},"sp":{"value":6104493696},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585908,"name":"Java: G1 Refine#0","threadState":{"x":[{"value":14},{"value":18446743198552878074},{"value":18446743198552878074},{"value":68719460488},{"value":0},{"value":160},{"value":0},{"value":0},{"value":1},{"value":24740220887291},{"value":5398752216,"symbolLocation":0,"symbol":"os::Bsd::_max_abstime"},{"value":24740230033291},{"value":0},{"value":0},{"value":0},{"value":0},{"value":18446744073709551580},{"value":8643302656},{"value":0},{"value":105553161057440},{"value":5397111926,"symbolLocation":27940,"symbol":"hsdis_library_name"},{"value":5397111873,"symbolLocation":27887,"symbol":"hsdis_library_name"},{"value":79107},{"value":5398491136,"symbolLocation":88,"symbol":"Deoptimization::_trap_reason_name"},{"value":5398652432,"symbolLocation":0,"symbol":"BarrierSet::_barrier_set"},{"value":5398760632,"symbolLocation":0,"symbol":"SuspendibleThreadSet::_suspend_all"},{"value":1},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":6106639728},"sp":{"value":6106639712},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":3802472,"symbol":"G1ConcurrentRefineThread::run_service()","symbolLocation":112,"imageIndex":6},{"imageOffset":2875640,"symbol":"ConcurrentGCThread::run()","symbolLocation":52,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585909,"name":"Java: G1 Service","threadState":{"x":[{"value":260},{"value":0},{"value":6244352},{"value":0},{"value":0},{"value":160},{"value":0},{"value":299999000},{"value":6108786072},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125588448},{"value":105553169566336},{"value":6108786912},{"value":299999000},{"value":0},{"value":6244352},{"value":6279169},{"value":6279424},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6108786192},"sp":{"value":6108786048},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":4062524,"symbol":"G1ServiceThread::sleep_before_next_cycle()","symbolLocation":192,"imageIndex":6},{"imageOffset":4063108,"symbol":"G1ServiceThread::run_service()","symbolLocation":92,"imageIndex":6},{"imageOffset":2875640,"symbol":"ConcurrentGCThread::run()","symbolLocation":52,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585910,"name":"Java: VM Thread","threadState":{"x":[{"value":260},{"value":0},{"value":1452800},{"value":0},{"value":0},{"value":160},{"value":0},{"value":999999000},{"value":6110932280},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125693296},{"value":105553169733440},{"value":6110933216},{"value":999999000},{"value":0},{"value":1452800},{"value":1460481},{"value":1460736},{"value":5398498888,"symbolLocation":0,"symbol":"GuaranteedSafepointInterval"},{"value":1000}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6110932400},"sp":{"value":6110932256},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":10760836,"symbol":"VMThread::wait_for_operation()","symbolLocation":432,"imageIndex":6},{"imageOffset":10757108,"symbol":"VMThread::run()","symbolLocation":196,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585911,"name":"Java: Reference Handler","threadState":{"x":[{"value":260},{"value":0},{"value":256},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6113077176},{"value":0},{"value":768},{"value":3298534884098},{"value":3298534884098},{"value":768},{"value":0},{"value":3298534884096},{"value":305},{"value":8643302656},{"value":0},{"value":105553125693936},{"value":105553169738880},{"value":6113079520},{"value":0},{"value":0},{"value":256},{"value":257},{"value":512},{"value":0},{"value":5789600256}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6113077296},"sp":{"value":6113077152},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277724,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":152,"imageIndex":6},{"imageOffset":8041336,"symbol":"Monitor::wait(long long)","symbolLocation":136,"imageIndex":6},{"imageOffset":5483348,"symbol":"JVM_WaitForReferencePendingList","symbolLocation":228,"imageIndex":6},{"imageOffset":13544708464,"imageIndex":21},{"imageOffset":13544693772,"imageIndex":21},{"imageOffset":13544693772,"imageIndex":21},{"imageOffset":13544669504,"imageIndex":21},{"imageOffset":4725792,"symbol":"JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*)","symbolLocation":924,"imageIndex":6},{"imageOffset":4721708,"symbol":"JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*)","symbolLocation":284,"imageIndex":6},{"imageOffset":4721912,"symbol":"JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*)","symbolLocation":100,"imageIndex":6},{"imageOffset":5474244,"symbol":"thread_entry(JavaThread*, JavaThread*)","symbolLocation":196,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585912,"name":"Java: Finalizer","threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6115222952},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":4930608168},{"value":4930608232},{"value":6115225824},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":105553129306464},{"value":2}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6115223072},"sp":{"value":6115222928},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8274420,"symbol":"os::PlatformEvent::park()","symbolLocation":164,"imageIndex":6},{"imageOffset":8149676,"symbol":"ObjectMonitor::wait(long, bool, JavaThread*)","symbolLocation":1632,"imageIndex":6},{"imageOffset":9950080,"symbol":"ObjectSynchronizer::wait(Handle, long, JavaThread*)","symbolLocation":300,"imageIndex":6},{"imageOffset":5399936,"symbol":"JVM_MonitorWait","symbolLocation":432,"imageIndex":6},{"imageOffset":13544708464,"imageIndex":21},{"imageOffset":13544693772,"imageIndex":21},{"imageOffset":13544693168,"imageIndex":21},{"imageOffset":13544693168,"imageIndex":21},{"imageOffset":13544669504,"imageIndex":21},{"imageOffset":4725792,"symbol":"JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*)","symbolLocation":924,"imageIndex":6},{"imageOffset":4721708,"symbol":"JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*)","symbolLocation":284,"imageIndex":6},{"imageOffset":4721912,"symbol":"JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*)","symbolLocation":100,"imageIndex":6},{"imageOffset":5474244,"symbol":"thread_entry(JavaThread*, JavaThread*)","symbolLocation":196,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585913,"name":"Java: Signal Dispatcher","threadState":{"x":[{"value":14},{"value":35},{"value":0},{"value":6117372008},{"value":6117371400},{"value":23},{"value":32199646364590448},{"value":0},{"value":5798646600},{"value":5399142168,"symbolLocation":128,"symbol":"_MergedGlobals"},{"value":4294967295},{"value":17},{"value":17},{"value":4918214720},{"value":262144},{"value":262144},{"value":18446744073709551580},{"value":105553117105104},{"value":0},{"value":105553161053360},{"value":5398642192,"symbolLocation":0,"symbol":"Thread::_thr_current"},{"value":105553161053360},{"value":2},{"value":5399142040,"symbolLocation":0,"symbol":"_MergedGlobals"},{"value":5399138304,"symbolLocation":943,"symbol":"ostream_abort()::buf"},{"value":6781145336,"symbolLocation":0,"symbol":"_tlv_get_addr"},{"value":10},{"value":4},{"value":105553129574432}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":6117370816},"sp":{"value":6117370800},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":9389892,"symbol":"os::signal_wait()","symbolLocation":204,"imageIndex":6},{"imageOffset":8224548,"symbol":"signal_thread_entry(JavaThread*, JavaThread*)","symbolLocation":76,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585914,"name":"Java: Service Thread","threadState":{"x":[{"value":260},{"value":0},{"value":1792},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6119517256},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125691536},{"value":105553169661120},{"value":6119518432},{"value":0},{"value":0},{"value":1792},{"value":1793},{"value":2048},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6119517376},"sp":{"value":6119517232},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277724,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":152,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":8849016,"symbol":"ServiceThread::service_thread_entry(JavaThread*, JavaThread*)","symbolLocation":496,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585915,"name":"Java: Monitor Deflation Thread","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":0},{"value":249999000},{"value":6121663736},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125691456},{"value":105553169660992},{"value":6121664736},{"value":249999000},{"value":0},{"value":0},{"value":5802241},{"value":5802496},{"value":5398466560,"symbolLocation":0,"symbol":"_dyld_private"},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6121663856},"sp":{"value":6121663712},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":7995444,"symbol":"MonitorDeflationThread::monitor_deflation_thread_entry(JavaThread*, JavaThread*)","symbolLocation":264,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585916,"name":"Java: C2 CompilerThread0","threadState":{"x":[{"value":4},{"value":0},{"value":928256},{"value":105553125695056},{"value":636617232630528},{"value":4256},{"value":4},{"value":999998000},{"value":6123809528},{"value":148224},{"value":148224},{"value":635517721002754},{"value":635517721002754},{"value":148224},{"value":256},{"value":636617232630528},{"value":305},{"value":8643302656},{"value":0},{"value":105553125695056},{"value":105553169741888},{"value":6123811040},{"value":999998000},{"value":4},{"value":928256},{"value":931330},{"value":931584},{"value":5398498760,"symbolLocation":0,"symbol":"UseDynamicNumberOfCompilerThreads"},{"value":105553129499040}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6123809648},"sp":{"value":6123809504},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041336,"symbol":"Monitor::wait(long long)","symbolLocation":136,"imageIndex":6},{"imageOffset":2777204,"symbol":"CompileQueue::get()","symbolLocation":196,"imageIndex":6},{"imageOffset":2791860,"symbol":"CompileBroker::compiler_thread_loop()","symbolLocation":712,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585917,"name":"Java: C1 CompilerThread0","threadState":{"x":[{"value":516},{"value":0},{"value":928256},{"value":0},{"value":0},{"value":160},{"value":5},{"value":0},{"value":6125955832},{"value":0},{"value":148224},{"value":636617232630530},{"value":636617232630530},{"value":148224},{"value":0},{"value":636617232630528},{"value":305},{"value":8643302656},{"value":0},{"value":105553125695056},{"value":105553169741888},{"value":6125957344},{"value":0},{"value":5},{"value":928256},{"value":931328},{"value":931840},{"value":5398498760,"symbolLocation":0,"symbol":"UseDynamicNumberOfCompilerThreads"},{"value":105553129498944}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6125955952},"sp":{"value":6125955808},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041336,"symbol":"Monitor::wait(long long)","symbolLocation":136,"imageIndex":6},{"imageOffset":2777204,"symbol":"CompileQueue::get()","symbolLocation":196,"imageIndex":6},{"imageOffset":2791860,"symbol":"CompileBroker::compiler_thread_loop()","symbolLocation":712,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585918,"name":"Java: Sweeper thread","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":86400},{"value":0},{"value":6128102632},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125690896},{"value":105553169660096},{"value":6128103648},{"value":0},{"value":86400},{"value":0},{"value":1},{"value":256},{"value":5398757376,"symbolLocation":0,"symbol":"SafepointMechanism::_poll_page_armed_value"},{"value":5398757376,"symbolLocation":0,"symbol":"SafepointMechanism::_poll_page_armed_value"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6128102752},"sp":{"value":6128102608},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":9913740,"symbol":"NMethodSweeper::sweeper_loop()","symbolLocation":164,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585919,"name":"Java: Notification Thread","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":6130248936},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125691616},{"value":105553169661248},{"value":6130249952},{"value":0},{"value":0},{"value":0},{"value":1},{"value":256},{"value":5398705520,"symbolLocation":0,"symbol":"DCmdFactory::_has_pending_jmx_notification"},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6130249056},"sp":{"value":6130248912},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277724,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":152,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":8118908,"symbol":"NotificationThread::notification_thread_entry(JavaThread*, JavaThread*)","symbolLocation":176,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585920,"name":"Java: VM Periodic Task Thread","threadState":{"x":[{"value":260},{"value":0},{"value":0},{"value":0},{"value":0},{"value":160},{"value":0},{"value":50000000},{"value":6132395304},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":105553125695376},{"value":105553169742528},{"value":6132396256},{"value":50000000},{"value":0},{"value":0},{"value":28637697},{"value":28637952},{"value":4835703278458516699},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6132395424},"sp":{"value":6132395280},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8277836,"symbol":"os::PlatformMonitor::wait(long)","symbolLocation":264,"imageIndex":6},{"imageOffset":8041176,"symbol":"Monitor::wait_without_safepoint_check(long long)","symbolLocation":48,"imageIndex":6},{"imageOffset":8117092,"symbol":"WatcherThread::sleep() const","symbolLocation":176,"imageIndex":6},{"imageOffset":8117284,"symbol":"WatcherThread::run()","symbolLocation":96,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":585921,"name":"Java: Common-Cleaner","threadState":{"x":[{"value":260},{"value":0},{"value":24320},{"value":0},{"value":0},{"value":160},{"value":60},{"value":0},{"value":6134539544},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":4930625064},{"value":4930625128},{"value":6134542560},{"value":0},{"value":60},{"value":24320},{"value":24321},{"value":24576},{"value":105553129307136},{"value":2}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":6134539664},"sp":{"value":6134539520},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}},"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":8275008,"symbol":"os::PlatformEvent::park(long)","symbolLocation":436,"imageIndex":6},{"imageOffset":8149524,"symbol":"ObjectMonitor::wait(long, bool, JavaThread*)","symbolLocation":1480,"imageIndex":6},{"imageOffset":9950080,"symbol":"ObjectSynchronizer::wait(Handle, long, JavaThread*)","symbolLocation":300,"imageIndex":6},{"imageOffset":5399936,"symbol":"JVM_MonitorWait","symbolLocation":432,"imageIndex":6},{"imageOffset":13544708464,"imageIndex":21},{"imageOffset":13544693772,"imageIndex":21},{"imageOffset":13544693168,"imageIndex":21},{"imageOffset":13544695164,"imageIndex":21},{"imageOffset":13544693772,"imageIndex":21},{"imageOffset":13544669504,"imageIndex":21},{"imageOffset":4725792,"symbol":"JavaCalls::call_helper(JavaValue*, methodHandle const&, JavaCallArguments*, JavaThread*)","symbolLocation":924,"imageIndex":6},{"imageOffset":4721708,"symbol":"JavaCalls::call_virtual(JavaValue*, Klass*, Symbol*, Symbol*, JavaCallArguments*, JavaThread*)","symbolLocation":284,"imageIndex":6},{"imageOffset":4721912,"symbol":"JavaCalls::call_virtual(JavaValue*, Handle, Klass*, Symbol*, Symbol*, JavaThread*)","symbolLocation":100,"imageIndex":6},{"imageOffset":5474244,"symbol":"thread_entry(JavaThread*, JavaThread*)","symbolLocation":196,"imageIndex":6},{"imageOffset":10228556,"symbol":"JavaThread::thread_main_inner()","symbolLocation":348,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"triggered":true,"id":586068,"threadState":{"x":[{"value":0},{"value":0},{"value":0},{"value":0},{"value":1},{"value":13803591736},{"value":46},{"value":0},{"value":15104047915529964879},{"value":15104047919049096527},{"value":2},{"value":1099511627776},{"value":4294967293},{"value":0},{"value":0},{"value":0},{"value":328},{"value":8643302728},{"value":0},{"value":6},{"value":30495},{"value":13803630816},{"value":5399150592,"symbolLocation":1576,"symbol":"VM_ReportJavaOutOfMemory::doit()::buffer"},{"value":5398585344,"symbolLocation":1552,"symbol":"jdk_internal_misc_Unsafe_methods"},{"value":13803597728},{"value":0},{"value":0},{"value":5398855680,"symbolLocation":488,"symbol":"vmClasses::_klasses"},{"value":5398498568,"symbolLocation":0,"symbol":"OnError"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781106248},"cpsr":{"value":1073741824},"fp":{"value":13803596896},"sp":{"value":13803596864},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780871560,"matchesCrashFrame":1},"far":{"value":0}},"frames":[{"imageOffset":37768,"symbol":"__pthread_kill","symbolLocation":8,"imageIndex":22},{"imageOffset":26696,"symbol":"pthread_kill","symbolLocation":296,"imageIndex":25},{"imageOffset":494052,"symbol":"abort","symbolLocation":124,"imageIndex":27},{"imageOffset":8278736,"symbol":"os::abort(bool, void*, void const*)","symbolLocation":56,"imageIndex":6},{"imageOffset":10685196,"symbol":"VMError::report_and_die(int, char const*, char const*, char*, Thread*, unsigned char*, void*, void*, char const*, int, unsigned long)","symbolLocation":2696,"imageIndex":6},{"imageOffset":10682488,"symbol":"VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*, char const*, ...)","symbolLocation":72,"imageIndex":6},{"imageOffset":10685520,"symbol":"VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*)","symbolLocation":36,"imageIndex":6},{"imageOffset":9390752,"symbol":"JVM_handle_bsd_signal","symbolLocation":344,"imageIndex":6},{"imageOffset":13988,"symbol":"_sigtramp","symbolLocation":56,"imageIndex":28},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":29920,"symbol":".omp_task_entry.","symbolLocation":64,"imageIndex":20},{"imageOffset":178076,"symbol":"__kmp_invoke_task(int, kmp_task*, kmp_taskdata*)","symbolLocation":328,"imageIndex":13},{"imageOffset":189096,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":672,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":586069,"frames":[{"imageOffset":134492,"symbol":"kmp_flag_native<unsigned long long, (flag_type)1, true>::done_check()","symbolLocation":0,"imageIndex":13},{"imageOffset":189388,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":964,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":14009641944},{"value":2},{"value":4930831104},{"value":4930831296},{"value":14009641800},{"value":0},{"value":0},{"value":6090586272},{"value":5199875420,"symbolLocation":0,"symbol":"kmp_flag_native<unsigned long long, (flag_type)1, true>::done_check()"},{"value":192},{"value":554301149},{"value":1},{"value":24000000},{"value":124223},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":2},{"value":0},{"value":1},{"value":14009641944},{"value":5791881280},{"value":2},{"value":4930831104},{"value":0},{"value":4294967294},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199930316},"cpsr":{"value":1610614784},"fp":{"value":14009641728},"sp":{"value":14009641568},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199875420},"far":{"value":0}}},{"id":586070,"frames":[{"imageOffset":188984,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":560,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":47343},{"value":3},{"value":4930831104},{"value":0},{"value":14018063176},{"value":0},{"value":0},{"value":6090586272},{"value":5172044352},{"value":5792285760},{"value":1134000821},{"value":1},{"value":24000000},{"value":96304},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":3},{"value":0},{"value":1},{"value":14018063320},{"value":5792573504},{"value":3},{"value":4930831104},{"value":0},{"value":11},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199929840},"cpsr":{"value":2147483648},"fp":{"value":14018063104},"sp":{"value":14018062944},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199929912},"far":{"value":0}}},{"id":586071,"frames":[{"imageOffset":16840,"symbol":"__semwait_signal","symbolLocation":8,"imageIndex":22},{"imageOffset":55028,"symbol":"nanosleep","symbolLocation":220,"imageIndex":27},{"imageOffset":91856,"symbol":"sleep","symbolLocation":52,"imageIndex":27},{"imageOffset":8270472,"symbol":"os::infinite_sleep()","symbolLocation":16,"imageIndex":6},{"imageOffset":10683488,"symbol":"VMError::report_and_die(int, char const*, char const*, char*, Thread*, unsigned char*, void*, void*, char const*, int, unsigned long)","symbolLocation":988,"imageIndex":6},{"imageOffset":10682488,"symbol":"VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*, char const*, ...)","symbolLocation":72,"imageIndex":6},{"imageOffset":10685520,"symbol":"VMError::report_and_die(Thread*, unsigned int, unsigned char*, void*, void*)","symbolLocation":36,"imageIndex":6},{"imageOffset":13988,"symbol":"_sigtramp","symbolLocation":56,"imageIndex":28},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":26792,"symbol":"msd_sort_numeric_recursive","symbolLocation":332,"imageIndex":20},{"imageOffset":29920,"symbol":".omp_task_entry.","symbolLocation":64,"imageIndex":20},{"imageOffset":178076,"symbol":"__kmp_invoke_task(int, kmp_task*, kmp_taskdata*)","symbolLocation":328,"imageIndex":13},{"imageOffset":189096,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":672,"imageIndex":13},{"imageOffset":233284,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":448,"imageIndex":13},{"imageOffset":225396,"symbol":"__kmp_hyper_barrier_gather(barrier_type, kmp_info*, int, int, void (*)(void*, void*), void*)","symbolLocation":436,"imageIndex":13},{"imageOffset":222892,"symbol":"__kmp_join_barrier(int)","symbolLocation":608,"imageIndex":13},{"imageOffset":122648,"symbol":"__kmp_launch_thread","symbolLocation":364,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":4},{"value":0},{"value":1},{"value":1},{"value":100},{"value":0},{"value":52},{"value":0},{"value":8626205976,"symbolLocation":0,"symbol":"clock_sem"},{"value":16387},{"value":17},{"value":14026450920},{"value":5},{"value":14026451347},{"value":195840},{"value":0},{"value":334},{"value":8643302776},{"value":0},{"value":14026452032},{"value":14026452048},{"value":10},{"value":5396937803},{"value":14026452840},{"value":14026452736},{"value":0},{"value":0},{"value":5398855680,"symbolLocation":488,"symbol":"vmClasses::_klasses"},{"value":5398706496,"symbolLocation":0,"symbol":"SuppressFatalErrorMessage"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6779655924},"cpsr":{"value":1610612736},"fp":{"value":14026452016},"sp":{"value":14026451968},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780850632},"far":{"value":0}}},{"id":586072,"frames":[{"imageOffset":234632,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1796,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":1},{"value":5},{"value":4930831104},{"value":4930831296},{"value":14034905928},{"value":0},{"value":0},{"value":6090586272},{"value":0},{"value":4},{"value":2147483647},{"value":1},{"value":24000000},{"value":96554},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":5200249348,"symbolLocation":0,"symbol":"__kmp_tasking_mode"},{"value":5792589888},{"value":5200286528,"symbolLocation":0,"symbol":"__kmp_global"},{"value":14034906072},{"value":0},{"value":5},{"value":4930831104},{"value":5200260648,"symbolLocation":0,"symbol":"__kmp_itt_fsync_prepare_ptr__3_0"},{"value":0},{"value":5200286284,"symbolLocation":0,"symbol":"__kmp_use_yield"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199975560},"cpsr":{"value":2147483648},"fp":{"value":14034906016},"sp":{"value":14034905872},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199975560},"far":{"value":0}}},{"id":586073,"frames":[{"imageOffset":118360,"symbol":"__kmp_get_random","symbolLocation":20,"imageIndex":13},{"imageOffset":188912,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":488,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":5792599616},{"value":6},{"value":4930831104},{"value":0},{"value":14043327304},{"value":0},{"value":0},{"value":6090586272},{"value":59876},{"value":599558170},{"value":3781322561},{"value":1},{"value":24000000},{"value":96554},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":6},{"value":0},{"value":1},{"value":14043327448},{"value":5792599616},{"value":6},{"value":4930831104},{"value":0},{"value":4294967295},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199929840},"cpsr":{"value":1610612736},"fp":{"value":14043327232},"sp":{"value":14043327072},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199859288},"far":{"value":0}}},{"id":586074,"frames":[{"imageOffset":188604,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":180,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":5792609344},{"value":7},{"value":14051748824},{"value":1},{"value":14051748680},{"value":0},{"value":0},{"value":6090586272},{"value":0},{"value":5792285760},{"value":12},{"value":192},{"value":24000000},{"value":96357},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":5200249348,"symbolLocation":0,"symbol":"__kmp_tasking_mode"},{"value":5792609344},{"value":1},{"value":14051748824},{"value":5792609344},{"value":7},{"value":4930831104},{"value":0},{"value":4294967294},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199975036},"cpsr":{"value":536870912},"fp":{"value":14051748608},"sp":{"value":14051748448},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199929532},"far":{"value":0}}},{"id":686087,"frames":[{"imageOffset":7020,"symbol":"start_wqthread","symbolLocation":0,"imageIndex":25}],"threadState":{"x":[{"value":6096023552},{"value":173999},{"value":6095486976},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6096023552},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6781086572},"far":{"value":0}}},{"id":686089,"frames":[{"imageOffset":7020,"symbol":"start_wqthread","symbolLocation":0,"imageIndex":25}],"threadState":{"x":[{"value":6097170432},{"value":113931},{"value":6096633856},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6097170432},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6781086572},"far":{"value":0}}},{"id":686127,"name":"Java: GC Thread#1","threadState":{"x":[{"value":14},{"value":1},{"value":1},{"value":13788704304},{"value":13788704192},{"value":2},{"value":9},{"value":0},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":30408952806458},{"value":4617},{"value":30076292192},{"value":3759418939},{"value":30075351512},{"value":18446744073709551580},{"value":105553117201168},{"value":0},{"value":105553161057360},{"value":1},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":13788704400},"sp":{"value":13788704384},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686128,"name":"Java: GC Thread#2","threadState":{"x":[{"value":14},{"value":1},{"value":13790850500},{"value":0},{"value":5638504576},{"value":2},{"value":1},{"value":13976445088914777935},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":0},{"value":2089},{"value":0},{"value":76},{"value":0},{"value":18446744073709551580},{"value":105553117214608},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":13790850704},"sp":{"value":13790850688},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686129,"name":"Java: GC Thread#3","threadState":{"x":[{"value":14},{"value":5397112864,"symbolLocation":28878,"symbol":"hsdis_library_name"},{"value":0},{"value":13792996944},{"value":13792996904},{"value":997483365},{"value":7665776580755349868},{"value":8530216044863972197},{"value":105553169613952},{"value":2},{"value":4294967295},{"value":30408952999958},{"value":4617},{"value":7308057374787972711},{"value":5652691955719949614},{"value":6647137},{"value":18446744073709551580},{"value":105553119866016},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":536870912},"fp":{"value":13792997008},"sp":{"value":13792996992},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686130,"name":"Java: GC Thread#4","threadState":{"x":[{"value":14},{"value":13795143276},{"value":5805081088},{"value":8},{"value":0},{"value":4950962048},{"value":16146108540007907364},{"value":16146108604432416819},{"value":105553169613952},{"value":2},{"value":4294967295},{"value":3779584},{"value":2052949034},{"value":4294934536},{"value":256},{"value":4950912000},{"value":18446744073709551580},{"value":105553119862768},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":536870912},"fp":{"value":13795143312},"sp":{"value":13795143296},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686131,"name":"Java: GC Thread#5","threadState":{"x":[{"value":14},{"value":1},{"value":0},{"value":13805776480},{"value":13805776408},{"value":0},{"value":0},{"value":0},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":30408952008500},{"value":5368729600},{"value":2045},{"value":2277763091},{"value":2275663902},{"value":18446744073709551580},{"value":105553119869712},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":13805776528},"sp":{"value":13805776512},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686132,"name":"Java: GC Thread#6","threadState":{"x":[{"value":14},{"value":5397113253,"symbolLocation":29267,"symbol":"hsdis_library_name"},{"value":1},{"value":13807922784},{"value":13807922712},{"value":5805267328},{"value":8530216044863972197},{"value":7579390421666377569},{"value":105553169613952},{"value":2},{"value":4294967295},{"value":30408951748958},{"value":5377093632},{"value":2045},{"value":2275663902},{"value":2273564698},{"value":18446744073709551580},{"value":105553117213040},{"value":0},{"value":105553161057360},{"value":1},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":536870912},"fp":{"value":13807922832},"sp":{"value":13807922816},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686133,"name":"Java: GC Thread#7","threadState":{"x":[{"value":14},{"value":1},{"value":0},{"value":5470191552},{"value":5470175360},{"value":0},{"value":9},{"value":16455866221792759458},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":0},{"value":13423988500},{"value":13423988332},{"value":72},{"value":5805081088},{"value":18446744073709551580},{"value":105553117208896},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":13819653776},"sp":{"value":13819653760},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686134,"name":"Java: GC Thread#8","threadState":{"x":[{"value":14},{"value":5397112852,"symbolLocation":28866,"symbol":"hsdis_library_name"},{"value":0},{"value":13821799984},{"value":13821799872},{"value":2},{"value":1},{"value":0},{"value":105553169613952},{"value":2},{"value":4294967295},{"value":30408952110083},{"value":3},{"value":0},{"value":0},{"value":1},{"value":18446744073709551580},{"value":105553119862320},{"value":0},{"value":105553161057360},{"value":0},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":536870912},"fp":{"value":13821800080},"sp":{"value":13821800064},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686135,"name":"Java: GC Thread#9","threadState":{"x":[{"value":14},{"value":1},{"value":4951678976},{"value":8},{"value":0},{"value":2},{"value":1},{"value":1968384547302218577},{"value":105553169613952},{"value":1},{"value":4294967295},{"value":6731264},{"value":2052949034},{"value":4294934536},{"value":4623},{"value":4950912000},{"value":18446744073709551580},{"value":105553119864784},{"value":0},{"value":105553161057360},{"value":1},{"value":105553160236448},{"value":1},{"value":4294967295},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5394480188},"cpsr":{"value":1610612736},"fp":{"value":13823946384},"sp":{"value":13823946368},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780836784},"far":{"value":0}},"frames":[{"imageOffset":2992,"symbol":"semaphore_wait_trap","symbolLocation":8,"imageIndex":22},{"imageOffset":8846396,"symbol":"OSXSemaphore::wait()","symbolLocation":24,"imageIndex":6},{"imageOffset":10924120,"symbol":"GangWorker::loop()","symbolLocation":52,"imageIndex":6},{"imageOffset":10924048,"symbol":"GangWorker::run()","symbolLocation":28,"imageIndex":6},{"imageOffset":10221948,"symbol":"Thread::call_run()","symbolLocation":204,"imageIndex":6},{"imageOffset":8243460,"symbol":"thread_native_entry(Thread*)","symbolLocation":344,"imageIndex":6},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}]},{"id":686196,"frames":[{"imageOffset":7020,"symbol":"start_wqthread","symbolLocation":0,"imageIndex":25}],"threadState":{"x":[{"value":6092894208},{"value":169279},{"value":6092357632},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6092894208},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6781086572},"far":{"value":0}}},{"id":686200,"frames":[{"imageOffset":7020,"symbol":"start_wqthread","symbolLocation":0,"imageIndex":25}],"threadState":{"x":[{"value":6172962816},{"value":107543},{"value":6172426240},{"value":0},{"value":409604},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":6172962816},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6781086572},"far":{"value":0}}},{"id":686202,"frames":[{"imageOffset":7020,"symbol":"start_wqthread","symbolLocation":0,"imageIndex":25}],"threadState":{"x":[{"value":13749481472},{"value":0},{"value":13748944896},{"value":0},{"value":278532},{"value":18446744073709551615},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0},{"value":0}],"flavor":"ARM_THREAD_STATE64","lr":{"value":0},"cpsr":{"value":0},"fp":{"value":0},"sp":{"value":13749481472},"esr":{"value":0,"description":" Address size fault"},"pc":{"value":6781086572},"far":{"value":0}}},{"id":686709,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15579867464},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5779804480},{"value":5779804416},{"value":15579869408},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5779804552},{"value":2881001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15579867584},"sp":{"value":15579867440},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686710,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15588288840},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780174656},{"value":5780174592},{"value":15588290784},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780174728},{"value":3656001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15588288960},"sp":{"value":15588288816},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686711,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15596710216},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780183872},{"value":5780183808},{"value":15596712160},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780183944},{"value":3439001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15596710336},"sp":{"value":15596710192},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686712,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15605131592},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780193088},{"value":5780193024},{"value":15605133536},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780193160},{"value":3181001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15605131712},"sp":{"value":15605131568},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686713,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15613552968},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780202304},{"value":5780202240},{"value":15613554912},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780202376},{"value":3564001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15613553088},"sp":{"value":15613552944},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686714,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15621974344},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780211520},{"value":5780211456},{"value":15621976288},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780211592},{"value":3593001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15621974464},"sp":{"value":15621974320},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686715,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15630395720},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780248896},{"value":5780248832},{"value":15630397664},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780248968},{"value":3432001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15630395840},"sp":{"value":15630395696},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686716,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15638817096},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780258112},{"value":5780258048},{"value":15638819040},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780258184},{"value":3512001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15638817216},"sp":{"value":15638817072},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686717,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15647238472},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780267328},{"value":5780267264},{"value":15647240416},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780267400},{"value":4393001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15647238592},"sp":{"value":15647238448},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686718,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":322628,"symbol":"__kmp_suspend_64","symbolLocation":328,"imageIndex":2},{"imageOffset":235484,"symbol":"kmp_flag_64::wait(kmp_info*, int, void*)","symbolLocation":1812,"imageIndex":2},{"imageOffset":220240,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":152,"imageIndex":2},{"imageOffset":232840,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":496,"imageIndex":2},{"imageOffset":118164,"symbol":"__kmp_launch_thread","symbolLocation":316,"imageIndex":2},{"imageOffset":317396,"symbol":"__kmp_launch_worker(void*)","symbolLocation":280,"imageIndex":2},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15655659848},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780276544},{"value":5780276480},{"value":15655661792},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780276616},{"value":3706001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15655659968},"sp":{"value":15655659824},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686719,"frames":[{"imageOffset":17356,"symbol":"__psynch_cvwait","symbolLocation":8,"imageIndex":22},{"imageOffset":28828,"symbol":"_pthread_cond_wait","symbolLocation":984,"imageIndex":25},{"imageOffset":18446658599028523008,"imageIndex":21}],"threadState":{"x":[{"value":260},{"value":0},{"value":512},{"value":0},{"value":0},{"value":160},{"value":0},{"value":0},{"value":15664081224},{"value":0},{"value":0},{"value":2},{"value":2},{"value":0},{"value":0},{"value":0},{"value":305},{"value":8643302656},{"value":0},{"value":5780285760},{"value":5780285696},{"value":15664083168},{"value":0},{"value":0},{"value":512},{"value":513},{"value":768},{"value":5780285832},{"value":3050001}],"flavor":"ARM_THREAD_STATE64","lr":{"value":6781108380},"cpsr":{"value":1610612736},"fp":{"value":15664081344},"sp":{"value":15664081200},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":6780851148},"far":{"value":0}}},{"id":686733,"frames":[{"imageOffset":204628,"symbol":"__kmp_steal_task(int, int, kmp_task_team*, std::__1::atomic<int>*, int*, int)","symbolLocation":12,"imageIndex":13},{"imageOffset":188744,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":320,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":2},{"value":8},{"value":4930831104},{"value":4930831296},{"value":18272709448},{"value":0},{"value":0},{"value":6090586272},{"value":5791881280},{"value":5792285760},{"value":3164127391},{"value":1},{"value":24000000},{"value":96698},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":8},{"value":0},{"value":1},{"value":18272709592},{"value":5805246528},{"value":8},{"value":4930831104},{"value":0},{"value":2},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199929672},"cpsr":{"value":2147483648},"fp":{"value":18272709376},"sp":{"value":18272709104},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199945556},"far":{"value":0}}},{"id":686734,"frames":[{"imageOffset":234212,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1376,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":0},{"value":9},{"value":4930831104},{"value":4930831296},{"value":18281130824},{"value":0},{"value":0},{"value":6090586272},{"value":0},{"value":4},{"value":0},{"value":1},{"value":24000000},{"value":96687},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":5200249348,"symbolLocation":0,"symbol":"__kmp_tasking_mode"},{"value":5809598016},{"value":5200286528,"symbolLocation":0,"symbol":"__kmp_global"},{"value":18281130968},{"value":0},{"value":9},{"value":4930831104},{"value":5200260648,"symbolLocation":0,"symbol":"__kmp_itt_fsync_prepare_ptr__3_0"},{"value":0},{"value":5200286284,"symbolLocation":0,"symbol":"__kmp_use_yield"}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199975036},"cpsr":{"value":536870912},"fp":{"value":18281130912},"sp":{"value":18281130768},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199975140},"far":{"value":0}}},{"id":686735,"frames":[{"imageOffset":188992,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":568,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":39261},{"value":0},{"value":4930831104},{"value":0},{"value":18289552200},{"value":0},{"value":0},{"value":6090586272},{"value":5791881280},{"value":5792285760},{"value":678725881},{"value":1},{"value":24000000},{"value":96553},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":10},{"value":0},{"value":1},{"value":18289552344},{"value":5171045440},{"value":10},{"value":4930831104},{"value":0},{"value":2},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199929840},"cpsr":{"value":2147483648},"fp":{"value":18289552128},"sp":{"value":18289551968},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199929920},"far":{"value":0}}},{"id":686736,"frames":[{"imageOffset":188604,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)","symbolLocation":180,"imageIndex":13},{"imageOffset":234108,"symbol":"kmp_flag_64<false, true>::wait(kmp_info*, int, void*)","symbolLocation":1272,"imageIndex":13},{"imageOffset":218848,"symbol":"__kmp_hyper_barrier_release(barrier_type, kmp_info*, int, int, int, void*)","symbolLocation":164,"imageIndex":13},{"imageOffset":229984,"symbol":"__kmp_fork_barrier(int, int)","symbolLocation":460,"imageIndex":13},{"imageOffset":122504,"symbol":"__kmp_launch_thread","symbolLocation":220,"imageIndex":13},{"imageOffset":332476,"symbol":"__kmp_launch_worker(void*)","symbolLocation":252,"imageIndex":13},{"imageOffset":27592,"symbol":"_pthread_start","symbolLocation":136,"imageIndex":25},{"imageOffset":7040,"symbol":"thread_start","symbolLocation":8,"imageIndex":25}],"threadState":{"x":[{"value":5172044352},{"value":11},{"value":18297973720},{"value":1},{"value":18297973576},{"value":0},{"value":0},{"value":6090586272},{"value":0},{"value":5792285760},{"value":12},{"value":192},{"value":24000000},{"value":96307},{"value":5200233984,"symbolLocation":0,"symbol":"vtable for kmp_flag_64<false, true>"},{"value":0},{"value":5199929352,"symbolLocation":0,"symbol":"int __kmp_execute_tasks_64<false, true>(kmp_info*, int, kmp_flag_64<false, true>*, int, int*, void*, int)"},{"value":8643302376},{"value":0},{"value":5200249348,"symbolLocation":0,"symbol":"__kmp_tasking_mode"},{"value":5172044352},{"value":1},{"value":18297973720},{"value":5172044352},{"value":11},{"value":4930831104},{"value":0},{"value":4294967294},{"value":11}],"flavor":"ARM_THREAD_STATE64","lr":{"value":5199975036},"cpsr":{"value":536870912},"fp":{"value":18297973504},"sp":{"value":18297973344},"esr":{"value":1442840704,"description":" Address size fault"},"pc":{"value":5199929532},"far":{"value":0}}}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4376264704,
+    "CFBundleShortVersionString" : "18.5.037",
+    "CFBundleIdentifier" : "com.stata.stata18",
+    "size" : 50790400,
+    "uuid" : "5c5c333f-3944-3a3d-baf6-121c59c04459",
+    "path" : "\/Applications\/Stata\/StataMP.app\/Contents\/MacOS\/StataMP",
+    "name" : "StataMP",
+    "CFBundleVersion" : "18.5.037"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4447387648,
+    "CFBundleShortVersionString" : "4.1.3",
+    "CFBundleIdentifier" : "com.sun.Scintilla",
+    "size" : 737280,
+    "uuid" : "1e307d78-4658-31d6-b19c-6eca4ba461a2",
+    "path" : "\/Applications\/Stata\/StataMP.app\/Contents\/Frameworks\/Scintilla.framework\/Versions\/A\/Scintilla",
+    "name" : "Scintilla",
+    "CFBundleVersion" : "4.1.3"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4444651520,
+    "size" : 442368,
+    "uuid" : "19de19c3-db27-35a8-bee8-8546bb23944b",
+    "path" : "\/Applications\/Stata\/StataMP.app\/Contents\/Frameworks\/libomp.dylib",
+    "name" : "libomp.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4655185920,
+    "size" : 49152,
+    "uuid" : "9a87f143-aa9d-3c46-b2e8-b3fb9215e33e",
+    "path" : "\/usr\/lib\/libobjc-trampolines.dylib",
+    "name" : "libobjc-trampolines.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 4919443456,
+    "CFBundleShortVersionString" : "329.2",
+    "CFBundleIdentifier" : "com.apple.AGXMetalG16X",
+    "size" : 7553024,
+    "uuid" : "0ce453ff-9f17-321f-bc18-383573a48221",
+    "path" : "\/System\/Library\/Extensions\/AGXMetalG16X.bundle\/Contents\/MacOS\/AGXMetalG16X",
+    "name" : "AGXMetalG16X",
+    "CFBundleVersion" : "329.2"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4946493440,
+    "size" : 81920,
+    "uuid" : "7f529b59-ad18-37d4-a0a4-7b936bc60211",
+    "path" : "\/Applications\/Stata\/*\/libjli.dylib",
+    "name" : "libjli.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5385633792,
+    "size" : 11960320,
+    "uuid" : "b51c839c-7674-38ea-a2df-89dc571d928a",
+    "path" : "\/Applications\/Stata\/*\/libjvm.dylib",
+    "name" : "libjvm.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4946411520,
+    "size" : 16384,
+    "uuid" : "e2b85dc1-382b-388a-b4b7-56a39e7fe3c6",
+    "path" : "\/Applications\/Stata\/*\/libjimage.dylib",
+    "name" : "libjimage.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4946870272,
+    "size" : 98304,
+    "uuid" : "07c1e8c8-d87b-34a5-8bdf-58c2c2a17f08",
+    "path" : "\/Applications\/Stata\/*\/libjava.dylib",
+    "name" : "libjava.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5210832896,
+    "size" : 49152,
+    "uuid" : "f98c682a-0655-3551-a995-1e86f8c433fa",
+    "path" : "\/Applications\/Stata\/*\/libnio.dylib",
+    "name" : "libnio.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5210963968,
+    "size" : 65536,
+    "uuid" : "28b7630c-0832-354f-a503-6e96aa57c361",
+    "path" : "\/Applications\/Stata\/*\/libnet.dylib",
+    "name" : "libnet.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5211275264,
+    "size" : 98304,
+    "uuid" : "f8854efd-3f5c-3da8-b10f-5268c26691c6",
+    "path" : "\/Applications\/Stata\/*\/libzip.dylib",
+    "name" : "libzip.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4941824000,
+    "size" : 16384,
+    "uuid" : "f88476cf-8952-3e52-a34f-02a554960f0b",
+    "path" : "\/Applications\/Stata\/*\/libextnet.dylib",
+    "name" : "libextnet.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5199740928,
+    "size" : 491520,
+    "uuid" : "0e12d2f4-7408-39bd-b6e9-d56a3dba63b3",
+    "path" : "\/opt\/homebrew\/*\/libomp.dylib",
+    "name" : "libomp.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5212585984,
+    "size" : 393216,
+    "uuid" : "2e171cb9-a524-3aad-8a76-ecccb8689a29",
+    "path" : "\/Applications\/Stata\/*\/libawt.dylib",
+    "name" : "libawt.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5184274432,
+    "size" : 393216,
+    "uuid" : "bd6a9b14-36b7-39cb-9ddb-f412a6fcafdc",
+    "path" : "\/Applications\/Stata\/*\/libmlib_image.dylib",
+    "name" : "libmlib_image.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5958221824,
+    "size" : 770048,
+    "uuid" : "5099f311-b285-3aeb-abc5-f7bc2c5c8aa1",
+    "path" : "\/Applications\/Stata\/*\/libawt_lwawt.dylib",
+    "name" : "libawt_lwawt.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4961632256,
+    "size" : 32768,
+    "uuid" : "f5b5e513-379e-356f-a2fe-52627b44ee09",
+    "path" : "\/Applications\/Stata\/*\/libosxapp.dylib",
+    "name" : "libosxapp.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 5959417856,
+    "size" : 983040,
+    "uuid" : "83d54c4f-dd86-38d2-a1ad-4cb867b37c24",
+    "path" : "\/Applications\/Stata\/*\/libfontmanager.dylib",
+    "name" : "libfontmanager.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 13781647360,
+    "size" : 491520,
+    "uuid" : "31d27d79-4e5f-347b-b4d0-6aee3d8b982c",
+    "path" : "\/Applications\/Stata\/*\/libfreetype.dylib",
+    "name" : "libfreetype.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 6091177984,
+    "size" : 393216,
+    "uuid" : "8b101309-df70-34e5-96e1-cd38b930d1b2",
+    "path" : "\/Users\/USER\/Documents\/*\/ctools_mac_arm.plugin",
+    "name" : "ctools_mac_arm.plugin"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6780833792,
+    "size" : 243300,
+    "uuid" : "1d4ffd44-8926-3746-924e-deef5b777588",
+    "path" : "\/usr\/lib\/system\/libsystem_kernel.dylib",
+    "name" : "libsystem_kernel.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6781558784,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.CoreFoundation",
+    "size" : 5500928,
+    "uuid" : "37cebb20-0448-392c-9f01-f5bd87eb295e",
+    "path" : "\/System\/Library\/Frameworks\/CoreFoundation.framework\/Versions\/A\/CoreFoundation",
+    "name" : "CoreFoundation",
+    "CFBundleVersion" : "3603.1.403"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6848016384,
+    "CFBundleShortVersionString" : "6.9",
+    "CFBundleIdentifier" : "com.apple.AppKit",
+    "size" : 21564672,
+    "uuid" : "00452387-9d4c-397a-a17d-cd14bb6ce9b4",
+    "path" : "\/System\/Library\/Frameworks\/AppKit.framework\/Versions\/C\/AppKit",
+    "name" : "AppKit",
+    "CFBundleVersion" : "2575.70.54"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6781079552,
+    "size" : 51832,
+    "uuid" : "022dc315-cf35-38da-939e-03800b5beff2",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6781132800,
+    "size" : 195492,
+    "uuid" : "e4fe35c9-8aee-3728-89b9-89a64239ed74",
+    "path" : "\/usr\/lib\/system\/libdyld.dylib",
+    "name" : "libdyld.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6779600896,
+    "size" : 528888,
+    "uuid" : "e098cb59-2c56-395c-ade1-6ef590e61199",
+    "path" : "\/usr\/lib\/system\/libsystem_c.dylib",
+    "name" : "libsystem_c.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6781329408,
+    "size" : 32268,
+    "uuid" : "c26e58a4-34a1-3f9c-bdbc-ebc34426633a",
+    "path" : "\/usr\/lib\/system\/libsystem_platform.dylib",
+    "name" : "libsystem_platform.dylib"
+  }
+],
+  "sharedCache" : {
+  "base" : 6776438784,
+  "size" : 5039734784,
+  "uuid" : "87b95872-5e6e-3168-a703-5f00925e0ab2"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=1.7G resident=0K(0%) swapped_out_or_unallocated=1.7G(100%)\nWritable regions: Total=8.0G written=4198K(0%) resident=4198K(0%) swapped_out=0K(0%) unallocated=8.0G(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nAccelerate framework               384K        3 \nActivity Tracing                   256K        1 \nCG image                          13.6M       59 \nColorSync                          704K       35 \nCoreAnimation                     39.8M      237 \nCoreGraphics                        32K        2 \nCoreImage                          816K       17 \nCoreUI image data                 5520K       43 \nFoundation                         144K        3 \nKernel Alloc Once                   32K        1 \nMALLOC                             7.6G      180 \nMALLOC guard page                  288K       18 \nSTACK GUARD                       1232K       55 \nStack                            239.8M       55 \nStack Guard                       56.2M       11 \nVM_ALLOCATE                        5.4G      207 \nVM_ALLOCATE (reserved)            34.1M        3         reserved VM address space (unallocated)\n__AUTH                            5447K      695 \n__AUTH_CONST                      76.5M      935 \n__CTF                               824        1 \n__DATA                            39.8M      939 \n__DATA_CONST                      28.5M      963 \n__DATA_DIRTY                      2763K      337 \n__FONT_DATA                        2352        1 \n__INFO_FILTER                         8        1 \n__LINKEDIT                       625.4M       22 \n__OBJC_RO                         61.4M        1 \n__OBJC_RW                         2397K        1 \n__TEXT                             1.1G      983 \n__TPRO_CONST                       128K        2 \nmapped file                      517.3M       61 \npage table in kernel              4198K        1 \nshared memory                      928K       17 \n===========                     =======  ======= \nTOTAL                             15.9G     5890 \nTOTAL, minus reserved VM space    15.8G     5890 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+
+  }
+},
+  "logWritingSignature" : "6deb3e3b7479cc4be00d709c9de2501629dd94a7",
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "6425c75e4327780c10cc4252",
+      "factorPackIds" : {
+        "SIRI_HOME_AUTOMATION_INTENT_SELECTION_CACHE" : "642600a457e7664b1698eb32"
+      },
+      "deploymentId" : 240000004
+    },
+    {
+      "rolloutId" : "5f72dc58705eff005a46b3a9",
+      "factorPackIds" : {
+
+      },
+      "deploymentId" : 240000015
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}
+
+Model: Mac16,8, BootROM 13822.61.10, proc 12:8:4 processors, 48 GB, SMC 
+Graphics: Apple M4 Pro, Apple M4 Pro, Built-In
+Display: Color LCD, 3024 x 1964 Retina, Main, MirrorOff, Online
+Memory Module: LPDDR5, Micron
+AirPort: spairport_wireless_card_type_wifi (0x14E4, 0x4388), wl0: Jun 24 2025 04:56:40 version 23.40.31.0.41.51.179 FWID 01-435c4c4d
+IO80211_driverkit-1485.12 "IO80211_driverkit-1485.12" Oct  7 2025 20:28:11
+AirPort: 
+Bluetooth: Version (null), 0 services, 0 devices, 0 incoming serial ports
+Network Service: Wi-Fi, AirPort, en0
+USB Device: USB31Bus
+USB Device: USB31Bus
+USB Device: USB31Bus
+Thunderbolt Bus: MacBook Pro, Apple Inc.
+Thunderbolt Bus: MacBook Pro, Apple Inc.
+Thunderbolt Bus: MacBook Pro, Apple Inc.

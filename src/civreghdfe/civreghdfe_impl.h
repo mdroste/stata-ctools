@@ -51,9 +51,11 @@ ST_retcode civreghdfe_main(const char *args);
     - beta: output coefficient vector (K_exog + K_endog)
     - V: output variance-covariance matrix ((K+1) x (K+1) for constant)
     - first_stage_F: output array of first-stage F-statistics (K_endog)
-    - vce_type: 0=unadjusted, 1=robust, 2=cluster
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster, 3=cluster2 (two-way)
     - cluster_ids: cluster IDs (may be NULL)
     - num_clusters: number of clusters
+    - cluster2_ids: second cluster IDs for two-way clustering (may be NULL)
+    - num_clusters2: number of second-dimension clusters
     - df_a: absorbed degrees of freedom
     - nested_adj: 1 if FE nested in cluster
     - verbose: 1 for verbose output
@@ -83,6 +85,8 @@ ST_retcode compute_2sls(
     ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
+    const ST_int *cluster2_ids,
+    ST_int num_clusters2,
     ST_int df_a,
     ST_int nested_adj,
     ST_int verbose,

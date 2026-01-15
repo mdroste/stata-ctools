@@ -272,6 +272,194 @@ void ivvce_compute_ZOmegaZ_cluster(
 }
 
 /*
+    Helper function to compute one-way cluster meat matrix.
+    Returns meat = sum_c (sum_i (PzX_i * e_i))' (sum_i (PzX_i * e_i))
+*/
+static void compute_cluster_meat(
+    const ST_double *PzX,
+    const ST_double *resid,
+    const ST_double *weights,
+    ST_int weight_type,
+    const ST_int *cluster_ids,
+    ST_int N,
+    ST_int K_total,
+    ST_int num_clusters,
+    ST_double *meat
+)
+{
+    ST_int i, j, k, c;
+
+    memset(meat, 0, K_total * K_total * sizeof(ST_double));
+
+    /* Allocate per-cluster sums */
+    ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
+    if (!cluster_sums) return;
+
+    /* Sum (PzX_i * e_i) within each cluster */
+    for (i = 0; i < N; i++) {
+        c = cluster_ids[i] - 1;  /* 1-indexed to 0-indexed */
+        if (c < 0 || c >= num_clusters) continue;
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        ST_double we = w * resid[i];
+        for (j = 0; j < K_total; j++) {
+            cluster_sums[c * K_total + j] += PzX[j * N + i] * we;
+        }
+    }
+
+    /* Compute meat: sum over clusters of outer products */
+    for (c = 0; c < num_clusters; c++) {
+        for (j = 0; j < K_total; j++) {
+            for (k = 0; k <= j; k++) {
+                ST_double contrib = cluster_sums[c * K_total + j] * cluster_sums[c * K_total + k];
+                meat[j * K_total + k] += contrib;
+                if (k != j) meat[k * K_total + j] += contrib;
+            }
+        }
+    }
+
+    free(cluster_sums);
+}
+
+/*
+    Compute two-way clustered VCE using Cameron-Gelbach-Miller (2011) formula.
+    V = V1 + V2 - V_intersection
+*/
+void ivvce_compute_twoway(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *temp_kiv_ktotal,
+    const ST_double *XkX_inv,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_total,
+    ST_int K_iv,
+    const ST_int *cluster1_ids,
+    ST_int num_clusters1,
+    const ST_int *cluster2_ids,
+    ST_int num_clusters2,
+    ST_int df_a,
+    ST_double *V
+)
+{
+    ST_int i, j, k;
+
+    /* Compute P_Z X = Z * (Z'Z)^-1 Z'X */
+    ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+    if (!PzX) return;
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < K_total; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K_iv; k++) {
+                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
+            }
+            PzX[j * N + i] = sum;
+        }
+    }
+
+    /* Allocate meat matrices for each clustering */
+    ST_double *meat1 = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *meat2 = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *meat_int = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *V1 = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *V2 = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *V_int = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+
+    if (!meat1 || !meat2 || !meat_int || !V1 || !V2 || !V_int || !temp_v) {
+        free(PzX);
+        if (meat1) free(meat1);
+        if (meat2) free(meat2);
+        if (meat_int) free(meat_int);
+        if (V1) free(V1);
+        if (V2) free(V2);
+        if (V_int) free(V_int);
+        if (temp_v) free(temp_v);
+        return;
+    }
+
+    /* Create intersection cluster IDs */
+    /* Each unique (cluster1, cluster2) pair becomes a single cluster */
+    ST_int *intersection_ids = (ST_int *)calloc(N, sizeof(ST_int));
+    if (!intersection_ids) {
+        free(PzX); free(meat1); free(meat2); free(meat_int);
+        free(V1); free(V2); free(V_int); free(temp_v);
+        return;
+    }
+
+    /* Simple approach: map (c1, c2) to unique integer */
+    /* Use hash: intersection_id = c1 * max_c2 + c2 */
+    /* Then compact to 1..num_intersection */
+    ST_int *pair_to_int = (ST_int *)calloc((num_clusters1 + 1) * (num_clusters2 + 1), sizeof(ST_int));
+    if (!pair_to_int) {
+        free(PzX); free(meat1); free(meat2); free(meat_int);
+        free(V1); free(V2); free(V_int); free(temp_v);
+        free(intersection_ids);
+        return;
+    }
+
+    ST_int num_intersection = 0;
+    for (i = 0; i < N; i++) {
+        ST_int c1 = cluster1_ids[i];
+        ST_int c2 = cluster2_ids[i];
+        ST_int pair_idx = c1 * (num_clusters2 + 1) + c2;
+        if (pair_to_int[pair_idx] == 0) {
+            num_intersection++;
+            pair_to_int[pair_idx] = num_intersection;
+        }
+        intersection_ids[i] = pair_to_int[pair_idx];
+    }
+    free(pair_to_int);
+
+    /* Compute meat matrices for each clustering dimension */
+    compute_cluster_meat(PzX, resid, weights, weight_type, cluster1_ids, N, K_total, num_clusters1, meat1);
+    compute_cluster_meat(PzX, resid, weights, weight_type, cluster2_ids, N, K_total, num_clusters2, meat2);
+    compute_cluster_meat(PzX, resid, weights, weight_type, intersection_ids, N, K_total, num_intersection, meat_int);
+
+    /* DOF adjustments for each dimension */
+    ST_int df_r = N - K_total - df_a;
+    if (df_r <= 0) df_r = 1;
+
+    /* V1 = XkX_inv * meat1 * XkX_inv * dof_adj1 */
+    ST_double G1 = (ST_double)num_clusters1;
+    ST_double dof_adj1 = ((ST_double)(N - 1) / (ST_double)df_r) * (G1 / (G1 - 1.0));
+    civreghdfe_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
+    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V1);
+    for (i = 0; i < K_total * K_total; i++) V1[i] *= dof_adj1;
+
+    /* V2 = XkX_inv * meat2 * XkX_inv * dof_adj2 */
+    ST_double G2 = (ST_double)num_clusters2;
+    ST_double dof_adj2 = ((ST_double)(N - 1) / (ST_double)df_r) * (G2 / (G2 - 1.0));
+    civreghdfe_matmul_ab(XkX_inv, meat2, K_total, K_total, K_total, temp_v);
+    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V2);
+    for (i = 0; i < K_total * K_total; i++) V2[i] *= dof_adj2;
+
+    /* V_int = XkX_inv * meat_int * XkX_inv * dof_adj_int */
+    ST_double G_int = (ST_double)num_intersection;
+    ST_double dof_adj_int = ((ST_double)(N - 1) / (ST_double)df_r) * (G_int / (G_int - 1.0));
+    civreghdfe_matmul_ab(XkX_inv, meat_int, K_total, K_total, K_total, temp_v);
+    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V_int);
+    for (i = 0; i < K_total * K_total; i++) V_int[i] *= dof_adj_int;
+
+    /* V = V1 + V2 - V_int */
+    for (i = 0; i < K_total * K_total; i++) {
+        V[i] = V1[i] + V2[i] - V_int[i];
+    }
+
+    /* Clean up */
+    free(PzX);
+    free(meat1);
+    free(meat2);
+    free(meat_int);
+    free(V1);
+    free(V2);
+    free(V_int);
+    free(temp_v);
+    free(intersection_ids);
+}
+
+/*
     Full VCE computation with P_Z X calculation.
 
     This is the main entry point for VCE computation when Z is available.

@@ -51,6 +51,10 @@
 /* Minimum observations for parallel histogram/scatter */
 #define MSD_PARALLEL_HIST_THRESHOLD (MIN_OBS_PER_THREAD * 2)
 
+/* Maximum recursion depth before switching to iterative fallback */
+/* Each recursive call uses ~4KB stack space, limit to prevent overflow */
+#define MSD_MAX_RECURSION_DEPTH 32
+
 /* ============================================================================
    Utility Functions
    ============================================================================ */
@@ -480,11 +484,12 @@ static int msd_sort_pass_numeric_seq(size_t *order, size_t *temp_order,
     Recursive MSD radix sort for numeric data (for subarrays).
     Uses pointer swapping to avoid memcpy.
     order_is_primary indicates whether order currently holds the data.
+    depth tracks recursion depth to prevent stack overflow.
 */
-static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
-                                       uint64_t *keys, size_t start,
-                                       size_t end, int byte_pos,
-                                       int a_is_current)
+static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
+                                            uint64_t *keys, size_t start,
+                                            size_t end, int byte_pos,
+                                            int a_is_current, int depth)
 {
     size_t counts[RADIX_SIZE];
     size_t bucket_starts[RADIX_SIZE];
@@ -512,14 +517,23 @@ static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
         return;
     }
 
+    /* Fallback: if recursion too deep, use insertion sort to prevent stack overflow */
+    if (depth >= MSD_MAX_RECURSION_DEPTH) {
+        insertion_sort_numeric(current_order, keys, start, end);
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+
     skipped = msd_sort_pass_numeric_seq(current_order, temp_order, keys,
                                         start, end, byte_pos,
                                         bucket_starts, counts);
 
     if (skipped) {
         /* Skip this byte, continue with same buffer */
-        msd_sort_numeric_recursive(order_a, order_b, keys, start, end,
-                                   byte_pos - 1, a_is_current);
+        msd_sort_numeric_recursive_impl(order_a, order_b, keys, start, end,
+                                        byte_pos - 1, a_is_current, depth + 1);
         return;
     }
 
@@ -535,22 +549,24 @@ static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
     #endif
             for (b = 0; b < RADIX_SIZE; b++) {
                 if (counts[b] > 1) {
-                    size_t bucket_end = bucket_starts[b] + counts[b];
+                    size_t bucket_start = bucket_starts[b];
+                    size_t bucket_count = counts[b];
+                    size_t bucket_end = bucket_start + bucket_count;
     #ifdef _OPENMP
-                    if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
-                        #pragma omp task
-                        msd_sort_numeric_recursive(order_a, order_b, keys,
-                                                   bucket_starts[b], bucket_end,
-                                                   byte_pos - 1, next_is_a);
+                    if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
+                        #pragma omp task firstprivate(bucket_start, bucket_end, next_is_a, byte_pos, depth)
+                        msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                        bucket_start, bucket_end,
+                                                        byte_pos - 1, next_is_a, depth + 1);
                     } else {
-                        msd_sort_numeric_recursive(order_a, order_b, keys,
-                                                   bucket_starts[b], bucket_end,
-                                                   byte_pos - 1, next_is_a);
+                        msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                        bucket_start, bucket_end,
+                                                        byte_pos - 1, next_is_a, depth + 1);
                     }
     #else
-                    msd_sort_numeric_recursive(order_a, order_b, keys,
-                                               bucket_starts[b], bucket_end,
-                                               byte_pos - 1, next_is_a);
+                    msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                    bucket_start, bucket_end,
+                                                    byte_pos - 1, next_is_a, depth + 1);
     #endif
                 } else if (counts[b] == 1 && !next_is_a) {
                     /* Single element in wrong buffer - copy it */
@@ -562,6 +578,16 @@ static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
         #pragma omp taskwait
     }
     #endif
+}
+
+/* Wrapper for backward compatibility */
+static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
+                                       uint64_t *keys, size_t start,
+                                       size_t end, int byte_pos,
+                                       int a_is_current)
+{
+    msd_sort_numeric_recursive_impl(order_a, order_b, keys, start, end,
+                                    byte_pos, a_is_current, 0);
 }
 
 /*
@@ -641,22 +667,24 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
             #endif
                     for (b = 0; b < RADIX_SIZE; b++) {
                         if (counts[b] > 1) {
-                            size_t bucket_end = bucket_starts[b] + counts[b];
+                            size_t bucket_start = bucket_starts[b];
+                            size_t bucket_count = counts[b];
+                            size_t bucket_end = bucket_start + bucket_count;
             #ifdef _OPENMP
-                            if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
-                                #pragma omp task
-                                msd_sort_numeric_recursive(order_a, order_b, keys,
-                                                           bucket_starts[b], bucket_end,
-                                                           6, 0);  /* 0 = data is in order_b */
+                            if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
+                                #pragma omp task firstprivate(bucket_start, bucket_end)
+                                msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                                bucket_start, bucket_end,
+                                                                6, 0, 1);  /* 0 = data is in order_b, depth=1 */
                             } else {
-                                msd_sort_numeric_recursive(order_a, order_b, keys,
-                                                           bucket_starts[b], bucket_end,
-                                                           6, 0);
+                                msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                                bucket_start, bucket_end,
+                                                                6, 0, 1);
                             }
             #else
-                            msd_sort_numeric_recursive(order_a, order_b, keys,
-                                                       bucket_starts[b], bucket_end,
-                                                       6, 0);
+                            msd_sort_numeric_recursive_impl(order_a, order_b, keys,
+                                                            bucket_start, bucket_end,
+                                                            6, 0, 1);
             #endif
                         } else if (counts[b] == 1) {
                             /* Single element - copy from order_b to order_a */
@@ -750,11 +778,12 @@ static int msd_sort_pass_string_seq(size_t *order, size_t *temp_order,
 /*
     Recursive MSD radix sort for string data with pointer swapping.
     a_is_current indicates whether order_a currently holds the data.
+    depth tracks recursion depth to prevent stack overflow.
 */
-static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
-                                      char **strings, size_t *str_lengths,
-                                      size_t start, size_t end, size_t char_pos,
-                                      int a_is_current)
+static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
+                                           char **strings, size_t *str_lengths,
+                                           size_t start, size_t end, size_t char_pos,
+                                           int a_is_current, int depth)
 {
     size_t counts[STRING_BUCKET_SIZE];
     size_t bucket_starts[STRING_BUCKET_SIZE];
@@ -766,6 +795,15 @@ static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
 
     /* Base case: use insertion sort for small arrays */
     if (n <= MSD_INSERTION_THRESHOLD) {
+        insertion_sort_string(current_order, strings, str_lengths, start, end, char_pos);
+        if (!a_is_current) {
+            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+        }
+        return;
+    }
+
+    /* Fallback: if recursion too deep, use insertion sort to prevent stack overflow */
+    if (depth >= MSD_MAX_RECURSION_DEPTH) {
         insertion_sort_string(current_order, strings, str_lengths, start, end, char_pos);
         if (!a_is_current) {
             memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
@@ -785,8 +823,8 @@ static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
     }
     if (result == 1) {
         /* Skip this pass, continue with same buffer */
-        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
-                                  start, end, char_pos + 1, a_is_current);
+        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                       start, end, char_pos + 1, a_is_current, depth + 1);
         return;
     }
 
@@ -802,22 +840,24 @@ static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
     #endif
             for (b = 1; b < STRING_BUCKET_SIZE; b++) {
                 if (counts[b] > 1) {
-                    size_t bucket_end = bucket_starts[b] + counts[b];
+                    size_t bucket_start = bucket_starts[b];
+                    size_t bucket_count = counts[b];
+                    size_t bucket_end = bucket_start + bucket_count;
     #ifdef _OPENMP
-                    if (counts[b] >= MSD_PARALLEL_THRESHOLD) {
-                        #pragma omp task
-                        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
-                                                  bucket_starts[b], bucket_end,
-                                                  char_pos + 1, next_is_a);
+                    if (bucket_count >= MSD_PARALLEL_THRESHOLD) {
+                        #pragma omp task firstprivate(bucket_start, bucket_end, char_pos, next_is_a, depth)
+                        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                                       bucket_start, bucket_end,
+                                                       char_pos + 1, next_is_a, depth + 1);
                     } else {
-                        msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
-                                                  bucket_starts[b], bucket_end,
-                                                  char_pos + 1, next_is_a);
+                        msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                                       bucket_start, bucket_end,
+                                                       char_pos + 1, next_is_a, depth + 1);
                     }
     #else
-                    msd_sort_string_recursive(order_a, order_b, strings, str_lengths,
-                                              bucket_starts[b], bucket_end,
-                                              char_pos + 1, next_is_a);
+                    msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                                   bucket_start, bucket_end,
+                                                   char_pos + 1, next_is_a, depth + 1);
     #endif
                 } else if (counts[b] == 1 && !next_is_a) {
                     /* Single element in wrong buffer */
@@ -835,6 +875,16 @@ static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
         #pragma omp taskwait
     }
     #endif
+}
+
+/* Wrapper for backward compatibility */
+static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
+                                      char **strings, size_t *str_lengths,
+                                      size_t start, size_t end, size_t char_pos,
+                                      int a_is_current)
+{
+    msd_sort_string_recursive_impl(order_a, order_b, strings, str_lengths,
+                                   start, end, char_pos, a_is_current, 0);
 }
 
 /*

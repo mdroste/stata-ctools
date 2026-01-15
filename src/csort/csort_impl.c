@@ -2,10 +2,10 @@
     csort_impl.c
     csort command implementation
 
-    High-performance radix sort for Stata datasets.
+    High-performance parallel sort for Stata datasets.
     Orchestrates the sorting process:
     1. Load data from Stata to C
-    2. Sort the data using LSD radix sort
+    2. Sort the data using IPS4O (default) or other algorithms
     3. Transfer sorted data back to Stata
 */
 
@@ -24,13 +24,13 @@
 /*
     Parse algorithm option from argument string.
     Looks for "alg=X" where X is:
-      0 or "lsd"      -> SORT_ALG_LSD (default)
+      0 or "lsd"      -> SORT_ALG_LSD
       1 or "msd"      -> SORT_ALG_MSD
       2 or "timsort"  -> SORT_ALG_TIMSORT
       3 or "sample"   -> SORT_ALG_SAMPLE
       4 or "counting" -> SORT_ALG_COUNTING
       5 or "merge"    -> SORT_ALG_MERGE
-      6 or "ips4o"    -> SORT_ALG_IPS4O
+      6 or "ips4o"    -> SORT_ALG_IPS4O (default)
 */
 static sort_algorithm_t parse_algorithm(const char *args)
 {
@@ -39,7 +39,7 @@ static sort_algorithm_t parse_algorithm(const char *args)
     /* Look for "alg=" in the arguments */
     p = strstr(args, "alg=");
     if (p == NULL) {
-        return SORT_ALG_LSD;  /* Default */
+        return SORT_ALG_IPS4O;  /* Default */
     }
 
     p += 4;  /* Skip "alg=" */
@@ -61,7 +61,7 @@ static sort_algorithm_t parse_algorithm(const char *args)
         return SORT_ALG_IPS4O;
     }
 
-    return SORT_ALG_LSD;  /* Default for unrecognized */
+    return SORT_ALG_IPS4O;  /* Default for unrecognized */
 }
 
 /* Parse the sort variable indices from the argument string.
@@ -265,12 +265,12 @@ ST_retcode csort_main(const char *args)
         case SORT_ALG_MERGE:
             rc = ctools_sort_merge(&data, sort_vars, nsort);
             break;
-        case SORT_ALG_IPS4O:
-            rc = ctools_sort_ips4o(&data, sort_vars, nsort);
-            break;
         case SORT_ALG_LSD:
-        default:
             rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+            break;
+        case SORT_ALG_IPS4O:
+        default:
+            rc = ctools_sort_ips4o(&data, sort_vars, nsort);
             break;
     }
 

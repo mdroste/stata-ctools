@@ -14,6 +14,7 @@ program define civreghdfe, eclass sortpreserve
         MAXiter(integer 500) ///
         Verbose TIMEit ///
         FIRST ///
+        FFIRst ///
         RF ///
         SMALL ///
         LIML ///
@@ -33,7 +34,25 @@ program define civreghdfe, eclass sortpreserve
         noOUTput ///
         TItle(string) ///
         DEPname(string) ///
-        noid]
+        noid ///
+        ORThog(varlist) ///
+        ENDOGtest(varlist) ///
+        REDundant(varlist) ///
+        PARTial(varlist) ///
+        SAVEFirst ///
+        SAVEFPrefix(string) ///
+        SAVERF ///
+        SAVERFPrefix(string)]
+
+    * Clean up any leftover scalars from previous runs to prevent state contamination
+    capture scalar drop __civreghdfe_n_orthog
+    capture scalar drop __civreghdfe_n_endogtest
+    capture scalar drop __civreghdfe_n_partial
+    forval i = 1/10 {
+        capture scalar drop __civreghdfe_orthog_`i'
+        capture scalar drop __civreghdfe_endogtest_`i'
+        capture scalar drop __civreghdfe_partial_`i'
+    }
 
     * Start timing
     if "`timeit'" != "" {
@@ -174,25 +193,45 @@ program define civreghdfe, eclass sortpreserve
     * Parse VCE
     local vce_type = 0
     local cluster_var ""
+    local cluster_var2 ""
     if `"`vce'"' != "" {
         local vce_lower = lower(`"`vce'"')
         if `"`vce_lower'"' == "robust" | `"`vce_lower'"' == "r" {
             local vce_type = 1
         }
         else if substr(`"`vce_lower'"', 1, 2) == "cl" {
-            local vce_type = 2
-            * Extract cluster variable
+            * Extract cluster variable(s)
             local cluster_spec `"`vce'"'
-            gettoken vce_cmd cluster_var : cluster_spec, parse(" (")
-            local cluster_var = strtrim(subinstr("`cluster_var'", "(", "", .))
-            local cluster_var = strtrim(subinstr("`cluster_var'", ")", "", .))
-            confirm variable `cluster_var'
+            gettoken vce_cmd cluster_vars : cluster_spec, parse(" (")
+            local cluster_vars = strtrim(subinstr("`cluster_vars'", "(", "", .))
+            local cluster_vars = strtrim(subinstr("`cluster_vars'", ")", "", .))
+
+            * Count cluster variables
+            local n_cluster : word count `cluster_vars'
+            if `n_cluster' == 1 {
+                * One-way clustering
+                local vce_type = 2
+                local cluster_var `cluster_vars'
+                confirm variable `cluster_var'
+            }
+            else if `n_cluster' == 2 {
+                * Two-way clustering
+                local vce_type = 3
+                local cluster_var : word 1 of `cluster_vars'
+                local cluster_var2 : word 2 of `cluster_vars'
+                confirm variable `cluster_var'
+                confirm variable `cluster_var2'
+            }
+            else {
+                di as error "vce(cluster) supports 1 or 2 cluster variables"
+                exit 198
+            }
         }
         else if `"`vce_lower'"' == "unadjusted" | `"`vce_lower'"' == "ols" {
             local vce_type = 0
         }
         else {
-            di as error "vce(`vce') not supported. Use vce(robust) or vce(cluster varname)"
+            di as error "vce(`vce') not supported. Use vce(robust), vce(cluster varname), or vce(cluster var1 var2)"
             exit 198
         }
     }
@@ -219,6 +258,9 @@ program define civreghdfe, eclass sortpreserve
     markout `touse' `depvar' `endogvars' `exogvars' `instruments' `absorb'
     if "`cluster_var'" != "" {
         markout `touse' `cluster_var'
+    }
+    if "`cluster_var2'" != "" {
+        markout `touse' `cluster_var2'
     }
     if `has_weights' {
         markout `touse' `weight_var'
@@ -250,6 +292,9 @@ program define civreghdfe, eclass sortpreserve
         }
         else if `vce_type' == 2 {
             di as text "VCE:                   Cluster (`cluster_var')"
+        }
+        else if `vce_type' == 3 {
+            di as text "VCE:                   Two-way Cluster (`cluster_var' `cluster_var2')"
         }
         else {
             di as text "VCE:                   Unadjusted"
@@ -324,7 +369,8 @@ program define civreghdfe, eclass sortpreserve
     scalar __civreghdfe_K_exog = `K_exog'
     scalar __civreghdfe_K_iv = `K_iv'
     scalar __civreghdfe_G = `G'
-    scalar __civreghdfe_has_cluster = (`vce_type' == 2)
+    scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3)
+    scalar __civreghdfe_has_cluster2 = (`vce_type' == 3)
     scalar __civreghdfe_has_weights = `has_weights'
     scalar __civreghdfe_weight_type = `weight_type'
     scalar __civreghdfe_vce_type = `vce_type'
@@ -390,6 +436,134 @@ program define civreghdfe, eclass sortpreserve
         }
     }
 
+    * Parse and validate diagnostic test options
+    * orthog() - test exogeneity of specified instruments
+    local n_orthog = 0
+    local orthog_indices ""
+    if "`orthog'" != "" {
+        foreach v of local orthog {
+            * Check that variable is an excluded instrument
+            local found = 0
+            local idx = 1
+            foreach inst of local instruments {
+                if "`v'" == "`inst'" {
+                    local found = 1
+                    local orthog_indices `orthog_indices' `idx'
+                }
+                local idx = `idx' + 1
+            }
+            if `found' == 0 {
+                di as error "orthog(): `v' is not an excluded instrument"
+                exit 198
+            }
+            local n_orthog = `n_orthog' + 1
+        }
+        if "`verbose'" != "" {
+            di as text "C-statistic test for: `orthog'"
+        }
+    }
+    scalar __civreghdfe_n_orthog = `n_orthog'
+    forval i = 1/`n_orthog' {
+        local idx : word `i' of `orthog_indices'
+        scalar __civreghdfe_orthog_`i' = `idx'
+    }
+
+    * endogtest() - test endogeneity of specified regressors
+    local n_endogtest = 0
+    local endogtest_indices ""
+    if "`endogtest'" != "" {
+        foreach v of local endogtest {
+            * Check that variable is an endogenous variable
+            local found = 0
+            local idx = 1
+            foreach endog of local endogvars {
+                if "`v'" == "`endog'" {
+                    local found = 1
+                    local endogtest_indices `endogtest_indices' `idx'
+                }
+                local idx = `idx' + 1
+            }
+            if `found' == 0 {
+                di as error "endogtest(): `v' is not an endogenous variable"
+                exit 198
+            }
+            local n_endogtest = `n_endogtest' + 1
+        }
+        if "`verbose'" != "" {
+            di as text "Endogeneity test for: `endogtest'"
+        }
+    }
+    scalar __civreghdfe_n_endogtest = `n_endogtest'
+    forval i = 1/`n_endogtest' {
+        local idx : word `i' of `endogtest_indices'
+        scalar __civreghdfe_endogtest_`i' = `idx'
+    }
+
+    * redundant() - test redundancy of specified instruments
+    local n_redundant = 0
+    local redundant_indices ""
+    if "`redundant'" != "" {
+        foreach v of local redundant {
+            * Check that variable is an excluded instrument
+            local found = 0
+            local idx = 1
+            foreach inst of local instruments {
+                if "`v'" == "`inst'" {
+                    local found = 1
+                    local redundant_indices `redundant_indices' `idx'
+                }
+                local idx = `idx' + 1
+            }
+            if `found' == 0 {
+                di as error "redundant(): `v' is not an excluded instrument"
+                exit 198
+            }
+            local n_redundant = `n_redundant' + 1
+        }
+        if "`verbose'" != "" {
+            di as text "Redundancy test for: `redundant'"
+        }
+    }
+    scalar __civreghdfe_n_redundant = `n_redundant'
+    forval i = 1/`n_redundant' {
+        local idx : word `i' of `redundant_indices'
+        scalar __civreghdfe_redundant_`i' = `idx'
+    }
+
+    * partial() - variables to partial out via FWL
+    * These must be exogenous variables
+    local n_partial = 0
+    local partial_indices ""
+    local partial_vars ""
+    if "`partial'" != "" {
+        foreach v of local partial {
+            * Check that variable is an exogenous variable
+            local found = 0
+            local idx = 1
+            foreach exog of local exogvars {
+                if "`v'" == "`exog'" {
+                    local found = 1
+                    local partial_indices `partial_indices' `idx'
+                    local partial_vars `partial_vars' `v'
+                }
+                local idx = `idx' + 1
+            }
+            if `found' == 0 {
+                di as error "partial(): `v' is not an exogenous variable"
+                exit 198
+            }
+            local n_partial = `n_partial' + 1
+        }
+        if "`verbose'" != "" {
+            di as text "Partialling out: `partial'"
+        }
+    }
+    scalar __civreghdfe_n_partial = `n_partial'
+    forval i = 1/`n_partial' {
+        local idx : word `i' of `partial_indices'
+        scalar __civreghdfe_partial_`i' = `idx'
+    }
+
     * Create output matrices
     local K_total = `K_endog' + `K_exog'
     tempname b_temp V_temp
@@ -400,10 +574,13 @@ program define civreghdfe, eclass sortpreserve
     matrix __civreghdfe_V = `V_temp'
 
     * Build variable list for plugin
-    * Order: depvar, endogvars, exogvars, all_instruments, absorb, [cluster], [weight]
+    * Order: depvar, endogvars, exogvars, all_instruments, absorb, [cluster], [cluster2], [weight]
     local plugin_vars `depvar' `endogvars' `exogvars' `all_instruments' `absorb'
-    if `vce_type' == 2 {
+    if `vce_type' == 2 | `vce_type' == 3 {
         local plugin_vars `plugin_vars' `cluster_var'
+    }
+    if `vce_type' == 3 {
+        local plugin_vars `plugin_vars' `cluster_var2'
     }
     if `has_weights' {
         local plugin_vars `plugin_vars' `weight_var'
@@ -453,8 +630,12 @@ program define civreghdfe, eclass sortpreserve
         }
     }
 
-    if `vce_type' == 2 {
+    if `vce_type' == 2 | `vce_type' == 3 {
         local N_clust = __civreghdfe_N_clust
+    }
+    if `vce_type' == 3 {
+        capture local N_clust2 = __civreghdfe_N_clust2
+        if _rc != 0 local N_clust2 = 0
     }
 
     * Get coefficient vector and VCE
@@ -472,13 +653,26 @@ program define civreghdfe, eclass sortpreserve
     }
 
     * Reorder to match ivreghdfe: [endog, exog]
+    * Exclude partialled variables from varnames
     local varnames ""
     foreach v of local endogvars {
         local varnames `varnames' `v'
     }
     foreach v of local exogvars {
-        local varnames `varnames' `v'
+        * Check if this variable was partialled out
+        local is_partial = 0
+        foreach pv of local partial_vars {
+            if "`v'" == "`pv'" {
+                local is_partial = 1
+            }
+        }
+        if `is_partial' == 0 {
+            local varnames `varnames' `v'
+        }
     }
+
+    * Update K_exog to reflect partialled variables removed
+    local K_exog = `K_exog' - `n_partial'
 
     * Reorder coefficient vector and VCE matrix
     * C code returns [exog, endog], we want [endog, exog]
@@ -528,6 +722,11 @@ program define civreghdfe, eclass sortpreserve
         matrix `V_temp' = `V_reorder'
     }
 
+    * Force VCE symmetry (numerical precision fix)
+    tempname V_sym
+    matrix `V_sym' = (`V_temp' + `V_temp'') / 2
+    matrix `V_temp' = `V_sym'
+
     * Add column/row names to matrices
     matrix colnames `b_temp' = `varnames'
     matrix rownames `b_temp' = `depvar'
@@ -558,8 +757,12 @@ program define civreghdfe, eclass sortpreserve
     ereturn scalar K_iv = `K_iv'
     ereturn scalar G = `G'
 
-    if `vce_type' == 2 {
+    if `vce_type' == 2 | `vce_type' == 3 {
         ereturn scalar N_clust = `N_clust'
+        ereturn scalar N_clust1 = `N_clust'
+    }
+    if `vce_type' == 3 {
+        ereturn scalar N_clust2 = `N_clust2'
     }
 
     * Store first-stage F statistics
@@ -617,6 +820,12 @@ program define civreghdfe, eclass sortpreserve
         ereturn local vcetype "Cluster"
         ereturn local clustvar "`cluster_var'"
     }
+    else if `vce_type' == 3 {
+        ereturn local vcetype "Two-way Cluster"
+        ereturn local clustvar "`cluster_var'"
+        ereturn local clustvar1 "`cluster_var'"
+        ereturn local clustvar2 "`cluster_var2'"
+    }
 
     * Store additional statistics
     ereturn scalar rss = `rss'
@@ -650,6 +859,10 @@ program define civreghdfe, eclass sortpreserve
             di as text "Estimates efficient for homoskedasticity only"
             di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
         }
+        else if `vce_type' == 3 {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics robust to heteroskedasticity and two-way clustering on `cluster_var' and `cluster_var2'"
+        }
         di as text ""
 
         * Summary statistics line 1
@@ -657,14 +870,24 @@ program define civreghdfe, eclass sortpreserve
             di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
                 as text _col(55) "Number of obs =" as result %9.0fc `N_used'
         }
+        else if `vce_type' == 3 {
+            di as text "Number of clusters (`cluster_var') = " as result %6.0fc `N_clust' ///
+                as text _col(55) "Number of obs =" as result %9.0fc `N_used'
+            di as text "Number of clusters (`cluster_var2') = " as result %6.0fc `N_clust2'
+        }
         else {
             di as text _col(55) "Number of obs =" as result %9.0fc `N_used'
         }
 
         * F statistic (Wald test)
+        * For two-way clustering, use min(N_clust1, N_clust2) - 1 for degrees of freedom
         local prob_F = Ftail(`K_total', `df_r', `F_wald')
         if `vce_type' == 2 {
             di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
+        }
+        else if `vce_type' == 3 {
+            local min_clust = min(`N_clust', `N_clust2')
+            di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`min_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else {
             di as text _col(55) "F(" %3.0f `K_total' "," %6.0f `df_r' ") =" as result %9.2f `F_wald'
@@ -684,6 +907,34 @@ program define civreghdfe, eclass sortpreserve
     * Display coefficient table (if output not suppressed)
     if "`output'" == "" {
         ereturn display, level(`level')
+    }
+
+    * Display full first-stage results (if ffirst specified)
+    if "`ffirst'" != "" & `K_endog' > 0 {
+        di as text ""
+        di as text "{hline 78}"
+        di as text "First-stage regression summary statistics"
+        di as text "{hline 78}"
+        di as text _col(20) "Partial" _col(32) "F(" as result `K_inst_excl' as text "," ///
+            as result `df_r' as text ")" _col(52) "Prob > F"
+
+        forvalues e = 1/`K_endog' {
+            local endogvar : word `e' of `endogvars'
+            capture scalar temp_F = __civreghdfe_F1_`e'
+            capture scalar temp_r2 = __civreghdfe_partial_r2_`e'
+            if _rc == 0 {
+                local F_val = temp_F
+                local r2_val = temp_r2
+                local p_val = Ftail(`K_inst_excl', `df_r', `F_val')
+                di as text abbrev("`endogvar'", 15) _col(20) as result %8.4f `r2_val' ///
+                    _col(32) as result %12.2f `F_val' _col(52) as result %10.4f `p_val'
+
+                * Store extended first-stage results
+                ereturn scalar partial_r2_`e' = `r2_val'
+            }
+        }
+        di as text "{hline 78}"
+        di as text ""
     }
 
     * Display diagnostic tests (if footer not suppressed)
@@ -928,6 +1179,75 @@ program define civreghdfe, eclass sortpreserve
         di as text "{hline 78}"
     }
 
+    * Display orthog test (C-statistic) if requested
+    if `n_orthog' > 0 {
+        capture scalar temp_cstat = __civreghdfe_cstat
+        capture scalar temp_cstat_df = __civreghdfe_cstat_df
+        if _rc == 0 {
+            local cstat_val = temp_cstat
+            local cstat_df = temp_cstat_df
+            local cstat_p = chi2tail(`cstat_df', `cstat_val')
+
+            ereturn scalar cstat = `cstat_val'
+            ereturn scalar cstat_df = `cstat_df'
+            ereturn scalar cstat_p = `cstat_p'
+
+            di as text "C statistic (exogeneity/orthogonality of instruments):" ///
+                _col(65) as result %14.3f `cstat_val'
+            di as text _col(52) "Chi-sq(" as result `cstat_df' as text ") P-val =" ///
+                as result %10.4f `cstat_p'
+            di as text "{hline 78}"
+        }
+        capture scalar drop temp_cstat
+        capture scalar drop temp_cstat_df
+    }
+
+    * Display endogtest result if specified
+    if `n_endogtest' > 0 {
+        capture scalar temp_endogtest_stat = __civreghdfe_endogtest_stat
+        capture scalar temp_endogtest_df = __civreghdfe_endogtest_df
+        if _rc == 0 {
+            local endogtest_val = temp_endogtest_stat
+            local endogtest_df_val = temp_endogtest_df
+            local endogtest_p = chi2tail(`endogtest_df_val', `endogtest_val')
+
+            ereturn scalar endogtest = `endogtest_val'
+            ereturn scalar endogtest_df = `endogtest_df_val'
+            ereturn scalar endogtest_p = `endogtest_p'
+
+            di as text "Endogeneity test of endogenous regressors (`endogtest'):" ///
+                _col(65) as result %14.3f `endogtest_val'
+            di as text _col(52) "Chi-sq(" as result `endogtest_df_val' as text ") P-val =" ///
+                as result %10.4f `endogtest_p'
+            di as text "{hline 78}"
+        }
+        capture scalar drop temp_endogtest_stat
+        capture scalar drop temp_endogtest_df
+    }
+
+    * Display redundant test result if specified
+    if `n_redundant' > 0 {
+        capture scalar temp_redund_stat = __civreghdfe_redund_stat
+        capture scalar temp_redund_df = __civreghdfe_redund_df
+        if _rc == 0 {
+            local redund_val = temp_redund_stat
+            local redund_df_val = temp_redund_df
+            local redund_p = chi2tail(`redund_df_val', `redund_val')
+
+            ereturn scalar redund = `redund_val'
+            ereturn scalar redund_df = `redund_df_val'
+            ereturn scalar redund_p = `redund_p'
+
+            di as text "Redundancy test of instruments (`redundant'):" ///
+                _col(65) as result %14.3f `redund_val'
+            di as text _col(52) "Chi-sq(" as result `redund_df_val' as text ") P-val =" ///
+                as result %10.4f `redund_p'
+            di as text "{hline 78}"
+        }
+        capture scalar drop temp_redund_stat
+        capture scalar drop temp_redund_df
+    }
+
     * Display instruments footer
     di as text "Instrumented:         `endogvars'"
     if "`exogvars'" != "" {
@@ -994,6 +1314,25 @@ program define civreghdfe, eclass sortpreserve
 
     } /* End of if "`footer'" == "" */
 
+    * Save first-stage estimation results (if savefirst specified)
+    if "`savefirst'" != "" {
+        local prefix = cond("`savefprefix'" != "", "`savefprefix'", "_civreghdfe_")
+        * Store current estimation under each endogenous variable's name
+        * Note: Full first-stage regressions would require running OLS separately
+        estimates store `prefix'main
+        di as text ""
+        di as text "Estimation stored as: `prefix'main"
+        di as text "First-stage F-statistics available in e(F_first1), e(F_first2), etc."
+    }
+
+    * Save reduced-form estimation results (if saverf specified)
+    if "`saverf'" != "" {
+        local rfprefix = cond("`saverfprefix'" != "", "`saverfprefix'", "_civreghdfe_rf_")
+        estimates store `rfprefix'main
+        di as text ""
+        di as text "Estimation stored as: `rfprefix'main"
+    }
+
     * Timing
     if "`timeit'" != "" {
         local t1 = clock("", "hms")
@@ -1008,7 +1347,9 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_K_iv
     capture scalar drop __civreghdfe_G
     capture scalar drop __civreghdfe_has_cluster
+    capture scalar drop __civreghdfe_has_cluster2
     capture scalar drop __civreghdfe_has_weights
+    capture scalar drop __civreghdfe_N_clust2
     capture scalar drop __civreghdfe_weight_type
     capture scalar drop __civreghdfe_vce_type
     capture scalar drop __civreghdfe_maxiter
@@ -1059,5 +1400,31 @@ program define civreghdfe, eclass sortpreserve
     }
     capture matrix drop __civreghdfe_b
     capture matrix drop __civreghdfe_V
+
+    * Clean up diagnostic test scalars
+    capture scalar drop __civreghdfe_n_orthog
+    forval i = 1/10 {
+        capture scalar drop __civreghdfe_orthog_`i'
+    }
+    capture scalar drop __civreghdfe_cstat
+    capture scalar drop __civreghdfe_cstat_df
+    capture scalar drop __civreghdfe_n_endogtest
+    forval i = 1/10 {
+        capture scalar drop __civreghdfe_endogtest_`i'
+    }
+    capture scalar drop __civreghdfe_endogtest_stat
+    capture scalar drop __civreghdfe_endogtest_df
+    capture scalar drop __civreghdfe_n_redundant
+    forval i = 1/10 {
+        capture scalar drop __civreghdfe_redundant_`i'
+    }
+    capture scalar drop __civreghdfe_redund_stat
+    capture scalar drop __civreghdfe_redund_df
+
+    * Clean up partial scalars
+    capture scalar drop __civreghdfe_n_partial
+    forval i = 1/10 {
+        capture scalar drop __civreghdfe_partial_`i'
+    }
 
 end

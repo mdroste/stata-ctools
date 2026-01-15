@@ -39,7 +39,7 @@
 {synopt:{opt cue}}use continuously-updated GMM (CUE){p_end}
 
 {syntab:VCE/SE}
-{synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar}{p_end}
+{synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}]{p_end}
 {synopt:{opt small}}use small-sample adjustments (df corrections){p_end}
 
 {syntab:HAC Standard Errors}
@@ -54,6 +54,7 @@
 
 {syntab:Reporting}
 {synopt:{opt first}}report first-stage regression statistics{p_end}
+{synopt:{opt ff:irst}}report full first-stage statistics (partial R², F-stat){p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
 {synopt:{opt coviv}}display covariance matrix of IV estimators{p_end}
 {synopt:{opt v:erbose}}display progress information{p_end}
@@ -68,8 +69,20 @@
 {synopt:{opt depn:ame(string)}}custom label for dependent variable in output{p_end}
 {synopt:{opt noid}}suppress underidentification test display{p_end}
 
+{syntab:Diagnostic Tests}
+{synopt:{opt orth:og(varlist)}}test orthogonality/exogeneity of specified excluded instruments (C-statistic){p_end}
+{synopt:{opt endogt:est(varlist)}}test endogeneity of specified endogenous regressors{p_end}
+{synopt:{opt red:undant(varlist)}}test redundancy of specified excluded instruments{p_end}
+
+{syntab:Estimation}
+{synopt:{opt part:ial(varlist)}}partial out specified exogenous regressors via FWL{p_end}
+
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
+{synopt:{opt savef:irst}}store estimation results using {cmd:estimates store}{p_end}
+{synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
+{synopt:{opt saverf}}store reduced-form estimation results{p_end}
+{synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
@@ -142,6 +155,13 @@ properties than two-step GMM.
 {phang2}{opt unadjusted} or {opt ols} - standard VCE assuming homoskedasticity{p_end}
 {phang2}{opt robust} - heteroskedasticity-robust standard errors (HC1){p_end}
 {phang2}{opt cluster} {it:clustvar} - cluster-robust standard errors{p_end}
+{phang2}{opt cluster} {it:clustvar1} {it:clustvar2} - two-way cluster-robust standard errors{p_end}
+
+{pstd}
+Two-way clustering computes standard errors that are robust to arbitrary correlation
+within each dimension using the Cameron-Gelbach-Miller (2011) formula:
+V_twoway = V_clustvar1 + V_clustvar2 - V_intersection.
+This is appropriate for panel data with both cross-sectional and time-series correlation.
 
 {pstd}
 The VCE is computed using the proper sandwich formula for the chosen estimator
@@ -192,6 +212,14 @@ effects, the constant is typically absorbed anyway.
 for testing instrument strength for each endogenous variable.
 
 {phang}
+{opt ffirst} reports full first-stage regression summary statistics in a
+tabular format. For each endogenous variable, displays the partial R-squared
+(the R² from regressing the endogenous variable on all instruments after
+partialling out exogenous regressors) and the first-stage F-statistic with
+its p-value. These statistics are also stored in {cmd:e()} for each
+endogenous variable (e.g., {cmd:e(partial_r2_1)}, {cmd:e(F_first1)}).
+
+{phang}
 {opt rf} reports reduced-form regression estimates (regression of the dependent
 variable directly on all instruments).
 
@@ -235,11 +263,72 @@ in the coefficient table output and stored results.
 {opt noid} suppresses the underidentification test display in the footer.
 The test is still computed and stored in {cmd:e(idstat)}.
 
+{dlgtab:Diagnostic Tests}
+
+{phang}
+{opt orthog(varlist)} requests the C-statistic (orthogonality test) for the specified
+excluded instruments. The test evaluates whether the specified instruments satisfy
+the exclusion restriction (i.e., are uncorrelated with the structural error).
+The C-statistic is computed as C = J_full - J_restricted, where J_restricted is the
+Sargan/Hansen statistic from a model excluding the tested instruments. Under H0 (that
+the specified instruments are exogenous), C ~ chi-sq(df) where df = number of tested
+instruments. A large C-statistic (small p-value) suggests the instruments may be
+endogenous. Results are stored in {cmd:e(cstat)}, {cmd:e(cstat_df)}, and {cmd:e(cstat_p)}.
+
+{phang}
+{opt endogtest(varlist)} requests the endogeneity test for the specified endogenous
+regressors. The test evaluates whether the specified variables can be treated as
+exogenous. This uses a Durbin-Wu-Hausman style augmented regression test applied
+to the subset of variables specified. Under H0 (that the specified regressors are
+exogenous), the test statistic ~ chi-sq(df) where df = number of tested regressors.
+A large test statistic (small p-value) supports treating these as endogenous.
+Results are stored in {cmd:e(endogtest)}, {cmd:e(endogtest_df)}, and {cmd:e(endogtest_p)}.
+
+{phang}
+{opt redundant(varlist)} requests the instrument redundancy test for the specified
+excluded instruments. The test evaluates whether the specified instruments contribute
+to identification beyond the remaining instruments. Under H0 (that the instruments
+are redundant), the LM statistic ~ chi-sq(df) where df = K_endog * (number tested).
+A small test statistic (large p-value) suggests the instruments may be safely dropped.
+Results are stored in {cmd:e(redund)}, {cmd:e(redund_df)}, and {cmd:e(redund_p)}.
+
+{dlgtab:Estimation}
+
+{phang}
+{opt partial(varlist)} requests that the specified exogenous variables be partialled
+out (removed) from the estimation using the Frisch-Waugh-Lovell (FWL) transformation.
+All other variables (dependent, endogenous, remaining exogenous, and instruments)
+are regressed on the partial variables and replaced with their residuals. The FWL
+theorem guarantees that coefficients on the non-partialled variables are numerically
+identical to those from the full regression. This option is useful when you want to
+omit certain control variables from the displayed output while still controlling for
+them. The partialled-out variables do not appear in the coefficient table.
+Note: Variables specified in partial() must be included in the model as exogenous
+regressors. The partialling is performed before fixed effect absorption.
+
 {dlgtab:Save Results}
 
 {phang}
 {opt residuals(newvar)} saves the residuals from the IV regression to a new
 variable named {it:newvar}.
+
+{phang}
+{opt savefirst} stores the current estimation results using {cmd:estimates store}
+so they can be retrieved later with {cmd:estimates restore}. The results are
+stored with a prefix (default: "_civreghdfe_") followed by "main".
+
+{phang}
+{opt savefprefix(string)} specifies the prefix to use when storing first-stage
+results with {opt savefirst}. The default prefix is "_civreghdfe_".
+
+{phang}
+{opt saverf} stores the current estimation results (as reduced-form estimates)
+using {cmd:estimates store}. The results are stored with a prefix (default:
+"_civreghdfe_rf_") followed by "main".
+
+{phang}
+{opt saverfprefix(string)} specifies the prefix to use when storing reduced-form
+results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
 
 
 {marker examples}{...}
@@ -282,6 +371,18 @@ variable named {it:newvar}.
 {pstd}With reduced-form and first-stage output:{p_end}
 {phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue) age, absorb(idcode) first rf}{p_end}
 
+{pstd}Test orthogonality of a specific instrument (C-statistic):{p_end}
+{phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue south) age, absorb(idcode) orthog(south)}{p_end}
+
+{pstd}Test endogeneity of a specific regressor:{p_end}
+{phang2}{cmd:. civreghdfe ln_wage (tenure hours = union wks_ue south) age, absorb(idcode) endogtest(hours)}{p_end}
+
+{pstd}Test instrument redundancy:{p_end}
+{phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue south) age, absorb(idcode) redundant(south)}{p_end}
+
+{pstd}Partial out exogenous variables (FWL transformation):{p_end}
+{phang2}{cmd:. civreghdfe ln_wage (tenure = union wks_ue) age ttl_exp, absorb(idcode) partial(ttl_exp)}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -299,7 +400,9 @@ variable named {it:newvar}.
 {synopt:{cmd:e(K_exog)}}number of exogenous regressors{p_end}
 {synopt:{cmd:e(K_iv)}}number of instruments (including exogenous){p_end}
 {synopt:{cmd:e(G)}}number of absorbed FE groups{p_end}
-{synopt:{cmd:e(N_clust)}}number of clusters (if clustered){p_end}
+{synopt:{cmd:e(N_clust)}}number of clusters (if clustered); for two-way equals e(N_clust1){p_end}
+{synopt:{cmd:e(N_clust1)}}number of first-dimension clusters (if two-way clustered){p_end}
+{synopt:{cmd:e(N_clust2)}}number of second-dimension clusters (if two-way clustered){p_end}
 {synopt:{cmd:e(F)}}Wald F-statistic{p_end}
 {synopt:{cmd:e(r2)}}R-squared{p_end}
 {synopt:{cmd:e(rss)}}residual sum of squares{p_end}
@@ -311,6 +414,8 @@ variable named {it:newvar}.
 {synopt:{cmd:e(F_first1)}}first-stage F-stat for 1st endogenous var{p_end}
 {synopt:{cmd:e(F_first2)}}first-stage F-stat for 2nd endogenous var{p_end}
 {synopt:{cmd:e(...)}}(additional F_first{it:k} for each endogenous var){p_end}
+{synopt:{cmd:e(partial_r2_1)}}partial R² for 1st endogenous var (if ffirst){p_end}
+{synopt:{cmd:e(partial_r2_2)}}partial R² for 2nd endogenous var (if ffirst){p_end}
 
 {p2col 5 20 24 2: Diagnostic test scalars}{p_end}
 {synopt:{cmd:e(idstat)}}underidentification test statistic (Anderson or Kleibergen-Paap){p_end}
@@ -326,6 +431,17 @@ variable named {it:newvar}.
 {synopt:{cmd:e(endog_f)}}endogeneity test F-statistic{p_end}
 {synopt:{cmd:e(endog_df)}}degrees of freedom for endogeneity test{p_end}
 {synopt:{cmd:e(endog_p)}}p-value for endogeneity test{p_end}
+
+{p2col 5 20 24 2: Optional diagnostic test scalars}{p_end}
+{synopt:{cmd:e(cstat)}}C-statistic for instrument orthogonality (if orthog() specified){p_end}
+{synopt:{cmd:e(cstat_df)}}degrees of freedom for C-statistic{p_end}
+{synopt:{cmd:e(cstat_p)}}p-value for C-statistic{p_end}
+{synopt:{cmd:e(endogtest)}}endogeneity test for subset (if endogtest() specified){p_end}
+{synopt:{cmd:e(endogtest_df)}}degrees of freedom for subset endogeneity test{p_end}
+{synopt:{cmd:e(endogtest_p)}}p-value for subset endogeneity test{p_end}
+{synopt:{cmd:e(redund)}}instrument redundancy test statistic (if redundant() specified){p_end}
+{synopt:{cmd:e(redund_df)}}degrees of freedom for redundancy test{p_end}
+{synopt:{cmd:e(redund_p)}}p-value for redundancy test{p_end}
 
 {p2col 5 20 24 2: LIML/Fuller scalars}{p_end}
 {synopt:{cmd:e(lambda)}}LIML k-value (if liml or fuller){p_end}
@@ -343,8 +459,10 @@ variable named {it:newvar}.
 {synopt:{cmd:e(absorb)}}absorbed fixed effects{p_end}
 {synopt:{cmd:e(title)}}estimation method title{p_end}
 {synopt:{cmd:e(model)}}estimator: 2sls, liml, fuller, kclass, gmm2s, or cue{p_end}
-{synopt:{cmd:e(vcetype)}}VCE type: Robust or Cluster{p_end}
-{synopt:{cmd:e(clustvar)}}cluster variable (if clustered){p_end}
+{synopt:{cmd:e(vcetype)}}VCE type: Robust, Cluster, or Two-way Cluster{p_end}
+{synopt:{cmd:e(clustvar)}}cluster variable (if clustered); for two-way equals e(clustvar1){p_end}
+{synopt:{cmd:e(clustvar1)}}first cluster variable (if two-way clustered){p_end}
+{synopt:{cmd:e(clustvar2)}}second cluster variable (if two-way clustered){p_end}
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}

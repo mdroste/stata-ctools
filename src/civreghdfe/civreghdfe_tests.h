@@ -184,4 +184,106 @@ void civreghdfe_compute_dwh_test(
     ST_int *endog_df
 );
 
+/*
+    Compute C-statistic (orthogonality test for specified instruments).
+
+    Tests H0: specified instruments are exogenous.
+    C = J_full - J_restricted (difference in overidentification statistics).
+    df = number of tested instruments.
+
+    Parameters:
+    - resid: 2SLS residuals (N x 1)
+    - Z: All instruments (N x K_iv)
+    - K_exog: Number of exogenous regressors (included in instruments)
+    - K_endog: Number of endogenous regressors
+    - K_iv: Total instruments
+    - orthog_indices: 1-based indices of excluded instruments to test
+    - n_orthog: Number of instruments to test
+    - vce_type, weights, weight_type, cluster_ids, num_clusters: VCE parameters
+    - sargan_full: Full model Sargan statistic (already computed)
+    - cstat: Output - C statistic
+    - cstat_df: Output - degrees of freedom
+*/
+void civreghdfe_compute_cstat(
+    const ST_double *resid,
+    const ST_double *Z,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    const ST_int *orthog_indices,
+    ST_int n_orthog,
+    ST_int vce_type,
+    const ST_double *weights,
+    ST_int weight_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_double sargan_full,
+    ST_double *cstat,
+    ST_int *cstat_df
+);
+
+/*
+    Compute endogeneity test for specified subset of endogenous regressors.
+
+    Tests H0: specified regressors are exogenous (can be treated as exogenous).
+    Uses DWH-style augmented regression approach.
+
+    Parameters:
+    - y: Dependent variable (N x 1)
+    - X_exog: Exogenous regressors (N x K_exog, may be NULL)
+    - X_endog: Endogenous regressors (N x K_endog)
+    - Z: All instruments (N x K_iv)
+    - temp1: First-stage coefficients (K_iv x K_total)
+    - N, K_exog, K_endog, K_iv, df_a: Parameters
+    - endogtest_indices: 1-based indices of endogenous regressors to test
+    - n_endogtest: Number of regressors to test
+    - endogtest_stat: Output - test statistic (chi-sq)
+    - endogtest_df: Output - degrees of freedom
+*/
+void civreghdfe_compute_endogtest_subset(
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *temp1,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_int df_a,
+    const ST_int *endogtest_indices,
+    ST_int n_endogtest,
+    ST_double *endogtest_stat,
+    ST_int *endogtest_df
+);
+
+/*
+    Compute instrument redundancy test.
+
+    Tests H0: specified instruments add no information beyond other instruments.
+    LM test based on partial correlation.
+
+    Parameters:
+    - X_endog: Endogenous regressors (N x K_endog)
+    - Z: All instruments (N x K_iv)
+    - K_exog, K_endog, K_iv: Dimensions
+    - redund_indices: 1-based indices of excluded instruments to test
+    - n_redund: Number of instruments to test
+    - redund_stat: Output - LM test statistic (chi-sq)
+    - redund_df: Output - degrees of freedom (K_endog * n_redund)
+*/
+void civreghdfe_compute_redundant(
+    const ST_double *X_endog,
+    const ST_double *Z,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    const ST_int *redund_indices,
+    ST_int n_redund,
+    ST_double *redund_stat,
+    ST_int *redund_df
+);
+
 #endif /* CIVREGHDFE_TESTS_H */

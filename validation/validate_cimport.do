@@ -3,6 +3,8 @@
  *
  * Comprehensive validation tests for cimport delimited vs import delimited
  * Tests all import options: delimiters, varnames, case, bindquotes, stripquotes
+ *
+ * VERIFICATION: All tests use cf _all to verify byte-for-byte identical data
  ******************************************************************************/
 
 * Load setup (works from project root or validation dir)
@@ -19,6 +21,49 @@ di as text "              CIMPORT DELIMITED VALIDATION TEST SUITE"
 di as text "======================================================================"
 
 capture mkdir "temp"
+
+/*******************************************************************************
+ * Helper: compare_imports - Import with both methods and compare using cf _all
+ * Returns 0 if identical, nonzero otherwise
+ ******************************************************************************/
+capture program drop compare_imports
+program define compare_imports, rclass
+    syntax using/, [STATAopts(string) CIMPORTopts(string) testname(string)]
+
+    * Import with Stata's import delimited
+    import delimited `using', `stataopts' clear
+    tempfile stata_data
+    quietly save `stata_data', replace
+    local stata_n = _N
+    local stata_k = c(k)
+
+    * Import with cimport delimited
+    cimport delimited `using', `cimportopts' clear
+    tempfile cimport_data
+    quietly save `cimport_data', replace
+    local cimport_n = _N
+    local cimport_k = c(k)
+
+    * Check dimensions first
+    if `stata_n' != `cimport_n' | `stata_k' != `cimport_k' {
+        return local result "fail"
+        return local reason "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
+        exit
+    }
+
+    * Compare data using cf _all
+    use `stata_data', clear
+    capture cf _all using `cimport_data'
+    if _rc == 0 {
+        return local result "pass"
+        return local reason ""
+    }
+    else {
+        * Get more detail on what differs
+        return local result "fail"
+        return local reason "cf _all comparison failed - data not identical"
+    }
+end
 
 /*******************************************************************************
  * Create test CSV files
@@ -114,96 +159,65 @@ if _rc != 0 {
 noi test_pass "cimport plugin loads and runs"
 
 /*******************************************************************************
- * SECTION 2: Basic comma-delimited import
+ * SECTION 2: Basic comma-delimited import (cf _all verification)
  ******************************************************************************/
 noi print_section "Basic Comma-Delimited Import"
 
-import delimited using "temp/basic.csv", clear
-local stata_n = _N
-local stata_k = c(k)
-
-cimport delimited using "temp/basic.csv", clear
-local cimport_n = _N
-local cimport_k = c(k)
-
-if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-    noi test_pass "basic CSV dimensions match (N=`stata_n', K=`stata_k')"
+compare_imports using "temp/basic.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "basic CSV data identical (cf _all)"
 }
 else {
-    noi test_fail "basic CSV" "N: `stata_n' vs `cimport_n', K: `stata_k' vs `cimport_k'"
+    noi test_fail "basic CSV" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 3: Tab-delimited import
+ * SECTION 3: Tab-delimited import (cf _all verification)
  ******************************************************************************/
 noi print_section "Tab-Delimited Import"
 
-import delimited using "temp/tabfile.tsv", delimiters(tab) clear
-local stata_n = _N
-local stata_k = c(k)
-
-cimport delimited using "temp/tabfile.tsv", delimiters(tab) clear
-local cimport_n = _N
-local cimport_k = c(k)
-
-if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-    noi test_pass "tab-delimited dimensions match"
+compare_imports using "temp/tabfile.tsv", stataopts(delimiters(tab)) cimportopts(delimiters(tab))
+if "`r(result)'" == "pass" {
+    noi test_pass "tab-delimited data identical (cf _all)"
 }
 else {
-    noi test_fail "tab-delimited" "dimensions differ"
+    noi test_fail "tab-delimited" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 4: Semicolon-delimited import
+ * SECTION 4: Semicolon-delimited import (cf _all verification)
  ******************************************************************************/
 noi print_section "Semicolon-Delimited Import"
 
-import delimited using "temp/semicolon.csv", delimiters(";") clear
-local stata_n = _N
-
-cimport delimited using "temp/semicolon.csv", delimiters(";") clear
-local cimport_n = _N
-
-if `stata_n' == `cimport_n' {
-    noi test_pass "semicolon-delimited N matches"
+compare_imports using "temp/semicolon.csv", stataopts(delimiters(";")) cimportopts(delimiters(";"))
+if "`r(result)'" == "pass" {
+    noi test_pass "semicolon-delimited data identical (cf _all)"
 }
 else {
-    noi test_fail "semicolon-delimited" "N differs"
+    noi test_fail "semicolon-delimited" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 5: varnames() option
+ * SECTION 5: varnames() option (cf _all verification)
  ******************************************************************************/
 noi print_section "varnames() Option"
 
 * varnames(1)
-import delimited using "temp/basic.csv", varnames(1) clear
-local stata_n = _N
-
-cimport delimited using "temp/basic.csv", varnames(1) clear
-local cimport_n = _N
-
-if `stata_n' == `cimport_n' {
-    noi test_pass "varnames(1) N matches"
+compare_imports using "temp/basic.csv", stataopts(varnames(1)) cimportopts(varnames(1))
+if "`r(result)'" == "pass" {
+    noi test_pass "varnames(1) data identical (cf _all)"
 }
 else {
-    noi test_fail "varnames(1)" "N differs"
+    noi test_fail "varnames(1)" "`r(reason)'"
 }
 
 * varnames(nonames)
-import delimited using "temp/noheader.csv", varnames(nonames) clear
-local stata_n = _N
-local stata_k = c(k)
-
-cimport delimited using "temp/noheader.csv", varnames(nonames) clear
-local cimport_n = _N
-local cimport_k = c(k)
-
-if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-    noi test_pass "varnames(nonames) dimensions match"
+compare_imports using "temp/noheader.csv", stataopts(varnames(nonames)) cimportopts(varnames(nonames))
+if "`r(result)'" == "pass" {
+    noi test_pass "varnames(nonames) data identical (cf _all)"
 }
 else {
-    noi test_fail "varnames(nonames)" "dimensions differ"
+    noi test_fail "varnames(nonames)" "`r(reason)'"
 }
 
 /*******************************************************************************
@@ -211,119 +225,88 @@ else {
  ******************************************************************************/
 noi print_section "case() Option"
 
-* case(preserve)
-capture cimport delimited using "temp/casetest.csv", case(preserve) clear
-if _rc == 0 {
-    noi test_pass "case(preserve) accepted"
+* case(preserve) - compare with Stata's case(preserve)
+compare_imports using "temp/casetest.csv", stataopts(case(preserve)) cimportopts(case(preserve))
+if "`r(result)'" == "pass" {
+    noi test_pass "case(preserve) data identical (cf _all)"
 }
 else {
-    noi test_fail "case(preserve)" "returned error `=_rc'"
+    noi test_fail "case(preserve)" "`r(reason)'"
 }
 
-* case(lower)
-capture cimport delimited using "temp/casetest.csv", case(lower) clear
-if _rc == 0 {
-    ds
-    local varlist `r(varlist)'
-    local lower_ok = 1
-    foreach v of local varlist {
-        if "`v'" != lower("`v'") local lower_ok = 0
-    }
-    if `lower_ok' {
-        noi test_pass "case(lower) produces lowercase vars"
-    }
-    else {
-        noi test_fail "case(lower)" "vars not all lowercase"
-    }
+* case(lower) - compare with Stata's case(lower)
+compare_imports using "temp/casetest.csv", stataopts(case(lower)) cimportopts(case(lower))
+if "`r(result)'" == "pass" {
+    noi test_pass "case(lower) data identical (cf _all)"
 }
 else {
-    noi test_fail "case(lower)" "returned error `=_rc'"
+    noi test_fail "case(lower)" "`r(reason)'"
 }
 
-* case(upper)
-capture cimport delimited using "temp/casetest.csv", case(upper) clear
-if _rc == 0 {
-    ds
-    local varlist `r(varlist)'
-    local upper_ok = 1
-    foreach v of local varlist {
-        if "`v'" != upper("`v'") local upper_ok = 0
-    }
-    if `upper_ok' {
-        noi test_pass "case(upper) produces uppercase vars"
-    }
-    else {
-        noi test_fail "case(upper)" "vars not all uppercase"
-    }
+* case(upper) - compare with Stata's case(upper)
+compare_imports using "temp/casetest.csv", stataopts(case(upper)) cimportopts(case(upper))
+if "`r(result)'" == "pass" {
+    noi test_pass "case(upper) data identical (cf _all)"
 }
 else {
-    noi test_fail "case(upper)" "returned error `=_rc'"
+    noi test_fail "case(upper)" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 7: Missing values handling
+ * SECTION 7: Missing values handling (cf _all verification)
  ******************************************************************************/
 noi print_section "Missing Values"
 
-import delimited using "temp/missing.csv", clear
-count if missing(x)
-local stata_miss = r(N)
-
-cimport delimited using "temp/missing.csv", clear
-count if missing(x)
-local cimport_miss = r(N)
-
-if `stata_miss' == `cimport_miss' {
-    noi test_pass "missing value count matches"
+compare_imports using "temp/missing.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "missing values data identical (cf _all)"
 }
 else {
-    noi test_fail "missing values" "counts differ: `stata_miss' vs `cimport_miss'"
+    noi test_fail "missing values" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 8: Quoted fields
+ * SECTION 8: Quoted fields (cf _all verification)
  ******************************************************************************/
 noi print_section "Quoted Fields"
 
-import delimited using "temp/quoted.csv", clear
-local stata_n = _N
-
-cimport delimited using "temp/quoted.csv", clear
-local cimport_n = _N
-
-if `stata_n' == `cimport_n' {
-    noi test_pass "quoted fields N matches"
+compare_imports using "temp/quoted.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "quoted fields data identical (cf _all)"
 }
 else {
-    noi test_fail "quoted fields" "N differs"
+    noi test_fail "quoted fields" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 9: bindquotes() option
+ * SECTION 9: bindquotes() option (cf _all verification)
  ******************************************************************************/
 noi print_section "bindquotes() Option"
 
-capture cimport delimited using "temp/quoted.csv", bindquotes(strict) clear
-if _rc == 0 {
-    noi test_pass "bindquotes(strict) accepted"
+* bindquotes(strict)
+compare_imports using "temp/quoted.csv", stataopts(bindquotes(strict)) cimportopts(bindquotes(strict))
+if "`r(result)'" == "pass" {
+    noi test_pass "bindquotes(strict) data identical (cf _all)"
 }
 else {
-    noi test_fail "bindquotes(strict)" "returned error `=_rc'"
+    noi test_fail "bindquotes(strict)" "`r(reason)'"
 }
 
-capture cimport delimited using "temp/quoted.csv", bindquotes(loose) clear
-if _rc == 0 {
-    noi test_pass "bindquotes(loose) accepted"
+* bindquotes(loose)
+compare_imports using "temp/quoted.csv", stataopts(bindquotes(loose)) cimportopts(bindquotes(loose))
+if "`r(result)'" == "pass" {
+    noi test_pass "bindquotes(loose) data identical (cf _all)"
 }
 else {
-    noi test_fail "bindquotes(loose)" "returned error `=_rc'"
+    noi test_fail "bindquotes(loose)" "`r(reason)'"
 }
 
 /*******************************************************************************
- * SECTION 10: stripquotes option
+ * SECTION 10: stripquotes option (cf _all verification)
  ******************************************************************************/
 noi print_section "stripquotes Option"
 
+* Note: Stata's import delimited doesn't have stripquotes, so just verify it works
 capture cimport delimited using "temp/quoted.csv", stripquotes clear
 if _rc == 0 {
     noi test_pass "stripquotes option accepted"
@@ -333,23 +316,16 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 11: Large file import
+ * SECTION 11: Large file import (cf _all verification)
  ******************************************************************************/
 noi print_section "Large File Import"
 
-import delimited using "temp/large.csv", clear
-local stata_n = _N
-local stata_k = c(k)
-
-cimport delimited using "temp/large.csv", clear
-local cimport_n = _N
-local cimport_k = c(k)
-
-if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-    noi test_pass "large file (5000 rows) dimensions match"
+compare_imports using "temp/large.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "large file (5000 rows) data identical (cf _all)"
 }
 else {
-    noi test_fail "large file" "dimensions differ"
+    noi test_fail "large file" "`r(reason)'"
 }
 
 /*******************************************************************************
@@ -388,69 +364,68 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 14: Value comparisons
- ******************************************************************************/
-noi print_section "Value Comparisons"
-
-import delimited using "temp/basic.csv", clear
-local stata_id2 = id[2]
-local stata_name2 = name[2]
-
-cimport delimited using "temp/basic.csv", clear
-local cimport_id2 = id[2]
-local cimport_name2 = name[2]
-
-if `stata_id2' == `cimport_id2' {
-    noi test_pass "numeric values match"
-}
-else {
-    noi test_fail "numeric values" "differ"
-}
-
-if "`stata_name2'" == "`cimport_name2'" {
-    noi test_pass "string values match"
-}
-else {
-    noi test_fail "string values" "differ"
-}
-
-/*******************************************************************************
- * SECTION 15: Round-trip tests
+ * SECTION 14: Round-trip tests (cf _all verification)
  ******************************************************************************/
 noi print_section "Round-Trip Tests"
 
+* auto dataset round-trip
 sysuse auto, clear
 export delimited using "temp/auto_rt.csv", replace
 
-import delimited using "temp/auto_rt.csv", clear
-local stata_n = _N
-local stata_k = c(k)
-
-cimport delimited using "temp/auto_rt.csv", clear
-local cimport_n = _N
-local cimport_k = c(k)
-
-if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
-    noi test_pass "auto dataset round-trip"
+compare_imports using "temp/auto_rt.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "auto dataset round-trip identical (cf _all)"
 }
 else {
-    noi test_fail "round-trip" "dimensions differ"
+    noi test_fail "auto round-trip" "`r(reason)'"
 }
 
+* census dataset round-trip
 sysuse census, clear
 export delimited using "temp/census_rt.csv", replace
 
-import delimited using "temp/census_rt.csv", clear
-local stata_n = _N
-
-cimport delimited using "temp/census_rt.csv", clear
-local cimport_n = _N
-
-if `stata_n' == `cimport_n' {
-    noi test_pass "census dataset round-trip"
+compare_imports using "temp/census_rt.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "census dataset round-trip identical (cf _all)"
 }
 else {
-    noi test_fail "census round-trip" "N differs"
+    noi test_fail "census round-trip" "`r(reason)'"
+}
+
+/*******************************************************************************
+ * SECTION 15: Additional data types
+ ******************************************************************************/
+noi print_section "Additional Data Types"
+
+* Create file with various numeric formats
+file open fh using "temp/numtypes.csv", write replace
+file write fh "int_val,float_val,neg_val,zero_val,large_val" _n
+file write fh "1,1.5,-10,0,1000000" _n
+file write fh "2,2.75,-20,0,2000000" _n
+file write fh "3,3.125,-30,0,3000000" _n
+file close fh
+
+compare_imports using "temp/numtypes.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "numeric types data identical (cf _all)"
+}
+else {
+    noi test_fail "numeric types" "`r(reason)'"
+}
+
+* Create file with long strings
+file open fh using "temp/longstr.csv", write replace
+file write fh "id,short_str,long_str" _n
+file write fh "1,abc,This is a longer string with spaces and stuff" _n
+file write fh "2,def,Another longer string value here for testing" _n
+file close fh
+
+compare_imports using "temp/longstr.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "string types data identical (cf _all)"
+}
+else {
+    noi test_fail "string types" "`r(reason)'"
 }
 
 /*******************************************************************************

@@ -539,6 +539,8 @@ typedef struct {
 /* Prefetch distance for software prefetching - 8 cache lines ahead */
 #define STREAM_PREFETCH_DISTANCE 64
 
+/* NOTE: This function is currently unused but retained for potential future use */
+__attribute__((unused))
 static void *stream_master_var_thread(void *arg)
 {
     stream_var_args_t *a = (stream_var_args_t *)arg;
@@ -1229,6 +1231,8 @@ static ST_retcode cmerge_execute(const char *args)
         arg_idx++;
         token = strtok(NULL, " ");
     }
+
+    (void)verbose;  /* Timing output moved to ado file */
 
     /* ===================================================================
      * Step 1: Load ALL master variables (parallel I/O)

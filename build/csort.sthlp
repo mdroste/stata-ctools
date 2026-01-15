@@ -32,8 +32,8 @@
 {synoptline}
 
 {pstd}
-where {it:name} is one of: {opt lsd} (default), {opt msd}, {opt timsort},
-{opt sample}, {opt counting}, {opt merge}, or {opt ips4o}
+where {it:name} is one of: {opt ips4o} (default), {opt lsd}, {opt msd}, {opt timsort},
+{opt sample}, {opt counting}, or {opt merge}
 
 
 {marker description}{...}
@@ -55,7 +55,8 @@ key values maintain their relative order.
 
 {phang}
 {opt algorithm(name)} specifies which sorting algorithm to use. The default is
-{opt lsd} (LSD radix sort). See {help csort##algorithms:Algorithms} for details
+{opt ips4o} (In-place Parallel Super Scalar Samplesort), a state-of-the-art
+parallel sorting algorithm. See {help csort##algorithms:Algorithms} for details
 on when to use each algorithm.
 
 {phang}
@@ -74,14 +75,26 @@ the sort: loading data to C, sorting, and storing data back to Stata.
 {cmd:csort} provides seven sorting algorithms optimized for different data patterns
 and parallelization strategies:
 
-{dlgtab:LSD Radix Sort (default)}
+{dlgtab:IPS4o (default)}
+
+{pstd}
+{opt algorithm(ips4o)} uses IPS4o (In-place Parallel Super Scalar Samplesort),
+a state-of-the-art parallel sorting algorithm that combines samplesort with
+branchless bucket classification and cache-efficient block-based data movement.
+
+{p 8 12 2}{it:Best for:} General-purpose sorting, large datasets, high core counts{p_end}
+{p 8 12 2}{it:Performance:} O(n log n) with excellent cache efficiency and parallel scaling{p_end}
+{p 8 12 2}{it:Parallelization:} Fully parallel classification and bucket sorting{p_end}
+{p 8 12 2}{it:Key features:} Branchless operations, minimal auxiliary memory, adaptive bucket count{p_end}
+
+{dlgtab:LSD Radix Sort}
 
 {pstd}
 {opt algorithm(lsd)} uses Least Significant Digit radix sort. This is a highly
 parallelized sorting algorithm that processes data byte-by-byte from the least
 significant to most significant byte.
 
-{p 8 12 2}{it:Best for:} General-purpose sorting, fixed-width numeric keys, uniformly distributed data{p_end}
+{p 8 12 2}{it:Best for:} Fixed-width numeric keys, uniformly distributed data{p_end}
 {p 8 12 2}{it:Performance:} O(n * k) where k is key width; excellent cache utilization{p_end}
 {p 8 12 2}{it:Parallelization:} Fully parallel histogram and scatter phases{p_end}
 
@@ -141,31 +154,19 @@ in parallel, then merges.
 {p 8 12 2}{it:Performance:} O(n log n) guaranteed; stable and predictable{p_end}
 {p 8 12 2}{it:Parallelization:} Parallel block sort + parallel merge{p_end}
 
-{dlgtab:IPS4o (In-place Parallel Super Scalar Samplesort)}
-
-{pstd}
-{opt algorithm(ips4o)} uses IPS4o, a state-of-the-art in-place parallel sorting
-algorithm that combines samplesort with branchless bucket classification and
-cache-efficient block-based data movement.
-
-{p 8 12 2}{it:Best for:} Large datasets where memory efficiency matters, high core counts{p_end}
-{p 8 12 2}{it:Performance:} O(n log n) with excellent cache efficiency{p_end}
-{p 8 12 2}{it:Parallelization:} Fully parallel classification and bucket sorting{p_end}
-{p 8 12 2}{it:Key features:} Branchless operations, minimal auxiliary memory, adaptive bucket count{p_end}
-
 {dlgtab:Algorithm Selection Guide}
 
 {pstd}
 Use the following guidelines to select an algorithm:
 
 {p2colset 5 28 30 2}{...}
-{p2col :{opt lsd}}Default; best for most numeric sorting tasks{p_end}
-{p2col :{opt msd}}Better for string variables or mixed-type keys{p_end}
+{p2col :{opt ips4o}}Default; best for most sorting tasks, excellent parallel scaling{p_end}
+{p2col :{opt lsd}}Alternative for numeric data with uniform distribution{p_end}
+{p2col :{opt msd}}Better for string variables with common prefixes{p_end}
 {p2col :{opt timsort}}When data is already partially sorted{p_end}
 {p2col :{opt sample}}Very large datasets with many CPU cores{p_end}
 {p2col :{opt counting}}Integer data with small range (year, categories){p_end}
 {p2col :{opt merge}}When guaranteed stable O(n log n) is needed{p_end}
-{p2col :{opt ips4o}}Large datasets with memory constraints and many cores{p_end}
 
 
 {marker remarks}{...}
