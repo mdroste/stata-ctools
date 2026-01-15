@@ -60,6 +60,19 @@
 #define CEXPORT_INITIAL_ROW_BUF  4096           /* Initial row buffer size */
 
 /* ========================================================================
+   Variable Storage Types (from Stata)
+   ======================================================================== */
+
+typedef enum {
+    VARTYPE_STRING = 0,
+    VARTYPE_BYTE   = 1,
+    VARTYPE_INT    = 2,
+    VARTYPE_LONG   = 3,
+    VARTYPE_FLOAT  = 4,
+    VARTYPE_DOUBLE = 5
+} vartype_t;
+
+/* ========================================================================
    Export Context and Configuration
    ======================================================================== */
 
@@ -85,6 +98,9 @@ typedef struct {
     /* Variable names (for header) */
     char **varnames;
     size_t nvars;
+
+    /* Variable storage types (for numeric precision) */
+    vartype_t *vartypes;
 
     /* Optimization flags */
     bool all_numeric;    /* True if all variables are numeric (fast path) */
@@ -219,19 +235,18 @@ static int format_decimal_fast(double val, char *buf)
 }
 
 /*
-    Fast double to string conversion.
+    Fast double to string conversion with type-appropriate precision.
 
     Features:
     - FAST PATH: Direct integer conversion for whole numbers (5-10x faster)
     - Handles Stata missing values as empty string or "."
+    - Uses 8 significant digits for float, 16 for double (matches Stata's export delimited)
     - Falls back to snprintf only for decimals/scientific notation
 
     Returns: number of characters written (not including null terminator)
 */
-static int double_to_str(double val, char *buf, int buf_size, bool missing_as_dot)
+static int double_to_str(double val, char *buf, int buf_size, bool missing_as_dot, vartype_t vtype)
 {
-    (void)buf_size;  /* Used only for snprintf fallback */
-
     if (is_stata_missing(val)) {
         if (missing_as_dot) {
             buf[0] = '.';
@@ -261,29 +276,49 @@ static int double_to_str(double val, char *buf, int buf_size, bool missing_as_do
 
     /* FAST PATH: Check if value is an exact integer that fits in int64
      * This handles ~80% of typical Stata data (IDs, counts, years, etc.)
+     * Also covers byte, int, long storage types perfectly.
      */
     if (val == (double)(int64_t)val && val >= -9007199254740992.0 && val <= 9007199254740992.0) {
         return ctools_int64_to_str((int64_t)val, buf);
     }
 
-    /* FAST DECIMAL PATH: Use custom formatter for normal-range decimals
-     * This avoids snprintf entirely for most float values.
-     * For very small numbers (< 1e-9), use scientific notation to preserve
-     * all significant digits. With 15 decimal places we can preserve
-     * 15 - |log10(val)| significant digits, so 1e-9 gives us 6+ digits. */
-    double abs_val = fabs(val);
-    if (abs_val >= 1e-9 && abs_val < 1e12) {
-        int len = format_decimal_fast(val, buf);
-        if (len > 0) {
-            return len;
-        }
-        /* Fallback if format_decimal_fast returns -1 */
+    /* Determine precision based on storage type
+     * Match Stata's export delimited behavior:
+     * - float: 8 significant digits (Stata outputs like .35762972)
+     * - double: 16 significant digits (Stata outputs like .2076905268617547)
+     */
+    int precision;
+    if (vtype == VARTYPE_FLOAT) {
+        precision = 8;
+    } else {
+        /* double, or integer types that somehow have decimal values */
+        precision = 16;
     }
 
-    /* SLOW PATH: Scientific notation or extreme values - use snprintf with full precision */
-    int len = snprintf(buf, buf_size, "%.15g", val);
+    /* Format with type-appropriate precision
+     * Use snprintf to match Stata's exact output format.
+     * We skip format_decimal_fast because it uses 15 digits while Stata uses 16 for double.
+     */
+    int len;
+    if (precision == 8) {
+        len = snprintf(buf, buf_size, "%.8g", val);
+    } else {
+        len = snprintf(buf, buf_size, "%.16g", val);
+    }
 
-    /* Remove trailing zeros after decimal point */
+    /* Remove leading zero to match Stata's format (e.g., 0.5 -> .5)
+     * Stata omits leading zero for values between -1 and 1 */
+    if (len >= 2 && buf[0] == '0' && buf[1] == '.') {
+        /* Shift string left to remove leading zero */
+        memmove(buf, buf + 1, len);  /* includes null terminator */
+        len--;
+    } else if (len >= 3 && buf[0] == '-' && buf[1] == '0' && buf[2] == '.') {
+        /* Handle negative: -0.5 -> -.5 */
+        memmove(buf + 1, buf + 2, len - 1);  /* includes null terminator */
+        len--;
+    }
+
+    /* Remove trailing zeros after decimal point (Stata also does this) */
     char *dot = strchr(buf, '.');
     if (dot != NULL) {
         char *end = buf + len - 1;
@@ -411,6 +446,7 @@ static int format_row_numeric(size_t row_idx, char *buf, size_t buf_size)
 
     for (size_t j = 0; j < nvars; j++) {
         double val = g_ctx.data.vars[j].data.dbl[row_idx];
+        vartype_t vtype = g_ctx.vartypes[j];
 
         /* Check buffer space (assume max 32 chars for number) */
         if (pos + 34 > buf_size) {
@@ -418,7 +454,7 @@ static int format_row_numeric(size_t row_idx, char *buf, size_t buf_size)
         }
 
         /* Write directly to output buffer */
-        int field_len = double_to_str(val, buf + pos, 32, true);
+        int field_len = double_to_str(val, buf + pos, 32, true, vtype);
         pos += field_len;
 
         /* Add delimiter or newline */
@@ -452,6 +488,7 @@ static int format_row(size_t row_idx, char *buf, size_t buf_size)
         if (var->type == STATA_TYPE_DOUBLE) {
             /* FAST PATH: Numeric variable - inline for speed */
             double val = var->data.dbl[row_idx];
+            vartype_t vtype = g_ctx.vartypes[j];
 
             /* Check buffer space (assume max 32 chars for number) */
             if (pos + 34 > buf_size) {
@@ -459,7 +496,7 @@ static int format_row(size_t row_idx, char *buf, size_t buf_size)
             }
 
             /* Write directly to output buffer */
-            field_len = double_to_str(val, buf + pos, sizeof(field_buf), true);
+            field_len = double_to_str(val, buf + pos, sizeof(field_buf), true, vtype);
             pos += field_len;
         } else {
             /* String variable */
@@ -683,6 +720,44 @@ static int load_varnames(void)
 }
 
 /*
+    Load variable types from Stata macro.
+    The .ado file sets CEXPORT_VARTYPES macro with space-separated type codes:
+    0=string, 1=byte, 2=int, 3=long, 4=float, 5=double
+*/
+static int load_vartypes(void)
+{
+    size_t nvars = g_ctx.nvars;
+    g_ctx.vartypes = (vartype_t *)malloc(nvars * sizeof(vartype_t));
+    if (g_ctx.vartypes == NULL) return -1;
+
+    /* Initialize to double (safest default - most precision) */
+    for (size_t j = 0; j < nvars; j++) {
+        g_ctx.vartypes[j] = VARTYPE_DOUBLE;
+    }
+
+    /* Try to get variable types from macro */
+    char vartypes_buf[32768];
+    if (SF_macro_use("CEXPORT_VARTYPES", vartypes_buf, sizeof(vartypes_buf)) == 0 &&
+        strlen(vartypes_buf) > 0) {
+        /* Parse space-separated type codes */
+        char *p = vartypes_buf;
+        for (size_t j = 0; j < nvars; j++) {
+            /* Skip whitespace */
+            while (*p == ' ' || *p == '\t') p++;
+            if (*p == '\0') break;
+
+            /* Parse type code */
+            int type_code = (int)strtol(p, &p, 10);
+            if (type_code >= 0 && type_code <= 5) {
+                g_ctx.vartypes[j] = (vartype_t)type_code;
+            }
+        }
+    }
+
+    return 0;
+}
+
+/*
     Free all resources in context.
 */
 static void cleanup_context(void)
@@ -705,6 +780,11 @@ static void cleanup_context(void)
         }
         free(g_ctx.varnames);
         g_ctx.varnames = NULL;
+    }
+
+    if (g_ctx.vartypes != NULL) {
+        free(g_ctx.vartypes);
+        g_ctx.vartypes = NULL;
     }
 
     stata_data_free(&g_ctx.data);
@@ -764,6 +844,13 @@ ST_retcode cexport_main(const char *args)
     /* Load variable names */
     if (load_varnames() != 0) {
         SF_error("cexport: failed to load variable names\n");
+        cleanup_context();
+        return 920;
+    }
+
+    /* Load variable types (for numeric precision) */
+    if (load_vartypes() != 0) {
+        SF_error("cexport: failed to load variable types\n");
         cleanup_context();
         return 920;
     }

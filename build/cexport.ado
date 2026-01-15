@@ -198,6 +198,33 @@ program define cexport, rclass
     * Pass variable names to the plugin via global macro
     global CEXPORT_VARNAMES `varlist'
 
+    * Pass variable storage types to the plugin
+    * Types: 1=byte, 2=int, 3=long, 4=float, 5=double, 0=string
+    local vartypes ""
+    foreach var of local export_varlist {
+        local vtype : type `var'
+        if "`vtype'" == "byte" {
+            local vartypes `vartypes' 1
+        }
+        else if "`vtype'" == "int" {
+            local vartypes `vartypes' 2
+        }
+        else if "`vtype'" == "long" {
+            local vartypes `vartypes' 3
+        }
+        else if "`vtype'" == "float" {
+            local vartypes `vartypes' 4
+        }
+        else if "`vtype'" == "double" {
+            local vartypes `vartypes' 5
+        }
+        else {
+            * String type (str#, strL)
+            local vartypes `vartypes' 0
+        }
+    }
+    global CEXPORT_VARTYPES `vartypes'
+
     * Record start time
     timer clear 99
     timer on 99
@@ -210,8 +237,9 @@ program define cexport, rclass
 
     local export_rc = _rc
 
-    * Clean up global macro
+    * Clean up global macros
     macro drop CEXPORT_VARNAMES
+    macro drop CEXPORT_VARTYPES
 
     if `export_rc' {
         di as error "Error exporting data (rc=`export_rc')"
