@@ -7,54 +7,10 @@
 
 #include "creghdfe_hdfe.h"
 #include "creghdfe_utils.h"
+#include "../ctools_hdfe_utils.h"
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
-
-/* ========================================================================
- * Factor management functions
- * ======================================================================== */
-
-/*
- * Drop singleton observations from a factor
- * Returns number of singletons found
- */
-ST_int find_singletons(FactorData *F, ST_int *singleton_mask)
-{
-    ST_int i, num_singletons = 0;
-
-    /* Mark observations in singleton levels */
-    for (i = 0; i < F->num_obs; i++) {
-        if (singleton_mask[i] == 0) continue;  /* Already dropped */
-        if (F->counts[F->levels[i] - 1] == 1) {
-            singleton_mask[i] = 0;  /* Mark for dropping */
-            num_singletons++;
-        }
-    }
-
-    return num_singletons;
-}
-
-/*
- * Update factor after dropping observations
- * Recomputes counts based on remaining observations
- */
-void update_factor_counts(FactorData *F, ST_int *mask, ST_int N)
-{
-    ST_int i;
-
-    /* Reset counts */
-    for (i = 0; i < F->num_levels; i++) {
-        F->counts[i] = 0;
-    }
-
-    /* Recount */
-    for (i = 0; i < N; i++) {
-        if (mask[i]) {
-            F->counts[F->levels[i] - 1]++;
-        }
-    }
-}
 
 /*
  * Clean up global state
@@ -144,7 +100,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     ST_int g, i, obs, idx;
     ST_double val;
     ST_int drop_singletons, verbose, compute_dof;
-    ST_int num_singletons, num_singletons_iter, iter;
+    ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
     IntHashTable **hash_tables = NULL;
@@ -290,37 +246,26 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
 
     t_read = get_time_sec();
 
-    /* STEP 2: Iteratively drop singletons */
+    /* STEP 2: Iteratively drop singletons using shared utility */
     num_singletons = 0;
     N = N_orig;
 
     if (drop_singletons) {
-        iter = 0;
-        do {
-            num_singletons_iter = 0;
-
-            /* Check each factor for singletons */
+        /* Build array of level pointers for shared utility */
+        ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
+        if (fe_levels) {
             for (g = 0; g < G; g++) {
-                ST_int found = find_singletons(&factors[g], mask);
-                num_singletons_iter += found;
+                fe_levels[g] = factors[g].levels;
             }
 
-            if (num_singletons_iter > 0) {
-                num_singletons += num_singletons_iter;
-                N -= num_singletons_iter;
+            num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask, max_iter, (verbose >= 2));
+            free(fe_levels);
 
-                /* Update counts for all factors */
-                for (g = 0; g < G; g++) {
-                    update_factor_counts(&factors[g], mask, N_orig);
-                }
+            /* Count remaining observations */
+            N = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) N++;
             }
-
-            iter++;
-        } while (num_singletons_iter > 0 && iter < max_iter && N > 1);
-
-        if (verbose >= 2 && num_singletons > 0) {
-            sprintf(msg, "{txt}   Dropped %d singletons in %d iterations\n", num_singletons, iter);
-            SF_display(msg);
         }
     }
 

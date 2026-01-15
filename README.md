@@ -10,20 +10,16 @@ High-performance C-accelerated drop-in replacements for Stata commands.
 
 **ctools** is a set of drop-in replacements for a variety of Stata programs. **ctools** programs inherit the syntax and functionality of the programs they replace, but are usually much faster for large datasets.
 
-**ctools** includes replacements for the following Stata programs:
-
 | Stata command | ctools command | Purpose | Typical speedup |
 | --- | --- | --- | ---: |
 | `import delimited` | `cimport delimited` | Import text-delimited files | **40x** |
-| `export delimited` | `cexport delimited` | Export text-delimited files | **25x** |
+| `export delimited` | `cexport delimited` | Export text-delimited files | **40x** |
 | `sort` | `csort` | Sort dataset | **1-6x** |
-| `merge` | `cmerge` | Merge (join) datasets | **2-8x** |
-| `binscatter` | `cbinscatter` | Binned scatter plots | **30x+** |
+| `merge` | `cmerge` | Merge (join) datasets | **1-8x** |
+| `binscatter` | `cbinscatter` | Binned scatter plots | **2-30x+** |
 | `reghdfe` | `creghdfe` | OLS with high-dimensional fixed effects | **10-20x** |
-| `ivreghdfe` | `civreghdfe` | 2SLS with high-dimensional fixed effects | **10-20x** |
+| `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with high-dimensional fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **4x** |
-
-Each of these programs is implemented with its own Stata .ado file (and internal .sthlp documentation).
 
 
 ## Installation
@@ -44,7 +40,8 @@ The package automatically detects your operating system and architecture, loadin
 
 ## Building from Source Files
 
-You almost certainly do not need to compile this program from the source files, as pre-compiled plugins are automatically built by GitHub and are included with the installation methods described above. If you want to build from source, then make sure your compiler can use OpenMP.
+
+You probably do not need to compile the ctools C plugin yourself; GitHub automatically compiles plugins for Windows, Mac (Intel and ARM/M-series), and Linux platforms, and installation will automatically download and select the appropriate plugin for you. If you want to build from source, then make sure your compiler can use OpenMP.
 
 ```bash
 make              # Build for current platform
@@ -53,11 +50,12 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
+If your computing environment has a CPU with an exceptionally large L3 cache (e.g. AMD's X3D chips or a Threadripper), you might explore playing around with the settings in ./src/ctools_config.h.
+
 ## Usage Notes
 
-- Some of these programs have I/O overhead involved in transporting data from Stata to C. This matters for you in two ways. First, it means that using --ctools-- requires more memory (RAM) than built-in Stata command, particularly for -csort- and -cmerge- which tend to require loading all variables / many variables into memory (cqreg, creghdfe, binscatter etc. only pull in what is needed). In addition, this IO overhead means that -csort- and -cmerge- in particular will run faster when there are fewer variables in memory. 
-- The Stata function interface is limited to working with datasets with fewer than 2^32-1 observations (about 2.147 billion). This is a [known limitation]() of the Stata function interface for C plugins. 
-- csort includes an additional option (algorithm) allowing you to choose a handful of sorting algorithms, as described in the internal help.
+- Some of these programs have I/O overhead involved in transporting data from Stata to C. This means -ctools- commands require more memory (RAM) than their Stata/Mata counterparts, as C needs to copy at least some of your data into arrays visible to C. This also means that some commands will run faster when they involve fewer variables (all else equal), or when you have fewer variables in memory. Only the variables required to run a command are pulled into C. For instance, -cbinscatter y x- will only load the variables y and x into memory, and the remainder of your dataset is irrelevant. On the other hand, -csort- and -cmerge- generally require pulling a lot of data into memory (and back); fixing N, the IO overhead of csort and cmerge scale linearly with the width of your data.
+- ctools only works with datasets smaller than 2^31-1 observations (about 2.147 billion). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed if Stata updates this interface.
 
 ## Compatibility
 
@@ -65,11 +63,11 @@ make clean        # Remove compiled files
 
 ## Authorship
 
-99.9% of the code for ctools repository was written using Claude Opus 4.5 and Claude Code. by Claude Opus 4.5 using Claude Code.
+99.9% of the code for ctools repository was written using Claude Opus 4.5 and Claude Code.
 
 ## Thanks
 
-Thanks to [Sergio Correa](https://github.com/sergiocorrea) for creating -[ftools](https://github.com/sergiocorrea/ftools)- and [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating -[gtools](https://github.com/mcaceresb/gtools)-. 
+Thanks to [Sergio Correa](https://github.com/sergiocorrea) for creating [ftools](https://github.com/sergiocorrea/ftools)/ and [reghdfe](https://github.com/sergiocorreia/reghdfe), and thanks to [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating [gtools](https://github.com/mcaceresb/gtools). Thanks also to Christopher (Kit) Baum for creating ivreg2, from which both ivreghdfe and civreghdfe are based. 
 
 
 ## License

@@ -1,0 +1,104 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/test_tab3.do 
+
+. clear all
+
+. set more off
+
+. adopath ++ build
+  [1]              "build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. 
+. * Test Stata import
+. import delimited using "/tmp/tabfile.tsv", delimiters(tab) clear
+(encoding automatically selected: ISO-8859-1)
+(4 vars, 4 obs)
+
+. local stata_n = _N
+
+. local stata_k = c(k)
+
+. di "Stata: N=`stata_n' K=`stata_k'"
+Stata: N=4 K=4
+
+. list
+
+     +----------------------------+
+     | id    name   score   group |
+     |----------------------------|
+  1. |  1    John    85.5       X |
+  2. |  2    Jane    92.3       Y |
+  3. |  3     Bob    78.9       X |
+  4. |  4   Alice    88.1       Y |
+     +----------------------------+
+
+. 
+. * Test cimport
+. cimport delimited using "/tmp/tabfile.tsv", delimiters(tab) clear
+Scanned 4 rows, 4 columns
+Loaded 4 observations
+(           4 observations read)
+
+. local cimport_n = _N
+
+. local cimport_k = c(k)
+
+. di "cimport: N=`cimport_n' K=`cimport_k'"
+cimport: N=4 K=4
+
+. list
+
+     +----------------------------+
+     | id    name   score   group |
+     |----------------------------|
+  1. |  1    John    85.5       X |
+  2. |  2    Jane    92.3       Y |
+  3. |  3     Bob    78.9       X |
+  4. |  4   Alice    88.1       Y |
+     +----------------------------+
+
+. 
+. if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+.     di "PASS: dimensions match"
+PASS: dimensions match
+. }
+
+. else {
+.     di "FAIL: dimensions differ (Stata: N=`stata_n' K=`stata_k', cimport: N=`
+> cimport_n' K=`cimport_k')"
+. }
+
+. 
+end of do-file

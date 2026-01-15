@@ -1,0 +1,304 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/test_mm_100.do 
+
+. clear all
+
+. set more off
+
+. adopath ++ build
+  [1]              "build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. 
+. * Create master dataset
+. clear
+
+. set obs 100
+Number of observations (_N) was 0, now 100.
+
+. set seed 42
+
+. gen group = mod(_n - 1, 10) + 1
+
+. gen val1 = runiform()
+
+. tempfile master_mm
+
+. save `master_mm'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St76894.000001 saved
+    as .dta format
+
+. 
+. * Create using dataset
+. clear
+
+. set obs 100
+Number of observations (_N) was 0, now 100.
+
+. set seed 43
+
+. gen group = mod(_n - 1, 10) + 1
+
+. gen val2 = runiform() * 100
+
+. tempfile using_mm
+
+. save `using_mm'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St76894.000002 saved
+    as .dta format
+
+. 
+. * Stata merge
+. use `master_mm', clear
+
+. merge m:m group using `using_mm', nogen
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                               100  
+    -----------------------------------------
+
+. di "Stata: N=`=_N'"
+Stata: N=100
+
+. save /tmp/stata_mm_100.dta, replace
+(file /tmp/stata_mm_100.dta not found)
+file /tmp/stata_mm_100.dta saved
+
+. 
+. * cmerge
+. use `master_mm', clear
+
+. cmerge m:m group using `using_mm', nogen noreport
+
+. di "cmerge: N=`=_N'"
+cmerge: N=100
+
+. save /tmp/cmerge_mm_100.dta, replace
+(file /tmp/cmerge_mm_100.dta not found)
+file /tmp/cmerge_mm_100.dta saved
+
+. 
+. * Compare
+. use /tmp/stata_mm_100.dta, clear
+
+. cf * using /tmp/cmerge_mm_100.dta, verbose
+            val1: 89 mismatches
+                  obs   1. .34776339 in master; .7551555 in using
+                  obs   2. .86126697 in master; .01238277 in using
+                  obs   3. .4345178 in master; .74760258 in using
+                  obs   4. .01238277 in master; .74516553 in using
+                  obs   5. .05917431 in master; .69985998 in using
+                  obs   6. .74760258 in master; .4345178 in using
+                  obs   7. .7551555 in master; .86126697 in using
+                  obs   9. .69985998 in master; .34776339 in using
+                  obs  10. .74516553 in master; .05917431 in using
+                  obs  11. .14931847 in master; .63903141 in using
+                  obs  12. .2994616 in master; .5237056 in using
+                  obs  13. .68605399 in master; .14931847 in using
+                  obs  14. .5237056 in master; .32375824 in using
+                  obs  15. .47571927 in master; .45944008 in using
+                  obs  16. .45944008 in master; .09161065 in using
+                  obs  17. .09161065 in master; .47571927 in using
+                  obs  18. .36695576 in master; .68605399 in using
+                  obs  19. .63903141 in master; .2994616 in using
+                  obs  20. .32375824 in master; .36695576 in using
+                  obs  21. .72909564 in master; .75214517 in using
+                  obs  22. .42525488 in master; .68527126 in using
+                  obs  23. .75214517 in master; .42525488 in using
+                  obs  24. .53693032 in master; .75096935 in using
+                  obs  25. .82377136 in master; .53693032 in using
+                  obs  26. .73813266 in master; .07424011 in using
+                  obs  27. .07424011 in master; .82377136 in using
+                  obs  28. .68527126 in master; .72909564 in using
+                  obs  29. .73533833 in master; .73813266 in using
+                  obs  30. .75096935 in master; .73533833 in using
+                  obs  31. .82051641 in master; .13627268 in using
+                  obs  33. .13627268 in master; .10004696 in using
+                  obs  34. .49178657 in master; .80433244 in using
+                  obs  35. .59388059 in master; .48886228 in using
+                  obs  36. .65071666 in master; .82051641 in using
+                  obs  37. .80433244 in master; .49178657 in using
+                  obs  38. .10004696 in master; .65071666 in using
+                  obs  39. .48886228 in master; .59388059 in using
+                  obs  41. .39551026 in master; .90326899 in using
+                  obs  42. .04351748 in master; .82654977 in using
+                  obs  43. .81625825 in master; .14391404 in using
+                  obs  44. .3526423 in master; .04351748 in using
+                  obs  48. .82654977 in master; .81625825 in using
+                  obs  49. .14391404 in master; .3526423 in using
+                  obs  50. .90326899 in master; .39551026 in using
+                  obs  51. .443436 in master; .09406831 in using
+                  obs  52. .93236077 in master; .9456985 in using
+                  obs  53. .09406831 in master; .09417242 in using
+                  obs  54. .31002823 in master; .92610252 in using
+                  obs  55. .13868514 in master; .60718137 in using
+                  obs  56. .9456985 in master; .443436 in using
+                  obs  57. .09417242 in master; .31002823 in using
+                  obs  58. .60718137 in master; .78712803 in using
+                  obs  59. .92610252 in master; .13868514 in using
+                  obs  60. .78712803 in master; .93236077 in using
+                  obs  61. .99544877 in master; .5745703 in using
+                  obs  62. .29705068 in master; .75321853 in using
+                  obs  63. .49307588 in master; .53016132 in using
+                  obs  64. .53016132 in master; .74364865 in using
+                  obs  65. .6520915 in master; .49307588 in using
+                  obs  66. .74064559 in master; .99544877 in using
+                  obs  67. .75321853 in master; .29705068 in using
+                  obs  68. .74364865 in master; .6520915 in using
+                  obs  70. .5745703 in master; .74064559 in using
+                  obs  71. .38394585 in master; .3728877 in using
+                  obs  72. .79384792 in master; .44891608 in using
+                  obs  73. .59494025 in master; .44619694 in using
+                  obs  74. .3728877 in master; .41604862 in using
+                  obs  75. .44619694 in master; .38394585 in using
+                  obs  76. .41604862 in master; .59494025 in using
+                  obs  77. .59272206 in master; .52279234 in using
+                  obs  78. .44891608 in master; .79384792 in using
+                  obs  79. .23012385 in master; .59272206 in using
+                  obs  80. .52279234 in master; .23012385 in using
+                  obs  82. .29762998 in master; .04680302 in using
+                  obs  83. .61903948 in master; .77301884 in using
+                  obs  84. .52161187 in master; .29762998 in using
+                  obs  86. .52911973 in master; .61903948 in using
+                  obs  87. .04680302 in master; .364871 in using
+                  obs  88. .364871 in master; .40255865 in using
+                  obs  89. .40255865 in master; .52161187 in using
+                  obs  90. .77301884 in master; .52911973 in using
+                  obs  91. .76379782 in master; .39027089 in using
+                  obs  92. .93661445 in master; .06459452 in using
+                  obs  94. .57680416 in master; .01930026 in using
+                  obs  95. .06459452 in master; .4159793 in using
+                  obs  96. .01930026 in master; .57680416 in using
+                  obs  97. .39027089 in master; .76379782 in using
+                  obs  98. .61291343 in master; .93661445 in using
+                  obs  99. .4159793 in master; .61291343 in using
+            val2: 92 mismatches
+                  obs   1. 84.590912 in master; 2.8075583 in using
+                  obs   2. 35.577095 in master; 19.855143 in using
+                  obs   3. 1.884804 in master; 35.577095 in using
+                  obs   4. 53.841965 in master; 94.232513 in using
+                  obs   5. 31.51519 in master; 29.345285 in using
+                  obs   6. 12.601505 in master; 31.51519 in using
+                  obs   7. 94.232513 in master; 84.590912 in using
+                  obs   8. 2.8075583 in master; 12.601505 in using
+                  obs   9. 29.345285 in master; 53.841965 in using
+                  obs  10. 19.855143 in master; 1.884804 in using
+                  obs  11. 17.058353 in master; 29.833401 in using
+                  obs  12. 32.109299 in master; 21.626638 in using
+                  obs  13. 83.069344 in master; 32.109299 in using
+                  obs  14. 21.626638 in master; 17.058353 in using
+                  obs  15. 29.833401 in master; 69.954102 in using
+                  obs  16. 69.954102 in master; 82.285019 in using
+                  obs  17. 73.548874 in master; 75.822327 in using
+                  obs  18. 82.285019 in master; 35.003441 in using
+                  obs  19. 75.822327 in master; 83.069344 in using
+                  obs  20. 35.003441 in master; 73.548874 in using
+                  obs  21. 45.736782 in master; 3.1516833 in using
+                  obs  22. 3.1516833 in master; 79.405289 in using
+                  obs  23. 4.8595085 in master; 7.4138784 in using
+                  obs  24. 69.687012 in master; 4.8595085 in using
+                  obs  25. 57.688492 in master; 69.687012 in using
+                  obs  26. 43.937958 in master; 45.736782 in using
+                  obs  27. 45.182945 in master; 57.688492 in using
+                  obs  28. 28.720058 in master; 43.937958 in using
+                  obs  29. 7.4138784 in master; 28.720058 in using
+                  obs  30. 79.405289 in master; 45.182945 in using
+                  obs  31. 21.588976 in master; 41.733006 in using
+                  obs  32. 63.891632 in master; 49.623951 in using
+                  obs  33. 74.768349 in master; 34.688248 in using
+                  obs  34. 41.733006 in master; 54.728691 in using
+                  obs  35. 34.688248 in master; 93.69342 in using
+                  obs  36. 93.69342 in master; 63.891632 in using
+                  obs  37. 54.728691 in master; 15.996583 in using
+                  obs  38. 48.907742 in master; 74.768349 in using
+                  obs  39. 49.623951 in master; 21.588976 in using
+                  obs  40. 15.996583 in master; 48.907742 in using
+                  obs  41. 75.227028 in master; 51.668495 in using
+                  obs  42. 57.486877 in master; 46.752518 in using
+                  obs  44. 51.668495 in master; 57.486877 in using
+                  obs  45. 50.624462 in master; 12.610698 in using
+                  obs  46. 46.752518 in master; 41.178524 in using
+                  obs  47. 12.610698 in master; 75.227028 in using
+                  obs  48. 30.434027 in master; 89.809654 in using
+                  obs  49. 41.178524 in master; 30.434027 in using
+                  obs  50. 89.809654 in master; 50.624462 in using
+                  obs  51. 41.622349 in master; 63.980095 in using
+                  obs  52. 79.423042 in master; 78.179092 in using
+                  obs  53. 63.980095 in master; 41.622349 in using
+                  obs  54. 59.031277 in master; 97.914642 in using
+                  obs  55. 49.126293 in master; 59.031277 in using
+                  obs  56. 97.914642 in master; 49.126293 in using
+                  obs  57. 75.769264 in master; 83.045547 in using
+                  obs  58. 78.179092 in master; 79.423042 in using
+                  obs  60. 83.045547 in master; 75.769264 in using
+                  obs  61. 70.620361 in master; 7.8680735 in using
+                  obs  62. 7.8680735 in master; 52.19376 in using
+                  obs  63. 67.924103 in master; 40.087639 in using
+                  obs  65. 18.362402 in master; 92.197639 in using
+                  obs  66. 81.301773 in master; 70.620361 in using
+                  obs  67. 40.087639 in master; 81.301773 in using
+                  obs  68. 17.717352 in master; 67.924103 in using
+                  obs  69. 92.197639 in master; 17.717352 in using
+                  obs  70. 52.19376 in master; 18.362402 in using
+                  obs  71. 29.819122 in master; 83.735474 in using
+                  obs  73. 10.180347 in master; 31.062965 in using
+                  obs  74. 31.062965 in master; 29.819122 in using
+                  obs  75. 38.310329 in master; 10.180347 in using
+                  obs  76. 3.4483893 in master; 18.13236 in using
+                  obs  78. 18.13236 in master; 3.4483893 in using
+                  obs  79. 48.7146 in master; 38.310329 in using
+                  obs  80. 83.735474 in master; 48.7146 in using
+                  obs  82. 1.0862687 in master; 76.139374 in using
+                  obs  83. 38.405163 in master; 49.718788 in using
+                  obs  84. 60.187492 in master; 4.8482294 in using
+                  obs  85. 50.430183 in master; 60.187492 in using
+                  obs  86. 95.723007 in master; 1.0862687 in using
+                  obs  87. 76.139374 in master; 50.430183 in using
+                  obs  88. 4.8482294 in master; 95.723007 in using
+                  obs  89. 49.718788 in master; 38.405163 in using
+                  obs  92. 3.4594078 in master; 43.678265 in using
+                  obs  93. 26.616749 in master; 30.201077 in using
+                  obs  94. 26.789442 in master; 82.266678 in using
+                  obs  95. 21.786465 in master; 81.129044 in using
+                  obs  96. 82.266678 in master; 26.789442 in using
+                  obs  97. 30.201077 in master; 53.591961 in using
+                  obs  98. 53.591961 in master; 26.616749 in using
+                  obs  99. 43.678265 in master; 3.4594078 in using
+                  obs 100. 81.129044 in master; 21.786465 in using
+r(9);
+
+end of do-file
+r(9);

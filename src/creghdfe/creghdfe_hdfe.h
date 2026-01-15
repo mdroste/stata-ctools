@@ -10,16 +10,6 @@
 
 #include "creghdfe_types.h"
 
-/* ========================================================================
- * Factor management functions
- * ======================================================================== */
-
-/* Drop singleton observations from a factor. Returns number found. */
-ST_int find_singletons(FactorData *F, ST_int *singleton_mask);
-
-/* Update factor counts after dropping observations */
-void update_factor_counts(FactorData *F, ST_int *mask, ST_int N);
-
 /* Clean up global state */
 void cleanup_state(void);
 

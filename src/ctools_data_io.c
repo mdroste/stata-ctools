@@ -12,19 +12,23 @@
     - Uses SF_vdata()/SF_sdata() for reading, SF_vstore()/SF_sstore() for writing
     - SPI convention: variable index first, then observation index (both 1-based)
 
-    Performance Optimizations:
-    - 8x loop unrolling reduces loop overhead and improves instruction pipelining
-    - Parallel variable I/O overlaps operations across columns
-    - SD_FASTMODE (compile flag) disables SPI bounds checking
-    - Cache-line aligned allocations for optimal memory access
-    - Software prefetching for improved memory latency hiding
-    - SIMD operations for bulk memory initialization
-    - Non-temporal stores for large write operations
-    - String arena allocator for reduced malloc overhead
-
     Thread Safety:
     - Each thread operates on a different Stata variable (column)
     - No shared state during I/O phase
+    - Assumes Stata's SPI is thread-safe for column-level parallelism
+    - Note: Custom streaming code (e.g., in cmerge) should use sequential I/O
+      to avoid potential race conditions with complex access patterns
+
+    Performance Optimizations:
+    - Parallel variable I/O overlaps operations across columns
+    - 16x loop unrolling reduces loop overhead and improves instruction pipelining
+    - Batched SPI calls via SF_VDATA_BATCH16/SF_VSTORE_BATCH16 macros
+    - SD_FASTMODE (compile flag) disables SPI bounds checking
+    - Cache-line aligned allocations for optimal memory access
+    - Software prefetching for improved memory latency hiding
+    - SIMD operations for bulk memory copies and initialization
+    - Non-temporal stores for large write operations
+    - String arena allocator for reduced malloc overhead
 */
 
 #include <stdlib.h>
@@ -531,7 +535,9 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         thread_args[j].success = 0;
     }
 
-    /* Decide whether to use parallel loading */
+    /* Parallel loading when multiple variables - one thread per variable.
+     * Each thread operates on a different Stata variable (column).
+     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
@@ -552,7 +558,7 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
             return STATA_ERR_MEMORY;
         }
     } else {
-        /* Sequential loading - reuse thread function directly */
+        /* Sequential loading for single variable */
         for (j = 0; j < nvars; j++) {
             if (load_variable_thread(&thread_args[j]) != NULL) {
                 free(thread_args);
@@ -716,7 +722,9 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
         thread_args[j].success = 0;
     }
 
-    /* Decide whether to use parallel storing */
+    /* Parallel storing when multiple variables - one thread per variable.
+     * Each thread operates on a different Stata variable (column).
+     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
@@ -730,7 +738,7 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
         ctools_pool_run(&pool, store_variable_thread);
         ctools_pool_free(&pool);
     } else {
-        /* Sequential storing - reuse thread function directly */
+        /* Sequential storing for single variable */
         for (j = 0; j < nvars; j++) {
             store_variable_thread(&thread_args[j]);
         }
@@ -824,7 +832,9 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
         thread_args[j].success = 0;
     }
 
-    /* Decide whether to use parallel loading */
+    /* Parallel loading when multiple variables - one thread per variable.
+     * Each thread operates on a different Stata variable (column).
+     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
@@ -845,7 +855,7 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
             return STATA_ERR_MEMORY;
         }
     } else {
-        /* Sequential loading */
+        /* Sequential loading for single variable */
         for (j = 0; j < nvars; j++) {
             if (load_variable_thread(&thread_args[j]) != NULL) {
                 free(thread_args);
@@ -857,6 +867,83 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
     }
 
     /* Memory barrier to ensure all thread-side effects are visible before returning */
+    ctools_memory_barrier();
+
+    return STATA_OK;
+}
+
+/* ===========================================================================
+   Selective Data Storing (C -> Stata) - Store to specified variables
+   =========================================================================== */
+
+/*
+    Store variables from C memory to specified Stata variable indices.
+
+    This function writes data to specific Stata variables, identified by their
+    1-based indices. This is needed when the C data structure doesn't map 1:1
+    to Stata's variable order (e.g., after merge operations).
+
+    @param data        [in]  stata_data structure containing data to write
+    @param var_indices [in]  Array of 1-based Stata variable indices
+                             var_indices[j] is the Stata variable for data->vars[j]
+    @param nvars       [in]  Number of variables to store
+    @param obs1        [in]  First observation in Stata (1-based)
+
+    @return STATA_OK on success, error code otherwise
+*/
+stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
+                                           size_t nvars, size_t obs1)
+{
+    size_t j;
+    size_t nobs;
+    ctools_var_io_args *thread_args = NULL;
+    int use_parallel;
+
+    if (data == NULL || var_indices == NULL || nvars == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    nobs = data->nobs;
+
+    /* Allocate thread arguments */
+    thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
+    if (thread_args == NULL) {
+        return STATA_ERR_MEMORY;
+    }
+
+    /* Initialize thread arguments with SPECIFIED variable indices */
+    for (j = 0; j < nvars; j++) {
+        thread_args[j].var = &data->vars[j];
+        thread_args[j].var_idx = var_indices[j];  /* Use specified index (1-based) */
+        thread_args[j].obs1 = obs1;
+        thread_args[j].nobs = nobs;
+        thread_args[j].is_string = 0;  /* Not used by store */
+        thread_args[j].success = 0;
+    }
+
+    /* Parallel storing when multiple variables */
+    use_parallel = (nvars >= 2);
+
+    if (use_parallel) {
+        /* Parallel storing using thread pool */
+        ctools_thread_pool pool;
+        if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+            free(thread_args);
+            return STATA_ERR_MEMORY;
+        }
+
+        ctools_pool_run(&pool, store_variable_thread);
+        ctools_pool_free(&pool);
+    } else {
+        /* Sequential storing for single variable */
+        for (j = 0; j < nvars; j++) {
+            store_variable_thread(&thread_args[j]);
+        }
+    }
+
+    free(thread_args);
+
+    /* Memory barrier to ensure all thread-side effects are visible */
     ctools_memory_barrier();
 
     return STATA_OK;

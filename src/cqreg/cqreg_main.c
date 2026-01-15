@@ -114,96 +114,60 @@ static ST_int load_data(cqreg_state *state,
                         ST_int depvar_idx,
                         const ST_int *indepvar_idx,
                         ST_int K_x,
+                        ST_int N,
                         ST_int in1, ST_int in2)
 {
-    ST_int N = in2 - in1 + 1;
     ST_int K = K_x + 1;  /* +1 for constant */
-    ST_int k, i;
-    size_t nvars = 1 + K_x;  /* depvar + indepvars (no constant from Stata) */
+    ST_int k, i, idx, obs;
+    ST_double val;
 
-    /* Suppress unused parameter warnings - ctools_data_load uses sequential indices */
-    (void)depvar_idx;
-    (void)indepvar_idx;
+    main_debug_log("load_data: N=%d, K_x=%d, in1=%d, in2=%d\n", N, K_x, in1, in2);
 
-    main_debug_log("load_data: N=%d, K_x=%d, nvars=%zu\n", N, K_x, nvars);
-
-    /* Allocate stata_data structure */
-    state->data = (stata_data *)calloc(1, sizeof(stata_data));
-    if (state->data == NULL) {
-        ctools_error("cqreg", "Failed to allocate stata_data");
+    /* Allocate y array directly (owned by state) */
+    state->y = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    if (state->y == NULL) {
+        ctools_error("cqreg", "Failed to allocate y array");
         return -1;
     }
-    state->data_owned = 1;
+    state->y_owned = 1;
 
-    /*
-     * Call ctools_data_load to load all variables in parallel.
-     * Variables are loaded in Stata's order, so we need to ensure
-     * variables are in the expected order in the Stata dataset.
-     *
-     * Expected variable order: depvar, indepvar1, indepvar2, ...
-     * This matches how Stata passes variables to the plugin.
-     */
-    stata_retcode rc = ctools_data_load(state->data, nvars);
-    if (rc != STATA_OK) {
-        ctools_error("cqreg", "ctools_data_load failed with code %d", rc);
-        stata_data_free(state->data);
-        free(state->data);
-        state->data = NULL;
-        state->data_owned = 0;
-        return -1;
-    }
-
-    main_debug_log("load_data: ctools_data_load returned OK, nobs=%zu\n", state->data->nobs);
-
-    /*
-     * Set up y pointer (view into stata_data, not copied)
-     * vars[0] = depvar
-     */
-    if (state->data->vars[0].type != STATA_TYPE_DOUBLE) {
-        ctools_error("cqreg", "Dependent variable must be numeric");
-        return -1;
-    }
-    state->y = state->data->vars[0].data.dbl;
-    state->y_owned = 0;  /* y is a view, don't free separately */
-
-    /*
-     * Allocate contiguous X matrix and copy columns from stata_data.
-     * X layout: column-major, N rows x K columns
-     * Column k at offset k*N, where k=0..K_x-1 are indepvars, k=K_x is constant
-     */
+    /* Allocate X matrix: column-major, N rows x K columns */
     state->X = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
     if (state->X == NULL) {
         ctools_error("cqreg", "Failed to allocate X matrix");
         return -1;
     }
 
-    /* Copy independent variable columns from stata_data
-     * Parallelize across columns for large K, use memcpy for efficiency */
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(K_x > 2)
-    #endif
-    for (k = 0; k < K_x; k++) {
-        if (state->data->vars[k + 1].type != STATA_TYPE_DOUBLE) {
-            /* Note: error handling in parallel region is tricky,
-             * but type check should never fail if Stata passed correct vars */
-            continue;
-        }
-        ST_double *src = state->data->vars[k + 1].data.dbl;
-        ST_double *dst = &state->X[k * N];
+    /*
+     * Load data from Stata, filtering by if condition.
+     * Only include observations where SF_ifobs() returns true.
+     */
+    idx = 0;
+    for (obs = in1; obs <= in2; obs++) {
+        if (!SF_ifobs(obs)) continue;
 
-        /* Use memcpy - typically highly optimized by compiler/runtime */
-        memcpy(dst, src, N * sizeof(ST_double));
-    }
-
-    /* Verify all columns were numeric (outside parallel region) */
-    for (k = 0; k < K_x; k++) {
-        if (state->data->vars[k + 1].type != STATA_TYPE_DOUBLE) {
-            ctools_error("cqreg", "Independent variable %d must be numeric", k + 1);
+        /* Load dependent variable */
+        if (SF_vdata(depvar_idx, obs, &val) != 0) {
+            ctools_error("cqreg", "Failed to read depvar at obs %d", obs);
             return -1;
         }
+        state->y[idx] = val;
+
+        /* Load independent variables */
+        for (k = 0; k < K_x; k++) {
+            if (SF_vdata(indepvar_idx[k], obs, &val) != 0) {
+                ctools_error("cqreg", "Failed to read indepvar %d at obs %d", k+1, obs);
+                return -1;
+            }
+            state->X[k * N + idx] = val;
+        }
+
+        idx++;
     }
 
-    /* Add constant as last column (vectorized fill) */
+    main_debug_log("load_data: loaded %d observations (expected %d)\n", idx, N);
+
+    /* Add constant as last column */
     ST_double *const_col = &state->X[K_x * N];
     ST_int N8 = N - (N % 8);
     for (i = 0; i < N8; i += 8) {
@@ -231,24 +195,28 @@ static ST_int load_data(cqreg_state *state,
 
 static ST_int load_clusters(cqreg_state *state,
                             ST_int cluster_var_idx,
+                            ST_int N,
                             ST_int in1, ST_int in2)
 {
-    ST_int N = in2 - in1 + 1;
-    ST_int i, obs;
+    ST_int idx, obs;
 
     state->cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
     if (state->cluster_ids == NULL) {
         return -1;
     }
 
-    for (i = 0; i < N; i++) {
-        obs = in1 + i;
+    /* Load cluster IDs, filtering by if condition */
+    idx = 0;
+    for (obs = in1; obs <= in2; obs++) {
+        if (!SF_ifobs(obs)) continue;
+
         ST_double val;
         if (SF_vdata(cluster_var_idx, obs, &val) != 0) {
             ctools_error("cqreg", "Failed to read cluster var at obs %d", obs);
             return -1;
         }
-        state->cluster_ids[i] = (ST_int)val;
+        state->cluster_ids[idx] = (ST_int)val;
+        idx++;
     }
 
     /* Count unique clusters */
@@ -259,8 +227,8 @@ static ST_int load_clusters(cqreg_state *state,
     }
 
     ST_int num_unique = 0;
-    for (i = 0; i < N; i++) {
-        ST_int cid = state->cluster_ids[i];
+    for (idx = 0; idx < N; idx++) {
+        ST_int cid = state->cluster_ids[idx];
         ST_int found = 0;
         for (ST_int j = 0; j < num_unique; j++) {
             if (seen[j] == cid) {
@@ -541,15 +509,22 @@ ST_retcode cqreg_full_regression(const char *args)
         return 198;
     }
 
-    /* Get observation range */
+    /* Get observation range and count valid observations (respecting if condition) */
     ST_int in1 = SF_in1();
     ST_int in2 = SF_in2();
-    ST_int N = in2 - in1 + 1;
+
+    /* Count observations that pass the if condition */
+    ST_int N = 0;
+    for (ST_int obs = in1; obs <= in2; obs++) {
+        if (SF_ifobs(obs)) N++;
+    }
 
     if (N <= 0) {
         ctools_error("cqreg", "No observations");
         return 2000;
     }
+
+    main_debug_log("cqreg_full_regression: N_range=%d, N_valid=%d\n", N_range, N);
 
     /* Number of variables passed to plugin (for validation if needed) */
     (void)SF_nvars();
@@ -623,8 +598,8 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("State created. Loading data...\n");
 
-    /* Load data */
-    if (load_data(state, depvar_idx, indepvar_idx, K_x, in1, in2) != 0) {
+    /* Load data (filtering by if condition) */
+    if (load_data(state, depvar_idx, indepvar_idx, K_x, N, in1, in2) != 0) {
         main_debug_log("ERROR: load_data failed\n");
         cqreg_state_free(state);
         free(indepvar_idx);
@@ -642,9 +617,9 @@ ST_retcode cqreg_full_regression(const char *args)
 
     state->time_load = ctools_timer_seconds() - time_start;
 
-    /* Load cluster variable if needed */
+    /* Load cluster variable if needed (filtering by if condition) */
     if (vce_type == CQREG_VCE_CLUSTER) {
-        if (load_clusters(state, cluster_var_idx, in1, in2) != 0) {
+        if (load_clusters(state, cluster_var_idx, N, in1, in2) != 0) {
             cqreg_state_free(state);
             free(indepvar_idx);
             free(fe_var_idx);

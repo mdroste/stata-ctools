@@ -24,18 +24,18 @@ program define benchmark_sort
     tempfile original
     quietly save `original'
 
-    * Run Stata sort, stable
-    sort `varlist', stable
+    * Run Stata sort, stable (quietly)
+    quietly sort `varlist', stable
     tempfile stata_sorted
     quietly save `stata_sorted'
 
-    * Restore and run csort
-    use `original', clear
+    * Restore and run csort (quietly)
+    quietly use `original', clear
     if "`algorithm'" != "" {
-        capture csort `varlist', algorithm(`algorithm')
+        capture quietly csort `varlist', algorithm(`algorithm')
     }
     else {
-        capture csort `varlist'
+        capture quietly csort `varlist'
     }
     local csort_rc = _rc
 
@@ -94,8 +94,8 @@ program define benchmark_merge
     tempfile original
     quietly save `original'
 
-    * Run Stata merge
-    capture merge `mergetype' `keyvars' using `using', `opts'
+    * Run Stata merge (quietly)
+    capture quietly merge `mergetype' `keyvars' using `using', `opts'
     local stata_rc = _rc
 
     if `stata_rc' != 0 {
@@ -119,15 +119,15 @@ program define benchmark_merge
     }
 
     * Sort by all variables for comparison
-    qui ds
+    quietly ds
     local allvars `r(varlist)'
-    sort `allvars'
+    quietly sort `allvars'
     tempfile stata_merged
     quietly save `stata_merged'
 
     * Restore and run cmerge
-    use `original', clear
-    capture cmerge `mergetype' `keyvars' using `using', `opts' noreport
+    quietly use `original', clear
+    capture quietly cmerge `mergetype' `keyvars' using `using', `opts' noreport
     local cmerge_rc = _rc
 
     if `cmerge_rc' != 0 {
@@ -154,9 +154,9 @@ program define benchmark_merge
     local counts_match = (`stata_m1' == `cmerge_m1') & (`stata_m2' == `cmerge_m2') & (`stata_m3' == `cmerge_m3')
 
     * Sort and compare datasets
-    qui ds
+    quietly ds
     local allvars `r(varlist)'
-    sort `allvars'
+    quietly sort `allvars'
     capture quietly cf _all using `stata_merged'
     local cf_rc = _rc
 
@@ -196,7 +196,7 @@ program define benchmark_reghdfe
 
     preserve
 
-    * Run reghdfe
+    * Run reghdfe (quietly)
     capture quietly reghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
     local reghdfe_rc = _rc
 
@@ -209,7 +209,7 @@ program define benchmark_reghdfe
     matrix reghdfe_b = e(b)
     local reghdfe_N = e(N)
 
-    * Run creghdfe
+    * Run creghdfe (quietly)
     capture quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
     local creghdfe_rc = _rc
 
@@ -267,7 +267,7 @@ program define benchmark_qreg
 
     preserve
 
-    * Run qreg
+    * Run qreg (quietly)
     capture quietly qreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
     local qreg_rc = _rc
 
@@ -280,7 +280,7 @@ program define benchmark_qreg
     matrix qreg_b = e(b)
     local qreg_N = e(N)
 
-    * Run cqreg
+    * Run cqreg (quietly)
     capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
     local cqreg_rc = _rc
 
@@ -338,8 +338,8 @@ program define benchmark_import
 
     preserve
 
-    * Run Stata import
-    capture import delimited `using', `opts'
+    * Run Stata import (quietly)
+    capture quietly import delimited `using', `opts'
     local stata_rc = _rc
 
     if `stata_rc' != 0 {
@@ -353,8 +353,8 @@ program define benchmark_import
     tempfile stata_import
     quietly save `stata_import'
 
-    * Run cimport
-    capture cimport delimited `using', `opts'
+    * Run cimport (quietly)
+    capture quietly cimport delimited `using', `opts'
     local cimport_rc = _rc
 
     if `cimport_rc' != 0 {
@@ -402,12 +402,12 @@ program define benchmark_export
     local stata_csv "`stata_export'.csv"
     local cexport_csv "`cexport_export'.csv"
 
-    * Run Stata export
+    * Run Stata export (quietly)
     if "`varlist'" != "" {
-        capture export delimited `varlist' using "`stata_csv'", `opts'
+        capture quietly export delimited `varlist' using "`stata_csv'", `opts'
     }
     else {
-        capture export delimited using "`stata_csv'", `opts'
+        capture quietly export delimited using "`stata_csv'", `opts'
     }
     local stata_rc = _rc
 
@@ -417,12 +417,12 @@ program define benchmark_export
         exit
     }
 
-    * Run cexport
+    * Run cexport (quietly)
     if "`varlist'" != "" {
-        capture cexport delimited `varlist' using "`cexport_csv'", `opts'
+        capture quietly cexport delimited `varlist' using "`cexport_csv'", `opts'
     }
     else {
-        capture cexport delimited using "`cexport_csv'", `opts'
+        capture quietly cexport delimited using "`cexport_csv'", `opts'
     }
     local cexport_rc = _rc
 
@@ -432,12 +432,12 @@ program define benchmark_export
         exit
     }
 
-    * Reimport and compare
-    import delimited using "`stata_csv'", clear
+    * Reimport and compare (quietly)
+    quietly import delimited using "`stata_csv'", clear
     local stata_n = _N
     local stata_k = c(k)
 
-    import delimited using "`cexport_csv'", clear
+    quietly import delimited using "`cexport_csv'", clear
     local cexport_n = _N
     local cexport_k = c(k)
 
@@ -473,7 +473,7 @@ program define benchmark_ivreghdfe
 
     preserve
 
-    * Run ivreghdfe
+    * Run ivreghdfe (quietly)
     capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt'
     local ivreghdfe_rc = _rc
 
@@ -487,7 +487,7 @@ program define benchmark_ivreghdfe
     matrix ivreghdfe_V = e(V)
     local ivreghdfe_N = e(N)
 
-    * Run civreghdfe
+    * Run civreghdfe (quietly)
     capture quietly civreghdfe `spec', absorb(`absorb') `vceopt'
     local civreghdfe_rc = _rc
 
@@ -549,5 +549,3 @@ program define benchmark_ivreghdfe
         test_fail "`testname'" "max VCE relative diff = `maxreldiff_V' (tol=`tol')"
     }
 end
-
-di as text "Benchmark helper programs loaded"

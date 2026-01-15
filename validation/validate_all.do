@@ -5,16 +5,16 @@
  * Runs all individual validation tests and provides summary
  *
  * Usage:
- *   stata -b do validation/validate_all.do
+ *   stata -b do validate_all.do
  *
  * Individual tests can also be run separately:
- *   stata -b do validation/validate_csort.do
- *   stata -b do validation/validate_cmerge.do
- *   stata -b do validation/validate_cimport.do
- *   stata -b do validation/validate_cexport.do
- *   stata -b do validation/validate_creghdfe.do
- *   stata -b do validation/validate_cqreg.do
- *   stata -b do validation/validate_civreghdfe.do
+ *   stata -b do validate_csort.do
+ *   stata -b do validate_cmerge.do
+ *   stata -b do validate_cimport.do
+ *   stata -b do validate_cexport.do
+ *   stata -b do validate_creghdfe.do
+ *   stata -b do validate_cqreg.do
+ *   stata -b do validate_civreghdfe.do
  ******************************************************************************/
 
 version 14.0
@@ -22,20 +22,22 @@ clear all
 set more off
 set trace off
 
-di as text ""
-di as text "######################################################################"
-di as text "#                                                                    #"
-di as text "#               CTOOLS VALIDATION TEST SUITE                         #"
-di as text "#                                                                    #"
-di as text "######################################################################"
-di as text ""
-di as text "Running comprehensive validation tests for all ctools commands."
-di as text "Each command is compared against its native Stata equivalent."
-di as text ""
-di as text "Date: " c(current_date) " " c(current_time)
-di as text "Stata version: " c(stata_version)
-di as text "Platform: " c(os) " " c(machine_type)
-di as text ""
+quietly {
+
+noi di as text ""
+noi di as text "######################################################################"
+noi di as text "#                                                                    #"
+noi di as text "#               CTOOLS VALIDATION TEST SUITE                         #"
+noi di as text "#                                                                    #"
+noi di as text "######################################################################"
+noi di as text ""
+noi di as text "Running comprehensive validation tests for all ctools commands."
+noi di as text "Each command is compared against its native Stata equivalent."
+noi di as text ""
+noi di as text "Date: " c(current_date) " " c(current_time)
+noi di as text "Stata version: " c(stata_version)
+noi di as text "Platform: " c(os) " " c(machine_type)
+noi di as text ""
 
 * Track overall results
 local total_passed = 0
@@ -46,15 +48,15 @@ local total_tests = 0
 local all_failures = ""
 
 * Create temp directory
-capture mkdir "validation/temp"
+capture mkdir "temp"
 
 /*******************************************************************************
  * RUN CSORT VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: csort validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: csort validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_csort.do"
 local csort_rc = _rc
@@ -77,19 +79,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `csort_rc' == 0 & `csort_failed' == 0 {
-    di as result "csort: ALL TESTS PASSED (`csort_passed'/`csort_total')"
+    noi di as result "csort: ALL TESTS PASSED (`csort_passed'/`csort_total')"
 }
 else {
-    di as error "csort: FAILED (`csort_failed' of `csort_total' tests failed)"
+    noi di as error "csort: FAILED (`csort_failed' of `csort_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CMERGE VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: cmerge validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cmerge validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_cmerge.do"
 local cmerge_rc = _rc
@@ -112,19 +114,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `cmerge_rc' == 0 & `cmerge_failed' == 0 {
-    di as result "cmerge: ALL TESTS PASSED (`cmerge_passed'/`cmerge_total')"
+    noi di as result "cmerge: ALL TESTS PASSED (`cmerge_passed'/`cmerge_total')"
 }
 else {
-    di as error "cmerge: FAILED (`cmerge_failed' of `cmerge_total' tests failed)"
+    noi di as error "cmerge: FAILED (`cmerge_failed' of `cmerge_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CIMPORT VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: cimport validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cimport validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_cimport.do"
 local cimport_rc = _rc
@@ -147,19 +149,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `cimport_rc' == 0 & `cimport_failed' == 0 {
-    di as result "cimport: ALL TESTS PASSED (`cimport_passed'/`cimport_total')"
+    noi di as result "cimport: ALL TESTS PASSED (`cimport_passed'/`cimport_total')"
 }
 else {
-    di as error "cimport: FAILED (`cimport_failed' of `cimport_total' tests failed)"
+    noi di as error "cimport: FAILED (`cimport_failed' of `cimport_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CEXPORT VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: cexport validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cexport validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_cexport.do"
 local cexport_rc = _rc
@@ -182,19 +184,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `cexport_rc' == 0 & `cexport_failed' == 0 {
-    di as result "cexport: ALL TESTS PASSED (`cexport_passed'/`cexport_total')"
+    noi di as result "cexport: ALL TESTS PASSED (`cexport_passed'/`cexport_total')"
 }
 else {
-    di as error "cexport: FAILED (`cexport_failed' of `cexport_total' tests failed)"
+    noi di as error "cexport: FAILED (`cexport_failed' of `cexport_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CREGHDFE VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: creghdfe validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: creghdfe validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_creghdfe.do"
 local creghdfe_rc = _rc
@@ -217,19 +219,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `creghdfe_rc' == 0 & `creghdfe_failed' == 0 {
-    di as result "creghdfe: ALL TESTS PASSED (`creghdfe_passed'/`creghdfe_total')"
+    noi di as result "creghdfe: ALL TESTS PASSED (`creghdfe_passed'/`creghdfe_total')"
 }
 else {
-    di as error "creghdfe: FAILED (`creghdfe_failed' of `creghdfe_total' tests failed)"
+    noi di as error "creghdfe: FAILED (`creghdfe_failed' of `creghdfe_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CQREG VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: cqreg validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cqreg validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_cqreg.do"
 local cqreg_rc = _rc
@@ -252,19 +254,19 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `cqreg_rc' == 0 & `cqreg_failed' == 0 {
-    di as result "cqreg: ALL TESTS PASSED (`cqreg_passed'/`cqreg_total')"
+    noi di as result "cqreg: ALL TESTS PASSED (`cqreg_passed'/`cqreg_total')"
 }
 else {
-    di as error "cqreg: FAILED (`cqreg_failed' of `cqreg_total' tests failed)"
+    noi di as error "cqreg: FAILED (`cqreg_failed' of `cqreg_total' tests failed)"
 }
 
 /*******************************************************************************
  * RUN CIVREGHDFE VALIDATION
  ******************************************************************************/
-di as text ""
-di as text "======================================================================"
-di as text "  Running: civreghdfe validation tests"
-di as text "======================================================================"
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: civreghdfe validation tests"
+noi di as text "======================================================================"
 
 capture noisily do "validation/validate_civreghdfe.do"
 local civreghdfe_rc = _rc
@@ -287,118 +289,120 @@ if $FAILURE_COUNT > 0 {
 }
 
 if `civreghdfe_rc' == 0 & `civreghdfe_failed' == 0 {
-    di as result "civreghdfe: ALL TESTS PASSED (`civreghdfe_passed'/`civreghdfe_total')"
+    noi di as result "civreghdfe: ALL TESTS PASSED (`civreghdfe_passed'/`civreghdfe_total')"
 }
 else {
-    di as error "civreghdfe: FAILED (`civreghdfe_failed' of `civreghdfe_total' tests failed)"
+    noi di as error "civreghdfe: FAILED (`civreghdfe_failed' of `civreghdfe_total' tests failed)"
 }
 
 /*******************************************************************************
  * FINAL SUMMARY
  ******************************************************************************/
-di as text ""
-di as text "######################################################################"
-di as text "#                     VALIDATION SUMMARY                             #"
-di as text "######################################################################"
-di as text ""
+noi di as text ""
+noi di as text "######################################################################"
+noi di as text "#                     VALIDATION SUMMARY                             #"
+noi di as text "######################################################################"
+noi di as text ""
 
 * Show all failures if any
 if `total_failed' > 0 {
-    di as error "{hline 70}"
-    di as error "ALL FAILED TESTS:"
-    di as error "{hline 70}"
-    di as error `"`all_failures'"'
-    di as error "{hline 70}"
-    di as text ""
+    noi di as error "{hline 70}"
+    noi di as error "ALL FAILED TESTS:"
+    noi di as error "{hline 70}"
+    noi di as error `"`all_failures'"'
+    noi di as error "{hline 70}"
+    noi di as text ""
 }
 
-di as text "Component Results:"
-di as text "{hline 55}"
-di as text "  Command       Passed   Failed   Total    Status"
-di as text "{hline 55}"
+noi di as text "Component Results:"
+noi di as text "{hline 55}"
+noi di as text "  Command       Passed   Failed   Total    Status"
+noi di as text "{hline 55}"
 
 * csort
 if `csort_failed' == 0 {
-    di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as result "PASS"
+    noi di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as result "PASS"
 }
 else {
-    di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as error "FAIL"
+    noi di as text "  csort      " %8.0f `csort_passed' %8.0f `csort_failed' %8.0f `csort_total' "    " as error "FAIL"
 }
 
 * cmerge
 if `cmerge_failed' == 0 {
-    di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as result "PASS"
+    noi di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as result "PASS"
 }
 else {
-    di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as error "FAIL"
+    noi di as text "  cmerge     " %8.0f `cmerge_passed' %8.0f `cmerge_failed' %8.0f `cmerge_total' "    " as error "FAIL"
 }
 
 * cimport
 if `cimport_failed' == 0 {
-    di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as result "PASS"
+    noi di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as result "PASS"
 }
 else {
-    di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as error "FAIL"
+    noi di as text "  cimport    " %8.0f `cimport_passed' %8.0f `cimport_failed' %8.0f `cimport_total' "    " as error "FAIL"
 }
 
 * cexport
 if `cexport_failed' == 0 {
-    di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as result "PASS"
+    noi di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as result "PASS"
 }
 else {
-    di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as error "FAIL"
+    noi di as text "  cexport    " %8.0f `cexport_passed' %8.0f `cexport_failed' %8.0f `cexport_total' "    " as error "FAIL"
 }
 
 * creghdfe
 if `creghdfe_failed' == 0 {
-    di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as result "PASS"
+    noi di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as result "PASS"
 }
 else {
-    di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as error "FAIL"
+    noi di as text "  creghdfe   " %8.0f `creghdfe_passed' %8.0f `creghdfe_failed' %8.0f `creghdfe_total' "    " as error "FAIL"
 }
 
 * cqreg
 if `cqreg_failed' == 0 {
-    di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as result "PASS"
+    noi di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as result "PASS"
 }
 else {
-    di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as error "FAIL"
+    noi di as text "  cqreg      " %8.0f `cqreg_passed' %8.0f `cqreg_failed' %8.0f `cqreg_total' "    " as error "FAIL"
 }
 
 * civreghdfe
 if `civreghdfe_failed' == 0 {
-    di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as result "PASS"
+    noi di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as result "PASS"
 }
 else {
-    di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as error "FAIL"
+    noi di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as error "FAIL"
 }
 
-di as text "{hline 55}"
-di as text "  TOTAL      " %8.0f `total_passed' %8.0f `total_failed' %8.0f `total_tests'
-di as text "{hline 55}"
-di as text ""
+noi di as text "{hline 55}"
+noi di as text "  TOTAL      " %8.0f `total_passed' %8.0f `total_failed' %8.0f `total_tests'
+noi di as text "{hline 55}"
+noi di as text ""
 
 * Overall result
 if `total_failed' == 0 {
-    di as result "######################################################################"
-    di as result "#                                                                    #"
-    di as result "#                   ALL VALIDATION TESTS PASSED                      #"
-    di as result "#                                                                    #"
-    di as result "######################################################################"
+    noi di as result "######################################################################"
+    noi di as result "#                                                                    #"
+    noi di as result "#                   ALL VALIDATION TESTS PASSED                      #"
+    noi di as result "#                                                                    #"
+    noi di as result "######################################################################"
 }
 else {
-    di as error "######################################################################"
-    di as error "#                                                                    #"
-    di as error "#                   SOME VALIDATION TESTS FAILED                     #"
-    di as error "#                                                                    #"
-    di as error "######################################################################"
-    di as error ""
-    di as error "See 'ALL FAILED TESTS' section above for details."
+    noi di as error "######################################################################"
+    noi di as error "#                                                                    #"
+    noi di as error "#                   SOME VALIDATION TESTS FAILED                     #"
+    noi di as error "#                                                                    #"
+    noi di as error "######################################################################"
+    noi di as error ""
+    noi di as error "See 'ALL FAILED TESTS' section above for details."
 }
 
-di as text ""
-di as text "Completed: " c(current_date) " " c(current_time)
-di as text ""
+noi di as text ""
+noi di as text "Completed: " c(current_date) " " c(current_time)
+noi di as text ""
+
+}
 
 * Return error code if any tests failed
 if `total_failed' > 0 {

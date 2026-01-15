@@ -105,6 +105,11 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
 // Write all variables from C memory back to Stata
 stata_retcode ctools_data_store(stata_data *data, size_t obs1);
 
+// Write variables from C memory to specified Stata variable indices
+// var_indices[j] is the 1-based Stata variable index for data->vars[j]
+stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
+                                           size_t nvars, size_t obs1);
+
 // Write specific output variable values to Stata using a source row mapping
 // For each output row i, reads from source_rows[i] (0-based, -1 = missing)
 // var_idx: 1-based Stata variable index

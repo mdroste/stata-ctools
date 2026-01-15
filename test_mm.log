@@ -1,0 +1,140 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do /tmp/test_mm.do 
+
+. clear all
+
+. set more off
+
+. 
+. * Create master dataset with duplicates
+. clear
+
+. input id x
+
+            id          x
+  1. 1 1
+  2. 1 2
+  3. 2 3
+  4. end
+
+. tempfile master
+
+. save `master'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St72149.000001 saved
+    as .dta format
+
+. 
+. * Create using dataset with duplicates
+. clear
+
+. input id y
+
+            id          y
+  1. 1 10
+  2. 1 20
+  3. 2 30
+  4. 2 40
+  5. end
+
+. tempfile using_data
+
+. save `using_data'
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St72149.000002 saved
+    as .dta format
+
+. 
+. * Stata merge m:m
+. use `master', clear
+
+. merge m:m id using `using_data', nogen
+
+    Result                      Number of obs
+    -----------------------------------------
+    Not matched                             0
+    Matched                                 4  
+    -----------------------------------------
+
+. sort id x y
+
+. list, noobs
+
+  +-------------+
+  | id   x    y |
+  |-------------|
+  |  1   1   10 |
+  |  1   2   20 |
+  |  2   3   30 |
+  |  2   3   40 |
+  +-------------+
+
+. save /tmp/stata_mm.dta, replace
+file /tmp/stata_mm.dta saved
+
+. 
+. * Now test cmerge m:m
+. use `master', clear
+
+. adopath ++ build
+  [1]              "build"
+  [2]  (BASE)      "/Applications/Stata/ado/base/"
+  [3]  (SITE)      "/Applications/Stata/ado/site/"
+  [4]              "."
+  [5]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [6]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [7]  (OLDPLACE)  "~/ado/"
+
+. cmerge m:m id using `using_data', nogen noreport
+
+. sort id x y
+
+. list, noobs
+
+  +-------------+
+  | id   x    y |
+  |-------------|
+  |  1   1   10 |
+  |  1   2   20 |
+  |  2   3   30 |
+  |  2   3   40 |
+  +-------------+
+
+. save /tmp/cmerge_mm.dta, replace
+file /tmp/cmerge_mm.dta saved
+
+. 
+. * Compare
+. use /tmp/stata_mm.dta, clear
+
+. cf * using /tmp/cmerge_mm.dta, verbose
+
+. di "Test completed"
+Test completed
+
+. 
+end of do-file

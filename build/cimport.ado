@@ -35,7 +35,7 @@ program define cimport, rclass
     * Support both "using filename" and just "filename" (like import delimited does)
     syntax [anything] [using/] [, Delimiters(string) VARNames(string) CLEAR ///
         CASE(string) ENCoding(string) BINDQuotes(string) ///
-        STRIPQuotes ROWRange(string) Verbose FAST]
+        STRIPQuotes ROWRange(string) Verbose]
 
     * Handle filename - can come from using/ or as first positional argument
     if `"`using'"' == "" & `"`anything'"' != "" {
@@ -211,7 +211,6 @@ program define cimport, rclass
         di as text "Delimiter:  " as result cond(`"`delimiters'"' == "	", "tab", `"`delimiters'"')
         di as text "Header row: " as result cond(`noheader' == 0, "yes (row 1)", "no")
         di as text "Case:       " as result "`case'"
-        di as text "Mode:       " as result cond("`fast'" == "", "standard", "fast (DTA)")
         di as text "{hline 60}"
         di ""
     }
@@ -226,78 +225,6 @@ program define cimport, rclass
     timer clear 99
     timer on 99
 
-    * =========================================================================
-    * FAST MODE: Write DTA directly, then load with Stata's use command
-    * =========================================================================
-
-    if "`fast'" != "" {
-        if "`verbose'" != "" {
-            di as text "Fast mode: Writing directly to DTA format..."
-        }
-
-        * Generate temp file path for DTA
-        tempfile tmpdata
-        local dtapath "`tmpdata'.dta"
-
-        * Call plugin in writedta mode
-        capture noisily plugin call ctools_plugin, ///
-            "cimport writedta `using' `delimiters' `opt_noheader' `opt_verbose' output=`dtapath'"
-
-        local write_rc = _rc
-        if `write_rc' {
-            di as error "Error writing DTA file (rc=`write_rc')"
-            exit `write_rc'
-        }
-
-        * Load the DTA file using Stata's native command
-        if "`verbose'" != "" {
-            di as text "Fast mode: Loading DTA file..."
-        }
-
-        timer on 15
-        quietly use "`dtapath'", clear
-        timer off 15
-
-        * Clean up temp file
-        capture erase "`dtapath'"
-
-        * Clean up global macros
-        capture macro drop _cimport_dtapath _cimport_nobs _cimport_nvar
-
-        timer off 99
-        quietly timer list 99
-        local elapsed = r(t99)
-
-        * Display summary
-        di as text ""
-        di as text "(" as result %12.0fc _N as text " observations read)"
-
-        if "`verbose'" != "" & `elapsed' > 0 {
-            di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
-            * Get file size for throughput calculation
-            tempname fh
-            file open `fh' using `"`using'"', read binary
-            file seek `fh' eof
-            local fsize = r(loc)
-            file close `fh'
-            local mbps = (`fsize' / 1048576) / `elapsed'
-            di as text "Speed:     " as result %9.1f `mbps' as text " MB/s"
-        }
-
-        timer clear
-
-        * Return results
-        return scalar N = _N
-        return scalar k = c(k)
-        return scalar time = `elapsed'
-        return local filename `"`using'"'
-
-        exit 0
-    }
-
-    * =========================================================================
-    * STANDARD MODE: Scan, create variables, load via SPI
-    * =========================================================================
 
     * =========================================================================
     * PHASE 1: Scan the CSV to get metadata

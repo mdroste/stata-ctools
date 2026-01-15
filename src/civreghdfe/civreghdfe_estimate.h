@@ -37,7 +37,11 @@ typedef struct {
     const ST_double *weights;
     ST_int weight_type; /* 0=none, 1=aweight, 2=fweight, 3=pweight */
 
-    /* Pre-computed matrices (owned by caller, not freed here) */
+    /* Original data (not owned, do not free) */
+    const ST_double *Z;     /* Instruments (N x K_iv) - needed for GMM2S/CUE */
+    const ST_double *y;     /* Dependent variable (N x 1) */
+
+    /* Pre-computed matrices (owned by context, freed in ivest_free_context) */
     ST_double *ZtZ;         /* Z'Z (K_iv x K_iv) */
     ST_double *ZtZ_inv;     /* (Z'Z)^-1 (K_iv x K_iv) */
     ST_double *ZtX;         /* Z'X (K_iv x K_total) */
@@ -46,7 +50,7 @@ typedef struct {
     ST_double *XtPzy;       /* X'P_Z y (K_total x 1) */
     ST_double *temp_kiv_ktotal; /* Temp storage: (Z'Z)^-1 Z'X (K_iv x K_total) */
 
-    /* Combined data arrays */
+    /* Combined data arrays (owned by context) */
     ST_double *X_all;       /* [X_exog, X_endog] (N x K_total) */
 
     /* Estimation method parameters */

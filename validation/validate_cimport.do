@@ -5,7 +5,11 @@
  * Tests all import options: delimiters, varnames, case, bindquotes, stripquotes
  ******************************************************************************/
 
-do "validate_setup.do"
+* Load setup (works from project root or validation dir)
+capture do "validation/validate_setup.do"
+if _rc != 0 {
+    do "validate_setup.do"
+}
 
 quietly {
 
@@ -348,9 +352,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 12: verbose/fast options
+ * SECTION 12: verbose option
  ******************************************************************************/
-noi print_section "verbose/fast Options"
+noi print_section "verbose Option"
 
 capture cimport delimited using "temp/basic.csv", verbose clear
 if _rc == 0 {
@@ -358,14 +362,6 @@ if _rc == 0 {
 }
 else {
     noi test_fail "verbose option" "returned error `=_rc'"
-}
-
-capture cimport delimited using "temp/basic.csv", fast clear
-if _rc == 0 {
-    noi test_pass "fast option accepted"
-}
-else {
-    noi test_fail "fast option" "returned error `=_rc'"
 }
 
 /*******************************************************************************

@@ -12,6 +12,7 @@
 #include "creghdfe_solver.h"
 #include "creghdfe_ols.h"
 #include "creghdfe_vce.h"
+#include "../ctools_hdfe_utils.h"
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -41,7 +42,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int k, g, i, j, obs, idx;
     ST_double val;
     ST_int drop_singletons, verbose, compute_dof;
-    ST_int num_singletons, num_singletons_iter, iter;
+    ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
     IntHashTable **hash_tables = NULL;
@@ -316,37 +317,45 @@ ST_retcode do_full_regression(int argc, char *argv[])
     t_read = get_time_sec();
 
     /* ================================================================
-     * STEP 2: Iteratively drop singletons
+     * STEP 2: Iteratively drop singletons using shared utility
      * ================================================================ */
     num_singletons = 0;
     N = N_orig;
 
     if (drop_singletons) {
-        iter = 0;
-        do {
-            num_singletons_iter = 0;
-
+        /* Build array of level pointers for shared utility */
+        ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
+        if (fe_levels) {
             for (g = 0; g < G; g++) {
-                ST_int found = find_singletons(&factors[g], mask);
-                num_singletons_iter += found;
+                fe_levels[g] = factors[g].levels;
             }
 
-            if (num_singletons_iter > 0) {
-                num_singletons += num_singletons_iter;
-                N -= num_singletons_iter;
+            num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask, max_iter_singleton, (verbose >= 1));
+            free(fe_levels);
 
-                for (g = 0; g < G; g++) {
-                    update_factor_counts(&factors[g], mask, N_orig);
-                }
+            /* Count remaining observations */
+            N = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) N++;
             }
-
-            iter++;
-        } while (num_singletons_iter > 0 && iter < max_iter_singleton && N > 1);
-
-        if (verbose >= 1 && num_singletons > 0) {
-            sprintf(msg, "{txt}(dropped %d singleton observations)\n", num_singletons);
-            SF_display(msg);
         }
+    }
+
+    /* Check if all observations were dropped as singletons */
+    if (N == 0) {
+        SF_scal_save("__creghdfe_N", 0.0);
+        SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+        SF_scal_save("__creghdfe_K_keep", 0.0);
+        SF_error("creghdfe: all observations are singletons\n");
+        for (g = 0; g < G; g++) {
+            if (factors[g].levels) free(factors[g].levels);
+            if (factors[g].counts) free(factors[g].counts);
+            if (hash_tables[g]) hash_destroy(hash_tables[g]);
+        }
+        free(factors); free(hash_tables); free(mask);
+        free(data); free(means); free(stdevs); free(tss);
+        if (weights) free(weights);
+        return 2001;  /* Custom error code for singleton issue */
     }
 
     t_singleton = get_time_sec();

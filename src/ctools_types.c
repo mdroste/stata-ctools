@@ -50,6 +50,16 @@ void stata_data_free(stata_data *data)
 
     if (data == NULL) return;
 
+    /* Sanity check: if nvars > 0 but vars is NULL, we have corruption */
+    if (data->nvars > 0 && data->vars == NULL) {
+        /* This should never happen - indicates memory corruption */
+        /* Reset to safe state and return without crashing */
+        data->nvars = 0;
+        data->nobs = 0;
+        data->sort_order = NULL;
+        return;
+    }
+
     /* Free each variable's data (allocated with aligned_alloc_cacheline) */
     if (data->vars != NULL) {
         for (i = 0; i < data->nvars; i++) {

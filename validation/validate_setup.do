@@ -17,7 +17,9 @@ set more off
 set trace off
 
 * Add build directory with ctools to adopath (use ++ for highest priority)
-adopath ++ "../build"
+* Works from both project root and validation directory
+capture adopath ++ "build"
+capture adopath ++ "../build"
 
 * Global counters
 global TESTS_PASSED = 0
@@ -279,9 +281,8 @@ program define reset_counters
     }
 end
 
-* Load benchmark helper programs
-do "benchmark_helpers.do"
-
-di as text ""
-di as text "ctools validation framework loaded"
-di as text ""
+* Load benchmark helper programs (works from project root or validation dir)
+capture quietly do "validation/benchmark_helpers.do"
+if _rc != 0 {
+    quietly do "benchmark_helpers.do"
+}

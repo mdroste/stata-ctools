@@ -36,7 +36,8 @@
       "Bash(do echo \"=== $f ===\" grep -E \"\\(SUMMARY|Tests passed|Tests failed|ALL TESTS|VALIDATION FAILED\\)\" \"$f\")",
       "Bash(for f in validate_cmerge.log validate_cexport.log validate_cimport.log)",
       "WebFetch(domain:fmwww.bc.edu)",
-      "WebFetch(domain:scholar.harvard.edu)"
+      "WebFetch(domain:scholar.harvard.edu)",
+      "Bash(clang:*)"
     ]
   }
 }

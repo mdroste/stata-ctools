@@ -550,10 +550,13 @@ program define cmerge, rclass
     }
 
     * Build plugin command for execute
+    * IMPORTANT: Use current c(k) not original master_nvars, because we added
+    * _cmerge_orig_row and other new variables that need to be loaded
+    local current_nvars = c(k)
     local plugin_args "execute `merge_code' `nkeys' `master_key_indices'"
     local plugin_args "`plugin_args' orig_row_idx `orig_row_idx'"
     local plugin_args "`plugin_args' master_nobs `master_nobs'"
-    local plugin_args "`plugin_args' master_nvars `master_nvars'"
+    local plugin_args "`plugin_args' master_nvars `current_nvars'"
     local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
     if `keepusing_count' > 0 {
         local plugin_args "`plugin_args' keepusing_placeholders `keepusing_placeholder_indices'"
@@ -617,8 +620,8 @@ program define cmerge, rclass
     * Apply variable notes from using dataset (unless nonotes specified)
     if "`nonotes'" == "" {
         foreach var of local keepusing_names {
-            if "``var'_note'" != "" {
-                char `var'[note1] ``var'_note'
+            if `"``var'_note'"' != "" {
+                char `var'[note1] `"``var'_note'"'
             }
         }
     }

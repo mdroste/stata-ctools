@@ -9,7 +9,11 @@
  *          noreport, nolabel, nonotes, update, replace, assert()
  ******************************************************************************/
 
-do "validate_setup.do"
+* Load setup (works from project root or validation dir)
+capture do "validation/validate_setup.do"
+if _rc != 0 {
+    do "validate_setup.do"
+}
 
 quietly {
 
