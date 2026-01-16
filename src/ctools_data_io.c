@@ -331,7 +331,147 @@ static inline __attribute__((unused)) void stream_doubles_16(double * restrict d
    =========================================================================== */
 
 /*
+    Thread argument structure for multi-variable I/O.
+    Each worker thread processes a range of variables [var_start, var_end).
+*/
+typedef struct {
+    stata_variable *vars;       /* Array of variable structures */
+    int *var_indices;           /* Array of 1-based Stata variable indices */
+    size_t var_start;           /* First variable index (0-based in arrays) */
+    size_t var_end;             /* End variable index (exclusive) */
+    size_t obs1;                /* First observation (1-based) */
+    size_t nobs;                /* Number of observations */
+    int *is_string;             /* Array indicating if each var is string */
+    int success;                /* 1 on success, 0 on failure */
+} ctools_multi_var_io_args;
+
+/*
+    Load a single variable from Stata into C memory (internal helper).
+    Used by both single-var and multi-var loading.
+*/
+static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
+                                 size_t nobs, int is_string)
+{
+    size_t i;
+    char strbuf[STATA_STR_MAXLEN + 1];
+
+    var->nobs = nobs;
+
+    if (is_string) {
+        /* String variable - use arena allocator for fast bulk free */
+        var->type = STATA_TYPE_STRING;
+        var->str_maxlen = STATA_STR_MAXLEN;
+        var->_arena = NULL;
+
+        /* Allocate pointer array (cache-line aligned) */
+        var->data.str = (char **)aligned_alloc_cacheline(nobs * sizeof(char *));
+        if (var->data.str == NULL) {
+            return -1;
+        }
+
+        char **str_ptr = var->data.str;
+
+        /* Create arena for all strings - estimate avg 64 bytes per string */
+        size_t arena_capacity = nobs * 64;
+        string_arena *arena = arena_create(arena_capacity);
+        if (arena != NULL) {
+            var->_arena = arena;
+        }
+
+        /* Load strings with prefetching */
+        for (i = 0; i < nobs; i++) {
+            if (i + PREFETCH_DISTANCE < nobs) {
+                _mm_prefetch((const char *)&str_ptr[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+            }
+
+            SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
+            str_ptr[i] = arena_strdup(arena, strbuf);
+            if (str_ptr[i] == NULL) {
+                return -1;
+            }
+        }
+    } else {
+        /* Numeric variable - use cache-line aligned allocation */
+        var->type = STATA_TYPE_DOUBLE;
+        var->_arena = NULL;
+        var->data.dbl = (double *)aligned_alloc_cacheline(nobs * sizeof(double));
+
+        if (var->data.dbl == NULL) {
+            return -1;
+        }
+
+        double * restrict dbl_ptr = var->data.dbl;
+
+        /* Double buffers for software pipelining - use pointer swap */
+        double buf_a[16], buf_b[16];
+        double *v0 = buf_a, *v1 = buf_b;
+
+        /* Calculate loop bounds */
+        size_t i_end_16 = nobs - (nobs % 16);
+        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
+
+        /* Phase 1: Main loop with prefetching (bulk of iterations) */
+        i = 0;
+        if (prefetch_end > 0) {
+            /* Prime the pipeline */
+            SF_VDATA_BATCH16((ST_int)var_idx, obs1, v0);
+
+            for (; i < prefetch_end; i += 16) {
+                /* Prefetch 2 cache lines ahead */
+                _mm_prefetch((const char *)&dbl_ptr[i + 32], _MM_HINT_T0);
+                _mm_prefetch((const char *)&dbl_ptr[i + 40], _MM_HINT_T0);
+
+                /* Load next batch into v1 */
+                SF_VDATA_BATCH16((ST_int)var_idx, i + 16 + obs1, v1);
+
+                /* Store previous batch */
+                copy_doubles_16(&dbl_ptr[i], v0);
+
+                /* Swap buffer pointers instead of memcpy */
+                double *tmp = v0;
+                v0 = v1;
+                v1 = tmp;
+            }
+        }
+
+        /* Phase 2: Remaining 16-element blocks without prefetch */
+        for (; i < i_end_16; i += 16) {
+            SF_VDATA_BATCH16((ST_int)var_idx, i + obs1, v0);
+            copy_doubles_16(&dbl_ptr[i], v0);
+        }
+
+        /* Phase 3: Handle remaining elements (< 16) */
+        for (; i < nobs; i++) {
+            SF_vdata((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
+        }
+    }
+
+    return 0;
+}
+
+/*
+    Thread function: Load multiple variables from Stata into C memory.
+    Each thread processes variables in range [var_start, var_end).
+*/
+static void *load_multi_variable_thread(void *arg)
+{
+    ctools_multi_var_io_args *args = (ctools_multi_var_io_args *)arg;
+    args->success = 0;
+
+    for (size_t v = args->var_start; v < args->var_end; v++) {
+        if (load_single_variable(&args->vars[v], args->var_indices[v],
+                                  args->obs1, args->nobs, args->is_string[v]) != 0) {
+            return (void *)1;
+        }
+    }
+
+    args->success = 1;
+    return NULL;
+}
+
+/*
     Thread function: Load a single variable from Stata into C memory.
+    (Legacy interface for backward compatibility)
 
     Allocates memory and reads all observations for one variable using
     SF_vdata (numeric) or SF_sdata (string). Uses optimized loops with:
@@ -348,117 +488,15 @@ static inline __attribute__((unused)) void stream_doubles_16(double * restrict d
 static void *load_variable_thread(void *arg)
 {
     ctools_var_io_args *args = (ctools_var_io_args *)arg;
-    size_t i;
-    size_t nobs = args->nobs;
-    size_t obs1 = args->obs1;
-    ST_int var_idx = (ST_int)args->var_idx;
-    char strbuf[STATA_STR_MAXLEN + 1];
+    args->success = 0;
 
-    args->var->nobs = nobs;
-    args->success = 0;  /* Assume failure until complete */
-
-    if (args->is_string) {
-        /* String variable - use arena allocator for fast bulk free */
-        args->var->type = STATA_TYPE_STRING;
-        args->var->str_maxlen = STATA_STR_MAXLEN;
-        args->var->_arena = NULL;
-
-        /* Allocate pointer array (cache-line aligned) */
-        args->var->data.str = (char **)aligned_alloc_cacheline(nobs * sizeof(char *));
-        if (args->var->data.str == NULL) {
-            return (void *)1;  /* Signal failure */
-        }
-
-        char **str_ptr = args->var->data.str;
-
-        /* Create arena for all strings - estimate avg 64 bytes per string.
-           Arena allows O(1) bulk free instead of O(n) individual frees. */
-        size_t arena_capacity = nobs * 64;
-        string_arena *arena = arena_create(arena_capacity);
-        if (arena != NULL) {
-            args->var->_arena = arena;  /* Store for later bulk free */
-        }
-
-        /* Load strings with prefetching */
-        for (i = 0; i < nobs; i++) {
-            /* Prefetch destination pointer array ahead */
-            if (i + PREFETCH_DISTANCE < nobs) {
-                _mm_prefetch((const char *)&str_ptr[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            }
-
-            SF_sdata(var_idx, (ST_int)(i + obs1), strbuf);
-            str_ptr[i] = arena_strdup(arena, strbuf);
-            if (str_ptr[i] == NULL) {
-                /* Arena full or allocation failed - this shouldn't happen with
-                   proper arena sizing, but we handle it gracefully */
-                return (void *)1;  /* Signal failure */
-            }
-        }
-
-    } else {
-        /* Numeric variable - use cache-line aligned allocation */
-        args->var->type = STATA_TYPE_DOUBLE;
-        args->var->_arena = NULL;  /* No arena for numeric data */
-        args->var->data.dbl = (double *)aligned_alloc_cacheline(nobs * sizeof(double));
-
-        if (args->var->data.dbl == NULL) {
-            return (void *)1;  /* Signal failure */
-        }
-
-        double * restrict dbl_ptr = args->var->data.dbl;
-
-        /*
-         * Aggressive optimization strategy:
-         * - 16x unrolling for better instruction-level parallelism
-         * - Double buffering for software pipelining (overlap load/store)
-         * - Branch-free prefetch by splitting into prefetch and non-prefetch regions
-         * - Use restrict to help compiler optimize
-         */
-
-        /* Double buffers for software pipelining */
-        double v0[16], v1[16];
-
-        /* Calculate loop bounds - separate prefetch region from tail */
-        size_t i_end_16 = nobs - (nobs % 16);
-        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
-
-        /* Phase 1: Main loop with prefetching (bulk of iterations) */
-        i = 0;
-        if (prefetch_end > 0) {
-            /* Prime the pipeline: load first batch */
-            SF_VDATA_BATCH16(var_idx, obs1, v0);
-
-            for (; i < prefetch_end; i += 16) {
-                /* Prefetch 2 cache lines ahead (32 doubles = 256 bytes) */
-                _mm_prefetch((const char *)&dbl_ptr[i + 32], _MM_HINT_T0);
-                _mm_prefetch((const char *)&dbl_ptr[i + 40], _MM_HINT_T0);
-
-                /* Load next batch into v1 while we still have v0 */
-                SF_VDATA_BATCH16(var_idx, i + 16 + obs1, v1);
-
-                /* Store previous batch */
-                copy_doubles_16(&dbl_ptr[i], v0);
-
-                /* Swap buffers */
-                double *tmp = (double *)memcpy(v0, v1, sizeof(v0));
-                (void)tmp;
-            }
-        }
-
-        /* Phase 2: Remaining 16-element blocks without prefetch */
-        for (; i < i_end_16; i += 16) {
-            SF_VDATA_BATCH16(var_idx, i + obs1, v0);
-            copy_doubles_16(&dbl_ptr[i], v0);
-        }
-
-        /* Phase 3: Handle remaining elements (< 16) */
-        for (; i < nobs; i++) {
-            SF_vdata(var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
-        }
+    if (load_single_variable(args->var, args->var_idx, args->obs1,
+                              args->nobs, args->is_string) != 0) {
+        return (void *)1;
     }
 
     args->success = 1;
-    return NULL;  /* Success */
+    return NULL;
 }
 
 /*
@@ -508,15 +546,17 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
     }
     memset(data->vars, 0, nvars * sizeof(stata_variable));
 
-    /* Allocate sort order array (cache-line aligned) */
-    data->sort_order = (size_t *)aligned_alloc_cacheline(nobs * sizeof(size_t));
+    /* Allocate sort order array (cache-line aligned, uses perm_idx_t for 50% memory savings) */
+    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(nobs * sizeof(perm_idx_t));
     if (data->sort_order == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
     }
 
-    /* Initialize sort order to identity permutation using SIMD */
-    init_identity_permutation(data->sort_order, nobs);
+    /* Initialize sort order to identity permutation */
+    for (size_t i = 0; i < nobs; i++) {
+        data->sort_order[i] = (perm_idx_t)i;
+    }
 
     /* Allocate thread arguments (used for both parallel and sequential) */
     thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
@@ -535,27 +575,99 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         thread_args[j].success = 0;
     }
 
-    /* Parallel loading when multiple variables - one thread per variable.
-     * Each thread operates on a different Stata variable (column).
-     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
+    /* Parallel loading with capped thread count.
+     * Cap threads to min(nvars, CTOOLS_IO_MAX_THREADS) to avoid oversubscription.
+     * Each thread processes a chunk of variables for better efficiency. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Parallel loading using thread pool */
-        ctools_thread_pool pool;
-        if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
-            free(thread_args);
-            stata_data_free(data);
-            return STATA_ERR_MEMORY;
+        /* Determine optimal thread count */
+        size_t num_threads = nvars;
+        if (num_threads > CTOOLS_IO_MAX_THREADS) {
+            num_threads = CTOOLS_IO_MAX_THREADS;
         }
 
-        int pool_result = ctools_pool_run(&pool, load_variable_thread);
-        ctools_pool_free(&pool);
-        free(thread_args);
+        /* If few variables, use legacy one-thread-per-variable approach */
+        if (nvars <= CTOOLS_IO_MAX_THREADS) {
+            /* Legacy path: one thread per variable */
+            ctools_thread_pool pool;
+            if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+                free(thread_args);
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
 
-        if (pool_result != 0) {
-            stata_data_free(data);
-            return STATA_ERR_MEMORY;
+            int pool_result = ctools_pool_run(&pool, load_variable_thread);
+            ctools_pool_free(&pool);
+            free(thread_args);
+
+            if (pool_result != 0) {
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
+        } else {
+            /* Multi-variable per thread: distribute variables among capped threads */
+            free(thread_args);  /* Don't need single-var args */
+
+            /* Build arrays for multi-var threading */
+            int *var_indices = (int *)malloc(nvars * sizeof(int));
+            int *is_string_arr = (int *)malloc(nvars * sizeof(int));
+            ctools_multi_var_io_args *multi_args = (ctools_multi_var_io_args *)malloc(
+                num_threads * sizeof(ctools_multi_var_io_args));
+
+            if (var_indices == NULL || is_string_arr == NULL || multi_args == NULL) {
+                free(var_indices);
+                free(is_string_arr);
+                free(multi_args);
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
+
+            /* Initialize variable info */
+            for (j = 0; j < nvars; j++) {
+                var_indices[j] = (int)(j + 1);
+                is_string_arr[j] = SF_var_is_string((ST_int)(j + 1));
+            }
+
+            /* Distribute variables among threads */
+            size_t vars_per_thread = nvars / num_threads;
+            size_t extra_vars = nvars % num_threads;
+
+            size_t var_offset = 0;
+            for (size_t t = 0; t < num_threads; t++) {
+                size_t this_thread_vars = vars_per_thread + (t < extra_vars ? 1 : 0);
+                multi_args[t].vars = data->vars;
+                multi_args[t].var_indices = var_indices;
+                multi_args[t].var_start = var_offset;
+                multi_args[t].var_end = var_offset + this_thread_vars;
+                multi_args[t].obs1 = obs1;
+                multi_args[t].nobs = nobs;
+                multi_args[t].is_string = is_string_arr;
+                multi_args[t].success = 0;
+                var_offset += this_thread_vars;
+            }
+
+            /* Run multi-variable threads */
+            ctools_thread_pool pool;
+            if (ctools_pool_init(&pool, num_threads, multi_args,
+                                  sizeof(ctools_multi_var_io_args)) != 0) {
+                free(var_indices);
+                free(is_string_arr);
+                free(multi_args);
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
+
+            int pool_result = ctools_pool_run(&pool, load_multi_variable_thread);
+            ctools_pool_free(&pool);
+            free(var_indices);
+            free(is_string_arr);
+            free(multi_args);
+
+            if (pool_result != 0) {
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
         }
     } else {
         /* Sequential loading for single variable */
@@ -580,32 +692,21 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
    =========================================================================== */
 
 /*
-    Thread function: Store a single variable from C memory to Stata.
-
-    Writes all observations for one variable using SF_vstore (numeric) or
-    SF_sstore (string). Aggressive optimizations include:
-    - 16x unrolled loop with batched SPI writes
-    - Software pipelining with double buffering
-    - Branch-free prefetch regions
-    - restrict keyword for aliasing optimization
-
-    @param arg  Pointer to ctools_var_io_args with input/output parameters
-    @return     NULL on success (for ctools_threads compatibility)
+    Store a single variable from C memory to Stata (internal helper).
+    Used by both single-var and multi-var storing.
 */
-static void *store_variable_thread(void *arg)
+static void store_single_variable(stata_variable *var, int var_idx, size_t obs1, size_t nobs)
 {
-    ctools_var_io_args *args = (ctools_var_io_args *)arg;
     size_t i;
-    size_t nobs = args->nobs;
-    size_t obs1 = args->obs1;
-    ST_int var_idx = (ST_int)args->var_idx;
+    ST_int stata_var_idx = (ST_int)var_idx;
 
-    if (args->var->type == STATA_TYPE_DOUBLE) {
+    if (var->type == STATA_TYPE_DOUBLE) {
         /* Numeric variable - aggressive optimization */
-        const double * restrict dbl_data = args->var->data.dbl;
+        const double * restrict dbl_data = var->data.dbl;
 
-        /* Double buffers for software pipelining */
-        double v0[16], v1[16];
+        /* Double buffers for software pipelining - use pointer swap */
+        double buf_a[16], buf_b[16];
+        double *v0 = buf_a, *v1 = buf_b;
 
         /* Calculate loop bounds */
         size_t i_end_16 = nobs - (nobs % 16);
@@ -626,28 +727,29 @@ static void *store_variable_thread(void *arg)
                 copy_doubles_16(v1, &dbl_data[i + 16]);
 
                 /* Write current batch to Stata */
-                SF_VSTORE_BATCH16(var_idx, i + obs1, v0);
+                SF_VSTORE_BATCH16(stata_var_idx, i + obs1, v0);
 
-                /* Swap buffers */
-                double *tmp = (double *)memcpy(v0, v1, sizeof(v0));
-                (void)tmp;
+                /* Swap buffer pointers instead of memcpy */
+                double *tmp = v0;
+                v0 = v1;
+                v1 = tmp;
             }
         }
 
         /* Phase 2: Remaining 16-element blocks without prefetch */
         for (; i < i_end_16; i += 16) {
             copy_doubles_16(v0, &dbl_data[i]);
-            SF_VSTORE_BATCH16(var_idx, i + obs1, v0);
+            SF_VSTORE_BATCH16(stata_var_idx, i + obs1, v0);
         }
 
         /* Phase 3: Handle remaining elements */
         for (; i < nobs; i++) {
-            SF_vstore(var_idx, (ST_int)(i + obs1), dbl_data[i]);
+            SF_vstore(stata_var_idx, (ST_int)(i + obs1), dbl_data[i]);
         }
 
     } else {
         /* String variable - optimized with prefetching */
-        char * const * restrict str_data = args->var->data.str;
+        char * const * restrict str_data = var->data.str;
 
         /* Calculate prefetch region */
         size_t prefetch_end = (nobs > PREFETCH_DISTANCE) ? (nobs - PREFETCH_DISTANCE) : 0;
@@ -658,17 +760,54 @@ static void *store_variable_thread(void *arg)
             _mm_prefetch((const char *)&str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
             _mm_prefetch(str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
 
-            SF_sstore(var_idx, (ST_int)(i + obs1), str_data[i]);
+            SF_sstore(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
         }
 
         /* Phase 2: Tail without prefetch */
         for (; i < nobs; i++) {
-            SF_sstore(var_idx, (ST_int)(i + obs1), str_data[i]);
+            SF_sstore(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
         }
+    }
+}
+
+/*
+    Thread function: Store multiple variables from C memory to Stata.
+    Each thread processes variables in range [var_start, var_end).
+*/
+static void *store_multi_variable_thread(void *arg)
+{
+    ctools_multi_var_io_args *args = (ctools_multi_var_io_args *)arg;
+    args->success = 0;
+
+    for (size_t v = args->var_start; v < args->var_end; v++) {
+        store_single_variable(&args->vars[v], args->var_indices[v],
+                              args->obs1, args->nobs);
     }
 
     args->success = 1;
-    return NULL;  /* Success */
+    return NULL;
+}
+
+/*
+    Thread function: Store a single variable from C memory to Stata.
+    (Legacy interface for backward compatibility)
+
+    Writes all observations for one variable using SF_vstore (numeric) or
+    SF_sstore (string). Aggressive optimizations include:
+    - 16x unrolled loop with batched SPI writes
+    - Software pipelining with double buffering
+    - Branch-free prefetch regions
+    - restrict keyword for aliasing optimization
+
+    @param arg  Pointer to ctools_var_io_args with input/output parameters
+    @return     NULL on success (for ctools_threads compatibility)
+*/
+static void *store_variable_thread(void *arg)
+{
+    ctools_var_io_args *args = (ctools_var_io_args *)arg;
+    store_single_variable(args->var, args->var_idx, args->obs1, args->nobs);
+    args->success = 1;
+    return NULL;
 }
 
 /*
@@ -722,29 +861,93 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
         thread_args[j].success = 0;
     }
 
-    /* Parallel storing when multiple variables - one thread per variable.
-     * Each thread operates on a different Stata variable (column).
-     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
+    /* Parallel storing with capped thread count.
+     * Cap threads to min(nvars, CTOOLS_IO_MAX_THREADS) to avoid oversubscription. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Parallel storing using thread pool */
-        ctools_thread_pool pool;
-        if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
-            free(thread_args);
-            return STATA_ERR_MEMORY;
+        /* Determine optimal thread count */
+        size_t num_threads = nvars;
+        if (num_threads > CTOOLS_IO_MAX_THREADS) {
+            num_threads = CTOOLS_IO_MAX_THREADS;
         }
 
-        ctools_pool_run(&pool, store_variable_thread);
-        ctools_pool_free(&pool);
+        /* If few variables, use legacy one-thread-per-variable approach */
+        if (nvars <= CTOOLS_IO_MAX_THREADS) {
+            /* Legacy path: one thread per variable */
+            ctools_thread_pool pool;
+            if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+                free(thread_args);
+                return STATA_ERR_MEMORY;
+            }
+
+            ctools_pool_run(&pool, store_variable_thread);
+            ctools_pool_free(&pool);
+            free(thread_args);
+        } else {
+            /* Multi-variable per thread: distribute variables among capped threads */
+            free(thread_args);  /* Don't need single-var args */
+
+            /* Build arrays for multi-var threading */
+            int *var_indices = (int *)malloc(nvars * sizeof(int));
+            int *is_string_arr = (int *)malloc(nvars * sizeof(int));
+            ctools_multi_var_io_args *multi_args = (ctools_multi_var_io_args *)malloc(
+                num_threads * sizeof(ctools_multi_var_io_args));
+
+            if (var_indices == NULL || is_string_arr == NULL || multi_args == NULL) {
+                free(var_indices);
+                free(is_string_arr);
+                free(multi_args);
+                return STATA_ERR_MEMORY;
+            }
+
+            /* Initialize variable info */
+            for (j = 0; j < nvars; j++) {
+                var_indices[j] = (int)(j + 1);
+                is_string_arr[j] = 0;  /* Not used by store */
+            }
+
+            /* Distribute variables among threads */
+            size_t vars_per_thread = nvars / num_threads;
+            size_t extra_vars = nvars % num_threads;
+
+            size_t var_offset = 0;
+            for (size_t t = 0; t < num_threads; t++) {
+                size_t this_thread_vars = vars_per_thread + (t < extra_vars ? 1 : 0);
+                multi_args[t].vars = data->vars;
+                multi_args[t].var_indices = var_indices;
+                multi_args[t].var_start = var_offset;
+                multi_args[t].var_end = var_offset + this_thread_vars;
+                multi_args[t].obs1 = obs1;
+                multi_args[t].nobs = nobs;
+                multi_args[t].is_string = is_string_arr;
+                multi_args[t].success = 0;
+                var_offset += this_thread_vars;
+            }
+
+            /* Run multi-variable threads */
+            ctools_thread_pool pool;
+            if (ctools_pool_init(&pool, num_threads, multi_args,
+                                  sizeof(ctools_multi_var_io_args)) != 0) {
+                free(var_indices);
+                free(is_string_arr);
+                free(multi_args);
+                return STATA_ERR_MEMORY;
+            }
+
+            ctools_pool_run(&pool, store_multi_variable_thread);
+            ctools_pool_free(&pool);
+            free(var_indices);
+            free(is_string_arr);
+            free(multi_args);
+        }
     } else {
         /* Sequential storing for single variable */
         for (j = 0; j < nvars; j++) {
             store_variable_thread(&thread_args[j]);
         }
+        free(thread_args);
     }
-
-    free(thread_args);
 
     /* Memory barrier to ensure all thread-side effects are visible before returning */
     ctools_memory_barrier();
@@ -805,15 +1008,17 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
     }
     memset(data->vars, 0, nvars * sizeof(stata_variable));
 
-    /* Allocate sort order array (cache-line aligned) */
-    data->sort_order = (size_t *)aligned_alloc_cacheline(nobs * sizeof(size_t));
+    /* Allocate sort order array (cache-line aligned, uses perm_idx_t for 50% memory savings) */
+    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(nobs * sizeof(perm_idx_t));
     if (data->sort_order == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
     }
 
-    /* Initialize sort order to identity permutation using SIMD */
-    init_identity_permutation(data->sort_order, nobs);
+    /* Initialize sort order to identity permutation */
+    for (size_t i = 0; i < nobs; i++) {
+        data->sort_order[i] = (perm_idx_t)i;
+    }
 
     /* Allocate thread arguments */
     thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));

@@ -32,6 +32,22 @@ typedef enum {
     STATA_ERR_UNSUPPORTED_TYPE = 5 /* Unsupported variable type */
 } stata_retcode;
 
+/*
+    Permutation index type for sort operations.
+
+    Stata's SPI limits observations to < 2^31 (SF_in2 returns int).
+    Using uint32_t instead of size_t saves 50% memory for permutation arrays
+    and improves cache utilization during sorting.
+
+    Memory savings for 10M rows:
+    - size_t (64-bit): 80MB per permutation array
+    - uint32_t (32-bit): 40MB per permutation array
+
+    The PERM_IDX_MAX constant can be used for validation.
+*/
+typedef uint32_t perm_idx_t;
+#define PERM_IDX_MAX UINT32_MAX
+
 // Variable type: numeric (double) or string
 typedef enum {
     STATA_TYPE_DOUBLE = 0,      /* Numeric variable (8-byte double) */
@@ -69,7 +85,7 @@ typedef struct {
     size_t nobs;                /* Number of observations */
     size_t nvars;               /* Number of variables (columns) */
     stata_variable *vars;       /* Array of all variables [nvars] */
-    size_t *sort_order;         /* Permutation array (0-based) [nobs] */
+    perm_idx_t *sort_order;     /* Permutation array (0-based) [nobs] - uses uint32_t for 50% memory savings */
 } stata_data;
 
 // Performance timing

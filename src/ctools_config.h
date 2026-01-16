@@ -29,7 +29,7 @@
     Maximum number of threads for parallel operations.
     Usually matches CPU core count; can be tuned for hyperthreading.
 */
-#define NUM_THREADS 8
+#define NUM_THREADS 12
 
 /* ============================================================================
    Memory alignment
@@ -167,7 +167,7 @@ static inline void ctools_aligned_free(void *ptr)
     Maximum threads for I/O operations.
     May differ from NUM_THREADS for I/O-bound vs CPU-bound work.
 */
-#define CTOOLS_IO_MAX_THREADS    16
+#define CTOOLS_IO_MAX_THREADS    12
 
 /*
     Arena allocator block size for string pooling.

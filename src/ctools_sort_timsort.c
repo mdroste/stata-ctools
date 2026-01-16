@@ -78,8 +78,8 @@ typedef struct {
 typedef struct multikey_context_s multikey_context_t;
 
 /* Forward declarations for multi-key functions (defined later) */
-static inline int compare_multikey(size_t idx_a, size_t idx_b, const multikey_context_t *ctx);
-static void merge_multikey(size_t *order, const multikey_context_t *ctx, size_t *temp,
+static inline int compare_multikey(perm_idx_t idx_a, perm_idx_t idx_b, const multikey_context_t *ctx);
+static void merge_multikey(perm_idx_t *order, const multikey_context_t *ctx, perm_idx_t *temp,
                            size_t base1, size_t len1, size_t len2);
 
 /* ============================================================================
@@ -130,12 +130,12 @@ static inline int compare_string(const char *a, const char *b)
     Sorts order[start..end) using binary search for insertion position.
     Uses memmove for batch shifting instead of element-by-element.
 */
-static void binary_insertion_sort_numeric(size_t *order, uint64_t *keys,
+static void binary_insertion_sort_numeric(perm_idx_t *order, uint64_t *keys,
                                           size_t start, size_t end, size_t sorted_end)
 {
     size_t i;
     size_t left, right, mid;
-    size_t temp_idx;
+    perm_idx_t temp_idx;
     uint64_t temp_key;
 
     for (i = sorted_end; i < end; i++) {
@@ -156,7 +156,7 @@ static void binary_insertion_sort_numeric(size_t *order, uint64_t *keys,
 
         /* Batch shift elements using memmove */
         if (left < i) {
-            memmove(&order[left + 1], &order[left], (i - left) * sizeof(size_t));
+            memmove(&order[left + 1], &order[left], (i - left) * sizeof(perm_idx_t));
         }
         order[left] = temp_idx;
     }
@@ -164,14 +164,14 @@ static void binary_insertion_sort_numeric(size_t *order, uint64_t *keys,
 
 /*
     Binary insertion sort for string data.
-    Uses memmove for batch shifting (order[] is size_t indices, not strings).
+    Uses memmove for batch shifting (order[] is perm_idx_t indices, not strings).
 */
-static void binary_insertion_sort_string(size_t *order, char **strings,
+static void binary_insertion_sort_string(perm_idx_t *order, char **strings,
                                          size_t start, size_t end, size_t sorted_end)
 {
     size_t i;
     size_t left, right, mid;
-    size_t temp_idx;
+    perm_idx_t temp_idx;
     const char *temp_str;
 
     for (i = sorted_end; i < end; i++) {
@@ -190,9 +190,9 @@ static void binary_insertion_sort_string(size_t *order, char **strings,
             }
         }
 
-        /* Batch shift elements using memmove (order is size_t*, safe to memmove) */
+        /* Batch shift elements using memmove (order is perm_idx_t*, safe to memmove) */
         if (left < i) {
-            memmove(&order[left + 1], &order[left], (i - left) * sizeof(size_t));
+            memmove(&order[left + 1], &order[left], (i - left) * sizeof(perm_idx_t));
         }
         order[left] = temp_idx;
     }
@@ -207,7 +207,7 @@ static void binary_insertion_sort_string(size_t *order, char **strings,
     Returns the length of the run.
     If descending, reverses the run to make it ascending.
 */
-static size_t find_run_numeric(size_t *order, uint64_t *keys,
+static size_t find_run_numeric(perm_idx_t *order, uint64_t *keys,
                                size_t start, size_t end)
 {
     size_t run_end = start + 1;
@@ -231,7 +231,7 @@ static size_t find_run_numeric(size_t *order, uint64_t *keys,
         size_t i = start;
         size_t j = run_end - 1;
         while (i < j) {
-            size_t temp = order[i];
+            perm_idx_t temp = order[i];
             order[i] = order[j];
             order[j] = temp;
             i++;
@@ -245,7 +245,7 @@ static size_t find_run_numeric(size_t *order, uint64_t *keys,
 /*
     Find a natural run for string data.
 */
-static size_t find_run_string(size_t *order, char **strings,
+static size_t find_run_string(perm_idx_t *order, char **strings,
                               size_t start, size_t end)
 {
     size_t run_end = start + 1;
@@ -271,7 +271,7 @@ static size_t find_run_string(size_t *order, char **strings,
         size_t i = start;
         size_t j = run_end - 1;
         while (i < j) {
-            size_t temp = order[i];
+            perm_idx_t temp = order[i];
             order[i] = order[j];
             order[j] = temp;
             i++;
@@ -291,7 +291,7 @@ static size_t find_run_string(size_t *order, char **strings,
     Uses exponential search followed by binary search.
     Returns index of first element > key (for left merge) or >= key (for right merge).
 */
-static size_t gallop_left_numeric(uint64_t key, size_t *order, uint64_t *keys,
+static size_t gallop_left_numeric(uint64_t key, perm_idx_t *order, uint64_t *keys,
                                   size_t base, size_t len)
 {
     size_t ofs = 1;
@@ -324,7 +324,7 @@ static size_t gallop_left_numeric(uint64_t key, size_t *order, uint64_t *keys,
     return ofs;
 }
 
-static size_t gallop_right_numeric(uint64_t key, size_t *order, uint64_t *keys,
+static size_t gallop_right_numeric(uint64_t key, perm_idx_t *order, uint64_t *keys,
                                    size_t base, size_t len)
 {
     size_t ofs = 1;
@@ -367,7 +367,7 @@ static size_t gallop_right_numeric(uint64_t key, size_t *order, uint64_t *keys,
     Galloping search for strings: find position where key should be inserted.
     Returns index of first element > key.
 */
-static size_t gallop_left_string(const char *key, size_t *order, char **strings,
+static size_t gallop_left_string(const char *key, perm_idx_t *order, char **strings,
                                  size_t base, size_t len)
 {
     size_t ofs = 1;
@@ -400,7 +400,7 @@ static size_t gallop_left_string(const char *key, size_t *order, char **strings,
     return ofs;
 }
 
-static size_t gallop_right_string(const char *key, size_t *order, char **strings,
+static size_t gallop_right_string(const char *key, perm_idx_t *order, char **strings,
                                   size_t base, size_t len)
 {
     size_t ofs = 1;
@@ -448,7 +448,7 @@ static size_t gallop_right_string(const char *key, size_t *order, char **strings
     run1 = [base1, base1 + len1), run2 = [base2, base2 + len2)
     where base2 = base1 + len1
 */
-static void merge_numeric(size_t *order, uint64_t *keys, size_t *temp,
+static void merge_numeric(perm_idx_t *order, uint64_t *keys, perm_idx_t *temp,
                           size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -467,7 +467,7 @@ static void merge_numeric(size_t *order, uint64_t *keys, size_t *temp,
     /* Copy smaller run to temp */
     if (len1 <= len2) {
         /* Merge low: copy run1 to temp, merge from left */
-        memcpy(temp, &order[base1], len1 * sizeof(size_t));
+        memcpy(temp, &order[base1], len1 * sizeof(perm_idx_t));
 
         i = 0;      /* Index into temp (copy of run1) */
         j = base2;  /* Index into run2 */
@@ -487,7 +487,7 @@ static void merge_numeric(size_t *order, uint64_t *keys, size_t *temp,
         }
     } else {
         /* Merge high: copy run2 to temp, merge from right */
-        memcpy(temp, &order[base2], len2 * sizeof(size_t));
+        memcpy(temp, &order[base2], len2 * sizeof(perm_idx_t));
 
         i = len1 - 1;  /* Index into run1 (from end) */
         j = len2 - 1;  /* Index into temp (from end) */
@@ -514,7 +514,7 @@ static void merge_numeric(size_t *order, uint64_t *keys, size_t *temp,
     Uses galloping to skip already-sorted elements.
     Always copies the smaller run to temp to minimize memory usage.
 */
-static void merge_string(size_t *order, char **strings, size_t *temp,
+static void merge_string(perm_idx_t *order, char **strings, perm_idx_t *temp,
                          size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -535,7 +535,7 @@ static void merge_string(size_t *order, char **strings, size_t *temp,
 
     if (len1 <= len2) {
         /* Left run is smaller - merge from left */
-        memcpy(temp, &order[base1], len1 * sizeof(size_t));
+        memcpy(temp, &order[base1], len1 * sizeof(perm_idx_t));
 
         i = 0;
         j = base2;
@@ -554,7 +554,7 @@ static void merge_string(size_t *order, char **strings, size_t *temp,
         }
     } else {
         /* Right run is smaller - merge from right */
-        memcpy(temp, &order[base2], len2 * sizeof(size_t));
+        memcpy(temp, &order[base2], len2 * sizeof(perm_idx_t));
 
         i = len1 - 1;
         j = len2 - 1;
@@ -586,7 +586,7 @@ static void merge_string(size_t *order, char **strings, size_t *temp,
     Parallel merge for numeric data.
     Uses OpenMP to merge large runs in parallel by dividing output among threads.
 */
-static void merge_numeric_parallel(size_t *order, uint64_t *keys, size_t *temp,
+static void merge_numeric_parallel(perm_idx_t *order, uint64_t *keys, perm_idx_t *temp,
                                    size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -594,10 +594,10 @@ static void merge_numeric_parallel(size_t *order, uint64_t *keys, size_t *temp,
     int num_threads;
 
     /* Copy both runs to temp (temp1 at start, temp2 after) */
-    size_t *temp1 = temp;
-    size_t *temp2 = temp + len1;
-    memcpy(temp1, &order[base1], len1 * sizeof(size_t));
-    memcpy(temp2, &order[base2], len2 * sizeof(size_t));
+    perm_idx_t *temp1 = temp;
+    perm_idx_t *temp2 = temp + len1;
+    memcpy(temp1, &order[base1], len1 * sizeof(perm_idx_t));
+    memcpy(temp2, &order[base2], len2 * sizeof(perm_idx_t));
 
     #pragma omp parallel
     {
@@ -651,7 +651,7 @@ static void merge_numeric_parallel(size_t *order, uint64_t *keys, size_t *temp,
 /*
     Parallel merge for string data.
 */
-static void merge_string_parallel(size_t *order, char **strings, size_t *temp,
+static void merge_string_parallel(perm_idx_t *order, char **strings, perm_idx_t *temp,
                                   size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -659,10 +659,10 @@ static void merge_string_parallel(size_t *order, char **strings, size_t *temp,
     int num_threads;
 
     /* Copy both runs to temp */
-    size_t *temp1 = temp;
-    size_t *temp2 = temp + len1;
-    memcpy(temp1, &order[base1], len1 * sizeof(size_t));
-    memcpy(temp2, &order[base2], len2 * sizeof(size_t));
+    perm_idx_t *temp1 = temp;
+    perm_idx_t *temp2 = temp + len1;
+    memcpy(temp1, &order[base1], len1 * sizeof(perm_idx_t));
+    memcpy(temp2, &order[base2], len2 * sizeof(perm_idx_t));
 
     #pragma omp parallel
     {
@@ -715,7 +715,7 @@ static void merge_string_parallel(size_t *order, char **strings, size_t *temp,
 /*
     Parallel merge for multi-key data.
 */
-static void merge_multikey_parallel(size_t *order, const multikey_context_t *ctx, size_t *temp,
+static void merge_multikey_parallel(perm_idx_t *order, const multikey_context_t *ctx, perm_idx_t *temp,
                                     size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -723,10 +723,10 @@ static void merge_multikey_parallel(size_t *order, const multikey_context_t *ctx
     int num_threads;
 
     /* Copy both runs to temp */
-    size_t *temp1 = temp;
-    size_t *temp2 = temp + len1;
-    memcpy(temp1, &order[base1], len1 * sizeof(size_t));
-    memcpy(temp2, &order[base2], len2 * sizeof(size_t));
+    perm_idx_t *temp1 = temp;
+    perm_idx_t *temp2 = temp + len1;
+    memcpy(temp1, &order[base1], len1 * sizeof(perm_idx_t));
+    memcpy(temp2, &order[base2], len2 * sizeof(perm_idx_t));
 
     #pragma omp parallel
     {
@@ -780,7 +780,7 @@ static void merge_multikey_parallel(size_t *order, const multikey_context_t *ctx
 /*
     Smart merge wrapper for numeric data - uses parallel merge for large runs.
 */
-static void merge_numeric_smart(size_t *order, uint64_t *keys, size_t *temp,
+static void merge_numeric_smart(perm_idx_t *order, uint64_t *keys, perm_idx_t *temp,
                                 size_t base1, size_t len1, size_t len2)
 {
 #ifdef _OPENMP
@@ -797,7 +797,7 @@ static void merge_numeric_smart(size_t *order, uint64_t *keys, size_t *temp,
 /*
     Smart merge wrapper for string data.
 */
-static void merge_string_smart(size_t *order, char **strings, size_t *temp,
+static void merge_string_smart(perm_idx_t *order, char **strings, perm_idx_t *temp,
                                size_t base1, size_t len1, size_t len2)
 {
 #ifdef _OPENMP
@@ -814,7 +814,7 @@ static void merge_string_smart(size_t *order, char **strings, size_t *temp,
 /*
     Smart merge wrapper for multi-key data.
 */
-static void merge_multikey_smart(size_t *order, const multikey_context_t *ctx, size_t *temp,
+static void merge_multikey_smart(perm_idx_t *order, const multikey_context_t *ctx, perm_idx_t *temp,
                                  size_t base1, size_t len1, size_t len2)
 {
 #ifdef _OPENMP
@@ -835,12 +835,12 @@ static void merge_multikey_smart(size_t *order, const multikey_context_t *ctx, s
 /*
     Timsort for numeric data.
 */
-static stata_retcode timsort_numeric(size_t *order, uint64_t *keys, size_t nobs)
+static stata_retcode timsort_numeric(perm_idx_t *order, uint64_t *keys, size_t nobs)
 {
     timsort_run_t run_stack[MAX_MERGE_STACK];
     int stack_size = 0;
     size_t min_run;
-    size_t *temp;
+    perm_idx_t *temp;
     size_t pos = 0;
 
     if (nobs < 2) return STATA_OK;
@@ -848,7 +848,7 @@ static stata_retcode timsort_numeric(size_t *order, uint64_t *keys, size_t nobs)
     min_run = calc_min_run(nobs);
 
     /* Allocate temp buffer for merging (full size for parallel merge) */
-    temp = (size_t *)malloc(nobs * sizeof(size_t));
+    temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
     if (temp == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -940,12 +940,12 @@ static stata_retcode timsort_numeric(size_t *order, uint64_t *keys, size_t nobs)
     Timsort for string data.
     Full timsort with stack and merging.
 */
-static stata_retcode timsort_string(size_t *order, char **strings, size_t nobs)
+static stata_retcode timsort_string(perm_idx_t *order, char **strings, size_t nobs)
 {
     timsort_run_t run_stack[MAX_MERGE_STACK];
     int stack_size = 0;
     size_t min_run;
-    size_t *temp;
+    perm_idx_t *temp;
     size_t pos = 0;
 
     if (nobs < 2) return STATA_OK;
@@ -953,7 +953,7 @@ static stata_retcode timsort_string(size_t *order, char **strings, size_t nobs)
     min_run = calc_min_run(nobs);
 
     /* Allocate temp buffer for merging (full size for parallel merge) */
-    temp = (size_t *)malloc(nobs * sizeof(size_t));
+    temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
     if (temp == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -1087,7 +1087,7 @@ struct multikey_context_s {
     Compare two indices using multiple keys.
     Returns negative if a < b, positive if a > b, 0 if equal.
 */
-static inline int compare_multikey(size_t idx_a, size_t idx_b, const multikey_context_t *ctx)
+static inline int compare_multikey(perm_idx_t idx_a, perm_idx_t idx_b, const multikey_context_t *ctx)
 {
     size_t k;
     for (k = 0; k < ctx->nsort; k++) {
@@ -1107,12 +1107,12 @@ static inline int compare_multikey(size_t idx_a, size_t idx_b, const multikey_co
 /*
     Binary insertion sort for multi-key data.
 */
-static void binary_insertion_sort_multikey(size_t *order, const multikey_context_t *ctx,
+static void binary_insertion_sort_multikey(perm_idx_t *order, const multikey_context_t *ctx,
                                            size_t start, size_t end, size_t sorted_end)
 {
     size_t i;
     size_t left, right, mid;
-    size_t temp_idx;
+    perm_idx_t temp_idx;
 
     for (i = sorted_end; i < end; i++) {
         temp_idx = order[i];
@@ -1131,7 +1131,7 @@ static void binary_insertion_sort_multikey(size_t *order, const multikey_context
 
         /* Batch shift elements using memmove */
         if (left < i) {
-            memmove(&order[left + 1], &order[left], (i - left) * sizeof(size_t));
+            memmove(&order[left + 1], &order[left], (i - left) * sizeof(perm_idx_t));
         }
         order[left] = temp_idx;
     }
@@ -1140,7 +1140,7 @@ static void binary_insertion_sort_multikey(size_t *order, const multikey_context
 /*
     Find a natural run for multi-key data.
 */
-static size_t find_run_multikey(size_t *order, const multikey_context_t *ctx,
+static size_t find_run_multikey(perm_idx_t *order, const multikey_context_t *ctx,
                                 size_t start, size_t end)
 {
     size_t run_end = start + 1;
@@ -1164,7 +1164,7 @@ static size_t find_run_multikey(size_t *order, const multikey_context_t *ctx,
         size_t i = start;
         size_t j = run_end - 1;
         while (i < j) {
-            size_t temp = order[i];
+            perm_idx_t temp = order[i];
             order[i] = order[j];
             order[j] = temp;
             i++;
@@ -1178,7 +1178,7 @@ static size_t find_run_multikey(size_t *order, const multikey_context_t *ctx,
 /*
     Merge two adjacent runs for multi-key data.
 */
-static void merge_multikey(size_t *order, const multikey_context_t *ctx, size_t *temp,
+static void merge_multikey(perm_idx_t *order, const multikey_context_t *ctx, perm_idx_t *temp,
                            size_t base1, size_t len1, size_t len2)
 {
     size_t base2 = base1 + len1;
@@ -1186,7 +1186,7 @@ static void merge_multikey(size_t *order, const multikey_context_t *ctx, size_t 
 
     if (len1 <= len2) {
         /* Left run is smaller - merge from left */
-        memcpy(temp, &order[base1], len1 * sizeof(size_t));
+        memcpy(temp, &order[base1], len1 * sizeof(perm_idx_t));
 
         i = 0;
         j = base2;
@@ -1205,7 +1205,7 @@ static void merge_multikey(size_t *order, const multikey_context_t *ctx, size_t 
         }
     } else {
         /* Right run is smaller - merge from right */
-        memcpy(temp, &order[base2], len2 * sizeof(size_t));
+        memcpy(temp, &order[base2], len2 * sizeof(perm_idx_t));
 
         i = len1 - 1;
         j = len2 - 1;
@@ -1228,12 +1228,12 @@ static void merge_multikey(size_t *order, const multikey_context_t *ctx, size_t 
 /*
     Timsort for multi-key data (single-pass composite key sorting).
 */
-static stata_retcode timsort_multikey(size_t *order, const multikey_context_t *ctx, size_t nobs)
+static stata_retcode timsort_multikey(perm_idx_t *order, const multikey_context_t *ctx, size_t nobs)
 {
     timsort_run_t run_stack[MAX_MERGE_STACK];
     int stack_size = 0;
     size_t min_run;
-    size_t *temp;
+    perm_idx_t *temp;
     size_t pos = 0;
 
     if (nobs < 2) return STATA_OK;
@@ -1241,7 +1241,7 @@ static stata_retcode timsort_multikey(size_t *order, const multikey_context_t *c
     min_run = calc_min_run(nobs);
 
     /* Allocate temp buffer for merging (full size for parallel merge) */
-    temp = (size_t *)malloc(nobs * sizeof(size_t));
+    temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
     if (temp == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -1401,7 +1401,7 @@ cleanup:
 
 typedef struct {
     stata_variable *var;
-    size_t *sort_order;
+    perm_idx_t *sort_order;
     size_t nobs;
     int success;
 } timsort_permute_args_t;
@@ -1414,7 +1414,7 @@ static void *timsort_apply_permute_thread(void *arg)
     timsort_permute_args_t *args = (timsort_permute_args_t *)arg;
     size_t i;
     size_t nobs = args->nobs;
-    size_t *perm = args->sort_order;
+    perm_idx_t *perm = args->sort_order;
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
@@ -1501,7 +1501,7 @@ static stata_retcode timsort_apply_permutation(stata_data *data)
     free(args);
 
     for (j = 0; j < data->nobs; j++) {
-        data->sort_order[j] = j;
+        data->sort_order[j] = (perm_idx_t)j;
     }
 
     return all_success ? STATA_OK : STATA_ERR_MEMORY;

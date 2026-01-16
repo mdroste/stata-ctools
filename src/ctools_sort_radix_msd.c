@@ -71,9 +71,9 @@
    Reusable Context for Parallel MSD Sort
    ============================================================================ */
 
-/* Thread argument for parallel histogram */
+/* Thread argument for parallel histogram (uses perm_idx_t for 50% memory savings) */
 typedef struct {
-    size_t *order;
+    perm_idx_t *order;
     uint64_t *keys;
     size_t start;
     size_t end;
@@ -81,10 +81,10 @@ typedef struct {
     size_t *local_counts;
 } msd_histogram_args_t;
 
-/* Thread argument for parallel scatter */
+/* Thread argument for parallel scatter (uses perm_idx_t for 50% memory savings) */
 typedef struct {
-    size_t *order;
-    size_t *temp_order;
+    perm_idx_t *order;
+    perm_idx_t *temp_order;
     uint64_t *keys;
     size_t start;
     size_t end;
@@ -200,7 +200,7 @@ static void *msd_histogram_thread(void *arg)
     msd_histogram_args_t *args = (msd_histogram_args_t *)arg;
     size_t i;
     uint8_t byte_val;
-    size_t *order = args->order;
+    perm_idx_t *order = args->order;
     uint64_t *keys = args->keys;
     int shift = args->shift;
 
@@ -221,9 +221,9 @@ static void *msd_scatter_thread(void *arg)
     size_t i;
     uint8_t byte_val;
     size_t local_offsets[RADIX_SIZE];
-    size_t *order = args->order;
+    perm_idx_t *order = args->order;
     uint64_t *keys = args->keys;
-    size_t *temp_order = args->temp_order;
+    perm_idx_t *temp_order = args->temp_order;
     int shift = args->shift;
 
     memcpy(local_offsets, args->local_offsets, RADIX_SIZE * sizeof(size_t));
@@ -244,11 +244,11 @@ static void *msd_scatter_thread(void *arg)
     Insertion sort for numeric data using precomputed keys.
     Used when subarray size falls below MSD_INSERTION_THRESHOLD.
 */
-static void insertion_sort_numeric(size_t *order, uint64_t *keys,
+static void insertion_sort_numeric(perm_idx_t *order, uint64_t *keys,
                                    size_t start, size_t end)
 {
     size_t i, j;
-    size_t temp_idx;
+    perm_idx_t temp_idx;
     uint64_t temp_key;
 
     for (i = start + 1; i < end; i++) {
@@ -268,19 +268,19 @@ static void insertion_sort_numeric(size_t *order, uint64_t *keys,
     Insertion sort for string data.
     Compares strings starting from a given character position.
 */
-static void insertion_sort_string(size_t *order, char **strings,
+static void insertion_sort_string(perm_idx_t *order, char **strings,
                                   size_t *str_lengths, size_t start,
                                   size_t end, size_t char_pos)
 {
     size_t i, j;
-    size_t temp_idx;
+    perm_idx_t temp_idx;
 
     for (i = start + 1; i < end; i++) {
         temp_idx = order[i];
         j = i;
 
         while (j > start) {
-            size_t prev_idx = order[j - 1];
+            perm_idx_t prev_idx = order[j - 1];
             /* Compare strings from char_pos onwards */
             const char *s1 = strings[prev_idx] + char_pos;
             const char *s2 = strings[temp_idx] + char_pos;
@@ -319,7 +319,7 @@ static void insertion_sort_string(size_t *order, char **strings,
     Uses context for thread-local allocations.
     Returns 1 if pass was skipped (uniform distribution), 0 otherwise.
 */
-static int msd_sort_pass_numeric_parallel(size_t *order, size_t *temp_order,
+static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_order,
                                           uint64_t *keys, size_t start,
                                           size_t end, int byte_pos,
                                           msd_sort_context_t *ctx,
@@ -430,7 +430,7 @@ static int msd_sort_pass_numeric_parallel(size_t *order, size_t *temp_order,
     Sequential MSD radix sort pass (for small subarrays or recursive calls).
     Returns 1 if skipped (uniform), 0 otherwise.
 */
-static int msd_sort_pass_numeric_seq(size_t *order, size_t *temp_order,
+static int msd_sort_pass_numeric_seq(perm_idx_t *order, perm_idx_t *temp_order,
                                      uint64_t *keys, size_t start, size_t end,
                                      int byte_pos, size_t *bucket_starts_out,
                                      size_t *counts_out)
@@ -486,7 +486,7 @@ static int msd_sort_pass_numeric_seq(size_t *order, size_t *temp_order,
     order_is_primary indicates whether order currently holds the data.
     depth tracks recursion depth to prevent stack overflow.
 */
-static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
+static void msd_sort_numeric_recursive_impl(perm_idx_t *order_a, perm_idx_t *order_b,
                                             uint64_t *keys, size_t start,
                                             size_t end, int byte_pos,
                                             int a_is_current, int depth)
@@ -494,8 +494,8 @@ static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
     size_t counts[RADIX_SIZE];
     size_t bucket_starts[RADIX_SIZE];
     size_t n = end - start;
-    size_t *current_order = a_is_current ? order_a : order_b;
-    size_t *temp_order = a_is_current ? order_b : order_a;
+    perm_idx_t *current_order = a_is_current ? order_a : order_b;
+    perm_idx_t *temp_order = a_is_current ? order_b : order_a;
     int b;
     int skipped;
 
@@ -504,7 +504,7 @@ static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
         insertion_sort_numeric(current_order, keys, start, end);
         /* If result is in wrong buffer, copy it */
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -512,7 +512,7 @@ static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
     /* Base case: processed all bytes */
     if (byte_pos < 0) {
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -521,7 +521,7 @@ static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
     if (depth >= MSD_MAX_RECURSION_DEPTH) {
         insertion_sort_numeric(current_order, keys, start, end);
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -581,7 +581,7 @@ static void msd_sort_numeric_recursive_impl(size_t *order_a, size_t *order_b,
 }
 
 /* Wrapper for backward compatibility */
-static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
+static void msd_sort_numeric_recursive(perm_idx_t *order_a, perm_idx_t *order_b,
                                        uint64_t *keys, size_t start,
                                        size_t end, int byte_pos,
                                        int a_is_current)
@@ -596,8 +596,8 @@ static void msd_sort_numeric_recursive(size_t *order_a, size_t *order_b,
 */
 static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
 {
-    size_t *order_a;
-    size_t *order_b;
+    perm_idx_t *order_a;
+    perm_idx_t *order_b;
     uint64_t *keys;
     size_t i;
     double *dbl_data;
@@ -610,8 +610,8 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
     int b;
 
     order_a = data->sort_order;
-    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
-                                           data->nobs * sizeof(size_t));
+    order_b = (perm_idx_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
+                                           data->nobs * sizeof(perm_idx_t));
     keys = (uint64_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
                                           data->nobs * sizeof(uint64_t));
 
@@ -718,14 +718,16 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
     Sequential MSD string sort pass.
     Returns 1 if skipped, 0 otherwise.
 */
-static int msd_sort_pass_string_seq(size_t *order, size_t *temp_order,
+static int msd_sort_pass_string_seq(perm_idx_t *order, perm_idx_t *temp_order,
                                     char **strings, size_t *str_lengths,
                                     size_t start, size_t end, size_t char_pos,
                                     size_t *bucket_starts_out, size_t *counts_out)
 {
     size_t counts[STRING_BUCKET_SIZE] = {0};
     size_t offsets[STRING_BUCKET_SIZE];
-    size_t i, idx, len;
+    size_t i;
+    perm_idx_t idx;
+    size_t len;
     unsigned int bucket;
     int non_empty = 0;
     int b;
@@ -780,7 +782,7 @@ static int msd_sort_pass_string_seq(size_t *order, size_t *temp_order,
     a_is_current indicates whether order_a currently holds the data.
     depth tracks recursion depth to prevent stack overflow.
 */
-static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
+static void msd_sort_string_recursive_impl(perm_idx_t *order_a, perm_idx_t *order_b,
                                            char **strings, size_t *str_lengths,
                                            size_t start, size_t end, size_t char_pos,
                                            int a_is_current, int depth)
@@ -788,8 +790,8 @@ static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
     size_t counts[STRING_BUCKET_SIZE];
     size_t bucket_starts[STRING_BUCKET_SIZE];
     size_t n = end - start;
-    size_t *current_order = a_is_current ? order_a : order_b;
-    size_t *temp_order = a_is_current ? order_b : order_a;
+    perm_idx_t *current_order = a_is_current ? order_a : order_b;
+    perm_idx_t *temp_order = a_is_current ? order_b : order_a;
     int b;
     int result;
 
@@ -797,7 +799,7 @@ static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
     if (n <= MSD_INSERTION_THRESHOLD) {
         insertion_sort_string(current_order, strings, str_lengths, start, end, char_pos);
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -806,7 +808,7 @@ static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
     if (depth >= MSD_MAX_RECURSION_DEPTH) {
         insertion_sort_string(current_order, strings, str_lengths, start, end, char_pos);
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -817,7 +819,7 @@ static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
     if (result == 2) {
         /* All strings ended */
         if (!a_is_current) {
-            memcpy(&order_a[start], &order_b[start], n * sizeof(size_t));
+            memcpy(&order_a[start], &order_b[start], n * sizeof(perm_idx_t));
         }
         return;
     }
@@ -878,7 +880,7 @@ static void msd_sort_string_recursive_impl(size_t *order_a, size_t *order_b,
 }
 
 /* Wrapper for backward compatibility */
-static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
+static void msd_sort_string_recursive(perm_idx_t *order_a, perm_idx_t *order_b,
                                       char **strings, size_t *str_lengths,
                                       size_t start, size_t end, size_t char_pos,
                                       int a_is_current)
@@ -892,8 +894,8 @@ static void msd_sort_string_recursive(size_t *order_a, size_t *order_b,
 */
 static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
 {
-    size_t *order_a;
-    size_t *order_b;
+    perm_idx_t *order_a;
+    perm_idx_t *order_b;
     size_t *str_lengths;
     size_t i;
     char **str_data;
@@ -914,9 +916,9 @@ static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
         str_lengths[i] = strlen(str_data[i]);
     }
 
-    /* Allocate temporary order array */
-    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
-                                           data->nobs * sizeof(size_t));
+    /* Allocate temporary order array (uses perm_idx_t for 50% memory savings) */
+    order_b = (perm_idx_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
+                                           data->nobs * sizeof(perm_idx_t));
     if (order_b == NULL) {
         free(str_lengths);
         return STATA_ERR_MEMORY;
@@ -940,7 +942,7 @@ static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
 */
 typedef struct {
     stata_variable *var;
-    size_t *sort_order;
+    perm_idx_t *sort_order;
     size_t nobs;
     int success;
 } msd_permute_args_t;
@@ -953,7 +955,7 @@ static void *msd_apply_permute_thread(void *arg)
     msd_permute_args_t *args = (msd_permute_args_t *)arg;
     size_t i;
     size_t nobs = args->nobs;
-    size_t *perm = args->sort_order;
+    perm_idx_t *perm = args->sort_order;
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
@@ -1035,7 +1037,7 @@ static stata_retcode msd_apply_permutation(stata_data *data)
 
     /* Reset sort_order to identity */
     for (j = 0; j < data->nobs; j++) {
-        data->sort_order[j] = j;
+        data->sort_order[j] = (perm_idx_t)j;
     }
 
     return all_success ? STATA_OK : STATA_ERR_MEMORY;

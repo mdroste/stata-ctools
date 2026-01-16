@@ -429,6 +429,187 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 16: Malformed/Edge Case CSV Files
+ * Tests for handling CSV data that may be poorly formatted:
+ * - Multiline quoted fields (quotes span multiple lines)
+ * - Various quoting edge cases
+ ******************************************************************************/
+noi print_section "Malformed/Edge Case CSV Files"
+
+* Multiline quoted fields - quotes that don't end on a given line
+* This is actually valid CSV per RFC 4180, but often causes parsing issues
+file open fh using "temp/multiline.csv", write replace
+file write fh "id,description,value" _n
+file write fh `"1,"This is a simple description",100"' _n
+file write fh `"2,"This description"' _n
+file write fh `"spans multiple"' _n
+file write fh `"lines of text",200"' _n
+file write fh `"3,"Another"' _n
+file write fh `"multiline entry",300"' _n
+file write fh `"4,"Normal again",400"' _n
+file close fh
+
+compare_imports using "temp/multiline.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline quoted fields data identical (cf _all)"
+}
+else {
+    noi test_fail "multiline quoted fields" "`r(reason)'"
+}
+
+* Test with bindquotes(strict) for multiline
+compare_imports using "temp/multiline.csv", stataopts(bindquotes(strict)) cimportopts(bindquotes(strict))
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline with bindquotes(strict) identical (cf _all)"
+}
+else {
+    noi test_fail "multiline bindquotes(strict)" "`r(reason)'"
+}
+
+* Multiline with embedded commas and quotes
+file open fh using "temp/multiline_complex.csv", write replace
+file write fh "id,text,amount" _n
+file write fh `"1,"Line 1, with comma"' _n
+file write fh `"and line 2",50.5"' _n
+file write fh `"2,"Contains ""quoted"" text"' _n
+file write fh `"across lines",75.25"' _n
+file write fh `"3,"Normal, simple text",100"' _n
+file close fh
+
+compare_imports using "temp/multiline_complex.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline with commas and quotes identical (cf _all)"
+}
+else {
+    noi test_fail "multiline complex" "`r(reason)'"
+}
+
+* Empty lines within quotes (paragraph-style text)
+file open fh using "temp/multiline_empty.csv", write replace
+file write fh "id,paragraph,num" _n
+file write fh `"1,"First paragraph."' _n
+file write fh `""' _n
+file write fh `"Second paragraph.",10"' _n
+file write fh `"2,"Single line",20"' _n
+file close fh
+
+compare_imports using "temp/multiline_empty.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline with empty lines identical (cf _all)"
+}
+else {
+    noi test_fail "multiline empty lines" "`r(reason)'"
+}
+
+* Quotes at different positions - edge cases
+file open fh using "temp/quote_edge.csv", write replace
+file write fh "id,text,val" _n
+file write fh `"1,"",10"' _n
+file write fh `"2,"""",20"' _n
+file write fh `"3,"a",30"' _n
+file write fh `"4,""""a"""",40"' _n
+file write fh `"5,"Start only,50"' _n
+file close fh
+
+* Note: Some of these are malformed - test that both handle them the same way
+capture compare_imports using "temp/quote_edge.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "quote edge cases identical (cf _all)"
+}
+else {
+    * Both may fail/handle differently - check if behaviors match
+    capture {
+        import delimited using "temp/quote_edge.csv", clear
+        local stata_rc = _rc
+        local stata_n = _N
+    }
+    capture {
+        cimport delimited using "temp/quote_edge.csv", clear
+        local cimport_rc = _rc
+        local cimport_n = _N
+    }
+    if `stata_rc' == `cimport_rc' {
+        noi test_pass "quote edge cases: same behavior (both rc=`stata_rc')"
+    }
+    else {
+        noi test_fail "quote edge cases" "Stata rc=`stata_rc', cimport rc=`cimport_rc'"
+    }
+}
+
+* Field with only newlines
+file open fh using "temp/newline_only.csv", write replace
+file write fh "id,content,num" _n
+file write fh `"1,""' _n
+file write fh `""' _n
+file write fh `"",100"' _n
+file write fh `"2,"text",200"' _n
+file close fh
+
+compare_imports using "temp/newline_only.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "field with only newlines identical (cf _all)"
+}
+else {
+    noi test_fail "newline only field" "`r(reason)'"
+}
+
+* Very long multiline field
+file open fh using "temp/multiline_long.csv", write replace
+file write fh "id,longtext,val" _n
+file write fh `"1,"This is a very long text field"' _n
+file write fh `"that spans many lines and contains"' _n
+file write fh `"a substantial amount of content."' _n
+file write fh `"It may include commas, like this one,"' _n
+file write fh `"and even ""embedded quotes"" too."' _n
+file write fh `"Finally it ends here.",999"' _n
+file write fh `"2,"Short",1"' _n
+file close fh
+
+compare_imports using "temp/multiline_long.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "long multiline field identical (cf _all)"
+}
+else {
+    noi test_fail "long multiline" "`r(reason)'"
+}
+
+* Multiline as first and last rows
+file open fh using "temp/multiline_position.csv", write replace
+file write fh "id,text,num" _n
+file write fh `"1,"First row"' _n
+file write fh `"is multiline",10"' _n
+file write fh `"2,"Middle row normal",20"' _n
+file write fh `"3,"Last row"' _n
+file write fh `"also multiline",30"' _n
+file close fh
+
+compare_imports using "temp/multiline_position.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline first/last rows identical (cf _all)"
+}
+else {
+    noi test_fail "multiline positions" "`r(reason)'"
+}
+
+* Tab and other whitespace within multiline quotes
+local tab = char(9)
+file open fh using "temp/multiline_whitespace.csv", write replace
+file write fh "id,text,num" _n
+file write fh `"1,"Text with`tab'tab"' _n
+file write fh `"and newline",10"' _n
+file write fh `"2,"  leading spaces"' _n
+file write fh `"trailing spaces  ",20"' _n
+file close fh
+
+compare_imports using "temp/multiline_whitespace.csv"
+if "`r(result)'" == "pass" {
+    noi test_pass "multiline with whitespace identical (cf _all)"
+}
+else {
+    noi test_fail "multiline whitespace" "`r(reason)'"
+}
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

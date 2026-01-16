@@ -69,6 +69,68 @@ static inline void cmerge_aligned_free(void *ptr)
 }
 
 /* ============================================================================
+ * String Arena Allocator for Merge Operations
+ *
+ * Allocates strings from a contiguous block to reduce per-string malloc
+ * overhead and enable O(1) bulk free instead of O(n) individual frees.
+ * ============================================================================ */
+
+typedef struct {
+    char *base;         /* Base pointer to arena memory */
+    size_t capacity;    /* Total arena capacity in bytes */
+    size_t used;        /* Currently used bytes */
+} cmerge_string_arena;
+
+/* Create a string arena with given capacity */
+static cmerge_string_arena *cmerge_arena_create(size_t capacity)
+{
+    cmerge_string_arena *arena = (cmerge_string_arena *)malloc(sizeof(cmerge_string_arena));
+    if (arena == NULL) return NULL;
+
+    arena->base = (char *)malloc(capacity);
+    if (arena->base == NULL) {
+        free(arena);
+        return NULL;
+    }
+
+    arena->capacity = capacity;
+    arena->used = 0;
+    return arena;
+}
+
+/* Allocate a string copy from the arena. Falls back to strdup if full. */
+static char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
+{
+    size_t len = strlen(s) + 1;
+
+    if (arena != NULL && arena->used + len <= arena->capacity) {
+        char *ptr = arena->base + arena->used;
+        memcpy(ptr, s, len);
+        arena->used += len;
+        return ptr;
+    }
+
+    /* Fallback to regular strdup */
+    return strdup(s);
+}
+
+/* Check if a pointer was allocated from the arena */
+static inline int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr)
+{
+    if (arena == NULL || ptr == NULL) return 0;
+    return (ptr >= arena->base && ptr < arena->base + arena->capacity);
+}
+
+/* Free the arena. Note: strings from fallback strdup must be freed separately */
+static void cmerge_arena_free(cmerge_string_arena *arena)
+{
+    if (arena != NULL) {
+        free(arena->base);
+        free(arena);
+    }
+}
+
+/* ============================================================================
  * Configuration
  * ============================================================================ */
 
@@ -118,6 +180,194 @@ static int cmerge_compare_order_pairs(const void *a, const void *b) {
     if (pa->orig_idx < pb->orig_idx) return -1;
     if (pa->orig_idx > pb->orig_idx) return 1;
     return 0;
+}
+
+/*
+ * Parallel LSD Radix Sort for order pairs.
+ *
+ * O(n) stable sort optimized for bounded integer keys with parallel execution.
+ * Uses 4 passes of 8-bit radix sort (sufficient for Stata's 2^31 obs limit).
+ * Parallel histogram + parallel scatter for high throughput.
+ * Falls back to qsort for very small arrays where parallel overhead dominates.
+ */
+
+/* Thread arguments for parallel histogram */
+typedef struct {
+    cmerge_order_pair_t *pairs;
+    size_t start;
+    size_t end;
+    int shift;
+    size_t *local_counts;  /* [256] */
+} cmerge_hist_args_t;
+
+/* Thread arguments for parallel scatter */
+typedef struct {
+    cmerge_order_pair_t *src;
+    cmerge_order_pair_t *dst;
+    size_t start;
+    size_t end;
+    int shift;
+    size_t *offsets;  /* Starting offset for each bucket for this thread */
+} cmerge_scatter_args_t;
+
+static void *cmerge_histogram_thread(void *arg)
+{
+    cmerge_hist_args_t *args = (cmerge_hist_args_t *)arg;
+    cmerge_order_pair_t *pairs = args->pairs;
+    int shift = args->shift;
+    size_t *counts = args->local_counts;
+
+    memset(counts, 0, 256 * sizeof(size_t));
+
+    for (size_t i = args->start; i < args->end; i++) {
+        uint8_t digit = (pairs[i].order_key >> shift) & 0xFF;
+        counts[digit]++;
+    }
+
+    return NULL;
+}
+
+static void *cmerge_scatter_thread(void *arg)
+{
+    cmerge_scatter_args_t *args = (cmerge_scatter_args_t *)arg;
+    cmerge_order_pair_t *src = args->src;
+    cmerge_order_pair_t *dst = args->dst;
+    int shift = args->shift;
+    size_t *offsets = args->offsets;
+
+    for (size_t i = args->start; i < args->end; i++) {
+        uint8_t digit = (src[i].order_key >> shift) & 0xFF;
+        dst[offsets[digit]++] = src[i];
+    }
+
+    return NULL;
+}
+
+static void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n)
+{
+    /* For small arrays, qsort is faster due to parallel overhead */
+    if (n < 10000) {
+        qsort(pairs, n, sizeof(cmerge_order_pair_t), cmerge_compare_order_pairs);
+        return;
+    }
+
+    /* Determine thread count */
+    int num_threads = NUM_THREADS;
+    if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
+    if ((size_t)num_threads > n / 1000) num_threads = (int)(n / 1000);
+    if (num_threads < 1) num_threads = 1;
+
+    /* Allocate auxiliary buffer and thread resources */
+    cmerge_order_pair_t *aux = (cmerge_order_pair_t *)malloc(n * sizeof(cmerge_order_pair_t));
+    pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
+    cmerge_hist_args_t *hist_args = (cmerge_hist_args_t *)malloc(num_threads * sizeof(cmerge_hist_args_t));
+    cmerge_scatter_args_t *scatter_args = (cmerge_scatter_args_t *)malloc(num_threads * sizeof(cmerge_scatter_args_t));
+    size_t *all_counts = (size_t *)malloc(num_threads * 256 * sizeof(size_t));
+    size_t *all_offsets = (size_t *)malloc(num_threads * 256 * sizeof(size_t));
+
+    if (!aux || !threads || !hist_args || !scatter_args || !all_counts || !all_offsets) {
+        /* Fallback to qsort on allocation failure */
+        free(aux);
+        free(threads);
+        free(hist_args);
+        free(scatter_args);
+        free(all_counts);
+        free(all_offsets);
+        qsort(pairs, n, sizeof(cmerge_order_pair_t), cmerge_compare_order_pairs);
+        return;
+    }
+
+    /* Calculate chunk boundaries */
+    size_t chunk_size = n / num_threads;
+    size_t remainder = n % num_threads;
+
+    cmerge_order_pair_t *src = pairs;
+    cmerge_order_pair_t *dst = aux;
+
+    /* 4 passes of 8-bit radix sort on order_key (32 bits sufficient for Stata) */
+    for (int pass = 0; pass < 4; pass++) {
+        int shift = pass * 8;
+
+        /* Phase 1: Parallel histogram */
+        size_t offset = 0;
+        for (int t = 0; t < num_threads; t++) {
+            hist_args[t].pairs = src;
+            hist_args[t].start = offset;
+            hist_args[t].end = offset + chunk_size + (t < (int)remainder ? 1 : 0);
+            hist_args[t].shift = shift;
+            hist_args[t].local_counts = all_counts + t * 256;
+            offset = hist_args[t].end;
+
+            pthread_create(&threads[t], NULL, cmerge_histogram_thread, &hist_args[t]);
+        }
+
+        for (int t = 0; t < num_threads; t++) {
+            pthread_join(threads[t], NULL);
+        }
+
+        /* Compute global counts and per-thread offsets */
+        size_t global_counts[256];
+        memset(global_counts, 0, sizeof(global_counts));
+
+        for (int t = 0; t < num_threads; t++) {
+            size_t *local = all_counts + t * 256;
+            for (int b = 0; b < 256; b++) {
+                global_counts[b] += local[b];
+            }
+        }
+
+        /* Convert global counts to prefix sums */
+        size_t total = 0;
+        size_t global_offsets[256];
+        for (int b = 0; b < 256; b++) {
+            global_offsets[b] = total;
+            total += global_counts[b];
+        }
+
+        /* Compute per-thread starting offsets for each bucket */
+        for (int b = 0; b < 256; b++) {
+            size_t bucket_offset = global_offsets[b];
+            for (int t = 0; t < num_threads; t++) {
+                all_offsets[t * 256 + b] = bucket_offset;
+                bucket_offset += all_counts[t * 256 + b];
+            }
+        }
+
+        /* Phase 2: Parallel scatter */
+        offset = 0;
+        for (int t = 0; t < num_threads; t++) {
+            scatter_args[t].src = src;
+            scatter_args[t].dst = dst;
+            scatter_args[t].start = offset;
+            scatter_args[t].end = offset + chunk_size + (t < (int)remainder ? 1 : 0);
+            scatter_args[t].shift = shift;
+            scatter_args[t].offsets = all_offsets + t * 256;
+            offset = scatter_args[t].end;
+
+            pthread_create(&threads[t], NULL, cmerge_scatter_thread, &scatter_args[t]);
+        }
+
+        for (int t = 0; t < num_threads; t++) {
+            pthread_join(threads[t], NULL);
+        }
+
+        /* Swap buffers */
+        cmerge_order_pair_t *tmp = src;
+        src = dst;
+        dst = tmp;
+    }
+
+    /* If result is in aux, copy back to pairs */
+    if (src != pairs) {
+        memcpy(pairs, src, n * sizeof(cmerge_order_pair_t));
+    }
+
+    free(aux);
+    free(threads);
+    free(hist_args);
+    free(scatter_args);
+    free(all_counts);
+    free(all_offsets);
 }
 
 /* ============================================================================
@@ -1431,7 +1681,8 @@ static ST_retcode cmerge_execute(const char *args)
             }
         }
 
-        qsort(pairs, output_nobs, sizeof(cmerge_order_pair_t), cmerge_compare_order_pairs);
+        /* Use radix sort for O(n) performance instead of O(n log n) qsort */
+        cmerge_radix_sort_order_pairs(pairs, output_nobs);
 
         cmerge_output_spec_t *new_specs = malloc(output_nobs * sizeof(cmerge_output_spec_t));
         int64_t *new_orig_rows = malloc(output_nobs * sizeof(int64_t));
@@ -1548,6 +1799,24 @@ static ST_retcode cmerge_execute(const char *args)
     }
     memset(output_data.vars, 0, n_output_vars * sizeof(stata_variable));
 
+    /* Count string variables and estimate arena size */
+    size_t n_string_vars = 0;
+    for (size_t vi = 0; vi < n_output_vars; vi++) {
+        int src_var_idx = output_var_indices[vi];
+        if (master_data.vars[src_var_idx].type == STATA_TYPE_STRING) {
+            n_string_vars++;
+        }
+    }
+
+    /* Create string arena for merge output: estimate 64 bytes per string cell.
+     * Arena enables O(1) bulk free instead of O(n*m) individual frees. */
+    cmerge_string_arena *str_arena = NULL;
+    if (n_string_vars > 0) {
+        size_t arena_size = n_string_vars * output_nobs * 64;
+        str_arena = cmerge_arena_create(arena_size);
+        /* If arena creation fails, we fall back to strdup (no error) */
+    }
+
     /* Apply permutation to each variable (can be parallelized with OpenMP) */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
@@ -1559,6 +1828,7 @@ static ST_retcode cmerge_execute(const char *args)
 
         dst_var->nobs = output_nobs;
         dst_var->type = src_var->type;
+        dst_var->_arena = NULL;
 
         if (src_var->type == STATA_TYPE_DOUBLE) {
             dst_var->data.dbl = (double *)cmerge_aligned_alloc(output_nobs * sizeof(double));
@@ -1582,9 +1852,12 @@ static ST_retcode cmerge_execute(const char *args)
                 }
             }
         } else {
-            /* String variable */
+            /* String variable - use arena allocator to reduce malloc overhead */
             dst_var->data.str = (char **)calloc(output_nobs, sizeof(char *));
             if (!dst_var->data.str) continue;
+
+            /* Mark this variable as using the shared arena */
+            dst_var->_arena = str_arena;
 
             int is_key = output_var_is_key[vi];
             int key_idx = output_var_key_idx[vi];
@@ -1595,16 +1868,16 @@ static ST_retcode cmerge_execute(const char *args)
             for (size_t i = 0; i < output_nobs; i++) {
                 int64_t sorted_row = output_specs[i].master_sorted_row;
                 if (sorted_row >= 0 && src_var->data.str[sorted_row]) {
-                    dst_var->data.str[i] = strdup(src_var->data.str[sorted_row]);
+                    dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[sorted_row]);
                 } else if (using_key_data != NULL) {
                     int64_t using_row = output_specs[i].using_sorted_row;
                     if (using_row >= 0 && using_key_data[using_row]) {
-                        dst_var->data.str[i] = strdup(using_key_data[using_row]);
+                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, using_key_data[using_row]);
                     } else {
-                        dst_var->data.str[i] = strdup("");
+                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
                     }
                 } else {
-                    dst_var->data.str[i] = strdup("");
+                    dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
                 }
             }
         }
@@ -1620,11 +1893,15 @@ static ST_retcode cmerge_execute(const char *args)
 
     rc = ctools_data_store_selective(&output_data, output_var_stata_idx, n_output_vars, 1);
     if (rc != STATA_OK) {
-        /* Cleanup on error */
+        /* Cleanup on error - free only non-arena strings */
         for (size_t vi = 0; vi < n_output_vars; vi++) {
             if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
+                /* Only free strings not owned by arena */
                 for (size_t i = 0; i < output_nobs; i++) {
-                    if (output_data.vars[vi].data.str[i]) free(output_data.vars[vi].data.str[i]);
+                    if (output_data.vars[vi].data.str[i] &&
+                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                        free(output_data.vars[vi].data.str[i]);
+                    }
                 }
                 free(output_data.vars[vi].data.str);
             } else if (output_data.vars[vi].data.dbl) {
@@ -1632,6 +1909,7 @@ static ST_retcode cmerge_execute(const char *args)
             }
         }
         cmerge_aligned_free(output_data.vars);
+        cmerge_arena_free(str_arena);  /* Free arena in one operation */
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
@@ -1687,11 +1965,15 @@ static ST_retcode cmerge_execute(const char *args)
 
     double t_cleanup_start = cmerge_get_time_ms();
 
-    /* Free output data */
+    /* Free output data - use arena for O(1) string cleanup */
     for (size_t vi = 0; vi < n_output_vars; vi++) {
         if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
+            /* Only free strings that fell back to strdup (not owned by arena) */
             for (size_t i = 0; i < output_nobs; i++) {
-                if (output_data.vars[vi].data.str[i]) free(output_data.vars[vi].data.str[i]);
+                if (output_data.vars[vi].data.str[i] &&
+                    !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                    free(output_data.vars[vi].data.str[i]);
+                }
             }
             free(output_data.vars[vi].data.str);
         } else if (output_data.vars[vi].data.dbl) {
@@ -1699,6 +1981,7 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
     cmerge_aligned_free(output_data.vars);
+    cmerge_arena_free(str_arena);  /* O(1) cleanup of all arena strings */
 
     free(output_var_indices);
     free(output_var_stata_idx);

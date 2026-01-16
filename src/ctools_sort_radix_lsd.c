@@ -60,11 +60,16 @@
 
 /* ============================================================================
    Parallel radix sort structures and functions
+
+   Permutation arrays use perm_idx_t (uint32_t) instead of size_t for:
+   - 50% memory reduction (4 bytes vs 8 bytes per index)
+   - Better cache utilization during sorting
+   - Sufficient for Stata's 2^31 observation limit
    ============================================================================ */
 
 /* Thread argument structure for parallel histogram */
 typedef struct {
-    size_t *order;           /* Input order array */
+    perm_idx_t *order;       /* Input order array (uses perm_idx_t for 50% memory savings) */
     uint64_t *keys;          /* Key array */
     size_t start;            /* Start index for this thread */
     size_t end;              /* End index (exclusive) for this thread */
@@ -74,8 +79,8 @@ typedef struct {
 
 /* Thread argument structure for parallel scatter */
 typedef struct {
-    size_t *order;           /* Input order array */
-    size_t *temp_order;      /* Output order array */
+    perm_idx_t *order;       /* Input order array */
+    perm_idx_t *temp_order;  /* Output order array */
     uint64_t *keys;          /* Key array */
     size_t start;            /* Start index for this thread */
     size_t end;              /* End index (exclusive) for this thread */
@@ -195,7 +200,7 @@ static void *histogram_thread(void *arg)
     histogram_args_t *args = (histogram_args_t *)arg;
     size_t i;
     uint8_t byte_val;
-    size_t *order = args->order;
+    perm_idx_t *order = args->order;
     uint64_t *keys = args->keys;
     int shift = args->shift;
 
@@ -218,9 +223,9 @@ static void *scatter_thread(void *arg)
     size_t i;
     uint8_t byte_val;
     size_t local_offsets[RADIX_SIZE];  /* Stack allocation for speed */
-    size_t *order = args->order;
+    perm_idx_t *order = args->order;
     uint64_t *keys = args->keys;
-    size_t *temp_order = args->temp_order;
+    perm_idx_t *temp_order = args->temp_order;
     int shift = args->shift;
 
     /* Copy offsets to local array */
@@ -240,8 +245,8 @@ static void *scatter_thread(void *arg)
     Uses reusable context to avoid per-pass allocations.
     Returns 1 if pass was skipped (uniform distribution), 0 otherwise.
 */
-static int radix_sort_pass_numeric_parallel(size_t *order,
-                                            size_t *temp_order,
+static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
+                                            perm_idx_t *temp_order,
                                             uint64_t *keys,
                                             size_t nobs,
                                             int byte_pos,
@@ -346,8 +351,8 @@ static int radix_sort_pass_numeric_parallel(size_t *order,
     Sequential radix sort pass (for small datasets or fallback).
     Returns 1 if pass was skipped (uniform distribution), 0 otherwise.
 */
-static int radix_sort_pass_numeric(size_t *order,
-                                   size_t *temp_order,
+static int radix_sort_pass_numeric(perm_idx_t *order,
+                                   perm_idx_t *temp_order,
                                    uint64_t *keys,
                                    size_t nobs,
                                    int byte_pos)
@@ -397,7 +402,7 @@ static int radix_sort_pass_numeric(size_t *order,
 
 /* Thread argument for parallel string histogram */
 typedef struct {
-    size_t *order;
+    perm_idx_t *order;
     char **strings;
     size_t *str_lengths;     /* Pre-cached string lengths */
     size_t start;
@@ -408,8 +413,8 @@ typedef struct {
 
 /* Thread argument for parallel string scatter */
 typedef struct {
-    size_t *order;
-    size_t *temp_order;
+    perm_idx_t *order;
+    perm_idx_t *temp_order;
     char **strings;
     size_t *str_lengths;
     size_t start;
@@ -424,7 +429,8 @@ static void *string_histogram_thread(void *arg)
     string_histogram_args_t *args = (string_histogram_args_t *)arg;
     size_t i;
     unsigned char byte_val;
-    size_t idx, len;
+    perm_idx_t idx;
+    size_t len;
 
     memset(args->local_counts, 0, (RADIX_SIZE + 1) * sizeof(size_t));
 
@@ -448,7 +454,8 @@ static void *string_scatter_thread(void *arg)
     string_scatter_args_t *args = (string_scatter_args_t *)arg;
     size_t i;
     unsigned char byte_val;
-    size_t idx, len;
+    perm_idx_t idx;
+    size_t len;
     size_t local_offsets[RADIX_SIZE + 1];
 
     memcpy(local_offsets, args->local_offsets, (RADIX_SIZE + 1) * sizeof(size_t));
@@ -566,8 +573,8 @@ static void string_context_free(string_sort_context_t *ctx)
     Parallel string radix sort pass.
     Returns 1 if skipped (uniform), 0 otherwise.
 */
-static int radix_sort_pass_string_parallel(size_t *order,
-                                           size_t *temp_order,
+static int radix_sort_pass_string_parallel(perm_idx_t *order,
+                                           perm_idx_t *temp_order,
                                            char **strings,
                                            size_t *str_lengths,
                                            size_t nobs,
@@ -670,8 +677,8 @@ static int radix_sort_pass_string_parallel(size_t *order,
     Sequential string radix sort pass with pre-cached lengths.
     Returns 1 if skipped, 0 otherwise.
 */
-static int radix_sort_pass_string(size_t *order,
-                                  size_t *temp_order,
+static int radix_sort_pass_string(perm_idx_t *order,
+                                  perm_idx_t *temp_order,
                                   char **strings,
                                   size_t *str_lengths,
                                   size_t nobs,
@@ -737,10 +744,10 @@ static int radix_sort_pass_string(size_t *order,
 */
 static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 {
-    size_t *order_a;
-    size_t *order_b;
-    size_t *current_order;
-    size_t *temp_order;
+    perm_idx_t *order_a;
+    perm_idx_t *order_b;
+    perm_idx_t *current_order;
+    perm_idx_t *temp_order;
     uint64_t *keys;
     size_t i;
     int byte_pos;
@@ -750,9 +757,9 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
     radix_sort_context_t *ctx = NULL;
     int swapped = 0;
 
-    /* Allocate temporary order array */
+    /* Allocate temporary order array (uses perm_idx_t for 50% memory savings) */
     order_a = data->sort_order;
-    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
+    order_b = (perm_idx_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(perm_idx_t));
 
     /* Allocate aligned keys array */
     keys = (uint64_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(uint64_t));
@@ -807,7 +814,7 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 
         /* Optimization 1: Swap pointers instead of memcpy */
         if (!skipped) {
-            size_t *tmp = current_order;
+            perm_idx_t *tmp = current_order;
             current_order = temp_order;
             temp_order = tmp;
             swapped = !swapped;
@@ -816,7 +823,7 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 
     /* Ensure final result is in data->sort_order */
     if (current_order != data->sort_order) {
-        memcpy(data->sort_order, current_order, data->nobs * sizeof(size_t));
+        memcpy(data->sort_order, current_order, data->nobs * sizeof(perm_idx_t));
     }
 
     radix_context_free(ctx);
@@ -832,10 +839,10 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 */
 static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 {
-    size_t *order_a;
-    size_t *order_b;
-    size_t *current_order;
-    size_t *temp_order;
+    perm_idx_t *order_a;
+    perm_idx_t *order_b;
+    perm_idx_t *current_order;
+    perm_idx_t *temp_order;
     size_t *str_lengths;
     size_t max_len = 0;
     size_t i, len;
@@ -877,9 +884,9 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
         return STATA_OK;
     }
 
-    /* Allocate temporary order array - aligned for cache efficiency */
+    /* Allocate temporary order array - aligned for cache efficiency (uses perm_idx_t) */
     order_a = data->sort_order;
-    order_b = (size_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(size_t));
+    order_b = (perm_idx_t *)ctools_aligned_alloc(CACHE_LINE_SIZE, data->nobs * sizeof(perm_idx_t));
     if (order_b == NULL) {
         free(str_lengths);
         return STATA_ERR_MEMORY;
@@ -920,7 +927,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
         }
 
         if (!skipped) {
-            size_t *tmp = current_order;
+            perm_idx_t *tmp = current_order;
             current_order = temp_order;
             temp_order = tmp;
             swapped = !swapped;
@@ -929,7 +936,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 
     /* Ensure final result is in data->sort_order */
     if (current_order != data->sort_order) {
-        memcpy(data->sort_order, current_order, data->nobs * sizeof(size_t));
+        memcpy(data->sort_order, current_order, data->nobs * sizeof(perm_idx_t));
     }
 
     string_context_free(ctx);
@@ -944,7 +951,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 */
 typedef struct {
     stata_variable *var;     /* [in/out] Variable to permute in place */
-    size_t *sort_order;      /* [in]     Permutation: new[i] = old[sort_order[i]] */
+    perm_idx_t *sort_order;  /* [in]     Permutation: new[i] = old[sort_order[i]] */
     size_t nobs;             /* [in]     Number of observations */
     int success;             /* [out]    1 on success, 0 on failure */
 } apply_permute_args_t;
@@ -963,7 +970,7 @@ static void *apply_permute_thread(void *arg)
     apply_permute_args_t *args = (apply_permute_args_t *)arg;
     size_t i;
     size_t nobs = args->nobs;
-    size_t *perm = args->sort_order;
+    perm_idx_t *perm = args->sort_order;
 
     if (args->var->type == STATA_TYPE_DOUBLE) {
         double *old_data = args->var->data.dbl;
@@ -1061,7 +1068,7 @@ static stata_retcode apply_permutation_to_all_vars(stata_data *data)
 
     /* Reset sort_order to identity since data is now physically sorted */
     for (j = 0; j < data->nobs; j++) {
-        data->sort_order[j] = j;
+        data->sort_order[j] = (perm_idx_t)j;
     }
 
     return all_success ? STATA_OK : STATA_ERR_MEMORY;

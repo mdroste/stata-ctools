@@ -2,12 +2,14 @@
  * ctools_threads.c - Thread pool utilities for ctools
  *
  * Provides a simple interface for parallel execution patterns.
+ * Includes both one-shot pools and persistent pools for efficiency.
  */
 
 #include <stdlib.h>
 #include <string.h>
 
 #include "ctools_threads.h"
+#include "ctools_config.h"
 
 /*
  * Initialize a thread pool for N threads.
@@ -142,4 +144,288 @@ int ctools_parallel_run(ctools_thread_func func, void *args,
     ctools_pool_free(&pool);
 
     return rc;
+}
+
+/* ===========================================================================
+   Persistent Thread Pool Implementation
+   =========================================================================== */
+
+/*
+ * Worker thread function for persistent pool.
+ * Waits for work items and executes them until shutdown.
+ */
+static void *persistent_worker_thread(void *arg)
+{
+    ctools_persistent_pool *pool = (ctools_persistent_pool *)arg;
+
+    while (1) {
+        ctools_work_item *item = NULL;
+
+        /* Wait for work */
+        pthread_mutex_lock(&pool->queue_mutex);
+
+        while (pool->queue_head == NULL && !pool->shutdown) {
+            pthread_cond_wait(&pool->work_available, &pool->queue_mutex);
+        }
+
+        if (pool->shutdown && pool->queue_head == NULL) {
+            pthread_mutex_unlock(&pool->queue_mutex);
+            break;
+        }
+
+        /* Dequeue work item */
+        item = pool->queue_head;
+        if (item != NULL) {
+            pool->queue_head = item->next;
+            if (pool->queue_head == NULL) {
+                pool->queue_tail = NULL;
+            }
+            pool->queue_size--;
+            pool->active_workers++;
+        }
+
+        pthread_mutex_unlock(&pool->queue_mutex);
+
+        /* Execute work item */
+        if (item != NULL) {
+            if (item->func != NULL) {
+                item->func(item->arg);
+            }
+            free(item);
+
+            /* Signal completion */
+            pthread_mutex_lock(&pool->queue_mutex);
+            pool->active_workers--;
+            pool->pending_items--;
+            if (pool->pending_items == 0) {
+                pthread_cond_broadcast(&pool->work_complete);
+            }
+            pthread_mutex_unlock(&pool->queue_mutex);
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * Initialize a persistent thread pool.
+ */
+int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers)
+{
+    size_t i;
+
+    if (pool == NULL || num_workers == 0) {
+        return -1;
+    }
+
+    memset(pool, 0, sizeof(*pool));
+
+    pool->workers = (pthread_t *)malloc(num_workers * sizeof(pthread_t));
+    if (pool->workers == NULL) {
+        return -1;
+    }
+
+    if (pthread_mutex_init(&pool->queue_mutex, NULL) != 0) {
+        free(pool->workers);
+        return -1;
+    }
+
+    if (pthread_cond_init(&pool->work_available, NULL) != 0) {
+        pthread_mutex_destroy(&pool->queue_mutex);
+        free(pool->workers);
+        return -1;
+    }
+
+    if (pthread_cond_init(&pool->work_complete, NULL) != 0) {
+        pthread_cond_destroy(&pool->work_available);
+        pthread_mutex_destroy(&pool->queue_mutex);
+        free(pool->workers);
+        return -1;
+    }
+
+    pool->num_workers = num_workers;
+    pool->shutdown = 0;
+    pool->initialized = 1;
+
+    /* Create worker threads */
+    for (i = 0; i < num_workers; i++) {
+        if (pthread_create(&pool->workers[i], NULL, persistent_worker_thread, pool) != 0) {
+            /* Failed - shut down and clean up */
+            pool->shutdown = 1;
+            pthread_cond_broadcast(&pool->work_available);
+
+            for (size_t j = 0; j < i; j++) {
+                pthread_join(pool->workers[j], NULL);
+            }
+
+            pthread_cond_destroy(&pool->work_complete);
+            pthread_cond_destroy(&pool->work_available);
+            pthread_mutex_destroy(&pool->queue_mutex);
+            free(pool->workers);
+            pool->initialized = 0;
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Submit work to the persistent pool.
+ */
+int ctools_persistent_pool_submit(ctools_persistent_pool *pool,
+                                   ctools_thread_func func, void *arg)
+{
+    ctools_work_item *item;
+
+    if (pool == NULL || !pool->initialized || pool->shutdown) {
+        return -1;
+    }
+
+    item = (ctools_work_item *)malloc(sizeof(ctools_work_item));
+    if (item == NULL) {
+        return -1;
+    }
+
+    item->func = func;
+    item->arg = arg;
+    item->next = NULL;
+
+    pthread_mutex_lock(&pool->queue_mutex);
+
+    /* Enqueue */
+    if (pool->queue_tail != NULL) {
+        pool->queue_tail->next = item;
+    } else {
+        pool->queue_head = item;
+    }
+    pool->queue_tail = item;
+    pool->queue_size++;
+    pool->pending_items++;
+
+    pthread_cond_signal(&pool->work_available);
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    return 0;
+}
+
+/*
+ * Submit multiple work items to the pool.
+ */
+int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
+                                         ctools_thread_func func,
+                                         void *args, size_t count, size_t arg_size)
+{
+    size_t i;
+    char *arg_ptr = (char *)args;
+
+    if (pool == NULL || !pool->initialized || pool->shutdown) {
+        return -1;
+    }
+
+    for (i = 0; i < count; i++) {
+        void *arg = (args != NULL) ? (void *)(arg_ptr + i * arg_size) : NULL;
+        if (ctools_persistent_pool_submit(pool, func, arg) != 0) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+ * Wait for all submitted work to complete.
+ */
+int ctools_persistent_pool_wait(ctools_persistent_pool *pool)
+{
+    if (pool == NULL || !pool->initialized) {
+        return -1;
+    }
+
+    pthread_mutex_lock(&pool->queue_mutex);
+
+    while (pool->pending_items > 0) {
+        pthread_cond_wait(&pool->work_complete, &pool->queue_mutex);
+    }
+
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    return 0;
+}
+
+/*
+ * Shut down and free the persistent pool.
+ */
+void ctools_persistent_pool_destroy(ctools_persistent_pool *pool)
+{
+    size_t i;
+    ctools_work_item *item;
+
+    if (pool == NULL || !pool->initialized) {
+        return;
+    }
+
+    /* Signal shutdown */
+    pthread_mutex_lock(&pool->queue_mutex);
+    pool->shutdown = 1;
+    pthread_cond_broadcast(&pool->work_available);
+    pthread_mutex_unlock(&pool->queue_mutex);
+
+    /* Wait for workers to finish */
+    for (i = 0; i < pool->num_workers; i++) {
+        pthread_join(pool->workers[i], NULL);
+    }
+
+    /* Free remaining queue items */
+    while (pool->queue_head != NULL) {
+        item = pool->queue_head;
+        pool->queue_head = item->next;
+        free(item);
+    }
+
+    /* Cleanup */
+    pthread_cond_destroy(&pool->work_complete);
+    pthread_cond_destroy(&pool->work_available);
+    pthread_mutex_destroy(&pool->queue_mutex);
+    free(pool->workers);
+
+    pool->initialized = 0;
+}
+
+/* Global persistent pool (singleton) */
+static ctools_persistent_pool g_global_pool;
+static int g_global_pool_initialized = 0;
+static pthread_mutex_t g_global_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * Get a global persistent pool (singleton).
+ */
+ctools_persistent_pool *ctools_get_global_pool(void)
+{
+    pthread_mutex_lock(&g_global_pool_mutex);
+
+    if (!g_global_pool_initialized) {
+        if (ctools_persistent_pool_init(&g_global_pool, CTOOLS_IO_MAX_THREADS) == 0) {
+            g_global_pool_initialized = 1;
+        }
+    }
+
+    pthread_mutex_unlock(&g_global_pool_mutex);
+
+    return g_global_pool_initialized ? &g_global_pool : NULL;
+}
+
+/*
+ * Destroy the global persistent pool.
+ */
+void ctools_destroy_global_pool(void)
+{
+    pthread_mutex_lock(&g_global_pool_mutex);
+
+    if (g_global_pool_initialized) {
+        ctools_persistent_pool_destroy(&g_global_pool);
+        g_global_pool_initialized = 0;
+    }
+
+    pthread_mutex_unlock(&g_global_pool_mutex);
 }

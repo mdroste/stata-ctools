@@ -137,12 +137,12 @@ static void build_tree_string(char **tree, char **splitters, int node, int left,
    Base Case Sorts
    ============================================================================ */
 
-static void insertion_sort_numeric(size_t * IPS4O_RESTRICT order,
+static void insertion_sort_numeric(perm_idx_t * IPS4O_RESTRICT order,
                                    const uint64_t * IPS4O_RESTRICT keys,
                                    size_t start, size_t end)
 {
     for (size_t i = start + 1; i < end; i++) {
-        size_t temp = order[i];
+        perm_idx_t temp = order[i];
         uint64_t temp_key = keys[temp];
         size_t j = i;
         while (j > start && keys[order[j - 1]] > temp_key) {
@@ -153,12 +153,12 @@ static void insertion_sort_numeric(size_t * IPS4O_RESTRICT order,
     }
 }
 
-static void insertion_sort_string(size_t * IPS4O_RESTRICT order,
+static void insertion_sort_string(perm_idx_t * IPS4O_RESTRICT order,
                                   char ** IPS4O_RESTRICT strings,
                                   size_t start, size_t end)
 {
     for (size_t i = start + 1; i < end; i++) {
-        size_t temp = order[i];
+        perm_idx_t temp = order[i];
         const char *temp_str = strings[temp];
         size_t j = i;
         while (j > start && strcmp(strings[order[j - 1]], temp_str) > 0) {
@@ -170,8 +170,8 @@ static void insertion_sort_string(size_t * IPS4O_RESTRICT order,
 }
 
 /* LSD Radix sort for numeric data - optimized with prefetching and unrolling */
-static void radix_sort_numeric(size_t * IPS4O_RESTRICT order,
-                               size_t * IPS4O_RESTRICT temp,
+static void radix_sort_numeric(perm_idx_t * IPS4O_RESTRICT order,
+                               perm_idx_t * IPS4O_RESTRICT temp,
                                const uint64_t * IPS4O_RESTRICT keys,
                                size_t start, size_t len)
 {
@@ -181,8 +181,8 @@ static void radix_sort_numeric(size_t * IPS4O_RESTRICT order,
     }
 
     size_t counts[256], offsets[256];
-    size_t *src = order + start;
-    size_t *dst = temp;
+    perm_idx_t *src = order + start;
+    perm_idx_t *dst = temp;
 
     for (int byte = 0; byte < 8; byte++) {
         int shift = byte * 8;
@@ -225,17 +225,17 @@ static void radix_sort_numeric(size_t * IPS4O_RESTRICT order,
             dst[offsets[b]++] = src[i];
         }
 
-        size_t *t = src; src = dst; dst = t;
+        perm_idx_t *t = src; src = dst; dst = t;
     }
 
     if (src != order + start) {
-        memcpy(order + start, src, len * sizeof(size_t));
+        memcpy(order + start, src, len * sizeof(perm_idx_t));
     }
 }
 
 /* MSD Radix sort for strings */
-static void radix_sort_string(size_t * IPS4O_RESTRICT order,
-                              size_t * IPS4O_RESTRICT temp,
+static void radix_sort_string(perm_idx_t * IPS4O_RESTRICT order,
+                              perm_idx_t * IPS4O_RESTRICT temp,
                               char ** IPS4O_RESTRICT strings,
                               size_t start, size_t len,
                               size_t char_pos, size_t max_len)
@@ -279,7 +279,7 @@ static void radix_sort_string(size_t * IPS4O_RESTRICT order,
         temp[offsets[c]++] = order[start + i];
     }
 
-    memcpy(order + start, temp, len * sizeof(size_t));
+    memcpy(order + start, temp, len * sizeof(perm_idx_t));
 
     /* Recompute offsets for recursion */
     offsets[0] = 0;
@@ -299,8 +299,8 @@ static void radix_sort_string(size_t * IPS4O_RESTRICT order,
    Sequential IPS4o (for small data or within parallel buckets)
    ============================================================================ */
 
-static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
-                                     size_t * IPS4O_RESTRICT temp,
+static void ips4o_sequential_numeric(perm_idx_t * IPS4O_RESTRICT order,
+                                     perm_idx_t * IPS4O_RESTRICT temp,
                                      uint64_t * IPS4O_RESTRICT keys,
                                      size_t start, size_t len, int depth)
 {
@@ -381,7 +381,7 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
         int b = ips4o_classify(keys[order[start + i]], tree, log_buckets, num_buckets);
         temp[write_pos[b]++] = order[start + i];
     }
-    memcpy(order + start, temp, len * sizeof(size_t));
+    memcpy(order + start, temp, len * sizeof(perm_idx_t));
 
     ctools_aligned_free(tree);
     free(write_pos);
@@ -399,8 +399,8 @@ static void ips4o_sequential_numeric(size_t * IPS4O_RESTRICT order,
     free(bucket_offsets);
 }
 
-static void ips4o_sequential_string(size_t * IPS4O_RESTRICT order,
-                                    size_t * IPS4O_RESTRICT temp,
+static void ips4o_sequential_string(perm_idx_t * IPS4O_RESTRICT order,
+                                    perm_idx_t * IPS4O_RESTRICT temp,
                                     char ** IPS4O_RESTRICT strings,
                                     size_t start, size_t len,
                                     size_t max_len, int depth)
@@ -472,7 +472,7 @@ static void ips4o_sequential_string(size_t * IPS4O_RESTRICT order,
         int b = ips4o_classify_string(strings[order[start + i]], tree, log_buckets, num_buckets);
         temp[write_pos[b]++] = order[start + i];
     }
-    memcpy(order + start, temp, len * sizeof(size_t));
+    memcpy(order + start, temp, len * sizeof(perm_idx_t));
 
     free(tree);
     free(write_pos);
@@ -501,7 +501,7 @@ typedef struct {
     size_t len;
 } bucket_work_t;
 
-static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
+static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
                                             uint64_t * IPS4O_RESTRICT keys,
                                             size_t nobs)
 {
@@ -509,7 +509,7 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
     /* Allocate global temp buffer */
-    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     /* Use thread count as bucket count for top-level partition */
@@ -664,7 +664,7 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
     }
 
     /* Copy back */
-    memcpy(order, temp, nobs * sizeof(size_t));
+    memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
     /* Cleanup partition resources */
     free(tree);
@@ -681,14 +681,14 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
         if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
     }
 
-    size_t **bucket_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
+    perm_idx_t **bucket_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
     if (!bucket_temps) {
         free(bucket_sizes); free(bucket_offsets); free(temp);
         return STATA_ERR_MEMORY;
     }
 
     for (int t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (size_t *)malloc(max_bucket * sizeof(size_t));
+        bucket_temps[t] = (perm_idx_t *)malloc(max_bucket * sizeof(perm_idx_t));
         if (!bucket_temps[t]) {
             for (int j = 0; j < t; j++) free(bucket_temps[j]);
             free(bucket_temps); free(bucket_sizes); free(bucket_offsets); free(temp);
@@ -718,14 +718,14 @@ static stata_retcode ips4o_parallel_numeric(size_t * IPS4O_RESTRICT order,
     return STATA_OK;
 }
 
-static stata_retcode ips4o_parallel_string(size_t * IPS4O_RESTRICT order,
+static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
                                            char ** IPS4O_RESTRICT strings,
                                            size_t nobs, size_t max_len)
 {
     int num_threads = omp_get_max_threads();
     if (num_threads > 16) num_threads = 16;
 
-    size_t *temp = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     int log_buckets = 0;
@@ -788,7 +788,7 @@ static stata_retcode ips4o_parallel_string(size_t * IPS4O_RESTRICT order,
         int b = ips4o_classify_string(strings[order[i]], tree, log_buckets, num_buckets);
         temp[write_pos[b]++] = order[i];
     }
-    memcpy(order, temp, nobs * sizeof(size_t));
+    memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
     free(tree);
     free(write_pos);
@@ -799,14 +799,14 @@ static stata_retcode ips4o_parallel_string(size_t * IPS4O_RESTRICT order,
         if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
     }
 
-    size_t **bucket_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
+    perm_idx_t **bucket_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
     if (!bucket_temps) {
         free(bucket_sizes); free(bucket_offsets); free(temp);
         return STATA_ERR_MEMORY;
     }
 
     for (int t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (size_t *)malloc(max_bucket * sizeof(size_t));
+        bucket_temps[t] = (perm_idx_t *)malloc(max_bucket * sizeof(perm_idx_t));
         if (!bucket_temps[t]) {
             for (int j = 0; j < t; j++) free(bucket_temps[j]);
             free(bucket_temps); free(bucket_sizes); free(bucket_offsets); free(temp);
@@ -864,14 +864,14 @@ static stata_retcode ips4o_sort_by_numeric_var(stata_data *data, int var_idx)
     if (nobs >= IPS4O_PARALLEL_THRESHOLD) {
         rc = ips4o_parallel_numeric(data->sort_order, keys, nobs);
     } else {
-        size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
+        perm_idx_t *temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
         if (!temp) { ctools_aligned_free(keys); return STATA_ERR_MEMORY; }
         ips4o_sequential_numeric(data->sort_order, temp, keys, 0, nobs, 0);
         free(temp);
         rc = STATA_OK;
     }
 #else
-    size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
+    perm_idx_t *temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
     if (!temp) { ctools_aligned_free(keys); return STATA_ERR_MEMORY; }
     ips4o_sequential_numeric(data->sort_order, temp, keys, 0, nobs, 0);
     free(temp);
@@ -916,14 +916,14 @@ static stata_retcode ips4o_sort_by_string_var(stata_data *data, int var_idx)
     if (nobs >= IPS4O_PARALLEL_THRESHOLD) {
         rc = ips4o_parallel_string(data->sort_order, strings, nobs, max_len);
     } else {
-        size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
+        perm_idx_t *temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
         if (!temp) return STATA_ERR_MEMORY;
         ips4o_sequential_string(data->sort_order, temp, strings, 0, nobs, max_len, 0);
         free(temp);
         rc = STATA_OK;
     }
 #else
-    size_t *temp = (size_t *)malloc(nobs * sizeof(size_t));
+    perm_idx_t *temp = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
     if (!temp) return STATA_ERR_MEMORY;
     ips4o_sequential_string(data->sort_order, temp, strings, 0, nobs, max_len, 0);
     free(temp);
@@ -941,7 +941,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
 {
     size_t nvars = data->nvars;
     size_t nobs = data->nobs;
-    size_t *perm = data->sort_order;
+    perm_idx_t *perm = data->sort_order;
 
     if (nvars == 0 || nobs == 0) return STATA_OK;
 
@@ -1023,7 +1023,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
     #pragma omp parallel for
     #endif
     for (size_t j = 0; j < nobs; j++) {
-        perm[j] = j;
+        perm[j] = (perm_idx_t)j;
     }
 
     return STATA_OK;

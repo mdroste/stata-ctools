@@ -64,7 +64,7 @@
    Sequential Counting Sort (for small datasets)
    ============================================================================ */
 
-static stata_retcode counting_sort_numeric_seq(size_t * COUNTING_RESTRICT order,
+static stata_retcode counting_sort_numeric_seq(perm_idx_t * COUNTING_RESTRICT order,
                                                const double * COUNTING_RESTRICT data,
                                                size_t nobs)
 {
@@ -74,7 +74,7 @@ static stata_retcode counting_sort_numeric_seq(size_t * COUNTING_RESTRICT order,
     size_t range;
     size_t *counts = NULL;
     size_t *offsets = NULL;
-    size_t *temp_order = NULL;
+    perm_idx_t *temp_order = NULL;
     size_t i;
     size_t missing_bucket;
     stata_retcode rc = STATA_OK;
@@ -102,7 +102,7 @@ static stata_retcode counting_sort_numeric_seq(size_t * COUNTING_RESTRICT order,
 
     counts = (size_t *)calloc(range + 1, sizeof(size_t));
     offsets = (size_t *)malloc((range + 1) * sizeof(size_t));
-    temp_order = (size_t *)malloc(nobs * sizeof(size_t));
+    temp_order = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
 
     if (!counts || !offsets || !temp_order) {
         rc = STATA_ERR_MEMORY;
@@ -146,7 +146,7 @@ static stata_retcode counting_sort_numeric_seq(size_t * COUNTING_RESTRICT order,
 
     /* Scatter */
     for (i = 0; i < nobs; i++) {
-        size_t idx = order[i];
+        perm_idx_t idx = order[i];
         double v = data[idx];
         size_t bucket;
 
@@ -159,7 +159,7 @@ static stata_retcode counting_sort_numeric_seq(size_t * COUNTING_RESTRICT order,
         temp_order[offsets[bucket]++] = idx;
     }
 
-    memcpy(order, temp_order, nobs * sizeof(size_t));
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
 cleanup:
     free(counts);
@@ -173,7 +173,7 @@ cleanup:
    Parallel Counting Sort Implementation
    ============================================================================ */
 
-static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT order,
+static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRICT order,
                                                     const double * COUNTING_RESTRICT data,
                                                     size_t nobs, int num_threads)
 {
@@ -191,7 +191,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     size_t *global_counts = NULL;
     size_t *global_offsets = NULL;
     size_t **thread_offsets = NULL;
-    size_t *temp_order = NULL;
+    perm_idx_t *temp_order = NULL;
 
     double global_min, global_max;
     int64_t min_val;
@@ -274,7 +274,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     global_counts = (size_t *)calloc(range + 1, sizeof(size_t));
     global_offsets = (size_t *)malloc((range + 1) * sizeof(size_t));
     thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
-    temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    temp_order = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
 
     if (!local_counts || !global_counts || !global_offsets ||
         !thread_offsets || !temp_order) {
@@ -390,7 +390,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
                 COUNTING_PREFETCH(&data[order[i + COUNTING_PREFETCH_DISTANCE]]);
             }
 
-            size_t idx = order[i];
+            perm_idx_t idx = order[i];
             double v = data[idx];
             size_t bucket;
 
@@ -405,7 +405,7 @@ static stata_retcode counting_sort_numeric_parallel(size_t * COUNTING_RESTRICT o
     }
 
     /* Copy result */
-    memcpy(order, temp_order, nobs * sizeof(size_t));
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
 cleanup:
     ctools_aligned_free(thread_min);
@@ -476,7 +476,7 @@ static stata_retcode counting_apply_permutation(stata_data *data)
     #pragma omp parallel for schedule(dynamic, 1)
     for (size_t j = 0; j < nvars; j++) {
         stata_variable *var = &data->vars[j];
-        size_t *perm = data->sort_order;
+        perm_idx_t *perm = data->sort_order;
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
@@ -509,7 +509,7 @@ static stata_retcode counting_apply_permutation(stata_data *data)
 
     /* Reset sort order */
     for (size_t j = 0; j < nobs; j++) {
-        data->sort_order[j] = j;
+        data->sort_order[j] = (perm_idx_t)j;
     }
 
     return all_success ? STATA_OK : STATA_ERR_MEMORY;

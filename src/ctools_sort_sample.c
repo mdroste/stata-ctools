@@ -190,12 +190,12 @@ static inline int find_bucket_string(const char *key,
    ============================================================================ */
 
 /* Insertion sort for small buckets */
-static void insertion_sort_numeric(size_t * SAMPLE_RESTRICT order,
+static void insertion_sort_numeric(perm_idx_t * SAMPLE_RESTRICT order,
                                    const uint64_t * SAMPLE_RESTRICT keys,
                                    size_t start, size_t len)
 {
     for (size_t i = 1; i < len; i++) {
-        size_t temp = order[start + i];
+        perm_idx_t temp = order[start + i];
         uint64_t temp_key = keys[temp];
         size_t j = i;
 
@@ -207,12 +207,12 @@ static void insertion_sort_numeric(size_t * SAMPLE_RESTRICT order,
     }
 }
 
-static void insertion_sort_string(size_t * SAMPLE_RESTRICT order,
+static void insertion_sort_string(perm_idx_t * SAMPLE_RESTRICT order,
                                   char * const * SAMPLE_RESTRICT strings,
                                   size_t start, size_t len)
 {
     for (size_t i = 1; i < len; i++) {
-        size_t temp = order[start + i];
+        perm_idx_t temp = order[start + i];
         const char *temp_str = strings[temp];
         size_t j = i;
 
@@ -225,15 +225,15 @@ static void insertion_sort_string(size_t * SAMPLE_RESTRICT order,
 }
 
 /* LSD radix sort for bucket (numeric) */
-static void radix_sort_bucket_numeric(size_t * SAMPLE_RESTRICT order,
-                                      size_t * SAMPLE_RESTRICT temp,
+static void radix_sort_bucket_numeric(perm_idx_t * SAMPLE_RESTRICT order,
+                                      perm_idx_t * SAMPLE_RESTRICT temp,
                                       const uint64_t * SAMPLE_RESTRICT keys,
                                       size_t start, size_t len)
 {
     size_t counts[256];
     size_t offsets[256];
-    size_t *src = order + start;
-    size_t *dst = temp;
+    perm_idx_t *src = order + start;
+    perm_idx_t *dst = temp;
 
     if (len < 32) {
         insertion_sort_numeric(order, keys, start, len);
@@ -286,20 +286,20 @@ static void radix_sort_bucket_numeric(size_t * SAMPLE_RESTRICT order,
         }
 
         /* Swap */
-        size_t *tmp = src;
+        perm_idx_t *tmp = src;
         src = dst;
         dst = tmp;
     }
 
     /* Copy back if needed */
     if (src != order + start) {
-        memcpy(order + start, src, len * sizeof(size_t));
+        memcpy(order + start, src, len * sizeof(perm_idx_t));
     }
 }
 
 /* MSD radix sort for bucket (string) */
-static void radix_sort_bucket_string(size_t * SAMPLE_RESTRICT order,
-                                     size_t * SAMPLE_RESTRICT temp,
+static void radix_sort_bucket_string(perm_idx_t * SAMPLE_RESTRICT order,
+                                     perm_idx_t * SAMPLE_RESTRICT temp,
                                      char * const * SAMPLE_RESTRICT strings,
                                      size_t start, size_t len,
                                      size_t char_pos, size_t max_len)
@@ -355,7 +355,7 @@ static void radix_sort_bucket_string(size_t * SAMPLE_RESTRICT order,
     }
 
     /* Copy back */
-    memcpy(order + start, temp, len * sizeof(size_t));
+    memcpy(order + start, temp, len * sizeof(perm_idx_t));
 
     /* Recompute offsets for recursion */
     offsets[0] = 0;
@@ -377,7 +377,7 @@ static void radix_sort_bucket_string(size_t * SAMPLE_RESTRICT order,
    Main Sample Sort Implementation (Numeric)
    ============================================================================ */
 
-static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
+static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order,
                                               uint64_t * SAMPLE_RESTRICT keys,
                                               size_t nobs, int num_threads)
 {
@@ -395,7 +395,7 @@ static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
     uint64_t *all_samples = (uint64_t *)malloc(total_samples * sizeof(uint64_t));
     uint64_t *sample_temp = (uint64_t *)malloc(total_samples * sizeof(uint64_t));
     uint64_t *splitters = (uint64_t *)malloc(num_splitters * sizeof(uint64_t));
-    size_t *temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    perm_idx_t *temp_order = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
 
     /* Per-thread bucket counts: use cache-line padding to avoid false sharing */
     size_t padded_buckets = ((num_threads + 7) / 8) * 8;  /* Round up to 8 */
@@ -405,7 +405,7 @@ static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
 
     /* Per-thread temp buffers for bucket sorting (FIX: avoids race condition) */
-    size_t **thread_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
 
     if (!all_samples || !sample_temp || !splitters || !temp_order ||
         !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
@@ -530,14 +530,14 @@ static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
                 SAMPLE_PREFETCH(&keys[order[i + SAMPLE_PREFETCH_DISTANCE]]);
             }
 
-            size_t idx = order[i];
+            perm_idx_t idx = order[i];
             int bucket = find_bucket_numeric(keys[idx], splitters, num_splitters);
             temp_order[local_offsets[bucket]++] = idx;
         }
     }
 
     /* Copy scattered order back */
-    memcpy(order, temp_order, nobs * sizeof(size_t));
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
     /* Phase 6: Allocate per-thread temp buffers for bucket sort */
     size_t max_bucket_size = 0;
@@ -550,7 +550,7 @@ static stata_retcode sample_sort_numeric_impl(size_t * SAMPLE_RESTRICT order,
     #pragma omp parallel num_threads(num_threads)
     {
         int tid = omp_get_thread_num();
-        thread_temps[tid] = (size_t *)malloc(max_bucket_size * sizeof(size_t));
+        thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
     /* Check allocation success */
@@ -595,7 +595,7 @@ cleanup:
    Main Sample Sort Implementation (String)
    ============================================================================ */
 
-static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
+static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
                                              char * const * SAMPLE_RESTRICT strings,
                                              size_t nobs, int num_threads,
                                              size_t max_len)
@@ -613,14 +613,14 @@ static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
     /* Allocate buffers */
     char **all_samples = (char **)malloc(total_samples * sizeof(char *));
     char **splitters = (char **)malloc(num_splitters * sizeof(char *));
-    size_t *temp_order = (size_t *)ctools_aligned_alloc(64, nobs * sizeof(size_t));
+    perm_idx_t *temp_order = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
 
     size_t padded_buckets = ((num_threads + 7) / 8) * 8;
     size_t *bucket_counts = (size_t *)ctools_aligned_alloc(64,
                                 num_threads * padded_buckets * sizeof(size_t));
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
-    size_t **thread_temps = (size_t **)malloc(num_threads * sizeof(size_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
 
     if (!all_samples || !splitters || !temp_order ||
         !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
@@ -728,13 +728,13 @@ static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
         }
 
         for (size_t i = start; i < end; i++) {
-            size_t idx = order[i];
+            perm_idx_t idx = order[i];
             int bucket = find_bucket_string(strings[idx], splitters, num_splitters);
             temp_order[local_offsets[bucket]++] = idx;
         }
     }
 
-    memcpy(order, temp_order, nobs * sizeof(size_t));
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
     /* Phase 6: Allocate per-thread temps */
     size_t max_bucket_size = 0;
@@ -747,7 +747,7 @@ static stata_retcode sample_sort_string_impl(size_t * SAMPLE_RESTRICT order,
     #pragma omp parallel num_threads(num_threads)
     {
         int tid = omp_get_thread_num();
-        thread_temps[tid] = (size_t *)malloc(max_bucket_size * sizeof(size_t));
+        thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
     for (int t = 0; t < num_threads; t++) {
@@ -822,7 +822,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
 
     if (num_threads < 2) {
         /* Sequential radix sort for small data */
-        size_t *temp = (size_t *)malloc(data->nobs * sizeof(size_t));
+        perm_idx_t *temp = (perm_idx_t *)malloc(data->nobs * sizeof(perm_idx_t));
         if (temp == NULL) {
             ctools_aligned_free(keys);
             return STATA_ERR_MEMORY;
@@ -863,7 +863,7 @@ static stata_retcode sample_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     if (num_threads < 2) {
-        size_t *temp = (size_t *)malloc(data->nobs * sizeof(size_t));
+        perm_idx_t *temp = (perm_idx_t *)malloc(data->nobs * sizeof(perm_idx_t));
         if (temp == NULL) {
             return STATA_ERR_MEMORY;
         }
@@ -896,7 +896,7 @@ static stata_retcode sample_apply_permutation(stata_data *data)
     #pragma omp parallel for schedule(dynamic, 1)
     for (size_t j = 0; j < nvars; j++) {
         stata_variable *var = &data->vars[j];
-        size_t *perm = data->sort_order;
+        perm_idx_t *perm = data->sort_order;
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
@@ -929,7 +929,7 @@ static stata_retcode sample_apply_permutation(stata_data *data)
 
     /* Reset sort order */
     for (size_t j = 0; j < nobs; j++) {
-        data->sort_order[j] = j;
+        data->sort_order[j] = (perm_idx_t)j;
     }
 
     return all_success ? STATA_OK : STATA_ERR_MEMORY;
