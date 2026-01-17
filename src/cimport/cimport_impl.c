@@ -211,9 +211,19 @@ static void cimport_arena_init(CImportArena *arena) {
 static void *cimport_arena_alloc(CImportArena *arena, size_t size) {
     size = (size + 7) & ~7;
 
-    if (!arena->current || arena->current->used + size > arena->current->capacity) {
+    /* Check for overflow in used + size calculation */
+    size_t needed = 0;
+    if (arena->current) {
+        if (size > SIZE_MAX - arena->current->used) return NULL;  /* overflow */
+        needed = arena->current->used + size;
+    }
+
+    if (!arena->current || needed > arena->current->capacity) {
         size_t block_size = CTOOLS_ARENA_BLOCK_SIZE;
-        if (size > block_size - sizeof(CImportArenaBlock)) {
+        size_t min_data_size = block_size - sizeof(CImportArenaBlock);
+        if (size > min_data_size) {
+            /* Check for overflow in size + sizeof addition */
+            if (size > SIZE_MAX - sizeof(CImportArenaBlock)) return NULL;
             block_size = size + sizeof(CImportArenaBlock);
         }
 
@@ -1145,15 +1155,31 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         }
 
         if (chunk->num_rows >= chunk->capacity) {
-            chunk->capacity *= 2;
-            CImportParsedRow **new_rows = realloc(chunk->rows, sizeof(CImportParsedRow *) * chunk->capacity);
+            /* Check for overflow in capacity doubling */
+            if (chunk->capacity > SIZE_MAX / 2) {
+                atomic_store(&ctx->error_code, 1);
+                break;
+            }
+            size_t new_capacity = chunk->capacity * 2;
+            /* Check for overflow in realloc size */
+            if (new_capacity > SIZE_MAX / sizeof(CImportParsedRow *)) {
+                atomic_store(&ctx->error_code, 1);
+                break;
+            }
+            CImportParsedRow **new_rows = realloc(chunk->rows, sizeof(CImportParsedRow *) * new_capacity);
             if (!new_rows) {
                 atomic_store(&ctx->error_code, 1);
                 break;
             }
             chunk->rows = new_rows;
+            chunk->capacity = new_capacity;
         }
 
+        /* Check for overflow in row_size calculation */
+        if ((size_t)num_fields > (SIZE_MAX - sizeof(CImportParsedRow)) / sizeof(CImportFieldRef)) {
+            atomic_store(&ctx->error_code, 1);
+            break;
+        }
         size_t row_size = sizeof(CImportParsedRow) + sizeof(CImportFieldRef) * num_fields;
         CImportParsedRow *row = cimport_arena_alloc(&chunk->arena, row_size);
         if (!row) {
@@ -1586,39 +1612,46 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     SF_macro_save("_cimport_nvar", macro_val);
 
     char *p = macro_val;
-    for (int i = 0; i < ctx->num_columns; i++) {
-        if (i > 0) *p++ = ' ';
-        strcpy(p, ctx->columns[i].name);
-        p += strlen(ctx->columns[i].name);
+    char *end = macro_val + sizeof(macro_val) - 1;  /* Leave room for null terminator */
+    for (int i = 0; i < ctx->num_columns && p < end; i++) {
+        if (i > 0 && p < end) *p++ = ' ';
+        size_t name_len = strlen(ctx->columns[i].name);
+        size_t space_left = (size_t)(end - p);
+        if (name_len > space_left) name_len = space_left;
+        memcpy(p, ctx->columns[i].name, name_len);
+        p += name_len;
     }
     *p = '\0';
     SF_macro_save("_cimport_varnames", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns; i++) {
-        if (i > 0) *p++ = ' ';
-        *p++ = (ctx->columns[i].type == CIMPORT_COL_STRING) ? '1' : '0';
+    for (int i = 0; i < ctx->num_columns && p < end; i++) {
+        if (i > 0 && p < end) *p++ = ' ';
+        if (p < end) *p++ = (ctx->columns[i].type == CIMPORT_COL_STRING) ? '1' : '0';
     }
     *p = '\0';
     SF_macro_save("_cimport_vartypes", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns; i++) {
-        if (i > 0) *p++ = ' ';
-        if (ctx->columns[i].type == CIMPORT_COL_STRING) {
-            *p++ = '0';
-        } else {
-            *p++ = '0' + (int)ctx->columns[i].num_subtype;
+    for (int i = 0; i < ctx->num_columns && p < end; i++) {
+        if (i > 0 && p < end) *p++ = ' ';
+        if (p < end) {
+            if (ctx->columns[i].type == CIMPORT_COL_STRING) {
+                *p++ = '0';
+            } else {
+                *p++ = '0' + (int)ctx->columns[i].num_subtype;
+            }
         }
     }
     *p = '\0';
     SF_macro_save("_cimport_numtypes", macro_val);
 
     p = macro_val;
-    for (int i = 0; i < ctx->num_columns; i++) {
-        if (i > 0) *p++ = ' ';
+    for (int i = 0; i < ctx->num_columns && p < end; i++) {
+        if (i > 0 && p < end) *p++ = ' ';
         int len = ctx->columns[i].type == CIMPORT_COL_STRING ? ctx->columns[i].max_strlen : 0;
-        p += sprintf(p, "%d", len);
+        int written = snprintf(p, (size_t)(end - p + 1), "%d", len);
+        if (written > 0 && p + written <= end) p += written;
     }
     *p = '\0';
     SF_macro_save("_cimport_strlens", macro_val);

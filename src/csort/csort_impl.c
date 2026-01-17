@@ -112,10 +112,12 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
         /* Add to array */
         if (count >= capacity) {
             capacity *= 2;
-            vars = (int *)realloc(vars, capacity * sizeof(int));
-            if (vars == NULL) {
+            int *new_vars = (int *)realloc(vars, capacity * sizeof(int));
+            if (new_vars == NULL) {
+                free(vars);
                 return -1;
             }
+            vars = new_vars;
         }
         vars[count++] = (int)val;
         p = endptr;

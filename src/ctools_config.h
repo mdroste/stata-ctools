@@ -99,6 +99,21 @@
 #endif
 
 /* ============================================================================
+   OpenMP compatibility layer
+   Provides fallback stubs when OpenMP is not available.
+   ============================================================================ */
+
+#ifdef _OPENMP
+    #include <omp.h>
+#else
+    /* Fallback stubs for OpenMP runtime functions */
+    static inline int omp_get_thread_num(void)  { return 0; }
+    static inline int omp_get_max_threads(void) { return 1; }
+    static inline int omp_get_num_threads(void) { return 1; }
+    static inline void omp_set_num_threads(int n) { (void)n; }
+#endif
+
+/* ============================================================================
    Cross-platform aligned memory allocation
 
    IMPORTANT: On Windows, _aligned_malloc() requires _aligned_free().
@@ -198,5 +213,81 @@ static inline void ctools_aligned_free(void *ptr)
     /* Fallback: compiler barrier only */
     #define ctools_memory_barrier() do { __asm__ __volatile__("" ::: "memory"); } while(0)
 #endif
+
+/* ============================================================================
+   Safe size arithmetic for memory allocation
+
+   Prevents integer overflow when computing allocation sizes like N*K*sizeof(T).
+   Returns 0 on success, -1 on overflow.
+   ============================================================================ */
+
+#include <stdint.h>
+
+/*
+    Multiply two size_t values safely, checking for overflow.
+    Returns 0 on success (result stored in *out), -1 on overflow.
+*/
+static inline int ctools_safe_mul_size(size_t a, size_t b, size_t *out)
+{
+    if (a != 0 && b > SIZE_MAX / a) {
+        *out = 0;
+        return -1;  /* overflow */
+    }
+    *out = a * b;
+    return 0;
+}
+
+/*
+    Compute a * b * c safely for allocation sizes.
+    Typical use: ctools_safe_alloc_size(N, K, sizeof(double), &size)
+    Returns 0 on success, -1 on overflow.
+*/
+static inline int ctools_safe_alloc_size(size_t a, size_t b, size_t c, size_t *out)
+{
+    size_t tmp;
+    if (ctools_safe_mul_size(a, b, &tmp) != 0) {
+        *out = 0;
+        return -1;
+    }
+    if (ctools_safe_mul_size(tmp, c, out) != 0) {
+        *out = 0;
+        return -1;
+    }
+    return 0;
+}
+
+/*
+    Allocate memory with overflow-checked size computation.
+    Returns NULL on overflow or allocation failure.
+    Usage: ptr = ctools_safe_malloc2(N, sizeof(double));
+           ptr = ctools_safe_malloc3(N, K, sizeof(double));
+*/
+static inline void *ctools_safe_malloc2(size_t a, size_t b)
+{
+    size_t size;
+    if (ctools_safe_mul_size(a, b, &size) != 0) return NULL;
+    return malloc(size);
+}
+
+static inline void *ctools_safe_malloc3(size_t a, size_t b, size_t c)
+{
+    size_t size;
+    if (ctools_safe_alloc_size(a, b, c, &size) != 0) return NULL;
+    return malloc(size);
+}
+
+static inline void *ctools_safe_calloc2(size_t a, size_t b)
+{
+    size_t size;
+    if (ctools_safe_mul_size(a, b, &size) != 0) return NULL;
+    return calloc(1, size);
+}
+
+static inline void *ctools_safe_calloc3(size_t a, size_t b, size_t c)
+{
+    size_t size;
+    if (ctools_safe_alloc_size(a, b, c, &size) != 0) return NULL;
+    return calloc(1, size);
+}
 
 #endif /* CTOOLS_CONFIG_H */

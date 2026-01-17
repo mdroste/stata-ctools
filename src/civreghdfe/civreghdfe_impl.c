@@ -19,9 +19,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
-#include <omp.h>
 
 #include "civreghdfe_impl.h"
+#include "../ctools_config.h"
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
@@ -154,16 +154,16 @@ ST_retcode compute_2sls(
         return 198;
     }
 
-    /* Allocate work arrays */
-    ST_double *ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ST_double *ZtZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ST_double *ZtX = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
-    ST_double *Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
-    ST_double *XtPzX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    ST_double *XtPzy = (ST_double *)calloc(K_total, sizeof(ST_double));
-    ST_double *temp1 = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
-    ST_double *X_all = (ST_double *)malloc(N * K_total * sizeof(ST_double));
-    ST_double *resid = (ST_double *)malloc(N * sizeof(ST_double));
+    /* Allocate work arrays (with overflow checks) */
+    ST_double *ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+    ST_double *ZtZ_inv = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
+    ST_double *ZtX = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
+    ST_double *Zty = (ST_double *)ctools_safe_calloc2((size_t)K_iv, sizeof(ST_double));
+    ST_double *XtPzX = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
+    ST_double *XtPzy = (ST_double *)ctools_safe_calloc2((size_t)K_total, sizeof(ST_double));
+    ST_double *temp1 = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_total, sizeof(ST_double));
+    ST_double *X_all = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
+    ST_double *resid = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
 
     if (!ZtZ || !ZtZ_inv || !ZtX || !Zty || !XtPzX || !XtPzy ||
         !temp1 || !X_all || !resid) {
@@ -176,10 +176,24 @@ ST_retcode compute_2sls(
     /* Combine X_exog and X_endog into X_all */
     /* Layout: [X_exog (N x K_exog) | X_endog (N x K_endog)] */
     if (K_exog > 0 && X_exog) {
-        memcpy(X_all, X_exog, N * K_exog * sizeof(ST_double));
+        size_t exog_size;
+        if (ctools_safe_alloc_size((size_t)N, (size_t)K_exog, sizeof(ST_double), &exog_size) != 0) {
+            SF_error("civreghdfe: Size overflow in memcpy\n");
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            return 920;
+        }
+        memcpy(X_all, X_exog, exog_size);
     }
     if (K_endog > 0 && X_endog) {
-        memcpy(X_all + N * K_exog, X_endog, N * K_endog * sizeof(ST_double));
+        size_t endog_size;
+        if (ctools_safe_alloc_size((size_t)N, (size_t)K_endog, sizeof(ST_double), &endog_size) != 0) {
+            SF_error("civreghdfe: Size overflow in memcpy\n");
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            return 920;
+        }
+        memcpy(X_all + (size_t)N * (size_t)K_exog, X_endog, endog_size);
     }
 
     /* Step 1: Compute Z'Z (weighted if needed) */
@@ -190,7 +204,11 @@ ST_retcode compute_2sls(
     }
 
     /* Step 2: Invert Z'Z */
-    memcpy(ZtZ_inv, ZtZ, K_iv * K_iv * sizeof(ST_double));
+    {
+        size_t ztz_size;
+        ctools_safe_alloc_size((size_t)K_iv, (size_t)K_iv, sizeof(ST_double), &ztz_size);
+        memcpy(ZtZ_inv, ZtZ, ztz_size);
+    }
     if (cholesky(ZtZ_inv, K_iv) != 0) {
         SF_error("civreghdfe: Z'Z is singular (instruments may be collinear)\n");
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);

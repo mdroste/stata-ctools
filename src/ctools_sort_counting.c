@@ -29,7 +29,6 @@
 #include <string.h>
 #include <stdint.h>
 #include <math.h>
-#include <omp.h>
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"

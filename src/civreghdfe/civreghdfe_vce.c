@@ -9,9 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <omp.h>
 
 #include "civreghdfe_vce.h"
+#include "../ctools_config.h"
 #include "civreghdfe_matrix.h"
 
 /* Forward declarations from creghdfe_solver */
@@ -65,15 +65,21 @@ void ivvce_compute_robust(
     /* PzX = Z * temp_kiv_ktotal where temp = (Z'Z)^-1 Z'X */
     /* Note: This requires Z matrix - for now, compute meat directly */
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K_total, (size_t)K_total, sizeof(ST_double), &kk_size) != 0) {
+        return;  /* Overflow */
+    }
+
     /* Allocate meat matrix */
-    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *meat = (ST_double *)calloc(1, kk_size);
     if (!meat) return;
 
     /* For robust VCE without Z, we use the sandwich with X'P_Z X */
     /* This is an approximation - full implementation needs Z */
 
     /* Compute temp = XkX_inv * meat */
-    ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *temp_v = (ST_double *)calloc(1, kk_size);
     if (!temp_v) {
         free(meat);
         return;

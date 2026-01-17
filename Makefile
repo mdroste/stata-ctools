@@ -265,7 +265,7 @@ else ifeq ($(LLVM_MINGW_EXISTS),yes)
     CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -fopenmp
+    LDFLAGS_WIN = -fopenmp -lpthread
     WIN_HAS_OMP = yes
 else
     # Cross-compile with mingw-w64 (no OpenMP)
@@ -273,7 +273,7 @@ else
     MINGW_EXISTS := $(shell which x86_64-w64-mingw32-gcc 2>/dev/null && echo yes || echo no)
     CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -static-libgcc
+    LDFLAGS_WIN = -static-libgcc -lpthread
     WIN_HAS_OMP = no
 endif
 

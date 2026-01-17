@@ -33,7 +33,17 @@ typedef struct {
     char *base;
     size_t capacity;
     size_t used;
+    int has_fallback;  /* Non-zero if any strings were allocated via strdup fallback */
 } string_arena_internal;
+
+/*
+    Check if a pointer is within the arena's memory range.
+*/
+static int arena_contains(string_arena_internal *arena, const char *ptr)
+{
+    if (arena == NULL || ptr == NULL) return 0;
+    return (ptr >= arena->base && ptr < arena->base + arena->capacity);
+}
 
 static void arena_free_internal(void *arena_ptr)
 {
@@ -68,18 +78,30 @@ void stata_data_free(stata_data *data)
                 aligned_free_internal(data->vars[i].data.dbl);
             } else if (data->vars[i].type == STATA_TYPE_STRING) {
                 if (data->vars[i].data.str != NULL) {
-                    /* Check if strings were allocated via arena (fast path)
-                       or individually via strdup (slow path) */
-                    if (data->vars[i]._arena != NULL) {
-                        /* Arena allocation: O(1) bulk free - just free the arena.
-                           All strings are inside the arena's contiguous memory block. */
-                        arena_free_internal(data->vars[i]._arena);
+                    string_arena_internal *arena = (string_arena_internal *)data->vars[i]._arena;
+
+                    if (arena != NULL && !arena->has_fallback) {
+                        /* Fast path: all strings are in the arena, O(1) bulk free */
+                        arena_free_internal(arena);
+                        data->vars[i]._arena = NULL;
+                    } else if (arena != NULL && arena->has_fallback) {
+                        /* Mixed path: some strings in arena, some from strdup.
+                           Free fallback strings individually (those outside arena range). */
+                        for (size_t j = 0; j < data->vars[i].nobs; j++) {
+                            char *str = data->vars[i].data.str[j];
+                            if (str != NULL && !arena_contains(arena, str)) {
+                                free(str);
+                            }
+                        }
+                        arena_free_internal(arena);
                         data->vars[i]._arena = NULL;
                     } else {
-                        /* Legacy path: individual strdup allocations - O(n) frees.
-                           This path is only used if arena allocation failed. */
+                        /* No arena: all strings are from strdup (or NULL).
+                           Free each non-NULL pointer individually. */
                         for (size_t j = 0; j < data->vars[i].nobs; j++) {
-                            free(data->vars[i].data.str[j]);
+                            if (data->vars[i].data.str[j] != NULL) {
+                                free(data->vars[i].data.str[j]);
+                            }
                         }
                     }
                     /* Free the pointer array (aligned allocation) */

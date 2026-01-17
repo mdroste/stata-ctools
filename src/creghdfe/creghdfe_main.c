@@ -13,6 +13,7 @@
 #include "creghdfe_ols.h"
 #include "creghdfe_vce.h"
 #include "../ctools_hdfe_utils.h"
+#include "../ctools_config.h"
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -155,10 +156,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Allocate factor structures */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
     hash_tables = (IntHashTable **)calloc(G, sizeof(IntHashTable *));
-    mask = (ST_int *)malloc(N_orig * sizeof(ST_int));
+    mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
 
     /* Allocate data matrix */
-    data = (ST_double *)malloc(N_orig * K * sizeof(ST_double));
+    data = (ST_double *)ctools_safe_malloc3((size_t)N_orig, (size_t)K, sizeof(ST_double));
     means = (ST_double *)malloc(K * sizeof(ST_double));
     stdevs = (ST_double *)malloc(K * sizeof(ST_double));
     tss = (ST_double *)malloc(K * sizeof(ST_double));
@@ -166,7 +167,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Allocate weight array if using weights */
     ST_double *weights = NULL;
     if (has_weights) {
-        weights = (ST_double *)malloc(N_orig * sizeof(ST_double));
+        weights = (ST_double *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_double));
     }
 
     if (!factors || !hash_tables || !mask || !data || !means || !stdevs || !tss ||
@@ -562,8 +563,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* ================================================================
      * STEP 5: Compact data (remove singleton rows)
      * ================================================================ */
-    ST_double *data_compact = (ST_double *)malloc(N * K * sizeof(ST_double));
-    ST_double *means_compact = (ST_double *)malloc(K * sizeof(ST_double));
+    ST_double *data_compact = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double));
+    ST_double *means_compact = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
 
     if (!data_compact || !means_compact) {
         if (data_compact) free(data_compact);

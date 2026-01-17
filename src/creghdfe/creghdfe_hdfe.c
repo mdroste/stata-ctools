@@ -8,6 +8,7 @@
 #include "creghdfe_hdfe.h"
 #include "creghdfe_utils.h"
 #include "../ctools_hdfe_utils.h"
+#include "../ctools_config.h"
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
@@ -154,8 +155,8 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     /* Allocate structures */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
     hash_tables = (IntHashTable **)calloc(G, sizeof(IntHashTable *));
-    mask = (ST_int *)malloc(N_orig * sizeof(ST_int));
-    raw_values = (ST_int *)malloc(G * sizeof(ST_int));  /* One value per FE for current obs */
+    mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
+    raw_values = (ST_int *)ctools_safe_malloc2((size_t)G, sizeof(ST_int));  /* One value per FE for current obs */
 
     if (!factors || !hash_tables || !mask || !raw_values) {
         if (factors) free(factors);
@@ -173,7 +174,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
 
     /* Allocate per-factor arrays */
     for (g = 0; g < G; g++) {
-        factors[g].levels = (ST_int *)malloc(N_orig * sizeof(ST_int));
+        factors[g].levels = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
         factors[g].num_obs = N_orig;
         hash_tables[g] = hash_create(N_orig);
 

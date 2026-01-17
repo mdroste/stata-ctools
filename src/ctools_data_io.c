@@ -112,6 +112,7 @@ typedef struct {
     char *base;         /* Base pointer to arena memory */
     size_t capacity;    /* Total arena capacity in bytes */
     size_t used;        /* Currently used bytes */
+    int has_fallback;   /* Non-zero if any strings were allocated via strdup fallback */
 } string_arena;
 
 /*
@@ -131,12 +132,13 @@ static string_arena *arena_create(size_t capacity)
 
     arena->capacity = capacity;
     arena->used = 0;
+    arena->has_fallback = 0;
     return arena;
 }
 
 /*
     Allocate a string copy from the arena.
-    Falls back to strdup if arena is full.
+    Falls back to strdup if arena is full (and sets has_fallback flag).
     Returns NULL on complete failure.
 */
 static char *arena_strdup(string_arena *arena, const char *s)
@@ -151,7 +153,10 @@ static char *arena_strdup(string_arena *arena, const char *s)
         return ptr;
     }
 
-    /* Fallback to regular strdup */
+    /* Fallback to regular strdup - mark that we have fallback allocations */
+    if (arena != NULL) {
+        arena->has_fallback = 1;
+    }
     return strdup(s);
 }
 
@@ -170,55 +175,6 @@ static void arena_free(string_arena *arena)
 /* ===========================================================================
    SIMD-Accelerated Utilities
    =========================================================================== */
-
-/*
-    Initialize an array with identity permutation [0, 1, 2, ..., n-1]
-    using SIMD acceleration where available.
-*/
-static void init_identity_permutation(size_t *arr, size_t n)
-{
-    size_t i = 0;
-
-#if defined(CTOOLS_AVX2)
-    /* AVX2: Initialize 4 size_t values at a time (256 bits = 4 x 64-bit) */
-    __m256i increment = _mm256_set1_epi64x(4);
-    __m256i indices = _mm256_set_epi64x(3, 2, 1, 0);
-
-    size_t vec_end = n - (n % 4);
-    for (; i < vec_end; i += 4) {
-        _mm256_storeu_si256((__m256i *)&arr[i], indices);
-        indices = _mm256_add_epi64(indices, increment);
-    }
-#elif defined(CTOOLS_ARM64)
-    /* NEON: Initialize 2 size_t values at a time (128 bits = 2 x 64-bit) */
-    uint64x2_t increment = vdupq_n_u64(2);
-    uint64x2_t indices = {0, 1};
-
-    size_t vec_end = n - (n % 2);
-    for (; i < vec_end; i += 2) {
-        vst1q_u64((uint64_t *)&arr[i], indices);
-        indices = vaddq_u64(indices, increment);
-    }
-#else
-    /* Scalar fallback with 8x unrolling */
-    size_t vec_end = n - (n % 8);
-    for (; i < vec_end; i += 8) {
-        arr[i]     = i;
-        arr[i + 1] = i + 1;
-        arr[i + 2] = i + 2;
-        arr[i + 3] = i + 3;
-        arr[i + 4] = i + 4;
-        arr[i + 5] = i + 5;
-        arr[i + 6] = i + 6;
-        arr[i + 7] = i + 7;
-    }
-#endif
-
-    /* Scalar cleanup for remaining elements */
-    for (; i < n; i++) {
-        arr[i] = i;
-    }
-}
 
 /*
     Copy 8 doubles from local buffer to destination array.
@@ -363,11 +319,12 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         var->str_maxlen = STATA_STR_MAXLEN;
         var->_arena = NULL;
 
-        /* Allocate pointer array (cache-line aligned) */
+        /* Allocate pointer array (cache-line aligned, zero-initialized for safe cleanup) */
         var->data.str = (char **)aligned_alloc_cacheline(nobs * sizeof(char *));
         if (var->data.str == NULL) {
             return -1;
         }
+        memset(var->data.str, 0, nobs * sizeof(char *));
 
         char **str_ptr = var->data.str;
 
@@ -1191,6 +1148,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         /* String variable: allocate buffer, gather, scatter */
         char **buf = (char **)aligned_alloc_cacheline(output_nobs * sizeof(char *));
         if (!buf) return STATA_ERR_MEMORY;
+        memset(buf, 0, output_nobs * sizeof(char *));  /* Zero-init for safe cleanup */
 
         char strbuf[2048];
 
@@ -1212,7 +1170,20 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
                 buf[i] = arena_strdup(arena, "");  /* Missing -> empty string */
             }
             if (!buf[i]) {
-                /* Cleanup on allocation failure */
+                /* Cleanup on allocation failure - free any fallback strings first */
+                if (arena != NULL && arena->has_fallback) {
+                    for (size_t j = 0; j < i; j++) {
+                        if (buf[j] != NULL &&
+                            (buf[j] < arena->base || buf[j] >= arena->base + arena->capacity)) {
+                            free(buf[j]);
+                        }
+                    }
+                } else if (arena == NULL) {
+                    /* No arena - free all strdup'd strings */
+                    for (size_t j = 0; j < i; j++) {
+                        free(buf[j]);
+                    }
+                }
                 arena_free(arena);
                 aligned_free(buf);
                 return STATA_ERR_MEMORY;
@@ -1231,10 +1202,22 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             SF_sstore(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
-        /* Note: We don't free individual strings - they're in the arena
-           (or if fallback strdup was used, we accept the leak for simplicity).
-           In practice, for very large strings that overflow the arena,
-           this could be improved with tracking. */
+        /* Free fallback strings (those outside arena range), then free arena */
+        if (arena != NULL && arena->has_fallback) {
+            for (i = 0; i < output_nobs; i++) {
+                if (buf[i] != NULL &&
+                    (buf[i] < arena->base || buf[i] >= arena->base + arena->capacity)) {
+                    free(buf[i]);
+                }
+            }
+        } else if (arena == NULL) {
+            /* No arena - free all strdup'd strings */
+            for (i = 0; i < output_nobs; i++) {
+                if (buf[i] != NULL) {
+                    free(buf[i]);
+                }
+            }
+        }
         arena_free(arena);
         aligned_free(buf);
 

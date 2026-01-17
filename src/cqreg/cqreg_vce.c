@@ -8,11 +8,13 @@
 #include "cqreg_vce.h"
 #include "cqreg_linalg.h"
 #include "cqreg_sparsity.h"
+#include "../ctools_config.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 
 /* Debug logging */
 #define VCE_DEBUG 0
@@ -67,9 +69,14 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
 
     vce_debug_log("cqreg_compute_xtx_inv: N=%d K=%d\n", N, K);
 
-    /* Allocate temporary storage */
-    XtX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    /* Allocate temporary storage (with overflow check) */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        vce_debug_log("  ERROR: size overflow K*K*sizeof\n");
+        return -1;
+    }
+    XtX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    L = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
 
     vce_debug_log("  XtX=%p, L=%p\n", (void*)XtX, (void*)L);
 
@@ -89,7 +96,7 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
      * Since K is typically small (3-20), parallelization provides minimal
      * benefit anyway. Keep this serial for stability.
      */
-    memset(XtX, 0, K * K * sizeof(ST_double));
+    memset(XtX, 0, kk_size);
 
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
@@ -109,11 +116,11 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
 
     /* Cholesky decomposition */
     vce_debug_log("  Cholesky decomposition...\n");
-    memcpy(L, XtX, K * K * sizeof(ST_double));
+    memcpy(L, XtX, kk_size);
     if (cqreg_cholesky(L, K) != 0) {
         vce_debug_log("  Cholesky failed, trying with regularization...\n");
         /* Try with regularization */
-        memcpy(L, XtX, K * K * sizeof(ST_double));
+        memcpy(L, XtX, kk_size);
         cqreg_add_regularization(L, K, 1e-10);
         if (cqreg_cholesky(L, K) != 0) {
             vce_debug_log("  ERROR: Cholesky still failed\n");
@@ -146,15 +153,22 @@ void cqreg_sandwich_product(ST_double *V,
     ST_int i, j, k;
     ST_double *AB = NULL;
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        memset(V, 0, (size_t)K * (size_t)K * sizeof(ST_double));
+        return;
+    }
+
     /* Allocate temporary for A * B */
-    AB = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    AB = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
     if (AB == NULL) {
-        memset(V, 0, K * K * sizeof(ST_double));
+        memset(V, 0, kk_size);
         return;
     }
 
     /* Compute AB = A * B */
-    memset(AB, 0, K * K * sizeof(ST_double));
+    memset(AB, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -166,7 +180,7 @@ void cqreg_sandwich_product(ST_double *V,
     }
 
     /* Compute V = AB * A' */
-    memset(V, 0, K * K * sizeof(ST_double));
+    memset(V, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -211,13 +225,24 @@ ST_int cqreg_map_clusters(const ST_int *cluster_ids,
         if (found < 0) {
             /* New cluster */
             if (n_unique >= capacity) {
-                capacity *= 2;
-                ST_int *tmp = (ST_int *)realloc(unique, capacity * sizeof(ST_int));
+                /* Check for overflow in capacity doubling */
+                if (capacity > INT32_MAX / 2) {
+                    free(unique);
+                    return -1;
+                }
+                ST_int new_capacity = capacity * 2;
+                /* Check for overflow in realloc size */
+                if ((size_t)new_capacity > SIZE_MAX / sizeof(ST_int)) {
+                    free(unique);
+                    return -1;
+                }
+                ST_int *tmp = (ST_int *)realloc(unique, (size_t)new_capacity * sizeof(ST_int));
                 if (tmp == NULL) {
                     free(unique);
                     return -1;
                 }
                 unique = tmp;
+                capacity = new_capacity;
             }
             unique[n_unique] = cid;
             found = n_unique;
@@ -252,8 +277,16 @@ ST_int cqreg_vce_iid(ST_double *V,
     vce_debug_log("cqreg_vce_iid: ENTRY N=%d K=%d q=%.4f sparsity=%.4f\n", N, K, q, sparsity);
     vce_debug_log("  V=%p, X=%p\n", (void*)V, (void*)X);
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        vce_debug_log("  ERROR: size overflow\n");
+        vce_debug_close();
+        return -1;
+    }
+
     /* Allocate (X'X)^{-1} */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
     vce_debug_log("  XtX_inv=%p\n", (void*)XtX_inv);
     if (XtX_inv == NULL) {
         vce_debug_log("  ERROR: XtX_inv alloc failed\n");
@@ -337,9 +370,16 @@ ST_int cqreg_vce_robust(ST_double *V,
     ST_double *Omega = NULL;    /* Score variance matrix */
     ST_int rc = 0;
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        vce_debug_log("  ERROR: size overflow\n");
+        return -1;
+    }
+
     /* Allocate matrices */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    Omega = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    Omega = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
 
     if (XtX_inv == NULL || Omega == NULL) {
         vce_debug_log("  ERROR: allocation failed\n");
@@ -363,13 +403,13 @@ ST_int cqreg_vce_robust(ST_double *V,
      *
      * Optimized: Compute column-by-column with unrolling
      */
-    memset(Omega, 0, K * K * sizeof(ST_double));
+    memset(Omega, 0, kk_size);
 
     ST_double psi_pos_sq = q * q;           /* tau^2 */
     ST_double psi_neg_sq = (1.0 - q) * (1.0 - q);  /* (1-tau)^2 */
 
     /* Pre-compute psi_sq for each observation to avoid branch in inner loop */
-    ST_double *psi_sq_vec = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double *psi_sq_vec = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
     if (psi_sq_vec != NULL) {
         for (i = 0; i < N; i++) {
             psi_sq_vec[i] = (residuals[i] >= 0) ? psi_pos_sq : psi_neg_sq;
@@ -451,14 +491,14 @@ ST_int cqreg_vce_robust(ST_double *V,
     vce_debug_log("  sparsity^2 = %.6e\n", scale);
 
     /* First compute temp = Omega * (X'X)^{-1} */
-    ST_double *temp = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ST_double *temp = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
     if (temp == NULL) {
         vce_debug_log("  ERROR: temp allocation failed\n");
         rc = -1;
         goto cleanup;
     }
 
-    memset(temp, 0, K * K * sizeof(ST_double));
+    memset(temp, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -470,7 +510,7 @@ ST_int cqreg_vce_robust(ST_double *V,
     }
 
     /* Now compute V = scale * (X'X)^{-1} * temp */
-    memset(V, 0, K * K * sizeof(ST_double));
+    memset(V, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -527,11 +567,18 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     ST_double *L = NULL;        /* Cholesky factor */
     ST_int rc = 0;
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        vce_debug_log("  ERROR: size overflow\n");
+        return -1;
+    }
+
     /* Allocate matrices */
-    XDX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    XDX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    XtX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    XDX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XDX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XtX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    L = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
 
     if (XDX == NULL || XDX_inv == NULL || XtX == NULL || L == NULL) {
         vce_debug_log("  ERROR: allocation failed\n");
@@ -541,7 +588,7 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
 
     /* Compute X'DX = sum_i f_i * X_i * X_i'
      * OPTIMIZED: Column-major traversal with 8x loop unrolling */
-    memset(XDX, 0, K * K * sizeof(ST_double));
+    memset(XDX, 0, kk_size);
     ST_int N8 = N - (N & 7);
 
     for (j = 0; j < K; j++) {
@@ -593,7 +640,7 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
 
     /* Compute X'X
      * OPTIMIZED: 8x loop unrolling */
-    memset(XtX, 0, K * K * sizeof(ST_double));
+    memset(XtX, 0, kk_size);
 
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
@@ -643,7 +690,7 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     vce_debug_log("  XtX[0,0] = %.6e\n", XtX[0]);
 
     /* Compute (X'DX)^{-1} using Cholesky */
-    memcpy(L, XDX, K * K * sizeof(ST_double));
+    memcpy(L, XDX, kk_size);
 
     /* Add regularization for numerical stability */
     for (j = 0; j < K; j++) {
@@ -665,13 +712,13 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     vce_debug_log("  scale (q*(1-q)) = %.6e\n", scale);
 
     /* temp = X'X * (X'DX)^{-1} */
-    ST_double *temp = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ST_double *temp = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
     if (temp == NULL) {
         rc = -1;
         goto cleanup;
     }
 
-    memset(temp, 0, K * K * sizeof(ST_double));
+    memset(temp, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -683,7 +730,7 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     }
 
     /* V = scale * (X'DX)^{-1} * temp */
-    memset(V, 0, K * K * sizeof(ST_double));
+    memset(V, 0, kk_size);
     for (i = 0; i < K; i++) {
         for (j = 0; j < K; j++) {
             ST_double sum = 0.0;
@@ -741,11 +788,17 @@ ST_int cqreg_vce_cluster(ST_double *V,
     ST_int *cluster_map = NULL;
     ST_int rc = 0;
 
+    /* Compute size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        return -1;
+    }
+
     /* Allocate matrices */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    M = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    score_g = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
-    cluster_map = (ST_int *)malloc(N * sizeof(ST_int));
+    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    M = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    score_g = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
+    cluster_map = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
 
     if (XtX_inv == NULL || M == NULL || score_g == NULL || cluster_map == NULL) {
         rc = -1;
@@ -771,7 +824,7 @@ ST_int cqreg_vce_cluster(ST_double *V,
      * where psi_i = q - I(resid_i < 0) is the influence function score
      */
 
-    memset(M, 0, K * K * sizeof(ST_double));
+    memset(M, 0, kk_size);
 
     /* Allocate storage for cluster scores */
     ST_double **cluster_scores = (ST_double **)calloc(actual_num_clusters, sizeof(ST_double *));

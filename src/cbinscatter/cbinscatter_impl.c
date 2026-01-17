@@ -21,6 +21,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_timer.h"
+#include "../ctools_config.h"
 #include "cbinscatter_impl.h"
 #include "cbinscatter_types.h"
 #include "cbinscatter_bins.h"
@@ -185,10 +186,10 @@ static ST_retcode load_data(
     ST_int *valid_idx = NULL;
     ST_int N_valid = 0;
 
-    /* Allocate arrays */
-    y = (ST_double *)malloc(N * sizeof(ST_double));
-    x = (ST_double *)malloc(N * sizeof(ST_double));
-    valid_idx = (ST_int *)malloc(N * sizeof(ST_int));
+    /* Allocate arrays (using safe multiplication to prevent overflow) */
+    y = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    x = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
 
     if (!y || !x || !valid_idx) {
         free(y); free(x); free(valid_idx);
@@ -196,7 +197,7 @@ static ST_retcode load_data(
     }
 
     if (config->has_controls && config->num_controls > 0) {
-        controls = (ST_double *)malloc(N * config->num_controls * sizeof(ST_double));
+        controls = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)config->num_controls, sizeof(ST_double));
         if (!controls) {
             free(y); free(x); free(valid_idx);
             return CBINSCATTER_ERR_MEMORY;
@@ -204,7 +205,7 @@ static ST_retcode load_data(
     }
 
     if (config->has_absorb && config->num_absorb > 0) {
-        fe_vars = (ST_int *)malloc(N * config->num_absorb * sizeof(ST_int));
+        fe_vars = (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)config->num_absorb, sizeof(ST_int));
         if (!fe_vars) {
             free(y); free(x); free(valid_idx); free(controls);
             return CBINSCATTER_ERR_MEMORY;
@@ -212,7 +213,7 @@ static ST_retcode load_data(
     }
 
     if (config->has_by) {
-        by_groups = (ST_int *)malloc(N * sizeof(ST_int));
+        by_groups = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
         if (!by_groups) {
             free(y); free(x); free(valid_idx); free(controls); free(fe_vars);
             return CBINSCATTER_ERR_MEMORY;

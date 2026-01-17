@@ -23,58 +23,69 @@
     #define CTOOLS_TIMER_FALLBACK 1
 #endif
 
-/* Platform-specific includes */
+/* Platform-specific includes and state */
 #if defined(CTOOLS_TIMER_MACH)
     #include <mach/mach_time.h>
+    #include <pthread.h>
     static mach_timebase_info_data_t g_timebase_info;
-    static int g_timer_initialized = 0;
+    static pthread_once_t g_timer_once = PTHREAD_ONCE_INIT;
 
 #elif defined(CTOOLS_TIMER_WINDOWS)
     #define WIN32_LEAN_AND_MEAN
     #include <windows.h>
     static LARGE_INTEGER g_frequency;
-    static int g_timer_initialized = 0;
+    static INIT_ONCE g_timer_once = INIT_ONCE_STATIC_INIT;
 
 #elif defined(CTOOLS_TIMER_POSIX)
     #include <time.h>
-    static int g_timer_initialized = 0;
+    #include <pthread.h>
+    static pthread_once_t g_timer_once = PTHREAD_ONCE_INIT;
 
 #else /* Fallback */
     #include <sys/time.h>
-    static int g_timer_initialized = 0;
+    #include <pthread.h>
+    static pthread_once_t g_timer_once = PTHREAD_ONCE_INIT;
+#endif
+
+#if !defined(CTOOLS_TIMER_WINDOWS)
+/* Internal initialization function (called once via pthread_once) */
+static void ctools_timer_init_internal(void) {
+#if defined(CTOOLS_TIMER_MACH)
+    mach_timebase_info(&g_timebase_info);
+#else
+    /* No initialization needed for clock_gettime or gettimeofday */
+#endif
+}
+#endif /* !CTOOLS_TIMER_WINDOWS */
+
+#if defined(CTOOLS_TIMER_WINDOWS)
+/* Windows callback for InitOnceExecuteOnce */
+static BOOL CALLBACK ctools_timer_init_callback(
+    PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context) {
+    (void)InitOnce; (void)Parameter; (void)Context;
+    QueryPerformanceFrequency(&g_frequency);
+    return TRUE;
+}
 #endif
 
 /*
  * Initialize the timer subsystem.
- * Thread-safe for repeated calls (idempotent).
+ * Thread-safe: uses pthread_once (POSIX) or InitOnceExecuteOnce (Windows).
  */
 void ctools_timer_init(void) {
-    if (g_timer_initialized) return;
-
-#if defined(CTOOLS_TIMER_MACH)
-    mach_timebase_info(&g_timebase_info);
-
-#elif defined(CTOOLS_TIMER_WINDOWS)
-    QueryPerformanceFrequency(&g_frequency);
-
-#elif defined(CTOOLS_TIMER_POSIX)
-    /* No initialization needed for clock_gettime */
-
-#else /* Fallback */
-    /* No initialization needed for gettimeofday */
+#if defined(CTOOLS_TIMER_WINDOWS)
+    InitOnceExecuteOnce(&g_timer_once, ctools_timer_init_callback, NULL, NULL);
+#else
+    pthread_once(&g_timer_once, ctools_timer_init_internal);
 #endif
-
-    g_timer_initialized = 1;
 }
 
 /*
  * Get current time in seconds.
  */
 double ctools_timer_seconds(void) {
-    /* Auto-initialize if needed */
-    if (!g_timer_initialized) {
-        ctools_timer_init();
-    }
+    /* Thread-safe auto-initialize */
+    ctools_timer_init();
 
 #if defined(CTOOLS_TIMER_MACH)
     uint64_t t = mach_absolute_time();

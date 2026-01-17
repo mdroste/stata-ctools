@@ -26,6 +26,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <limits.h>
 #include <pthread.h>
 
 #ifdef _OPENMP
@@ -79,6 +80,7 @@ typedef struct {
     char *base;         /* Base pointer to arena memory */
     size_t capacity;    /* Total arena capacity in bytes */
     size_t used;        /* Currently used bytes */
+    int alloc_failed;   /* Set to 1 if any allocation failed */
 } cmerge_string_arena;
 
 /* Create a string arena with given capacity */
@@ -95,10 +97,12 @@ static cmerge_string_arena *cmerge_arena_create(size_t capacity)
 
     arena->capacity = capacity;
     arena->used = 0;
+    arena->alloc_failed = 0;
     return arena;
 }
 
-/* Allocate a string copy from the arena. Falls back to strdup if full. */
+/* Allocate a string copy from the arena. Falls back to strdup if full.
+ * Sets arena->alloc_failed on allocation failure and returns empty string. */
 static char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
 {
     size_t len = strlen(s) + 1;
@@ -111,7 +115,18 @@ static char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
     }
 
     /* Fallback to regular strdup */
-    return strdup(s);
+    char *result = strdup(s);
+    if (result == NULL && arena != NULL) {
+        arena->alloc_failed = 1;
+        /* Return pointer to empty string in arena if possible */
+        if (arena->used < arena->capacity) {
+            char *ptr = arena->base + arena->used;
+            ptr[0] = '\0';
+            arena->used += 1;
+            return ptr;
+        }
+    }
+    return result;
 }
 
 /* Check if a pointer was allocated from the arena */
@@ -372,6 +387,10 @@ static void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n)
 
 /* ============================================================================
  * Using data cache (persists between plugin calls)
+ *
+ * Thread safety: Stata plugin calls are single-threaded; the Stata Plugin
+ * Interface does not support concurrent plugin invocations. This global state
+ * is safe because only one cmerge call can be active at a time.
  * ============================================================================ */
 
 typedef struct {
@@ -1425,7 +1444,9 @@ static ST_retcode cmerge_execute(const char *args)
         return 459;
     }
 
-    /* Parse arguments - use static buffer to avoid stack issues */
+    /* Parse arguments - use static buffers to avoid stack overflow.
+     * Thread safety: Stata plugins are single-threaded, so these statics
+     * cannot race. They're reinitialized on each call. */
     static char args_copy[8192];
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
@@ -1690,6 +1711,15 @@ static ST_retcode cmerge_execute(const char *args)
             stata_data_free(&master_data);
             free(all_var_indices);
             SF_error("cmerge: Merge join failed\n");
+            return 920;
+        }
+
+        /* Stata max obs is 2^31-1; reject if exceeded */
+        if (output_nobs_signed > INT32_MAX) {
+            if (sort_perm) free(sort_perm);
+            stata_data_free(&master_data);
+            free(all_var_indices);
+            SF_error("cmerge: Merge result exceeds Stata observation limit\n");
             return 920;
         }
 
@@ -1961,6 +1991,32 @@ static ST_retcode cmerge_execute(const char *args)
                 }
             }
         }
+    }
+
+    /* Check for allocation failures during string copying */
+    if (str_arena != NULL && str_arena->alloc_failed) {
+        SF_error("cmerge: memory allocation failed during string copy\n");
+        /* Cleanup */
+        for (size_t vi = 0; vi < n_output_vars; vi++) {
+            if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
+                for (size_t i = 0; i < output_nobs; i++) {
+                    if (output_data.vars[vi].data.str[i] &&
+                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                        free(output_data.vars[vi].data.str[i]);
+                    }
+                }
+            }
+        }
+        cmerge_arena_free(str_arena);
+        free(output_data.vars);
+        free(output_specs);
+        if (sort_perm) free(sort_perm);
+        stata_data_free(&master_data);
+        free(all_var_indices);
+        free(output_var_stata_idx);
+        free(output_var_is_key);
+        free(output_var_key_idx);
+        return 920;
     }
 
     double t_permute = cmerge_get_time_ms() - t_start;

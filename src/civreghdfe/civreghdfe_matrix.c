@@ -12,9 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include <omp.h>
 
 #include "civreghdfe_matrix.h"
+#include "../ctools_config.h"
 #include "../ctools_unroll.h"
 
 /* Forward declarations for functions from creghdfe_solver */

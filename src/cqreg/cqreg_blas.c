@@ -10,6 +10,7 @@
 
 #include "cqreg_blas.h"
 #include "../ctools_unroll.h"
+#include "../ctools_config.h"
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
@@ -429,8 +430,8 @@ ST_int lapack_dpotri(ST_int N, ST_double *A, ST_int lda)
 #else
     /* Pure C inverse via column-by-column solve */
     ST_int j, k;
-    ST_double *col = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *Ainv = (ST_double *)malloc(N * N * sizeof(ST_double));
+    ST_double *col = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    ST_double *Ainv = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)N, sizeof(ST_double));
 
     if (!col || !Ainv) {
         free(col);
@@ -438,9 +439,12 @@ ST_int lapack_dpotri(ST_int N, ST_double *A, ST_int lda)
         return -1;
     }
 
+    /* Compute safe size for memset */
+    size_t col_size = (size_t)N * sizeof(ST_double);
+
     for (j = 0; j < N; j++) {
         /* Set column to e_j */
-        memset(col, 0, N * sizeof(ST_double));
+        memset(col, 0, col_size);
         col[j] = 1.0;
 
         /* Solve L * L' * col = e_j */

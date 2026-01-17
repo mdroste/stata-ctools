@@ -3,13 +3,13 @@
 *! Part of the ctools suite
 *!
 *! Supports multiple sort algorithms:
-*!   algorithm(lsd)      - LSD radix sort (default) - best for fixed-width keys
+*!   algorithm(ips4o)    - IPS4o (default) - in-place parallel super scalar samplesort
+*!   algorithm(lsd)      - LSD radix sort - best for fixed-width keys
 *!   algorithm(msd)      - MSD radix sort - best for variable-length strings
 *!   algorithm(timsort)  - Timsort - best for partially sorted data
 *!   algorithm(sample)   - Sample sort - best for large datasets with many cores
 *!   algorithm(counting) - Counting sort - best for integer data with small range
 *!   algorithm(merge)    - Parallel merge sort - stable, predictable O(n log n)
-*!   algorithm(ips4o)    - IPS4o - in-place parallel super scalar samplesort
 
 program define csort
     version 14.0
@@ -54,7 +54,7 @@ program define csort
         }
         else {
             di as error "csort: invalid algorithm '`algorithm''"
-            di as error "Valid options: lsd (default), msd, timsort, sample, counting, merge, ips4o"
+            di as error "Valid options: ips4o (default), lsd, msd, timsort, sample, counting, merge"
             exit 198
         }
     }
@@ -160,7 +160,7 @@ program define csort
             di as text "       Algorithm: `algorithm'"
         }
         else {
-            di as text "       Algorithm: lsd (default)"
+            di as text "       Algorithm: ips4o (default)"
         }
     }
 

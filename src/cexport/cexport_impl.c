@@ -164,7 +164,13 @@ static const char DIGIT_PAIRS[200] = {
     Avoids snprintf entirely for common float values.
 
     Returns: number of characters written, or -1 if fallback needed
+
+    NOTE: Currently unused - Stata requires 16 digits for doubles, this uses 15.
+    Kept for potential future use with float variables.
 */
+#if defined(__GNUC__) || defined(__clang__)
+__attribute__((unused))
+#endif
 static int format_decimal_fast(double val, char *buf)
 {
     /* Handle negative numbers */
@@ -387,7 +393,15 @@ static inline bool string_needs_quoting(const char *str, char delimiter)
 */
 static int write_quoted_string(const char *str, char *buf, int buf_size)
 {
-    if (str == NULL || buf_size < 3) {
+    /* Handle edge cases: need at least 3 bytes for empty quoted string '""' + null */
+    if (buf_size < 1) {
+        return 0;
+    }
+    if (buf_size < 3) {
+        buf[0] = '\0';
+        return 0;
+    }
+    if (str == NULL) {
         buf[0] = '"';
         buf[1] = '"';
         buf[2] = '\0';
@@ -680,13 +694,14 @@ static int parse_args(const char *args)
 static int load_varnames(void)
 {
     size_t nvars = SF_nvars();
-    g_ctx.varnames = (char **)malloc(nvars * sizeof(char *));
+    g_ctx.varnames = (char **)calloc(nvars, sizeof(char *));
     if (g_ctx.varnames == NULL) return -1;
 
     g_ctx.nvars = nvars;
 
     /* Try to get variable names from macro */
     char varnames_buf[32768];
+    size_t names_parsed = 0;
     if (SF_macro_use("CEXPORT_VARNAMES", varnames_buf, sizeof(varnames_buf)) == 0 &&
         strlen(varnames_buf) > 0) {
         /* Parse space-separated names */
@@ -705,6 +720,15 @@ static int load_varnames(void)
             if (g_ctx.varnames[j] == NULL) return -1;
             memcpy(g_ctx.varnames[j], start, len);
             g_ctx.varnames[j][len] = '\0';
+            names_parsed++;
+        }
+
+        /* Fill remaining entries with fallback names if macro was short */
+        for (size_t j = names_parsed; j < nvars; j++) {
+            char namebuf[32];
+            snprintf(namebuf, sizeof(namebuf), "v%zu", j + 1);
+            g_ctx.varnames[j] = strdup(namebuf);
+            if (g_ctx.varnames[j] == NULL) return -1;
         }
     } else {
         /* Fallback: use generic names */
@@ -915,13 +939,31 @@ ST_retcode cexport_main(const char *args)
     if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
     if (num_threads < 1) num_threads = 1;
 
-    /* Estimate buffer size per chunk (generous estimate) */
-    size_t avg_row_size = nvars * 20 + nvars; /* ~20 chars per field + delimiters */
-    size_t chunk_buffer_size = CTOOLS_EXPORT_CHUNK_SIZE * avg_row_size * 2; /* 2x safety margin */
+    /* Estimate buffer size per chunk (generous estimate) with overflow checks */
+    size_t avg_row_size;
+    if (nvars > SIZE_MAX / 21) {
+        SF_error("cexport: variable count too large\n");
+        cleanup_context();
+        return 920;
+    }
+    avg_row_size = nvars * 21; /* ~20 chars per field + 1 delimiter */
+
+    size_t chunk_buffer_size;
+    if (avg_row_size > SIZE_MAX / CTOOLS_EXPORT_CHUNK_SIZE / 2) {
+        SF_error("cexport: buffer size overflow\n");
+        cleanup_context();
+        return 920;
+    }
+    chunk_buffer_size = CTOOLS_EXPORT_CHUNK_SIZE * avg_row_size * 2; /* 2x safety margin */
 
     /* For small datasets, use single-threaded approach */
     if (nobs < CTOOLS_EXPORT_CHUNK_SIZE || num_threads == 1) {
         /* Single-threaded: format and write directly */
+        if (avg_row_size > SIZE_MAX / 4) {
+            SF_error("cexport: row buffer size overflow\n");
+            cleanup_context();
+            return 920;
+        }
         char *row_buf = (char *)malloc(avg_row_size * 4);
         if (row_buf == NULL) {
             SF_error("cexport: memory allocation failed\n");

@@ -6,6 +6,7 @@
  */
 
 #include "cqreg_types.h"
+#include "../ctools_config.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -151,26 +152,32 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
         if (ipm->thread_buf[t] == NULL) goto cleanup;
     }
 
+    /* Compute N*K size with overflow check */
+    size_t nk_size;
+    if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &nk_size) != 0) {
+        goto cleanup;  /* Overflow */
+    }
+
     /* Allocate Frisch-Newton solver workspace */
-    ipm->fn_xp = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_s = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_yd = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_z = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_w = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dx = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_ds = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dy = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dz = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dw = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fx = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fs = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fz = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fw = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_q = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_r = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_tmp = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_sinv = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_Xq = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_xp = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_s = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_yd = (ST_double *)cqreg_aligned_alloc((size_t)K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_z = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_w = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dx = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_ds = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dy = (ST_double *)cqreg_aligned_alloc((size_t)K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dz = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_dw = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fx = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fs = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fz = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_fw = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_q = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_r = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_tmp = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_sinv = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->fn_Xq = (ST_double *)cqreg_aligned_alloc(nk_size, CQREG_CACHE_LINE);
     if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
         !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
         !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||

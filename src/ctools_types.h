@@ -206,13 +206,13 @@ stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
 
 // Sort algorithm enumeration
 typedef enum {
-    SORT_ALG_LSD = 0,      // LSD radix sort (default) - best for fixed-width keys
+    SORT_ALG_LSD = 0,      // LSD radix sort - best for fixed-width keys
     SORT_ALG_MSD = 1,      // MSD radix sort - best for variable-length strings
     SORT_ALG_TIMSORT = 2,  // Timsort - best for partially sorted data
     SORT_ALG_SAMPLE = 3,   // Sample sort - best for large datasets with many cores
     SORT_ALG_COUNTING = 4, // Counting sort - best for integer data with small range
     SORT_ALG_MERGE = 5,    // Parallel merge sort - stable, predictable O(n log n)
-    SORT_ALG_IPS4O = 6     // IPS4o - in-place parallel super scalar samplesort
+    SORT_ALG_IPS4O = 6     // IPS4o (default) - in-place parallel super scalar samplesort
 } sort_algorithm_t;
 
 // Sort data using specified algorithm
