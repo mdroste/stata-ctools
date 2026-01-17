@@ -1,4 +1,4 @@
-*! version 3.0.0 10Jan2026
+*! version 3.1.0 17Jan2026
 *! cmerge: Optimized C-accelerated merge for Stata datasets
 *! Part of the ctools suite
 *!
@@ -10,6 +10,7 @@
 *!
 *! Syntax:
 *!   cmerge 1:1 varlist using filename [, options]
+*!   cmerge 1:1 _n using filename [, options]
 *!   cmerge m:1 varlist using filename [, options]
 *!   cmerge 1:m varlist using filename [, options]
 *!   cmerge m:m varlist using filename [, options]
@@ -40,32 +41,73 @@ program define cmerge, rclass
         exit 198
     }
 
+    * Check for _n merge (merge by observation number)
+    gettoken first_token rest : 0, parse(" ")
+    local merge_by_n = 0
+    if "`first_token'" == "_n" {
+        * Validate: _n only valid with 1:1 merge
+        if "`merge_type'" != "1:1" {
+            di as error "cmerge: _n may only be used with 1:1 merge"
+            exit 198
+        }
+        local merge_by_n = 1
+        * Remove _n from 0 and continue parsing
+        local 0 "`rest'"
+    }
+
     * Parse key variables and using filename
-    syntax varlist using/ [, ///
-        Keep(string) ///
-        ASSert(string) ///
-        GENerate(name) ///
-        NOGENerate ///
-        KEEPUSing(string) ///
-        SORTED ///
-        FORCE ///
-        NOREPort ///
-        Verbose ///
-        NOLabel ///
-        NONotes ///
-        TIMEit ///
-        UPDATE ///
-        REPLACE ///
-        PRESERVE_order(integer 0) ///
-        ]
+    if `merge_by_n' {
+        * For _n merge, no varlist needed
+        syntax using/ [, ///
+            Keep(string) ///
+            ASSert(string) ///
+            GENerate(name) ///
+            NOGENerate ///
+            KEEPUSing(string) ///
+            SORTED ///
+            FORCE ///
+            NOREPort ///
+            Verbose ///
+            NOLabel ///
+            NONotes ///
+            TIMEit ///
+            UPDATE ///
+            REPLACE ///
+            PRESERVE_order(integer 0) ///
+            ]
 
-    * Validate key variables exist in master
-    local keyvars `varlist'
-    local nkeys : word count `keyvars'
+        * No key variables for _n merge
+        local keyvars ""
+        local nkeys = 0
+    }
+    else {
+        * Standard merge with key variables
+        syntax varlist using/ [, ///
+            Keep(string) ///
+            ASSert(string) ///
+            GENerate(name) ///
+            NOGENerate ///
+            KEEPUSing(string) ///
+            SORTED ///
+            FORCE ///
+            NOREPort ///
+            Verbose ///
+            NOLabel ///
+            NONotes ///
+            TIMEit ///
+            UPDATE ///
+            REPLACE ///
+            PRESERVE_order(integer 0) ///
+            ]
 
-    if `nkeys' == 0 {
-        di as error "cmerge: no key variables specified"
-        exit 198
+        * Validate key variables exist in master
+        local keyvars `varlist'
+        local nkeys : word count `keyvars'
+
+        if `nkeys' == 0 {
+            di as error "cmerge: no key variables specified"
+            exit 198
+        }
     }
 
     * Default generate variable name
@@ -126,15 +168,17 @@ program define cmerge, rclass
         }
     }
 
-    * Get variable types for key variables in master
+    * Get variable types for key variables in master (skip for _n merge)
     local master_keytypes ""
-    foreach var of local keyvars {
-        capture confirm string variable `var'
-        if !_rc {
-            local master_keytypes "`master_keytypes' str"
-        }
-        else {
-            local master_keytypes "`master_keytypes' num"
+    if !`merge_by_n' {
+        foreach var of local keyvars {
+            capture confirm string variable `var'
+            if !_rc {
+                local master_keytypes "`master_keytypes' str"
+            }
+            else {
+                local master_keytypes "`master_keytypes' num"
+            }
         }
     }
 
@@ -148,22 +192,24 @@ program define cmerge, rclass
         exit 2000
     }
 
-    * Get master key variable indices (1-based) - optimized single pass
+    * Get master key variable indices (1-based) - skip for _n merge
     local master_key_indices ""
-    local pos = 1
-    foreach v of local master_varlist {
-        foreach var of local keyvars {
-            if "`v'" == "`var'" {
-                local master_key_indices "`master_key_indices' `pos'"
+    if !`merge_by_n' {
+        local pos = 1
+        foreach v of local master_varlist {
+            foreach var of local keyvars {
+                if "`v'" == "`var'" {
+                    local master_key_indices "`master_key_indices' `pos'"
+                }
             }
+            local ++pos
         }
-        local ++pos
-    }
-    * Verify all keys found
-    local n_found : word count `master_key_indices'
-    if `n_found' != `nkeys' {
-        di as error "cmerge: not all key variables found in master"
-        exit 111
+        * Verify all keys found
+        local n_found : word count `master_key_indices'
+        if `n_found' != `nkeys' {
+            di as error "cmerge: not all key variables found in master"
+            exit 111
+        }
     }
 
     * Display header if verbose
@@ -173,7 +219,12 @@ program define cmerge, rclass
         di as text "cmerge: Optimized C-Accelerated Merge"
         di as text "{hline 60}"
         di as text "Merge type:  " as result "`merge_type'"
-        di as text "Key vars:    " as result "`keyvars'"
+        if `merge_by_n' {
+            di as text "Key vars:    " as result "_n (observation number)"
+        }
+        else {
+            di as text "Key vars:    " as result "`keyvars'"
+        }
         di as text "Using file:  " as result `"`using'"'
         di as text "Master obs:  " as result `master_nobs'
         di as text "Master vars: " as result `master_nvars'
@@ -263,40 +314,42 @@ program define cmerge, rclass
     * Load using dataset
     qui use `"`using'"', clear
 
-    * Check key variables exist in using
-    foreach var of local keyvars {
-        capture confirm variable `var'
-        if _rc {
-            di as error "cmerge: key variable `var' not found in using dataset"
-            restore
-            exit 111
-        }
-    }
-
-    * Validate key variable types match
-    local i = 1
-    foreach var of local keyvars {
-        local master_type : word `i' of `master_keytypes'
-        capture confirm string variable `var'
-        if !_rc {
-            local using_type "str"
-        }
-        else {
-            local using_type "num"
-        }
-
-        if "`master_type'" != "`using_type'" {
-            if "`force'" == "" {
-                di as error "cmerge: key variable `var' is `master_type' in master but `using_type' in using"
-                di as error "use force option to override"
+    * Check key variables exist in using (skip for _n merge)
+    if !`merge_by_n' {
+        foreach var of local keyvars {
+            capture confirm variable `var'
+            if _rc {
+                di as error "cmerge: key variable `var' not found in using dataset"
                 restore
-                exit 106
+                exit 111
             }
         }
-        local ++i
+
+        * Validate key variable types match
+        local i = 1
+        foreach var of local keyvars {
+            local master_type : word `i' of `master_keytypes'
+            capture confirm string variable `var'
+            if !_rc {
+                local using_type "str"
+            }
+            else {
+                local using_type "num"
+            }
+
+            if "`master_type'" != "`using_type'" {
+                if "`force'" == "" {
+                    di as error "cmerge: key variable `var' is `master_type' in master but `using_type' in using"
+                    di as error "use force option to override"
+                    restore
+                    exit 106
+                }
+            }
+            local ++i
+        }
     }
 
-    * Build list of variables to keep: keys + keepusing
+    * Build list of variables to keep: keys + keepusing (no keys for _n merge)
     local using_keep_vars "`keyvars'"
     local keepusing_count = 0
     local keepusing_names ""
@@ -389,7 +442,12 @@ program define cmerge, rclass
     local using_nobs = _N
 
     if "`verbose'" != "" {
-        di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `nkeys' as text " keys + " as result `keepusing_count' as text " keepusing vars"
+        if `merge_by_n' {
+            di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `keepusing_count' as text " keepusing vars (merge by _n)"
+        }
+        else {
+            di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `nkeys' as text " keys + " as result `keepusing_count' as text " keepusing vars"
+        }
     }
 
     * Get variable indices in the reduced using dataset - optimized single pass
@@ -399,10 +457,12 @@ program define cmerge, rclass
     unab using_varlist : _all
     foreach v of local using_varlist {
         local is_key = 0
-        foreach k of local keyvars {
-            if "`v'" == "`k'" {
-                local using_key_indices "`using_key_indices' `pos'"
-                local is_key = 1
+        if !`merge_by_n' {
+            foreach k of local keyvars {
+                if "`v'" == "`k'" {
+                    local using_key_indices "`using_key_indices' `pos'"
+                    local is_key = 1
+                }
             }
         }
         if !`is_key' {
@@ -422,6 +482,9 @@ program define cmerge, rclass
     }
     if "`sorted'" != "" {
         local plugin_args "`plugin_args' sorted"
+    }
+    if `merge_by_n' {
+        local plugin_args "`plugin_args' merge_by_n"
     }
 
     * End pre-plugin1 timer, start plugin1 timer
@@ -482,8 +545,21 @@ program define cmerge, rclass
         }
         local ++placeholder_num
     }
+    * Create merge variable if:
+    * 1. nogenerate is not specified, OR
+    * 2. keep() is specified (need _merge for filtering, will drop later)
+    local need_merge_var = 0
+    local temp_merge_var = ""
     if "`nogenerate'" == "" {
+        local need_merge_var = 1
         local new_var_names "`new_var_names' `generate'"
+        local new_var_types "`new_var_types' byte"
+    }
+    else if "`keep'" != "" {
+        * Need temporary merge variable for keep() filtering
+        local need_merge_var = 1
+        local temp_merge_var "_merge_temp_filter"
+        local new_var_names "`new_var_names' `temp_merge_var'"
         local new_var_types "`new_var_types' byte"
     }
 
@@ -556,7 +632,7 @@ program define cmerge, rclass
 
     * Get _merge variable index (already in current_varlist from unab)
     local merge_var_idx = 0
-    if "`nogenerate'" == "" {
+    if `need_merge_var' {
         local merge_var_idx = c(k)
     }
 
@@ -587,7 +663,7 @@ program define cmerge, rclass
     if `keepusing_count' > 0 {
         local plugin_args "`plugin_args' keepusing_placeholders `keepusing_placeholder_indices'"
     }
-    if "`nogenerate'" == "" {
+    if `need_merge_var' {
         local plugin_args "`plugin_args' merge_var_idx `merge_var_idx'"
     }
     local plugin_args "`plugin_args' preserve_order `preserve_order'"
@@ -605,6 +681,9 @@ program define cmerge, rclass
     }
     if `keepusing_count' > 0 {
         local plugin_args "`plugin_args' shared_flags `shared_var_flags'"
+    }
+    if `merge_by_n' {
+        local plugin_args "`plugin_args' merge_by_n"
     }
 
     * End inter-plugin timer, start plugin2 timer
@@ -682,17 +761,26 @@ program define cmerge, rclass
             }
         }
 
-        if "`nogenerate'" == "" {
-            local keep_expr ""
-            foreach code of local keep_codes {
-                if "`keep_expr'" == "" {
-                    local keep_expr "`generate' == `code'"
-                }
-                else {
-                    local keep_expr "`keep_expr' | `generate' == `code'"
-                }
+        * Use the appropriate merge variable for filtering
+        local filter_var "`generate'"
+        if "`temp_merge_var'" != "" {
+            local filter_var "`temp_merge_var'"
+        }
+
+        local keep_expr ""
+        foreach code of local keep_codes {
+            if "`keep_expr'" == "" {
+                local keep_expr "`filter_var' == `code'"
             }
-            qui keep if `keep_expr'
+            else {
+                local keep_expr "`keep_expr' | `filter_var' == `code'"
+            }
+        }
+        qui keep if `keep_expr'
+
+        * Drop temp filter variable if we created one
+        if "`temp_merge_var'" != "" {
+            qui drop `temp_merge_var'
         }
     }
 
@@ -880,6 +968,11 @@ program define cmerge, rclass
     return scalar N_3 = `merge_matched'
     return scalar time = `elapsed'
     return local using `"`using'"'
-    return local keyvars "`keyvars'"
+    if `merge_by_n' {
+        return local keyvars "_n"
+    }
+    else {
+        return local keyvars "`keyvars'"
+    }
 
 end

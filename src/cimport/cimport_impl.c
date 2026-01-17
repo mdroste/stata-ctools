@@ -153,6 +153,9 @@ typedef struct {
     size_t count;
 } CImportColumnCache;
 
+/* Warning tracking for malformed data */
+#define CIMPORT_MAX_WARNINGS 10
+
 typedef struct {
     char *file_data;
     size_t file_size;
@@ -182,6 +185,10 @@ typedef struct {
     double time_parse;
     double time_type_infer;
     double time_cache;
+    /* Warning tracking for unmatched quotes */
+    size_t unmatched_quote_rows[CIMPORT_MAX_WARNINGS];
+    int num_unmatched_quote_warnings;
+    pthread_mutex_t warning_mutex;
 #ifdef CIMPORT_WINDOWS
     HANDLE file_handle;
     HANDLE mapping_handle;
@@ -257,6 +264,53 @@ static void cimport_display_error(const char *msg) {
 
 static inline bool cimport_is_whitespace(char c) {
     return c == ' ' || c == '\t' || c == '\r';
+}
+
+/* Check if a row has unmatched quotes (odd number of quote characters) */
+static inline bool cimport_row_has_unmatched_quote(const char *start, const char *end, char quote) {
+    int quote_count = 0;
+    for (const char *p = start; p < end; p++) {
+        if (*p == quote) quote_count++;
+    }
+    return (quote_count % 2) == 1;
+}
+
+/* Record a warning for unmatched quote (thread-safe) */
+static void cimport_record_unmatched_quote(CImportContext *ctx, size_t row_num) {
+    pthread_mutex_lock(&ctx->warning_mutex);
+    if (ctx->num_unmatched_quote_warnings < CIMPORT_MAX_WARNINGS) {
+        ctx->unmatched_quote_rows[ctx->num_unmatched_quote_warnings] = row_num;
+    }
+    ctx->num_unmatched_quote_warnings++;
+    pthread_mutex_unlock(&ctx->warning_mutex);
+}
+
+/* Display warnings for unmatched quotes (Stata-compatible format) */
+static void cimport_display_warnings(CImportContext *ctx) {
+    if (ctx->num_unmatched_quote_warnings == 0) return;
+
+    char msg[600];
+    int to_display = (ctx->num_unmatched_quote_warnings < CIMPORT_MAX_WARNINGS)
+                     ? ctx->num_unmatched_quote_warnings
+                     : CIMPORT_MAX_WARNINGS;
+
+    for (int i = 0; i < to_display; i++) {
+        snprintf(msg, sizeof(msg),
+            "Note: Unmatched quote while processing row %zu; this can be due to a formatting\n"
+            "    problem in the file or because a quoted data element spans multiple\n"
+            "    lines. You should carefully inspect your data after importing. Consider\n"
+            "    using option bindquote(strict) if quoted data spans multiple lines or\n"
+            "    option bindquote(nobind) if quotes are not used for binding data.\n",
+            ctx->unmatched_quote_rows[i]);
+        cimport_display_msg(msg);
+    }
+
+    if (ctx->num_unmatched_quote_warnings > CIMPORT_MAX_WARNINGS) {
+        snprintf(msg, sizeof(msg),
+            "(... %d additional unmatched quote warnings not shown)\n",
+            ctx->num_unmatched_quote_warnings - CIMPORT_MAX_WARNINGS);
+        cimport_display_msg(msg);
+    }
 }
 
 /* ============================================================================
@@ -465,31 +519,72 @@ static int cimport_extract_field_fast(const char *file_base, CImportFieldRef *fi
     int src_len = field->length;
     int out_len = 0;
 
-    while (src_len > 0 && (*src == ' ' || *src == '\t')) {
-        src++;
+    /* Only strip trailing CR/LF (not spaces/tabs - those are preserved like Stata) */
+    while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
         src_len--;
     }
 
-    while (src_len > 0 && (src[src_len-1] == ' ' || src[src_len-1] == '\t' ||
-                           src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
-        src_len--;
+    /* Check for quotes - need to look past leading whitespace to find them */
+    const char *trimmed_src = src;
+    int trimmed_len = src_len;
+    while (trimmed_len > 0 && (*trimmed_src == ' ' || *trimmed_src == '\t')) {
+        trimmed_src++;
+        trimmed_len--;
+    }
+    while (trimmed_len > 0 && (trimmed_src[trimmed_len-1] == ' ' || trimmed_src[trimmed_len-1] == '\t')) {
+        trimmed_len--;
     }
 
-    bool is_quoted = (src_len >= 2 && src[0] == quote && src[src_len-1] == quote);
+    bool starts_with_quote = (trimmed_len >= 1 && trimmed_src[0] == quote);
+    bool ends_with_quote = (trimmed_len >= 1 && trimmed_src[trimmed_len-1] == quote);
+    bool is_quoted = (trimmed_len >= 2 && starts_with_quote && ends_with_quote);
+
+    /* Special case: field is just a single quote - treat as empty (matches Stata) */
+    if (trimmed_len == 1 && trimmed_src[0] == quote) {
+        output[0] = '\0';
+        return 0;
+    }
 
     if (is_quoted) {
-        src++;
-        src_len -= 2;
+        /* Properly quoted field - use trimmed src, strip both quotes and handle escaped quotes */
+        trimmed_src++;
+        trimmed_len -= 2;
 
-        for (int i = 0; i < src_len && out_len < max_len - 1; i++) {
-            if (src[i] == quote && i + 1 < src_len && src[i + 1] == quote) {
+        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
+            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
                 output[out_len++] = quote;
                 i++;
             } else {
-                output[out_len++] = src[i];
+                output[out_len++] = trimmed_src[i];
+            }
+        }
+    } else if (starts_with_quote && !ends_with_quote) {
+        /* Orphan leading quote (e.g., from multiline in loose mode) - strip it
+         * Use trimmed version, also handle escaped quotes ("") within the field */
+        trimmed_src++;
+        trimmed_len--;
+        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
+            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
+                output[out_len++] = quote;
+                i++;
+            } else {
+                output[out_len++] = trimmed_src[i];
+            }
+        }
+    } else if (!starts_with_quote && ends_with_quote) {
+        /* Orphan trailing quote - strip it
+         * Use trimmed version, also handle escaped quotes ("") within the field */
+        trimmed_len--;
+        for (int i = 0; i < trimmed_len && out_len < max_len - 1; i++) {
+            if (trimmed_src[i] == quote && i + 1 < trimmed_len && trimmed_src[i + 1] == quote) {
+                output[out_len++] = quote;
+                i++;
+            } else {
+                output[out_len++] = trimmed_src[i];
             }
         }
     } else {
+        /* No quotes - copy as-is from ORIGINAL src (preserving whitespace like Stata) */
         int copy_len = (src_len < max_len - 1) ? src_len : max_len - 1;
         memcpy(output, src, copy_len);
         out_len = copy_len;
@@ -503,13 +598,8 @@ static inline int cimport_extract_field_unquoted(const char *file_base, CImportF
     const char *src = file_base + field->offset;
     int src_len = field->length;
 
-    while (src_len > 0 && (*src == ' ' || *src == '\t')) {
-        src++;
-        src_len--;
-    }
-
-    while (src_len > 0 && (src[src_len-1] == ' ' || src[src_len-1] == '\t' ||
-                           src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
+    /* Only strip trailing CR/LF - preserve spaces/tabs like Stata */
+    while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
         src_len--;
     }
 
@@ -918,6 +1008,7 @@ static void cimport_free_context(CImportContext *ctx) {
     free(ctx->filename);
     free(ctx->row_offsets);
     cimport_munmap_file(ctx);
+    pthread_mutex_destroy(&ctx->warning_mutex);
     free(ctx);
 }
 
@@ -1019,6 +1110,21 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         }
 
         bool is_header_row = (ctx->has_header && task->chunk_id == 0 && chunk->num_rows == 0);
+
+        /* Check for unmatched quotes in LOOSE mode and record warning */
+        if (ctx->bindquotes == CIMPORT_BINDQUOTES_LOOSE && !is_header_row) {
+            if (cimport_row_has_unmatched_quote(ptr, row_end, ctx->quote_char)) {
+                /* Row number: chunk->num_rows + 1 gives row within chunk */
+                /* For chunk 0, this is the file row. For other chunks, add offset estimate */
+                size_t approx_row = chunk->num_rows + 1;
+                if (task->chunk_id > 0) {
+                    /* Rough estimate: each prior chunk has ~equal rows */
+                    approx_row += task->chunk_id * (ctx->file_size / ctx->num_chunks / 50);
+                }
+                cimport_record_unmatched_quote(ctx, approx_row);
+            }
+        }
+
         if (!is_header_row) {
             for (int f = 0; f < num_fields && f < chunk->num_col_stats; f++) {
                 CImportColumnParseStats *stats = &chunk->col_stats[f];
@@ -1087,6 +1193,10 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->filename = strdup(filename);
     ctx->verbose = verbose;
     atomic_init(&ctx->error_code, 0);
+
+    /* Initialize warning tracking */
+    ctx->num_unmatched_quote_warnings = 0;
+    pthread_mutex_init(&ctx->warning_mutex, NULL);
 
     t_start = cimport_get_time_ms();
     if (cimport_mmap_file(ctx, filename) != 0) {
@@ -1161,6 +1271,15 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             }
 
             bool is_header_row = (ctx->has_header && chunk->num_rows == 0);
+
+            /* Check for unmatched quotes in LOOSE mode and record warning */
+            if (ctx->bindquotes == CIMPORT_BINDQUOTES_LOOSE && !is_header_row) {
+                if (cimport_row_has_unmatched_quote(ptr, row_end, ctx->quote_char)) {
+                    /* Row number is 1-based file row (chunk->num_rows includes header) */
+                    size_t row_num = chunk->num_rows + 1;
+                    cimport_record_unmatched_quote(ctx, row_num);
+                }
+            }
             if (!is_header_row) {
                 for (int f = 0; f < num_fields && f < chunk->num_col_stats; f++) {
                     CImportColumnParseStats *stats = &chunk->col_stats[f];
@@ -1504,6 +1623,9 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     *p = '\0';
     SF_macro_save("_cimport_strlens", macro_val);
 
+    /* Display warnings for malformed data (like Stata) */
+    cimport_display_warnings(ctx);
+
     snprintf(msg, sizeof(msg), "Scanned %zu rows, %d columns\n", ctx->total_rows, ctx->num_columns);
     cimport_display_msg(msg);
 
@@ -1533,6 +1655,8 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         if (!ctx) {
             return 601;
         }
+        /* Display warnings for malformed data (like Stata) */
+        cimport_display_warnings(ctx);
     }
 
     if (!ctx->cache_ready) {
@@ -1676,7 +1800,7 @@ ST_retcode cimport_main(const char *args) {
     char delimiter = ',';
     bool has_header = true;
     bool verbose = false;
-    CImportBindQuotesMode bindquotes = CIMPORT_BINDQUOTES_LOOSE;  /* Default: loose (matches Stata) */
+    CImportBindQuotesMode bindquotes = CIMPORT_BINDQUOTES_LOOSE;  /* Default: loose (matches Stata's import delimited) */
 
     char *token = strtok(args_copy, " ");
     int arg_idx = 0;

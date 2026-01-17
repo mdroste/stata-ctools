@@ -744,6 +744,256 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 18: 1:1 _n merge tests (merge by observation number)
+ ******************************************************************************/
+noi print_section "1:1 _n Merge Tests"
+
+* Basic 1:1 _n merge - same number of observations
+sysuse auto, clear
+keep make price mpg
+tempfile master
+save `master'
+
+sysuse auto, clear
+keep weight length
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1', nogenerate
+local stata_N = _N
+local stata_price1 = price[1]
+local stata_weight1 = weight[1]
+
+use `master', clear
+cmerge 1:1 _n using `using_1', nogenerate noreport
+local cmerge_N = _N
+local cmerge_price1 = price[1]
+local cmerge_weight1 = weight[1]
+
+if `stata_N' == `cmerge_N' & `stata_price1' == `cmerge_price1' & `stata_weight1' == `cmerge_weight1' {
+    noi test_pass "1:1 _n basic (same nobs)"
+}
+else {
+    noi test_fail "1:1 _n basic (same nobs)" "N: stata=`stata_N' cmerge=`cmerge_N'"
+}
+
+* 1:1 _n merge - master has more observations
+clear
+set obs 100
+gen id = _n
+gen value1 = runiform()
+tempfile master
+save `master'
+
+clear
+set obs 70
+gen extra = runiform() * 100
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1'
+qui count if _merge == 3
+local stata_matched = r(N)
+qui count if _merge == 1
+local stata_master = r(N)
+qui count if _merge == 2
+local stata_using = r(N)
+drop _merge
+
+use `master', clear
+cmerge 1:1 _n using `using_1', noreport
+qui count if _merge == 3
+local cmerge_matched = r(N)
+qui count if _merge == 1
+local cmerge_master = r(N)
+qui count if _merge == 2
+local cmerge_using = r(N)
+drop _merge
+
+if `stata_matched' == `cmerge_matched' & `stata_master' == `cmerge_master' & `stata_using' == `cmerge_using' {
+    noi test_pass "1:1 _n master has more obs"
+}
+else {
+    noi test_fail "1:1 _n master has more obs" "matched: stata=`stata_matched' cmerge=`cmerge_matched'"
+}
+
+* 1:1 _n merge - using has more observations
+clear
+set obs 50
+gen id = _n
+gen value1 = runiform()
+tempfile master
+save `master'
+
+clear
+set obs 80
+gen extra = runiform() * 100
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1'
+qui count if _merge == 3
+local stata_matched = r(N)
+qui count if _merge == 1
+local stata_master = r(N)
+qui count if _merge == 2
+local stata_using = r(N)
+drop _merge
+
+use `master', clear
+cmerge 1:1 _n using `using_1', noreport
+qui count if _merge == 3
+local cmerge_matched = r(N)
+qui count if _merge == 1
+local cmerge_master = r(N)
+qui count if _merge == 2
+local cmerge_using = r(N)
+drop _merge
+
+if `stata_matched' == `cmerge_matched' & `stata_master' == `cmerge_master' & `stata_using' == `cmerge_using' {
+    noi test_pass "1:1 _n using has more obs"
+}
+else {
+    noi test_fail "1:1 _n using has more obs" "matched: stata=`stata_matched' cmerge=`cmerge_matched'"
+}
+
+* 1:1 _n merge with keepusing option
+sysuse auto, clear
+keep make price mpg
+tempfile master
+save `master'
+
+sysuse auto, clear
+keep weight length turn
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1', keepusing(weight) nogenerate
+local stata_has_weight = 1
+capture confirm variable weight
+if _rc local stata_has_weight = 0
+capture confirm variable length
+local stata_has_length = !_rc
+local stata_weight1 = weight[1]
+
+use `master', clear
+cmerge 1:1 _n using `using_1', keepusing(weight) nogenerate noreport
+local cmerge_has_weight = 1
+capture confirm variable weight
+if _rc local cmerge_has_weight = 0
+capture confirm variable length
+local cmerge_has_length = !_rc
+local cmerge_weight1 = weight[1]
+
+if `stata_has_weight' == `cmerge_has_weight' & `stata_has_length' == `cmerge_has_length' & `stata_weight1' == `cmerge_weight1' {
+    noi test_pass "1:1 _n with keepusing"
+}
+else {
+    noi test_fail "1:1 _n with keepusing" "has_weight: stata=`stata_has_weight' cmerge=`cmerge_has_weight'"
+}
+
+* 1:1 _n merge with keep() option
+clear
+set obs 100
+gen id = _n
+gen value1 = runiform()
+tempfile master
+save `master'
+
+clear
+set obs 70
+gen extra = runiform() * 100
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1', keep(match) nogenerate
+local stata_N = _N
+
+use `master', clear
+cmerge 1:1 _n using `using_1', keep(match) nogenerate noreport
+local cmerge_N = _N
+
+if `stata_N' == `cmerge_N' {
+    noi test_pass "1:1 _n with keep(match)"
+}
+else {
+    noi test_fail "1:1 _n with keep(match)" "N: stata=`stata_N' cmerge=`cmerge_N'"
+}
+
+* 1:1 _n merge with generate() option
+sysuse auto, clear
+keep make price mpg
+tempfile master
+save `master'
+
+sysuse auto, clear
+keep weight length
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1', generate(merge_result)
+local stata_has_merge = 1
+capture confirm variable merge_result
+if _rc local stata_has_merge = 0
+drop merge_result
+
+use `master', clear
+cmerge 1:1 _n using `using_1', generate(merge_result) noreport
+local cmerge_has_merge = 1
+capture confirm variable merge_result
+if _rc local cmerge_has_merge = 0
+drop merge_result
+
+if `stata_has_merge' == 1 & `cmerge_has_merge' == 1 {
+    noi test_pass "1:1 _n with generate()"
+}
+else {
+    noi test_fail "1:1 _n with generate()" "has_merge: stata=`stata_has_merge' cmerge=`cmerge_has_merge'"
+}
+
+* Large 1:1 _n merge test
+clear
+set seed 99999
+set obs 50000
+gen id = _n
+gen value1 = runiform()
+gen value2 = runiformint(1, 100)
+tempfile master
+save `master'
+
+clear
+set obs 50000
+gen extra1 = runiform() * 100
+gen extra2 = runiformint(1, 1000)
+tempfile using_1
+save `using_1'
+
+use `master', clear
+merge 1:1 _n using `using_1', nogenerate
+local stata_N = _N
+local stata_extra1_1 = extra1[1]
+local stata_extra1_last = extra1[_N]
+
+use `master', clear
+cmerge 1:1 _n using `using_1', nogenerate noreport
+local cmerge_N = _N
+local cmerge_extra1_1 = extra1[1]
+local cmerge_extra1_last = extra1[_N]
+
+if `stata_N' == `cmerge_N' & `stata_extra1_1' == `cmerge_extra1_1' & `stata_extra1_last' == `cmerge_extra1_last' {
+    noi test_pass "1:1 _n large dataset (50K obs)"
+}
+else {
+    noi test_fail "1:1 _n large dataset" "N: stata=`stata_N' cmerge=`cmerge_N'"
+}
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 noi print_summary "cmerge"

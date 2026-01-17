@@ -381,6 +381,7 @@ typedef struct {
     int nkeys;
     int n_keepusing;
     int loaded;
+    int merge_by_n;             /* 1 if merging by observation number (_n) */
 } cmerge_using_cache_t;
 
 static cmerge_using_cache_t g_using_cache = {0};
@@ -1158,6 +1159,7 @@ static ST_retcode cmerge_load_using(const char *args)
     int keepusing_indices[CMERGE_MAX_VARS];
     int verbose = 0;
     int sorted = 0;
+    int merge_by_n = 0;
 
     char *token = strtok(args_copy, " ");
     int arg_idx = 0;
@@ -1189,6 +1191,9 @@ static ST_retcode cmerge_load_using(const char *args)
         else if (strcmp(token, "sorted") == 0) {
             sorted = 1;
         }
+        else if (strcmp(token, "merge_by_n") == 0) {
+            merge_by_n = 1;
+        }
         arg_idx++;
         token = strtok(NULL, " ");
     }
@@ -1205,50 +1210,78 @@ static ST_retcode cmerge_load_using(const char *args)
 
     double t_phase1_start = cmerge_get_time_ms();
 
-    /* Load ONLY key variables */
-    double t_load_keys_start = cmerge_get_time_ms();
-    rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
-    if (rc != STATA_OK) {
-        SF_error("cmerge: Failed to load using keys\n");
-        return 459;
-    }
-    /* Critical null check - prevents crash if load failed silently */
-    if (g_using_cache.keys.vars == NULL) {
-        SF_error("cmerge: FATAL - keys.vars is NULL after load\n");
-        return 920;
-    }
-    double t_load_keys = cmerge_get_time_ms() - t_load_keys_start;
-
-    /* Load ONLY keepusing variables */
+    double t_load_keys = 0;
     double t_load_keepusing = 0;
-    if (n_keepusing > 0) {
-        double t_load_keepusing_start = cmerge_get_time_ms();
-        rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+
+    /* For merge_by_n, we don't need key variables - just keepusing */
+    if (merge_by_n) {
+        /* Initialize empty keys structure */
+        stata_data_init(&g_using_cache.keys);
+        g_using_cache.keys.nobs = SF_nobs();  /* Get nobs from Stata */
+
+        /* Load keepusing variables */
+        if (n_keepusing > 0) {
+            double t_load_keepusing_start = cmerge_get_time_ms();
+            rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+            if (rc != STATA_OK) {
+                SF_error("cmerge: Failed to load keepusing variables\n");
+                return 459;
+            }
+            if (g_using_cache.keepusing.vars == NULL) {
+                SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
+                return 920;
+            }
+            t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
+            g_using_cache.keys.nobs = g_using_cache.keepusing.nobs;
+        } else {
+            stata_data_init(&g_using_cache.keepusing);
+        }
+    } else {
+        /* Standard merge: Load ONLY key variables */
+        double t_load_keys_start = cmerge_get_time_ms();
+        rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
         if (rc != STATA_OK) {
-            stata_data_free(&g_using_cache.keys);
-            SF_error("cmerge: Failed to load keepusing variables\n");
+            SF_error("cmerge: Failed to load using keys\n");
             return 459;
         }
-        /* Critical null check */
-        if (g_using_cache.keepusing.vars == NULL) {
-            stata_data_free(&g_using_cache.keys);
-            SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
+        /* Critical null check - prevents crash if load failed silently */
+        if (g_using_cache.keys.vars == NULL) {
+            SF_error("cmerge: FATAL - keys.vars is NULL after load\n");
             return 920;
         }
-        t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
-    } else {
-        stata_data_init(&g_using_cache.keepusing);
+        t_load_keys = cmerge_get_time_ms() - t_load_keys_start;
+
+        /* Load ONLY keepusing variables */
+        if (n_keepusing > 0) {
+            double t_load_keepusing_start = cmerge_get_time_ms();
+            rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+            if (rc != STATA_OK) {
+                stata_data_free(&g_using_cache.keys);
+                SF_error("cmerge: Failed to load keepusing variables\n");
+                return 459;
+            }
+            /* Critical null check */
+            if (g_using_cache.keepusing.vars == NULL) {
+                stata_data_free(&g_using_cache.keys);
+                SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
+                return 920;
+            }
+            t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
+        } else {
+            stata_data_init(&g_using_cache.keepusing);
+        }
     }
 
     g_using_cache.nobs = g_using_cache.keys.nobs;
     g_using_cache.nkeys = nkeys;
     g_using_cache.n_keepusing = n_keepusing;
+    g_using_cache.merge_by_n = merge_by_n;
 
     double t_sort = 0;
     double t_apply_perm = 0;
 
-    /* Sort using data on keys (skip if sorted option specified) */
-    if (!sorted) {
+    /* Sort using data on keys (skip if sorted option specified or merge_by_n) */
+    if (!sorted && !merge_by_n) {
         double t_sort_start = cmerge_get_time_ms();
 
         int *sort_vars = malloc(nkeys * sizeof(int));
@@ -1385,8 +1418,9 @@ static ST_retcode cmerge_execute(const char *args)
         return 459;
     }
 
-    /* Critical null check - prevents crash if cache was corrupted */
-    if (g_using_cache.keys.vars == NULL) {
+    /* Critical null check - prevents crash if cache was corrupted
+       Note: For merge_by_n mode, keys.vars is intentionally NULL */
+    if (g_using_cache.keys.vars == NULL && !g_using_cache.merge_by_n) {
         SF_error("cmerge: FATAL - g_using_cache.keys.vars is NULL!\n");
         return 459;
     }
@@ -1478,9 +1512,15 @@ static ST_retcode cmerge_execute(const char *args)
                 shared_flags[i] = token ? atoi(token) : 0;
             }
         }
+        else if (strcmp(token, "merge_by_n") == 0) {
+            /* Parsed but value comes from cache */
+        }
         arg_idx++;
         token = strtok(NULL, " ");
     }
+
+    /* Get merge_by_n from cache (set during load_using phase) */
+    int merge_by_n = g_using_cache.merge_by_n;
 
     (void)verbose;  /* Timing output moved to ado file */
 
@@ -1518,13 +1558,13 @@ static ST_retcode cmerge_execute(const char *args)
     double t_load = cmerge_get_time_ms() - t_start;
 
     /* ===================================================================
-     * Step 2: Sort master data on keys (skip if sorted option specified)
+     * Step 2: Sort master data on keys (skip if sorted option specified or merge_by_n)
      * =================================================================== */
 
     double t_sort = 0;
     size_t *sort_perm = NULL;
 
-    if (!sorted) {
+    if (!sorted && !merge_by_n) {
         t_start = cmerge_get_time_ms();
 
         /* Build sort variable indices (within master_data, 1-based) */
@@ -1563,59 +1603,99 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* ===================================================================
-     * Step 3: Perform sorted merge join
-     * We need to create a minimal keys-only structure for the join
+     * Step 3: Perform merge join
+     * For merge_by_n: simple row-by-row matching
+     * For standard merge: sorted join using keys
      * =================================================================== */
 
     t_start = cmerge_get_time_ms();
 
-    /* Create a temporary keys-only view for the merge join */
-    stata_data master_keys_view;
-    stata_data_init(&master_keys_view);
-    master_keys_view.nobs = master_data.nobs;
-    master_keys_view.nvars = nkeys;
-    master_keys_view.vars = malloc(nkeys * sizeof(stata_variable));
-    if (!master_keys_view.vars) {
-        if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
-        free(all_var_indices);
-        return 920;
-    }
+    cmerge_output_spec_t *output_specs = NULL;
+    size_t output_nobs = 0;
 
-    /* Point to the key variables in master_data (0-indexed in vars array) */
-    for (int k = 0; k < nkeys; k++) {
-        int var_idx = master_key_indices[k] - 1;  /* Convert to 0-based */
+    if (merge_by_n) {
+        /* Merge by observation number (_n): simple row-by-row matching */
+        size_t m_nobs = master_nobs;
+        size_t u_nobs = g_using_cache.nobs;
+        size_t max_nobs = (m_nobs > u_nobs) ? m_nobs : u_nobs;
 
-        /* Critical bounds check - prevents crash from bad indices */
-        if (var_idx < 0 || (size_t)var_idx >= master_data.nvars) {
-            SF_error("cmerge: key variable index out of bounds\n");
-            free(master_keys_view.vars);
+        output_specs = malloc(max_nobs * sizeof(cmerge_output_spec_t));
+        if (!output_specs) {
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            return 459;
+            return 920;
         }
 
-        master_keys_view.vars[k] = master_data.vars[var_idx];
+        /* Build output specs: row i matches row i */
+        for (size_t i = 0; i < max_nobs; i++) {
+            if (i < m_nobs && i < u_nobs) {
+                /* Both master and using have this row - matched */
+                output_specs[i].master_sorted_row = (int64_t)i;
+                output_specs[i].using_sorted_row = (int64_t)i;
+                output_specs[i].merge_result = MERGE_RESULT_BOTH;
+            } else if (i < m_nobs) {
+                /* Only master has this row */
+                output_specs[i].master_sorted_row = (int64_t)i;
+                output_specs[i].using_sorted_row = -1;
+                output_specs[i].merge_result = MERGE_RESULT_MASTER_ONLY;
+            } else {
+                /* Only using has this row */
+                output_specs[i].master_sorted_row = -1;
+                output_specs[i].using_sorted_row = (int64_t)i;
+                output_specs[i].merge_result = MERGE_RESULT_USING_ONLY;
+            }
+        }
+        output_nobs = max_nobs;
+    } else {
+        /* Standard merge: create keys view and perform sorted join */
+        stata_data master_keys_view;
+        stata_data_init(&master_keys_view);
+        master_keys_view.nobs = master_data.nobs;
+        master_keys_view.nvars = nkeys;
+        master_keys_view.vars = malloc(nkeys * sizeof(stata_variable));
+        if (!master_keys_view.vars) {
+            if (sort_perm) free(sort_perm);
+            stata_data_free(&master_data);
+            free(all_var_indices);
+            return 920;
+        }
+
+        /* Point to the key variables in master_data (0-indexed in vars array) */
+        for (int k = 0; k < nkeys; k++) {
+            int var_idx = master_key_indices[k] - 1;  /* Convert to 0-based */
+
+            /* Critical bounds check - prevents crash from bad indices */
+            if (var_idx < 0 || (size_t)var_idx >= master_data.nvars) {
+                SF_error("cmerge: key variable index out of bounds\n");
+                free(master_keys_view.vars);
+                if (sort_perm) free(sort_perm);
+                stata_data_free(&master_data);
+                free(all_var_indices);
+                return 459;
+            }
+
+            master_keys_view.vars[k] = master_data.vars[var_idx];
+        }
+
+        int64_t output_nobs_signed = cmerge_sorted_join(
+            &master_keys_view, &g_using_cache.keys,
+            nkeys, merge_type, &output_specs);
+
+        /* Free the view (but not the underlying data which belongs to master_data) */
+        free(master_keys_view.vars);
+
+        if (output_nobs_signed < 0) {
+            if (sort_perm) free(sort_perm);
+            stata_data_free(&master_data);
+            free(all_var_indices);
+            SF_error("cmerge: Merge join failed\n");
+            return 920;
+        }
+
+        output_nobs = (size_t)output_nobs_signed;
     }
 
-    cmerge_output_spec_t *output_specs = NULL;
-    int64_t output_nobs_signed = cmerge_sorted_join(
-        &master_keys_view, &g_using_cache.keys,
-        nkeys, merge_type, &output_specs);
-
-    /* Free the view (but not the underlying data which belongs to master_data) */
-    free(master_keys_view.vars);
-
-    if (output_nobs_signed < 0) {
-        if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
-        free(all_var_indices);
-        SF_error("cmerge: Merge join failed\n");
-        return 920;
-    }
-
-    size_t output_nobs = (size_t)output_nobs_signed;
     double t_merge = cmerge_get_time_ms() - t_start;
 
     /* ===================================================================
