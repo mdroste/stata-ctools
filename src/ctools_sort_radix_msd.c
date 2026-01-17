@@ -334,6 +334,7 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
 
     /* Phase 1: Parallel histogram */
     chunk_size = (n + num_threads - 1) / num_threads;
+    int threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         size_t t_start = start + (size_t)t * chunk_size;
         size_t t_end = start + (size_t)(t + 1) * chunk_size;
@@ -347,10 +348,15 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
         ctx->hist_args[t].shift = shift;
         ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
 
-        pthread_create(&ctx->threads[t], NULL, msd_histogram_thread, &ctx->hist_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, msd_histogram_thread, &ctx->hist_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            msd_histogram_thread(&ctx->hist_args[t]);
+        }
     }
 
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -402,6 +408,7 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
     }
 
     /* Phase 2: Parallel scatter */
+    threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         size_t t_start = start + (size_t)t * chunk_size;
         size_t t_end = start + (size_t)(t + 1) * chunk_size;
@@ -416,10 +423,15 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
         ctx->scatter_args[t].shift = shift;
         ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
 
-        pthread_create(&ctx->threads[t], NULL, msd_scatter_thread, &ctx->scatter_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, msd_scatter_thread, &ctx->scatter_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            msd_scatter_thread(&ctx->scatter_args[t]);
+        }
     }
 
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -1016,17 +1028,27 @@ static stata_retcode msd_apply_permutation(stata_data *data)
         return STATA_ERR_MEMORY;
     }
 
+    size_t threads_created = 0;
     for (j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
         args[j].sort_order = data->sort_order;
         args[j].nobs = data->nobs;
         args[j].success = 0;
 
-        pthread_create(&threads[j], NULL, msd_apply_permute_thread, &args[j]);
+        if (pthread_create(&threads[j], NULL, msd_apply_permute_thread, &args[j]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            msd_apply_permute_thread(&args[j]);
+        }
     }
 
-    for (j = 0; j < nvars; j++) {
+    /* Wait for successfully created threads */
+    for (j = 0; j < threads_created; j++) {
         pthread_join(threads[j], NULL);
+    }
+    /* Check success for all args (both threaded and fallback) */
+    for (j = 0; j < nvars; j++) {
         if (!args[j].success) {
             all_success = 0;
         }

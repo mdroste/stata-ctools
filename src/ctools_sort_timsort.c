@@ -1481,17 +1481,27 @@ static stata_retcode timsort_apply_permutation(stata_data *data)
         return STATA_ERR_MEMORY;
     }
 
+    size_t threads_created = 0;
     for (j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
         args[j].sort_order = data->sort_order;
         args[j].nobs = data->nobs;
         args[j].success = 0;
 
-        pthread_create(&threads[j], NULL, timsort_apply_permute_thread, &args[j]);
+        if (pthread_create(&threads[j], NULL, timsort_apply_permute_thread, &args[j]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            timsort_apply_permute_thread(&args[j]);
+        }
     }
 
-    for (j = 0; j < nvars; j++) {
+    /* Wait for successfully created threads */
+    for (j = 0; j < threads_created; j++) {
         pthread_join(threads[j], NULL);
+    }
+    /* Check success for all args (both threaded and fallback) */
+    for (j = 0; j < nvars; j++) {
         if (!args[j].success) {
             all_success = 0;
         }

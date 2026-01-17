@@ -520,26 +520,39 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
         /* Remap to contiguous levels and copy */
         ST_int *remap = (ST_int *)calloc(hash_tables[g]->size + 1, sizeof(ST_int));
-        if (remap) {
-            ST_int next_level = 1;
-            idx = 0;
-            for (i = 0; i < N_orig; i++) {
-                if (mask[i]) {
-                    ST_int old_level = factors[g].levels[i];
-                    if (remap[old_level] == 0) {
-                        remap[old_level] = next_level++;
-                    }
-                    g_state->factors[g].levels[idx] = remap[old_level];
-                    g_state->factors[g].counts[remap[old_level] - 1] += 1.0;
-                    /* Accumulate weighted counts if using weights */
-                    if (has_weights) {
-                        g_state->factors[g].weighted_counts[remap[old_level] - 1] += weights[i];
-                    }
-                    idx++;
-                }
+        if (!remap) {
+            cleanup_state();
+            for (i = 0; i < G; i++) {
+                if (factors[i].levels) free(factors[i].levels);
+                if (factors[i].counts) free(factors[i].counts);
+                if (hash_tables[i]) hash_destroy(hash_tables[i]);
             }
-            free(remap);
+            free(factors); free(hash_tables); free(mask);
+            free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
+            for (i = 0; i < G; i++) {
+                if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
+            }
+            return 1;
         }
+        ST_int next_level = 1;
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                ST_int old_level = factors[g].levels[i];
+                if (remap[old_level] == 0) {
+                    remap[old_level] = next_level++;
+                }
+                g_state->factors[g].levels[idx] = remap[old_level];
+                g_state->factors[g].counts[remap[old_level] - 1] += 1.0;
+                /* Accumulate weighted counts if using weights */
+                if (has_weights) {
+                    g_state->factors[g].weighted_counts[remap[old_level] - 1] += weights[i];
+                }
+                idx++;
+            }
+        }
+        free(remap);
     }
 
     /* Allocate thread buffers */
@@ -549,15 +562,58 @@ ST_retcode do_full_regression(int argc, char *argv[])
     g_state->thread_proj = (ST_double **)calloc(num_threads, sizeof(ST_double *));
     g_state->thread_fe_means = (ST_double **)calloc(num_threads * G, sizeof(ST_double *));
 
-    for (t = 0; t < num_threads; t++) {
+    /* Check array allocations */
+    if (!g_state->thread_cg_r || !g_state->thread_cg_u || !g_state->thread_cg_v ||
+        !g_state->thread_proj || !g_state->thread_fe_means) {
+        cleanup_state();
+        for (i = 0; i < G; i++) {
+            if (factors[i].levels) free(factors[i].levels);
+            if (factors[i].counts) free(factors[i].counts);
+            if (hash_tables[i]) hash_destroy(hash_tables[i]);
+        }
+        free(factors); free(hash_tables); free(mask);
+        free(data); free(means); free(stdevs); free(tss);
+        if (weights) free(weights);
+        for (i = 0; i < G; i++) {
+            if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
+        }
+        return 1;
+    }
+
+    int thread_alloc_failed = 0;
+    for (t = 0; t < num_threads && !thread_alloc_failed; t++) {
         g_state->thread_cg_r[t] = (ST_double *)malloc(N * sizeof(ST_double));
         g_state->thread_cg_u[t] = (ST_double *)malloc(N * sizeof(ST_double));
         g_state->thread_cg_v[t] = (ST_double *)malloc(N * sizeof(ST_double));
         g_state->thread_proj[t] = (ST_double *)malloc(N * sizeof(ST_double));
+        if (!g_state->thread_cg_r[t] || !g_state->thread_cg_u[t] ||
+            !g_state->thread_cg_v[t] || !g_state->thread_proj[t]) {
+            thread_alloc_failed = 1;
+            break;
+        }
         for (g = 0; g < G; g++) {
             g_state->thread_fe_means[t * G + g] = (ST_double *)malloc(
                 g_state->factors[g].num_levels * sizeof(ST_double));
+            if (!g_state->thread_fe_means[t * G + g]) {
+                thread_alloc_failed = 1;
+                break;
+            }
         }
+    }
+    if (thread_alloc_failed) {
+        cleanup_state();
+        for (i = 0; i < G; i++) {
+            if (factors[i].levels) free(factors[i].levels);
+            if (factors[i].counts) free(factors[i].counts);
+            if (hash_tables[i]) hash_destroy(hash_tables[i]);
+        }
+        free(factors); free(hash_tables); free(mask);
+        free(data); free(means); free(stdevs); free(tss);
+        if (weights) free(weights);
+        for (i = 0; i < G; i++) {
+            if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
+        }
+        return 1;
     }
 
     /* ================================================================

@@ -1,0 +1,47 @@
+v 3
+d ctools: C-accelerated tools for Stata
+d
+d ctools provides high-performance C plugins for Stata that dramatically
+d accelerate common data operations through parallelization and optimized
+d algorithms.
+d
+d Included commands:
+d   csort       - Parallel sorting (IPS4o, radix, timsort, etc.)
+d   cmerge      - C-accelerated dataset merging
+d   cimport     - Multi-threaded CSV import
+d   cexport     - Parallel CSV export
+d   creghdfe    - HDFE regression with CG solver
+d   civreghdfe  - IV/2SLS regression with HDFE
+d   cqreg       - Quantile regression with IPM solver
+d   cbinscatter - Binned scatter plots
+d
+d Version: 1.0.0
+d
+d Requires: Stata 14.0 or later
+d
+d Distribution-Date: 20260117
+
+f ctools.ado
+f ctools.sthlp
+f csort.ado
+f csort.sthlp
+f cmerge.ado
+f cmerge.sthlp
+f cimport.ado
+f cimport.sthlp
+f cexport.ado
+f cexport.sthlp
+f creghdfe.ado
+f creghdfe.sthlp
+f creghdfe_p.ado
+f civreghdfe.ado
+f civreghdfe.sthlp
+f cqreg.ado
+f cqreg.sthlp
+f cqreg_p.ado
+f cbinscatter.ado
+f cbinscatter.sthlp
+f ctools_mac_arm.plugin
+f ctools_mac_x86.plugin
+f ctools_windows.plugin
+f ctools_linux.plugin

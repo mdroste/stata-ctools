@@ -145,8 +145,8 @@ static char *arena_strdup(string_arena *arena, const char *s)
 {
     size_t len = strlen(s) + 1;
 
-    /* Check if arena has space */
-    if (arena != NULL && arena->used + len <= arena->capacity) {
+    /* Check if arena has space - with overflow protection */
+    if (arena != NULL && arena->used <= arena->capacity - len && len <= arena->capacity) {
         char *ptr = arena->base + arena->used;
         memcpy(ptr, s, len);
         arena->used += len;
@@ -333,7 +333,13 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         char **str_ptr = var->data.str;
 
         /* Create arena for all strings - estimate avg 64 bytes per string */
-        size_t arena_capacity = nobs * 64;
+        /* Overflow check: nobs * 64 */
+        size_t arena_capacity = 0;
+        if (nobs <= SIZE_MAX / 64) {
+            arena_capacity = nobs * 64;
+        } else {
+            arena_capacity = SIZE_MAX;  /* Will likely fail, triggering strdup fallback */
+        }
         string_arena *arena = arena_create(arena_capacity);
         if (arena != NULL) {
             var->_arena = arena;
@@ -1170,7 +1176,14 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         char strbuf[2048];
 
         /* Create arena for string storage (estimate 64 bytes avg per string) */
-        string_arena *arena = arena_create(output_nobs * 64);
+        /* Overflow check: output_nobs * 64 */
+        size_t arena_capacity = 0;
+        if (output_nobs <= SIZE_MAX / 64) {
+            arena_capacity = output_nobs * 64;
+        } else {
+            arena_capacity = SIZE_MAX;  /* Will likely fail, triggering strdup fallback */
+        }
+        string_arena *arena = arena_create(arena_capacity);
         /* Arena failure is ok - we fall back to strdup */
 
         /* GATHER: Read from source positions with prefetching */

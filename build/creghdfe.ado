@@ -1,4 +1,4 @@
-*! version 1.2.0 08Jan2026
+*! version 1.0.0 17Jan2026
 *! creghdfe: C-accelerated high-dimensional fixed effects regression
 *! Part of the ctools suite
 *!

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.1.0}{...}
+{* *! version 1.0.0}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}

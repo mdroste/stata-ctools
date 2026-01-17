@@ -1,4 +1,4 @@
-*! version 1.0.0 09Jan2026
+*! version 1.0.0 17Jan2026
 *! cbinscatter: C-accelerated binned scatter plots
 *! Part of the ctools suite
 *!

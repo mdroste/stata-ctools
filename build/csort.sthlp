@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.4.0}{...}
+{* *! version 1.0.0}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}

@@ -259,6 +259,7 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
 
     /* Phase 1: Parallel histogram computation */
     chunk_size = (nobs + num_threads - 1) / num_threads;
+    int threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         start = (size_t)t * chunk_size;
         end = (size_t)(t + 1) * chunk_size;
@@ -272,11 +273,16 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
         ctx->hist_args[t].shift = shift;
         ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
 
-        pthread_create(&ctx->threads[t], NULL, histogram_thread, &ctx->hist_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, histogram_thread, &ctx->hist_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            histogram_thread(&ctx->hist_args[t]);
+        }
     }
 
     /* Wait for histogram threads */
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -321,6 +327,7 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
     }
 
     /* Phase 2: Parallel scatter */
+    threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         start = (size_t)t * chunk_size;
         end = (size_t)(t + 1) * chunk_size;
@@ -336,11 +343,16 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
         ctx->scatter_args[t].global_offsets = ctx->global_offsets;
         ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
 
-        pthread_create(&ctx->threads[t], NULL, scatter_thread, &ctx->scatter_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, scatter_thread, &ctx->scatter_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            scatter_thread(&ctx->scatter_args[t]);
+        }
     }
 
     /* Wait for scatter threads */
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -588,6 +600,7 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
     /* Phase 1: Parallel histogram */
+    int threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         start = (size_t)t * chunk_size;
         end = (size_t)(t + 1) * chunk_size;
@@ -602,10 +615,15 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
         ctx->hist_args[t].char_pos = char_pos;
         ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
 
-        pthread_create(&ctx->threads[t], NULL, string_histogram_thread, &ctx->hist_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, string_histogram_thread, &ctx->hist_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            string_histogram_thread(&ctx->hist_args[t]);
+        }
     }
 
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -648,6 +666,7 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
     }
 
     /* Phase 2: Parallel scatter */
+    threads_created = 0;
     for (t = 0; t < num_threads; t++) {
         start = (size_t)t * chunk_size;
         end = (size_t)(t + 1) * chunk_size;
@@ -663,10 +682,15 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
         ctx->scatter_args[t].char_pos = char_pos;
         ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
 
-        pthread_create(&ctx->threads[t], NULL, string_scatter_thread, &ctx->scatter_args[t]);
+        if (pthread_create(&ctx->threads[t], NULL, string_scatter_thread, &ctx->scatter_args[t]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            string_scatter_thread(&ctx->scatter_args[t]);
+        }
     }
 
-    for (t = 0; t < num_threads; t++) {
+    for (t = 0; t < threads_created; t++) {
         pthread_join(ctx->threads[t], NULL);
     }
 
@@ -1046,18 +1070,27 @@ static stata_retcode apply_permutation_to_all_vars(stata_data *data)
     }
 
     /* Launch threads to apply permutation to each variable */
+    size_t threads_created = 0;
     for (j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
         args[j].sort_order = data->sort_order;
         args[j].nobs = data->nobs;
         args[j].success = 0;
 
-        pthread_create(&threads[j], NULL, apply_permute_thread, &args[j]);
+        if (pthread_create(&threads[j], NULL, apply_permute_thread, &args[j]) == 0) {
+            threads_created++;
+        } else {
+            /* Run in current thread as fallback */
+            apply_permute_thread(&args[j]);
+        }
     }
 
-    /* Wait for all threads */
-    for (j = 0; j < nvars; j++) {
+    /* Wait for successfully created threads */
+    for (j = 0; j < threads_created; j++) {
         pthread_join(threads[j], NULL);
+    }
+    /* Check success for all args (both threaded and fallback) */
+    for (j = 0; j < nvars; j++) {
         if (!args[j].success) {
             all_success = 0;
         }

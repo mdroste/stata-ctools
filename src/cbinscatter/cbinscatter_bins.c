@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include "stplugin.h"
 #include "cbinscatter_bins.h"
+#include "../ctools_config.h"
 
 /* Stata missing value check */
 #define STATA_MISSING 8.988465674311579e+307
@@ -147,10 +148,27 @@ ST_retcode compute_bin_statistics(
     ST_double w, yi, xi, mean_y, mean_x, var_y, var_x;
     ST_int actual_bins = 0;
 
+    /* Validate nquantiles to prevent overflow */
+    if (nquantiles <= 0) {
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
     /* Allocate accumulators - all in one block for cache efficiency */
-    size_t alloc_size = nquantiles * (3 * sizeof(ST_double) + sizeof(ST_int));
+    /* Use safe multiplication to prevent overflow */
+    size_t base_per_bin = 3 * sizeof(ST_double) + sizeof(ST_int);
+    size_t alloc_size;
+    if (ctools_safe_mul_size((size_t)nquantiles, base_per_bin, &alloc_size) != 0) {
+        return CBINSCATTER_ERR_MEMORY;
+    }
     if (compute_se) {
-        alloc_size += nquantiles * 2 * sizeof(ST_double);
+        size_t se_size;
+        if (ctools_safe_mul_size((size_t)nquantiles, 2 * sizeof(ST_double), &se_size) != 0) {
+            return CBINSCATTER_ERR_MEMORY;
+        }
+        if (alloc_size > SIZE_MAX - se_size) {
+            return CBINSCATTER_ERR_MEMORY;
+        }
+        alloc_size += se_size;
     }
 
     void *alloc_block = calloc(1, alloc_size);

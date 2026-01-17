@@ -16,6 +16,7 @@
 #include "stplugin.h"
 #include "cbinscatter_fit.h"
 #include "cbinscatter_resid.h"
+#include "../ctools_config.h"
 
 /* ========================================================================
  * Fast Linear Fit (Single Pass)
@@ -250,8 +251,12 @@ ST_retcode fit_polynomial(
     }
 
     /* General case for order >= 3 */
+    /* Validate order to prevent overflow (reasonable max for polynomial fitting) */
+    if (order < 3 || order > 100) {
+        return CBINSCATTER_ERR_INVALID;
+    }
+
     ST_int K = order + 1;
-    ST_int K2 = K * K;
     ST_double *XtX = NULL;
     ST_double *Xty = NULL;
     ST_double *xpows = NULL;  /* Powers of x for current observation */
@@ -259,10 +264,17 @@ ST_retcode fit_polynomial(
     ST_int i, j, k;
     ST_double sum_w = 0.0, sum_y = 0.0, sum_yy = 0.0;
 
+    /* Compute K*K safely to prevent overflow */
+    size_t K_size = (size_t)K;
+    size_t K2_size;
+    if (ctools_safe_mul_size(K_size, K_size, &K2_size) != 0) {
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
     /* Allocate only what we need - no design matrix */
-    XtX = (ST_double *)calloc(K2, sizeof(ST_double));
-    Xty = (ST_double *)calloc(K, sizeof(ST_double));
-    xpows = (ST_double *)malloc(K * sizeof(ST_double));
+    XtX = (ST_double *)calloc(K2_size, sizeof(ST_double));
+    Xty = (ST_double *)calloc(K_size, sizeof(ST_double));
+    xpows = (ST_double *)malloc(K_size * sizeof(ST_double));
 
     if (!XtX || !Xty || !xpows) {
         rc = CBINSCATTER_ERR_MEMORY;

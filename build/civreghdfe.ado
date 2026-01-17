@@ -1,4 +1,4 @@
-*! version 1.1.0 13jan2026
+*! version 1.0.0 17Jan2026
 *! civreghdfe: C-accelerated instrumental variables regression with HDFE
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 

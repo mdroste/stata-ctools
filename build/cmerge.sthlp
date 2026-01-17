@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 2.0.0}{...}
+{* *! version 1.0.0}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}

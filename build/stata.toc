@@ -1,0 +1,10 @@
+v 3
+d ctools - C-accelerated tools for Stata
+d
+d High-performance C plugins providing parallelized sorting, merging,
+d CSV import/export, regression with high-dimensional fixed effects,
+d quantile regression, binned scatter plots, and instrumental variables.
+d
+d Requires: Stata 14.0 or later
+
+p ctools C-accelerated tools for Stata

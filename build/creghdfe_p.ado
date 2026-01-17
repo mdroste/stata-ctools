@@ -1,4 +1,4 @@
-*! version 1.0.0 06Jan2026
+*! version 1.0.0 17Jan2026
 *! creghdfe_p: Predict program for creghdfe
 *! Part of the ctools suite
 

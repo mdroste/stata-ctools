@@ -1,4 +1,4 @@
-*! version 1.1.0 07Jan2026
+*! version 1.0.0 17Jan2026
 *! cqreg: C-accelerated quantile regression
 *! Part of the ctools suite
 *!

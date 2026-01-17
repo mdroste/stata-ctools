@@ -1465,6 +1465,12 @@ static void *cimport_build_cache_worker(void *arg) {
         size_t row_idx = 0;
 
         if (col->type == CIMPORT_COL_STRING) {
+            /* Validate cache allocation before use */
+            if (cache->string_data == NULL) {
+                cache->count = 0;
+                continue;  /* Skip this column - allocation failed */
+            }
+
             cimport_arena_init(&cache->string_arena);
 
             for (int c = 0; c < ctx->num_chunks; c++) {
@@ -1508,6 +1514,12 @@ static void *cimport_build_cache_worker(void *arg) {
                 }
             }
         } else {
+            /* Validate cache allocation before use */
+            if (cache->numeric_data == NULL) {
+                cache->count = 0;
+                continue;  /* Skip this column - allocation failed */
+            }
+
             double missing = SV_missval;
 
             for (int c = 0; c < ctx->num_chunks; c++) {
@@ -1574,6 +1586,7 @@ static void cimport_build_column_cache(CImportContext *ctx) {
         CImportCacheBuildTask tasks[CIMPORT_MAX_THREADS];
 
         int cols_per_thread = (ctx->num_columns + num_threads - 1) / num_threads;
+        int threads_created = 0;
 
         for (int t = 0; t < num_threads; t++) {
             tasks[t].ctx = ctx;
@@ -1582,10 +1595,15 @@ static void cimport_build_column_cache(CImportContext *ctx) {
             if (tasks[t].col_end > ctx->num_columns) tasks[t].col_end = ctx->num_columns;
             tasks[t].thread_id = t;
 
-            pthread_create(&threads[t], NULL, cimport_build_cache_worker, &tasks[t]);
+            if (pthread_create(&threads[t], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
+                threads_created++;
+            } else {
+                /* Run in current thread as fallback */
+                cimport_build_cache_worker(&tasks[t]);
+            }
         }
 
-        for (int t = 0; t < num_threads; t++) {
+        for (int t = 0; t < threads_created; t++) {
             pthread_join(threads[t], NULL);
         }
     }

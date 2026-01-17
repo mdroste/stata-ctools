@@ -1038,7 +1038,8 @@ ST_retcode cexport_main(const char *args)
             size_t batch_size = num_chunks - chunk_idx;
             if (batch_size > num_threads) batch_size = num_threads;
 
-            /* Launch threads for this batch */
+            /* Launch threads for this batch - track which were created */
+            int thread_launched[CTOOLS_IO_MAX_THREADS] = {0};
             for (size_t t = 0; t < batch_size; t++) {
                 size_t c = chunk_idx + t;
                 chunk_args[t].start_row = c * CTOOLS_EXPORT_CHUNK_SIZE;
@@ -1049,13 +1050,23 @@ ST_retcode cexport_main(const char *args)
                 chunk_args[t].bytes_written = 0;
                 chunk_args[t].success = 0;
 
-                pthread_create(&threads[t], NULL, format_chunk_thread, &chunk_args[t]);
+                if (pthread_create(&threads[t], NULL, format_chunk_thread, &chunk_args[t]) == 0) {
+                    thread_launched[t] = 1;
+                } else {
+                    /* Run in current thread as fallback */
+                    format_chunk_thread(&chunk_args[t]);
+                }
             }
 
-            /* Wait for threads and write output in order */
+            /* Wait for launched threads */
             for (size_t t = 0; t < batch_size; t++) {
-                pthread_join(threads[t], NULL);
+                if (thread_launched[t]) {
+                    pthread_join(threads[t], NULL);
+                }
+            }
 
+            /* Check results and write output in order */
+            for (size_t t = 0; t < batch_size; t++) {
                 if (!chunk_args[t].success) {
                     for (size_t u = 0; u < num_threads; u++) free(chunk_buffers[u]);
                     free(threads);

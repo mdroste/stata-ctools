@@ -1,4 +1,4 @@
-*! version 1.1.0 05Jan2026
+*! version 1.0.0 17Jan2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!

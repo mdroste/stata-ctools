@@ -15,6 +15,7 @@
 #include "cqreg_linalg.h"
 #include "../ctools_error.h"
 #include "../ctools_timer.h"
+#include "../ctools_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -123,16 +124,26 @@ static ST_int load_data(cqreg_state *state,
 
     main_debug_log("load_data: N=%d, K_x=%d, in1=%d, in2=%d\n", N, K_x, in1, in2);
 
-    /* Allocate y array directly (owned by state) */
-    state->y = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    /* Allocate y array directly (owned by state) - with overflow check */
+    size_t y_size;
+    if (ctools_safe_mul_size((size_t)N, sizeof(ST_double), &y_size) != 0) {
+        ctools_error("cqreg", "Overflow computing y array size");
+        return -1;
+    }
+    state->y = (ST_double *)cqreg_aligned_alloc(y_size, CQREG_CACHE_LINE);
     if (state->y == NULL) {
         ctools_error("cqreg", "Failed to allocate y array");
         return -1;
     }
     state->y_owned = 1;
 
-    /* Allocate X matrix: column-major, N rows x K columns */
-    state->X = (ST_double *)cqreg_aligned_alloc(N * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    /* Allocate X matrix: column-major, N rows x K columns - with overflow check */
+    size_t x_size;
+    if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &x_size) != 0) {
+        ctools_error("cqreg", "Overflow computing X matrix size");
+        return -1;
+    }
+    state->X = (ST_double *)cqreg_aligned_alloc(x_size, CQREG_CACHE_LINE);
     if (state->X == NULL) {
         ctools_error("cqreg", "Failed to allocate X matrix");
         return -1;

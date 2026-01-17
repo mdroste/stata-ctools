@@ -101,8 +101,12 @@ static cmerge_string_arena *cmerge_arena_create(size_t capacity)
     return arena;
 }
 
+/* Static empty string for fallback when all allocations fail */
+static char cmerge_empty_string[1] = "";
+
 /* Allocate a string copy from the arena. Falls back to strdup if full.
- * Sets arena->alloc_failed on allocation failure and returns empty string. */
+ * Sets arena->alloc_failed on allocation failure.
+ * ALWAYS returns a valid pointer (never NULL) - falls back to static empty string. */
 static char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
 {
     size_t len = strlen(s) + 1;
@@ -116,23 +120,30 @@ static char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
 
     /* Fallback to regular strdup */
     char *result = strdup(s);
-    if (result == NULL && arena != NULL) {
-        arena->alloc_failed = 1;
-        /* Return pointer to empty string in arena if possible */
-        if (arena->used < arena->capacity) {
-            char *ptr = arena->base + arena->used;
-            ptr[0] = '\0';
-            arena->used += 1;
-            return ptr;
+    if (result == NULL) {
+        if (arena != NULL) {
+            arena->alloc_failed = 1;
+            /* Return pointer to empty string in arena if possible */
+            if (arena->used < arena->capacity) {
+                char *ptr = arena->base + arena->used;
+                ptr[0] = '\0';
+                arena->used += 1;
+                return ptr;
+            }
         }
+        /* Last resort: return static empty string (never NULL) */
+        return cmerge_empty_string;
     }
     return result;
 }
 
-/* Check if a pointer was allocated from the arena */
+/* Check if a pointer was allocated from the arena (or is the static fallback) */
 static inline int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr)
 {
-    if (arena == NULL || ptr == NULL) return 0;
+    if (ptr == NULL) return 0;
+    /* Static empty string should not be freed */
+    if (ptr == cmerge_empty_string) return 1;
+    if (arena == NULL) return 0;
     return (ptr >= arena->base && ptr < arena->base + arena->capacity);
 }
 
@@ -1922,16 +1933,38 @@ static ST_retcode cmerge_execute(const char *args)
      * Arena enables O(1) bulk free instead of O(n*m) individual frees. */
     cmerge_string_arena *str_arena = NULL;
     if (n_string_vars > 0) {
-        size_t arena_size = n_string_vars * output_nobs * 64;
+        /* Overflow check for arena_size = n_string_vars * output_nobs * 64 */
+        size_t arena_size = 0;
+        if (n_string_vars > 0 && output_nobs > 0) {
+            /* Check n_string_vars * output_nobs */
+            if (n_string_vars > SIZE_MAX / output_nobs) {
+                /* Overflow - use a smaller fallback size */
+                arena_size = SIZE_MAX / 64;  /* Will likely fail, triggering strdup fallback */
+            } else {
+                size_t cell_count = n_string_vars * output_nobs;
+                /* Check cell_count * 64 */
+                if (cell_count > SIZE_MAX / 64) {
+                    arena_size = SIZE_MAX;  /* Will likely fail */
+                } else {
+                    arena_size = cell_count * 64;
+                }
+            }
+        }
         str_arena = cmerge_arena_create(arena_size);
         /* If arena creation fails, we fall back to strdup (no error) */
     }
+
+    /* Track allocation failures in parallel loop */
+    volatile int alloc_failed = 0;
 
     /* Apply permutation to each variable (can be parallelized with OpenMP) */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
     #endif
     for (size_t vi = 0; vi < n_output_vars; vi++) {
+        /* Skip remaining work if allocation already failed */
+        if (alloc_failed) continue;
+
         int src_var_idx = output_var_indices[vi];
         stata_variable *src_var = &master_data.vars[src_var_idx];
         stata_variable *dst_var = &output_data.vars[vi];
@@ -1942,7 +1975,10 @@ static ST_retcode cmerge_execute(const char *args)
 
         if (src_var->type == STATA_TYPE_DOUBLE) {
             dst_var->data.dbl = (double *)cmerge_aligned_alloc(output_nobs * sizeof(double));
-            if (!dst_var->data.dbl) continue;  /* Error handled below */
+            if (!dst_var->data.dbl) {
+                alloc_failed = 1;
+                continue;
+            }
 
             int is_key = output_var_is_key[vi];
             int key_idx = output_var_key_idx[vi];
@@ -1964,7 +2000,10 @@ static ST_retcode cmerge_execute(const char *args)
         } else {
             /* String variable - use arena allocator to reduce malloc overhead */
             dst_var->data.str = (char **)calloc(output_nobs, sizeof(char *));
-            if (!dst_var->data.str) continue;
+            if (!dst_var->data.str) {
+                alloc_failed = 1;
+                continue;
+            }
 
             /* Mark this variable as using the shared arena */
             dst_var->_arena = str_arena;
@@ -1993,29 +2032,69 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
 
-    /* Check for allocation failures during string copying */
-    if (str_arena != NULL && str_arena->alloc_failed) {
-        SF_error("cmerge: memory allocation failed during string copy\n");
-        /* Cleanup */
+    /* Check for allocation failures in the parallel loop */
+    if (alloc_failed) {
+        SF_error("cmerge: memory allocation failed during output assembly\n");
+        /* Cleanup - free any successfully allocated buffers */
         for (size_t vi = 0; vi < n_output_vars; vi++) {
             if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
+                /* Only free strings not owned by arena */
                 for (size_t i = 0; i < output_nobs; i++) {
                     if (output_data.vars[vi].data.str[i] &&
                         !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
                         free(output_data.vars[vi].data.str[i]);
                     }
                 }
+                free(output_data.vars[vi].data.str);
+            } else if (output_data.vars[vi].data.dbl) {
+                cmerge_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
         cmerge_arena_free(str_arena);
         free(output_data.vars);
-        free(output_specs);
-        if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
-        free(all_var_indices);
+        free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
         free(output_var_key_idx);
+        free(output_specs);
+        free(master_orig_rows);
+        if (sort_perm) free(sort_perm);
+        stata_data_free(&master_data);
+        free(all_var_indices);
+        return 920;
+    }
+
+    /* Check for allocation failures during string copying */
+    if (str_arena != NULL && str_arena->alloc_failed) {
+        SF_error("cmerge: memory allocation failed during string copy\n");
+        /* Cleanup - free all allocated resources */
+        for (size_t vi = 0; vi < n_output_vars; vi++) {
+            if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
+                /* Free fallback strings not owned by arena */
+                for (size_t i = 0; i < output_nobs; i++) {
+                    if (output_data.vars[vi].data.str[i] &&
+                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                        free(output_data.vars[vi].data.str[i]);
+                    }
+                }
+                /* Free the string pointer array */
+                free(output_data.vars[vi].data.str);
+            } else if (output_data.vars[vi].data.dbl) {
+                /* Free numeric buffer */
+                cmerge_aligned_free(output_data.vars[vi].data.dbl);
+            }
+        }
+        cmerge_arena_free(str_arena);
+        free(output_data.vars);
+        free(output_var_indices);
+        free(output_var_stata_idx);
+        free(output_var_is_key);
+        free(output_var_key_idx);
+        free(output_specs);
+        free(master_orig_rows);
+        if (sort_perm) free(sort_perm);
+        stata_data_free(&master_data);
+        free(all_var_indices);
         return 920;
     }
 

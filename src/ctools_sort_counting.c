@@ -533,6 +533,11 @@ int ctools_counting_sort_suitable(stata_data *data, int var_idx)
         return 0;  /* Strings not supported */
     }
 
+    /* Check for empty dataset */
+    if (data->nobs == 0) {
+        return 0;  /* No data to sort */
+    }
+
     dbl_data = data->vars[var_idx].data.dbl;
 
     /* Sample to check suitability (check every 1000th element) */

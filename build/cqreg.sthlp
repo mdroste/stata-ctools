@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.0 07Jan2026}{...}
+{* *! version 1.0.0}{...}
 {vieweralsosee "[R] qreg" "help qreg"}{...}
 {vieweralsosee "ctools" "help ctools"}{...}
 {viewerjumpto "Syntax" "cqreg##syntax"}{...}

@@ -13,6 +13,7 @@
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_vce.h"
+#include "../ctools_config.h"
 
 /* Forward declarations from creghdfe_solver */
 extern int cholesky(double *A, int K);
@@ -59,15 +60,26 @@ ST_retcode ivest_init_context(
         return 198;
     }
 
-    /* Allocate matrices */
-    ctx->ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ctx->ZtZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ctx->ZtX = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
+    /* Allocate matrices - with overflow checks */
+    size_t kiv_kiv_size, kiv_ktotal_size, ktotal_ktotal_size, n_ktotal_size;
+    size_t n_kexog_size, n_kendog_size;
+
+    if (ctools_safe_alloc_size((size_t)K_iv, (size_t)K_iv, sizeof(ST_double), &kiv_kiv_size) != 0 ||
+        ctools_safe_alloc_size((size_t)K_iv, (size_t)K_total, sizeof(ST_double), &kiv_ktotal_size) != 0 ||
+        ctools_safe_alloc_size((size_t)K_total, (size_t)K_total, sizeof(ST_double), &ktotal_ktotal_size) != 0 ||
+        ctools_safe_alloc_size((size_t)N, (size_t)K_total, sizeof(ST_double), &n_ktotal_size) != 0) {
+        SF_error("civreghdfe: Matrix size overflow\n");
+        return 920;
+    }
+
+    ctx->ZtZ = (ST_double *)calloc(1, kiv_kiv_size);
+    ctx->ZtZ_inv = (ST_double *)calloc(1, kiv_kiv_size);
+    ctx->ZtX = (ST_double *)calloc(1, kiv_ktotal_size);
     ctx->Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
-    ctx->XtPzX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ctx->XtPzX = (ST_double *)calloc(1, ktotal_ktotal_size);
     ctx->XtPzy = (ST_double *)calloc(K_total, sizeof(ST_double));
-    ctx->temp_kiv_ktotal = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
-    ctx->X_all = (ST_double *)malloc(N * K_total * sizeof(ST_double));
+    ctx->temp_kiv_ktotal = (ST_double *)calloc(1, kiv_ktotal_size);
+    ctx->X_all = (ST_double *)malloc(n_ktotal_size);
 
     if (!ctx->ZtZ || !ctx->ZtZ_inv || !ctx->ZtX || !ctx->Zty ||
         !ctx->XtPzX || !ctx->XtPzy || !ctx->temp_kiv_ktotal || !ctx->X_all) {
@@ -76,12 +88,22 @@ ST_retcode ivest_init_context(
         return 920;
     }
 
-    /* Combine X_exog and X_endog into X_all */
+    /* Combine X_exog and X_endog into X_all - with overflow checks */
     if (K_exog > 0 && X_exog) {
-        memcpy(ctx->X_all, X_exog, N * K_exog * sizeof(ST_double));
+        if (ctools_safe_alloc_size((size_t)N, (size_t)K_exog, sizeof(ST_double), &n_kexog_size) != 0) {
+            SF_error("civreghdfe: Matrix size overflow\n");
+            ivest_free_context(ctx);
+            return 920;
+        }
+        memcpy(ctx->X_all, X_exog, n_kexog_size);
     }
     if (K_endog > 0 && X_endog) {
-        memcpy(ctx->X_all + N * K_exog, X_endog, N * K_endog * sizeof(ST_double));
+        if (ctools_safe_alloc_size((size_t)N, (size_t)K_endog, sizeof(ST_double), &n_kendog_size) != 0) {
+            SF_error("civreghdfe: Matrix size overflow\n");
+            ivest_free_context(ctx);
+            return 920;
+        }
+        memcpy(ctx->X_all + (size_t)N * K_exog, X_endog, n_kendog_size);
     }
 
     /* Compute Z'Z (weighted if needed) */
@@ -92,7 +114,7 @@ ST_retcode ivest_init_context(
     }
 
     /* Invert Z'Z */
-    memcpy(ctx->ZtZ_inv, ctx->ZtZ, K_iv * K_iv * sizeof(ST_double));
+    memcpy(ctx->ZtZ_inv, ctx->ZtZ, kiv_kiv_size);
     if (cholesky(ctx->ZtZ_inv, K_iv) != 0) {
         SF_error("civreghdfe: Z'Z is singular (instruments may be collinear)\n");
         ivest_free_context(ctx);

@@ -107,6 +107,7 @@ typedef struct {
 #define CBINSCATTER_ERR_SYNTAX      198   /* Syntax error */
 #define CBINSCATTER_ERR_SINGULAR    199   /* Singular matrix */
 #define CBINSCATTER_ERR_HDFE        459   /* HDFE solver failed */
+#define CBINSCATTER_ERR_INVALID     2003  /* Invalid parameter value */
 
 /* ========================================================================
  * Helper functions

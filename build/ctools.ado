@@ -1,4 +1,4 @@
-*! version 1.1.0 06Jan2026
+*! version 1.0.0 17Jan2026
 *! ctools: C-accelerated tools for Stata
 *! Main info program for the ctools suite
 
