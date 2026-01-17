@@ -28,14 +28,20 @@ ST_int ctools_find_singletons_factor(
     memset(counts, 0, (max_level + 1) * sizeof(ST_int));
     for (i = 0; i < N; i++) {
         if (mask[i]) {
-            counts[levels[i]]++;
+            ST_int level = levels[i];
+            /* Bounds check to prevent out-of-bounds access */
+            if (level >= 0 && level <= max_level) {
+                counts[level]++;
+            }
         }
     }
 
     /* Second pass: mark singletons */
     for (i = 0; i < N; i++) {
         if (mask[i] == 0) continue;  /* Already dropped */
-        if (counts[levels[i]] == 1) {
+        ST_int level = levels[i];
+        /* Bounds check to prevent out-of-bounds access */
+        if (level >= 0 && level <= max_level && counts[level] == 1) {
             mask[i] = 0;  /* Mark for dropping */
             num_singletons++;
         }

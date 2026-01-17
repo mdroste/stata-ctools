@@ -1490,10 +1490,18 @@ static void *cimport_build_cache_worker(void *arg) {
                         str = cimport_arena_alloc(&cache->string_arena, len + 1);
                         if (str) {
                             memcpy(str, field_buf, len + 1);
+                        } else {
+                            /* Fallback to empty string on allocation failure */
+                            str = "";
                         }
                     } else {
                         str = cimport_arena_alloc(&cache->string_arena, 1);
-                        if (str) str[0] = '\0';
+                        if (str) {
+                            str[0] = '\0';
+                        } else {
+                            /* Fallback to empty string on allocation failure */
+                            str = "";
+                        }
                     }
 
                     cache->string_data[row_idx++] = str;

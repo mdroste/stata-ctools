@@ -320,11 +320,15 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         var->_arena = NULL;
 
         /* Allocate pointer array (cache-line aligned, zero-initialized for safe cleanup) */
-        var->data.str = (char **)aligned_alloc_cacheline(nobs * sizeof(char *));
+        size_t str_array_size;
+        if (ctools_safe_mul_size(nobs, sizeof(char *), &str_array_size) != 0) {
+            return -1;  /* Overflow */
+        }
+        var->data.str = (char **)aligned_alloc_cacheline(str_array_size);
         if (var->data.str == NULL) {
             return -1;
         }
-        memset(var->data.str, 0, nobs * sizeof(char *));
+        memset(var->data.str, 0, str_array_size);
 
         char **str_ptr = var->data.str;
 
@@ -351,7 +355,11 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         /* Numeric variable - use cache-line aligned allocation */
         var->type = STATA_TYPE_DOUBLE;
         var->_arena = NULL;
-        var->data.dbl = (double *)aligned_alloc_cacheline(nobs * sizeof(double));
+        size_t dbl_array_size;
+        if (ctools_safe_mul_size(nobs, sizeof(double), &dbl_array_size) != 0) {
+            return -1;  /* Overflow */
+        }
+        var->data.dbl = (double *)aligned_alloc_cacheline(dbl_array_size);
 
         if (var->data.dbl == NULL) {
             return -1;
@@ -959,14 +967,23 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
     data->nvars = nvars;
 
     /* Allocate array of variables (cache-line aligned) */
-    data->vars = (stata_variable *)aligned_alloc_cacheline(nvars * sizeof(stata_variable));
+    size_t vars_size;
+    if (ctools_safe_mul_size(nvars, sizeof(stata_variable), &vars_size) != 0) {
+        return STATA_ERR_MEMORY;  /* Overflow */
+    }
+    data->vars = (stata_variable *)aligned_alloc_cacheline(vars_size);
     if (data->vars == NULL) {
         return STATA_ERR_MEMORY;
     }
-    memset(data->vars, 0, nvars * sizeof(stata_variable));
+    memset(data->vars, 0, vars_size);
 
     /* Allocate sort order array (cache-line aligned, uses perm_idx_t for 50% memory savings) */
-    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(nobs * sizeof(perm_idx_t));
+    size_t sort_order_size;
+    if (ctools_safe_mul_size(nobs, sizeof(perm_idx_t), &sort_order_size) != 0) {
+        stata_data_free(data);
+        return STATA_ERR_MEMORY;  /* Overflow */
+    }
+    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(sort_order_size);
     if (data->sort_order == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
