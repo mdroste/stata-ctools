@@ -1,6 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     'build/ctools_mac_arm.plugin'
-relocations:
-  - { offset: 0x95D, size: 0x8, addend: 0x0, symName: _.str.5.1429, symObjAddr: 0xBF020, symBinAddr: 0xC05A0, symSize: 0x0 }
-...

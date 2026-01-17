@@ -117,7 +117,7 @@ program define cimport, rclass
         di as text "         File will be read as UTF-8"
     }
 
-    * Parse bindquotes - default is strict
+    * Parse bindquotes - default is loose (matches Stata's import delimited default)
     if "`bindquotes'" != "" {
         if !inlist("`bindquotes'", "strict", "loose") {
             di as error "cimport: bindquotes() must be strict or loose"
@@ -125,7 +125,7 @@ program define cimport, rclass
         }
     }
     else {
-        local bindquotes "strict"
+        local bindquotes "loose"
     }
 
     * Parse rowrange option
@@ -220,6 +220,7 @@ program define cimport, rclass
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
     local opt_stripquotes = cond("`stripquotes'" != "", "stripquotes", "")
     local opt_case = "case=`case'"
+    local opt_bindquotes = "bindquotes=`bindquotes'"
 
     * Record start time
     timer clear 99
@@ -237,7 +238,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport scan `using' `plugin_delim' `opt_noheader' `opt_verbose'"
+        "cimport scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -359,7 +360,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport load `using' `plugin_delim' `opt_noheader' `opt_verbose'"
+        "cimport load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes'"
 
     local load_rc = _rc
     if `load_rc' {
