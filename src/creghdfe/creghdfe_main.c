@@ -1253,51 +1253,60 @@ ST_retcode do_full_regression(int argc, char *argv[])
         num_clusters = cluster_ht->size;
         hash_destroy(cluster_ht);
 
-        /* Check if any FE variable is identical to the cluster variable */
+        /* Check if any FE variable is nested within cluster variable.
+         * FE is nested if each FE level maps to exactly one cluster.
+         * Algorithm: Use array lookup - for each FE level, track which cluster it belongs to.
+         * If we see the same FE level with a different cluster, it's not nested. */
+        ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));
+
         for (g = 0; g < G; g++) {
-            ST_int *fe_raw = (ST_int *)malloc(N * sizeof(ST_int));
-            if (!fe_raw) continue;
+            /* Use the already-remapped FE levels from g_state (0 to num_levels-1) */
+            ST_int *fe_levels_g = g_state->factors[g].levels;
+            ST_int num_fe_levels = g_state->factors[g].num_levels;
 
-            idx = 0;
-            i = 0;
-            ST_int fe_var_idx = K + g + 1;
-            ST_int read_ok = 1;
-            for (obs = in1; obs <= in2; obs++) {
-                if (!SF_ifobs(obs)) continue;
-                if (mask[i]) {
-                    if (SF_vdata(fe_var_idx, obs, &val)) {
-                        read_ok = 0;
-                        break;
-                    }
-                    fe_raw[idx] = (ST_int)val;
-                    idx++;
+            /* Allocate array to track which cluster each FE level belongs to.
+             * Initialize to -1 meaning "no cluster assigned yet". */
+            ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
+            if (fe_to_cluster) {
+                for (i = 0; i < num_fe_levels; i++) {
+                    fe_to_cluster[i] = -1;
                 }
-                i++;
+
+                /* Check if each FE level maps to exactly one cluster */
+                ST_int is_nested = 1;
+                for (idx = 0; idx < N && is_nested; idx++) {
+                    ST_int fe_level = fe_levels_g[idx];
+                    ST_int clust_id = cluster_ids[idx];
+
+                    if (fe_to_cluster[fe_level] == -1) {
+                        /* First time seeing this FE level - record its cluster */
+                        fe_to_cluster[fe_level] = clust_id;
+                    } else if (fe_to_cluster[fe_level] != clust_id) {
+                        /* FE level appears in multiple clusters - not nested */
+                        is_nested = 0;
+                    }
+                }
+
+                if (is_nested) {
+                    fe_nested[g] = 1;
+                    df_a_nested_computed += num_fe_levels;
+                }
+                free(fe_to_cluster);
             }
 
-            if (read_ok) {
-                ST_int all_match = 1;
-                for (idx = 0; idx < N; idx++) {
-                    if (fe_raw[idx] != cluster_raw[idx]) {
-                        all_match = 0;
-                        break;
-                    }
-                }
-
-                if (all_match) {
-                    df_a_nested_computed += g_state->factors[g].num_levels;
-                    if (verbose >= 1) {
-                        sprintf(msg, "{txt}   FE #%d is nested within cluster (df_a_nested += %d)\n",
-                                g + 1, g_state->factors[g].num_levels);
-                        SF_display(msg);
-                    }
-                }
-            }
-
-            free(fe_raw);
+            /* Save per-FE nested status to Stata scalar */
+            sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
+            SF_scal_save(scalar_name, (ST_double)fe_nested[g]);
         }
 
+        free(fe_nested);
         free(cluster_raw);
+    } else {
+        /* No clustering - save 0 for all FE nested status */
+        for (g = 0; g < G; g++) {
+            sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
+            SF_scal_save(scalar_name, 0.0);
+        }
     }
 
     /* Use computed df_a_nested if we found nested FEs, otherwise use passed value */
@@ -1510,12 +1519,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
         SF_scal_save("__creghdfe_N_clust", (ST_double)num_clusters);
     }
 
-    if (verbose >= 2) {
-        sprintf(msg, "{txt}   Timing: read=%.3fs singleton=%.3fs dof=%.3fs partial=%.3fs ols=%.3fs vce=%.3fs total=%.3fs\n",
-                t_read - t_start, t_singleton - t_read, t_dof - t_singleton,
-                t_partial - t_dof, t_ols - t_partial, t_vce - t_ols, t_vce - t_start);
-        SF_display(msg);
-    }
+    /* Save timing results to Stata scalars */
+    SF_scal_save("_creghdfe_time_read", t_read - t_start);
+    SF_scal_save("_creghdfe_time_singleton", t_singleton - t_read);
+    SF_scal_save("_creghdfe_time_dof", t_dof - t_singleton);
+    SF_scal_save("_creghdfe_time_partial", t_partial - t_dof);
+    SF_scal_save("_creghdfe_time_ols", t_ols - t_partial);
+    SF_scal_save("_creghdfe_time_vce", t_vce - t_ols);
+    SF_scal_save("_creghdfe_time_total", t_vce - t_start);
 
     /* ================================================================
      * Cleanup

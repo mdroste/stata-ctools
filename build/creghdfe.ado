@@ -17,8 +17,15 @@
 program define creghdfe, eclass
     version 14.0
 
+    * Start wall clock timer immediately
+    local __do_timing = 0
+    timer clear 98
+    timer on 98
+
     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
         TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name)]
+
+    local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
 
     * Mark sample - include absorb and cluster variables
     marksample touse
@@ -226,28 +233,13 @@ program define creghdfe, eclass
     scalar __creghdfe_has_weights = (`weight_type' > 0)
     scalar __creghdfe_weight_type = `weight_type'
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "creghdfe: C-Accelerated HDFE Regression"
-        di as text "{hline 60}"
-        di as text "Depvar:     " as result "`depvar'"
-        di as text "Indepvars:  " as result "`indepvars'"
-        di as text "Absorb:     " as result "`absorb'"
-        di as text "Obs:        " as result `nobs'
-        di as text "VCE type:   " as result cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster(`clustervar')"))
-        if `weight_type' > 0 {
-            local wtype_str = cond(`weight_type'==1, "aweight", cond(`weight_type'==2, "fweight", "pweight"))
-            di as text "Weights:    " as result "[`wtype_str'=`weight_var']"
-        }
-        di as text "{hline 60}"
-        di ""
-    }
 
-    * Record start time
-    timer clear 99
-    timer on 99
+    * Record setup time
+    timer off 98
+    quietly timer list 98
+    local __time_setup = r(t98)
+    timer clear 98
+    timer on 98
 
     * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [resid_var]
     local plugin_varlist `varlist' `absorb'
@@ -291,9 +283,12 @@ program define creghdfe, eclass
         exit `reg_rc'
     }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
+    * Record plugin call time
+    timer off 98
+    quietly timer list 98
+    local __time_plugin_call = r(t98)
+    timer clear 98
+    timer on 98
 
     * Retrieve results from scalars set by C plugin
     local N_final = __creghdfe_N
@@ -309,40 +304,28 @@ program define creghdfe, eclass
     capture local num_iters = __creghdfe_iterations
     if _rc != 0 local num_iters = 1
 
-    * Get number of levels for each FE (for absorbed DOF table)
+    * Get number of levels and nested status for each FE (computed by C plugin)
+    local df_a_nested = 0
     forval g = 1/`nfe' {
         capture local fe_levels_`g' = __creghdfe_num_levels_`g'
         if _rc != 0 local fe_levels_`g' = .
-        local fe_nested_`g' = 0
-    }
 
-    * Detect FEs nested within cluster variable (for df_a adjustment)
-    local df_a_nested = 0
-    if `vcetype' == 2 & "`clustervar_orig'" != "" {
-        forval g = 1/`nfe' {
-            local fevar : word `g' of `absorb'
-            * Check if this absorbed FE variable is the same as the cluster variable
-            if "`fevar'" == "`clustervar_orig'" {
-                * This FE is identical to the cluster variable - all its levels are nested
-                local df_a_nested = `df_a_nested' + `fe_levels_`g''
-                local fe_nested_`g' = 1
-            }
-            else {
-                * Check if FE is nested within cluster (every FE level maps to exactly one cluster)
-                * This is a more expensive check - need to verify nesting
-                tempvar fe_clust_check
-                quietly egen `fe_clust_check' = tag(`fevar' `clustervar_orig') if `touse'
-                quietly count if `fe_clust_check' == 1 & `touse'
-                local num_fe_clust_pairs = r(N)
-                if `num_fe_clust_pairs' == `fe_levels_`g'' {
-                    * Each FE level maps to exactly one cluster - FE is nested within cluster
-                    local df_a_nested = `df_a_nested' + `fe_levels_`g''
-                    local fe_nested_`g' = 1
-                }
-                drop `fe_clust_check'
-            }
+        * Get nested status from C plugin (replaces slow egen-based check)
+        capture local fe_nested_`g' = __creghdfe_fe_nested_`g'
+        if _rc != 0 local fe_nested_`g' = 0
+
+        * Accumulate df_a_nested
+        if `fe_nested_`g'' == 1 {
+            local df_a_nested = `df_a_nested' + `fe_levels_`g''
         }
     }
+
+    * Record post-processing time (nested FE now computed in C plugin)
+    timer off 98
+    quietly timer list 98
+    local __time_postproc = r(t98)
+    timer clear 98
+    timer on 98
 
     * Adjust df_a for nested FEs
     local df_a_adjusted = `df_a' - `df_a_nested'
@@ -458,6 +441,13 @@ program define creghdfe, eclass
         local F = `Wald'[1,1] / `df_m'
     }
 
+    * Record results building time
+    timer off 98
+    quietly timer list 98
+    local __time_build = r(t98)
+    timer clear 98
+    timer on 98
+
     * Post results
     ereturn post `b' `V', esample(`touse') depname(`depvar') obs(`N_final')
 
@@ -494,6 +484,13 @@ program define creghdfe, eclass
     ereturn local predict "creghdfe_p"
     ereturn local cmd "creghdfe"
     ereturn local cmdline "creghdfe `0'"
+
+    * Record ereturn posting time
+    timer off 98
+    quietly timer list 98
+    local __time_ereturn = r(t98)
+    timer clear 98
+    timer on 98
 
     * Display singleton and convergence messages (before header, like reghdfe)
     if `num_singletons' > 0 {
@@ -585,12 +582,53 @@ program define creghdfe, eclass
     }
     capture matrix drop __creghdfe_V
 
-    * Display timing if requested
-    if "`timeit'" != "" | "`verbose'" != "" {
-        di as text ""
-        di as text "Total time: " as result %9.3f `elapsed' as text " seconds"
+    * Clean up nested FE scalars
+    forval k = 1/20 {
+        capture scalar drop __creghdfe_fe_nested_`k'
     }
 
-    timer clear 99
+    * Record display time and compute total
+    timer off 98
+    quietly timer list 98
+    local __time_display = r(t98)
+    local __time_total = `__time_setup' + `__time_plugin_call' + `__time_postproc' + `__time_build' + `__time_ereturn' + `__time_display'
+
+    * Display timing if requested
+    if `__do_timing' {
+        di as text ""
+        di as text "{hline 55}"
+        di as text "creghdfe timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f _creghdfe_time_read " sec"
+        di as text "    Singleton removal:      " as result %8.4f _creghdfe_time_singleton " sec"
+        di as text "    DOF computation:        " as result %8.4f _creghdfe_time_dof " sec"
+        di as text "    HDFE partial out:       " as result %8.4f _creghdfe_time_partial " sec"
+        di as text "    OLS estimation:         " as result %8.4f _creghdfe_time_ols " sec"
+        di as text "    VCE computation:        " as result %8.4f _creghdfe_time_vce " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _creghdfe_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Setup (parsing, etc):   " as result %8.4f `__time_setup' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f (`__time_plugin_call' - _creghdfe_time_total) " sec"
+        di as text "    Post-processing:        " as result %8.4f `__time_postproc' " sec"
+        di as text "    Results building:       " as result %8.4f `__time_build' " sec"
+        di as text "    ereturn posting:        " as result %8.4f `__time_ereturn' " sec"
+        di as text "    Display output:         " as result %8.4f `__time_display' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_setup' + (`__time_plugin_call' - _creghdfe_time_total) + `__time_postproc' + `__time_build' + `__time_ereturn' + `__time_display'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
+
+        * Clean up timing scalars
+        capture scalar drop _creghdfe_time_read _creghdfe_time_singleton
+        capture scalar drop _creghdfe_time_dof _creghdfe_time_partial
+        capture scalar drop _creghdfe_time_ols _creghdfe_time_vce _creghdfe_time_total
+    }
+
+    timer clear 98
 
 end
