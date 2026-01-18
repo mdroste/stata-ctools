@@ -302,21 +302,27 @@ static ST_retcode load_data(
     }
 
     /* Read absorb variables (as integers) */
+    /* NOTE: Check for Stata missings before casting - missings are large positive doubles
+       that would become huge ints and cause OOM in init_factor allocations */
     if (fe_vars) {
         for (j = 0; j < config->num_absorb; j++) {
             for (i = 0; i < N; i++) {
                 SF_vdata(var_idx, i + in1, &val);
-                fe_vars[j * N + i] = (ST_int)val;
+                /* Set missings to 0 so they're filtered by the <= 0 check later */
+                fe_vars[j * N + i] = SF_is_missing(val) ? 0 : (ST_int)val;
             }
             var_idx++;
         }
     }
 
     /* Read by variable */
+    /* NOTE: Check for Stata missings before casting - missings are large positive doubles
+       that would become huge ints and explode num_groups calculation */
     if (by_groups) {
         for (i = 0; i < N; i++) {
             SF_vdata(var_idx, i + in1, &val);
-            by_groups[i] = (ST_int)val;
+            /* Set missings to -1 so they're filtered by the < 0 check later */
+            by_groups[i] = SF_is_missing(val) ? -1 : (ST_int)val;
         }
         var_idx++;
     }

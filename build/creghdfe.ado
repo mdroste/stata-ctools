@@ -518,9 +518,9 @@ program define creghdfe, eclass
     * Display absorbed degrees of freedom table
     di as text ""
     di as text "Absorbed degrees of freedom:"
-    di as text "{hline 53}+"
-    di as text " Absorbed FE | Categories  - Redundant  = Num. Coefs |"
-    di as text "{hline 13}+{hline 39}|"
+    di as text "{hline 13}{c TT}{hline 39}{c TRC}"
+    di as text " Absorbed FE {c |} Categories  - Redundant  = Num. Coefs {c |}"
+    di as text "{hline 13}{c +}{hline 39}{c RT}"
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`nfe' {
@@ -557,9 +557,9 @@ program define creghdfe, eclass
         }
         local coefs = `cats' - `redundant'
         local total_coefs = `total_coefs' + `coefs'
-        di as text %12s abbrev("`fevar'", 12) " |" as result %10.0f `cats' as text "  " as result %10.0f `redundant' as text "  " as result %10.0f `coefs' as text "    `nested_marker'|"
+        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "   `nested_marker'{c |}"
     }
-    di as text "{hline 53}+"
+    di as text "{hline 13}{c BT}{hline 39}{c BRC}"
     if `has_nested' {
         di as text "* = FE nested within cluster; treated as redundant for DoF computation"
     }

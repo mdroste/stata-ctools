@@ -381,13 +381,31 @@ ST_retcode compute_bins_single_group(
             goto cleanup;
         }
 
-        /* Pass 1: Find min/max */
-        ST_double x_min = x[0], x_max = x[0];
-        for (i = 1; i < N; i++) {
+        /* Pass 1: Find min/max - must skip missing values for initialization */
+        ST_double x_min = 0, x_max = 0;
+        int found_valid = 0;
+        for (i = 0; i < N; i++) {
             if (!IS_MISSING(x[i])) {
-                if (x[i] < x_min) x_min = x[i];
-                if (x[i] > x_max) x_max = x[i];
+                if (!found_valid) {
+                    x_min = x[i];
+                    x_max = x[i];
+                    found_valid = 1;
+                } else {
+                    if (x[i] < x_min) x_min = x[i];
+                    if (x[i] > x_max) x_max = x[i];
+                }
             }
+        }
+
+        /* Handle all-missing case */
+        if (!found_valid) {
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = 0;
+            }
+            free(histogram);
+            free(cum_hist);
+            free(bucket_to_bin);
+            goto compute_stats;
         }
 
         ST_double range = x_max - x_min;
@@ -490,13 +508,31 @@ ST_retcode compute_bins_single_group(
             goto cleanup;
         }
 
-        /* Pass 1: Find min/max */
-        ST_double x_min = x[0], x_max = x[0];
-        for (i = 1; i < N; i++) {
+        /* Pass 1: Find min/max - must skip missing values for initialization */
+        ST_double x_min = 0, x_max = 0;
+        int found_valid = 0;
+        for (i = 0; i < N; i++) {
             if (!IS_MISSING(x[i])) {
-                if (x[i] < x_min) x_min = x[i];
-                if (x[i] > x_max) x_max = x[i];
+                if (!found_valid) {
+                    x_min = x[i];
+                    x_max = x[i];
+                    found_valid = 1;
+                } else {
+                    if (x[i] < x_min) x_min = x[i];
+                    if (x[i] > x_max) x_max = x[i];
+                }
             }
+        }
+
+        /* Handle all-missing case */
+        if (!found_valid) {
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = 0;
+            }
+            free(bucket_weights);
+            free(cum_weights);
+            free(bucket_to_bin);
+            goto compute_stats;
         }
 
         ST_double range = x_max - x_min;

@@ -284,8 +284,32 @@ static ST_retcode do_iv_regression(void)
     ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
     ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
     ST_int **fe_levels_c = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
-    for (ST_int g = 0; g < G; g++) {
-        fe_levels_c[g] = (ST_int *)malloc((size_t)N_valid * sizeof(ST_int));
+    int fe_c_alloc_failed = 0;
+    if (fe_levels_c) {
+        for (ST_int g = 0; g < G; g++) {
+            fe_levels_c[g] = (ST_int *)malloc((size_t)N_valid * sizeof(ST_int));
+            if (!fe_levels_c[g]) fe_c_alloc_failed = 1;
+        }
+    } else {
+        fe_c_alloc_failed = 1;
+    }
+
+    /* Check all allocations */
+    if (!y_c || !Z_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c) ||
+        (has_weights && !weights_c) || (has_cluster && !cluster_ids_c) ||
+        (has_cluster2 && !cluster2_ids_c) || fe_c_alloc_failed) {
+        SF_error("civreghdfe: Memory allocation failed for compacted arrays\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        if (fe_levels_c) {
+            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            free(fe_levels_c);
+        }
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 920;
     }
 
     ST_int idx = 0;
@@ -322,7 +346,15 @@ static ST_retcode do_iv_regression(void)
     ST_int N = N_valid;
 
     /* Singleton detection using shared utility from ctools_hdfe_utils */
-    ST_int *singleton_mask = (ST_int *)malloc(N * sizeof(ST_int));
+    ST_int *singleton_mask = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    if (!singleton_mask) {
+        SF_error("civreghdfe: Memory allocation failed for singleton mask\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 920;
+    }
     ST_int num_singletons_total = ctools_remove_singletons(
         fe_levels_c, G, N, singleton_mask, 100, verbose
     );
@@ -699,6 +731,34 @@ static ST_retcode do_iv_regression(void)
 
     /* Combine all data into one array for parallel processing */
     ST_double *all_data = (ST_double *)malloc((size_t)N * total_cols * sizeof(ST_double));
+    if (!all_data) {
+        SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        /* Cleanup state */
+        for (ST_int t = 0; t < num_threads; t++) {
+            free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
+            free(state->thread_cg_v[t]); free(state->thread_proj[t]);
+            for (ST_int fg = 0; fg < G; fg++) {
+                if (state->thread_fe_means[t * G + fg])
+                    free(state->thread_fe_means[t * G + fg]);
+            }
+        }
+        free(state->thread_cg_r); free(state->thread_cg_u);
+        free(state->thread_cg_v); free(state->thread_proj);
+        free(state->thread_fe_means);
+        for (ST_int fg = 0; fg < G; fg++) {
+            free(state->factors[fg].counts);
+            if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+            free(state->factors[fg].means);
+        }
+        free(state->factors);
+        free(state);
+        g_state = NULL;
+        return 920;
+    }
 
     /* Copy y */
     memcpy(all_data, y_c, N * sizeof(ST_double));
@@ -773,8 +833,8 @@ static ST_retcode do_iv_regression(void)
             free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-            free(fe_levels_c); free(singleton_mask);
-            /* Cleanup state */
+            free(fe_levels_c);
+            /* Cleanup state (singleton_mask already freed at line 375) */
             for (ST_int t = 0; t < num_threads; t++) {
                 free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
                 free(state->thread_cg_v[t]); free(state->thread_proj[t]);
@@ -806,8 +866,8 @@ static ST_retcode do_iv_regression(void)
             free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-            free(fe_levels_c); free(singleton_mask);
-            /* Cleanup state */
+            free(fe_levels_c);
+            /* Cleanup state (singleton_mask already freed at line 375) */
             for (ST_int t = 0; t < num_threads; t++) {
                 free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
                 free(state->thread_cg_v[t]); free(state->thread_proj[t]);
