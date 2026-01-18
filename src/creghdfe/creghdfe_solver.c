@@ -128,10 +128,7 @@ void project_one_fe_csr(const ST_double * RESTRICT y,
     (void)N;  /* N is implicit in offsets */
 
     if (weights == NULL) {
-        /* Unweighted case - parallelize over levels for large FEs */
-        #ifdef _OPENMP
-        #pragma omp parallel for if(num_levels > 1000) schedule(static)
-        #endif
+        /* Unweighted case - NO nested parallelism (outer CG loop is parallel) */
         for (ST_int level = 0; level < num_levels; level++) {
             ST_double sum = 0.0;
             const ST_int start = offsets[level];
@@ -142,36 +139,29 @@ void project_one_fe_csr(const ST_double * RESTRICT y,
                 sum += y[indices[pos]];
             }
 
-            /* Compute mean */
+            /* Compute mean and broadcast */
             ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
             means[level] = mean;
 
-            /* Broadcast mean to proj array */
             for (ST_int pos = start; pos < end; pos++) {
                 proj[indices[pos]] = mean;
             }
         }
     } else {
-        /* Weighted case */
-        #ifdef _OPENMP
-        #pragma omp parallel for if(num_levels > 1000) schedule(static)
-        #endif
+        /* Weighted case - NO nested parallelism */
         for (ST_int level = 0; level < num_levels; level++) {
             ST_double sum = 0.0;
             const ST_int start = offsets[level];
             const ST_int end = offsets[level + 1];
 
-            /* Accumulate weighted y values for this level */
             for (ST_int pos = start; pos < end; pos++) {
                 ST_int i = indices[pos];
                 sum += y[i] * weights[i];
             }
 
-            /* Compute mean */
             ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
             means[level] = mean;
 
-            /* Broadcast mean to proj array */
             for (ST_int pos = start; pos < end; pos++) {
                 proj[indices[pos]] = mean;
             }
@@ -249,6 +239,50 @@ void project_one_fe_threaded(const ST_double * RESTRICT y,
  * Symmetric Kaczmarz transformation with thread-local buffers
  * ======================================================================== */
 
+/*
+ * Fused project-and-subtract: computes means and subtracts in-place.
+ * Eliminates the intermediate proj array, reducing memory traffic.
+ */
+static void project_and_subtract_fe(ST_double * RESTRICT ans,
+                                    const FE_Factor * RESTRICT f,
+                                    ST_int N,
+                                    const ST_double * RESTRICT weights,
+                                    ST_double * RESTRICT means)
+{
+    ST_int i, level;
+    const ST_int num_levels = f->num_levels;
+    const ST_int * RESTRICT levels = f->levels;
+    /* Use precomputed inverse counts to replace division with multiplication */
+    const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
+        ? f->inv_weighted_counts : f->inv_counts;
+
+    memset(means, 0, num_levels * sizeof(ST_double));
+
+    if (weights == NULL) {
+        /* Unweighted: accumulate ans values */
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += ans[i];
+        }
+    } else {
+        /* Weighted: accumulate ans * weight values */
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += ans[i] * weights[i];
+        }
+    }
+
+    /* Multiply by inverse counts (faster than division) */
+    #pragma omp simd
+    for (level = 0; level < num_levels; level++) {
+        means[level] *= inv_counts[level];
+    }
+
+    /* Subtract means in-place (fused with gather) */
+    #pragma omp simd
+    for (i = 0; i < N; i++) {
+        ans[i] -= means[levels[i] - 1];
+    }
+}
+
 void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
                                      const ST_double * RESTRICT y,
                                      ST_double * RESTRICT ans,
@@ -260,38 +294,20 @@ void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
     const ST_int N = S->N;
     const ST_int G = S->G;
 
+    (void)proj;  /* Not used in fused version */
+
     memcpy(ans, y, N * sizeof(ST_double));
 
-    /* Forward sweep - use CSR projection when available */
+    /* Forward sweep - fused project-and-subtract */
     for (g = 0; g < G; g++) {
-        const FE_Factor *f = &S->factors[g];
-        if (f->csr_initialized) {
-            project_one_fe_csr(ans, f, N, S->weights, proj,
-                               fe_means[thread_id * G + g]);
-        } else {
-            project_one_fe_threaded(ans, f, N, S->weights, proj,
-                                    fe_means[thread_id * G + g]);
-        }
-        #pragma omp simd
-        for (i = 0; i < N; i++) {
-            ans[i] -= proj[i];
-        }
+        project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
+                                fe_means[thread_id * G + g]);
     }
 
-    /* Backward sweep - use CSR projection when available */
+    /* Backward sweep - fused project-and-subtract */
     for (g = G - 2; g >= 0; g--) {
-        const FE_Factor *f = &S->factors[g];
-        if (f->csr_initialized) {
-            project_one_fe_csr(ans, f, N, S->weights, proj,
-                               fe_means[thread_id * G + g]);
-        } else {
-            project_one_fe_threaded(ans, f, N, S->weights, proj,
-                                    fe_means[thread_id * G + g]);
-        }
-        #pragma omp simd
-        for (i = 0; i < N; i++) {
-            ans[i] -= proj[i];
-        }
+        project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
+                                fe_means[thread_id * G + g]);
     }
 
     /* Return projection: y - ans */

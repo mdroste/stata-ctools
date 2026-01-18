@@ -692,17 +692,31 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
         free(remap);
 
-        /* Build CSR format for fast projection */
+        /* Compute inverse counts for fast division in projection */
+        ST_int num_lev = g_state->factors[g].num_levels;
+        g_state->factors[g].inv_counts = (ST_double *)malloc(num_lev * sizeof(ST_double));
+        if (g_state->factors[g].inv_counts) {
+            for (ST_int lev = 0; lev < num_lev; lev++) {
+                g_state->factors[g].inv_counts[lev] =
+                    (g_state->factors[g].counts[lev] > 0) ? 1.0 / g_state->factors[g].counts[lev] : 0.0;
+            }
+        }
+        if (has_weights && g_state->factors[g].weighted_counts) {
+            g_state->factors[g].inv_weighted_counts = (ST_double *)malloc(num_lev * sizeof(ST_double));
+            if (g_state->factors[g].inv_weighted_counts) {
+                for (ST_int lev = 0; lev < num_lev; lev++) {
+                    g_state->factors[g].inv_weighted_counts[lev] =
+                        (g_state->factors[g].weighted_counts[lev] > 0) ? 1.0 / g_state->factors[g].weighted_counts[lev] : 0.0;
+                }
+            }
+        } else {
+            g_state->factors[g].inv_weighted_counts = NULL;
+        }
+
+        /* Initialize CSR fields (not used currently) */
         g_state->factors[g].csr_offsets = NULL;
         g_state->factors[g].csr_indices = NULL;
         g_state->factors[g].csr_initialized = 0;
-        if (build_csr_format(&g_state->factors[g], N) != 0) {
-            /* CSR build failed - continue without CSR acceleration */
-            if (verbose >= 2) {
-                sprintf(msg, "{txt}   Warning: CSR build failed for FE %d, using fallback\n", g + 1);
-                SF_display(msg);
-            }
-        }
     }
 
     /* Allocate thread buffers */

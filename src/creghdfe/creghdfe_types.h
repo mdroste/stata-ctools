@@ -45,7 +45,9 @@ typedef struct {
     ST_int num_slopes;
     ST_int *levels;
     ST_double *counts;           /* Unweighted counts per level */
+    ST_double *inv_counts;       /* Precomputed 1/counts for fast division */
     ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
+    ST_double *inv_weighted_counts; /* Precomputed 1/weighted_counts */
     ST_double *means;
     /* CSR format for fast projection - observations sorted by level */
     ST_int *csr_offsets;         /* offsets[L+1]: start of each level's observations */
