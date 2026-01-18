@@ -337,7 +337,7 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
         levels_out[pairs[i].index] = current_level;
     }
 
-    *num_levels = current_level;
+    *num_levels = (ST_int)current_level;
     free(pairs);
     return 0;
 }

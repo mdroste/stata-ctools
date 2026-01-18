@@ -24,35 +24,16 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
                                ST_int N);
 
 /* ========================================================================
- * CSR Format for Fast Projection
+ * Sorted Indices for Fast Projection
  * ======================================================================== */
 
-/* Build CSR (Compressed Sparse Row) format from levels array.
- * This enables cache-friendly projection by grouping observations by level.
+/* Build sorted observation indices using counting sort on levels.
+ * This enables cache-friendly projection by accessing means sequentially.
  * Returns 0 on success, non-zero on error. */
-int build_csr_format(FE_Factor *f, ST_int N);
+int build_sorted_indices(FE_Factor *f, ST_int N);
 
-/* Free CSR format data */
-void free_csr_format(FE_Factor *f);
-
-/* ========================================================================
- * Fixed Effect Projection
- * ======================================================================== */
-
-void project_one_fe_threaded(const ST_double * RESTRICT y,
-                             const FE_Factor * RESTRICT f,
-                             ST_int N,
-                             const ST_double * RESTRICT weights,
-                             ST_double * RESTRICT proj,
-                             ST_double * RESTRICT means);
-
-/* CSR-accelerated projection - faster for large FEs */
-void project_one_fe_csr(const ST_double * RESTRICT y,
-                        const FE_Factor * RESTRICT f,
-                        ST_int N,
-                        const ST_double * RESTRICT weights,
-                        ST_double * RESTRICT proj,
-                        ST_double * RESTRICT means);
+/* Free sorted indices data */
+void free_sorted_indices(FE_Factor *f);
 
 /* ========================================================================
  * Symmetric Kaczmarz Transformation
@@ -61,7 +42,6 @@ void project_one_fe_csr(const ST_double * RESTRICT y,
 void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
                                      const ST_double * RESTRICT y,
                                      ST_double * RESTRICT ans,
-                                     ST_double * RESTRICT proj,
                                      ST_double ** RESTRICT fe_means,
                                      ST_int thread_id);
 

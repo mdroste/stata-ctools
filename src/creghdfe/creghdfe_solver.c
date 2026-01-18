@@ -28,144 +28,83 @@ ST_double dot_product(const ST_double * RESTRICT x,
  * we can iterate over levels and access contiguous observation indices.
  * ======================================================================== */
 
-int build_csr_format(FE_Factor *f, ST_int N)
+/*
+ * Build sorted observation indices using radix LSD sort on levels.
+ * This enables cache-friendly projection by accessing means sequentially.
+ *
+ * After sorting:
+ * - sorted_indices[i] = original observation index
+ * - sorted_levels[i] = level of that observation (for sequential means access)
+ *
+ * Observations with the same level are grouped together.
+ */
+int build_sorted_indices(FE_Factor *f, ST_int N)
 {
     if (!f || !f->levels || f->num_levels <= 0) return -1;
 
-    const ST_int num_levels = f->num_levels;
     const ST_int * RESTRICT levels = f->levels;
+    const ST_int num_levels = f->num_levels;
 
-    /* Allocate offsets and indices */
-    f->csr_offsets = (ST_int *)malloc((num_levels + 1) * sizeof(ST_int));
-    f->csr_indices = (ST_int *)malloc(N * sizeof(ST_int));
+    /* Allocate output arrays */
+    f->sorted_indices = (ST_int *)malloc(N * sizeof(ST_int));
+    f->sorted_levels = (ST_int *)malloc(N * sizeof(ST_int));
 
-    if (!f->csr_offsets || !f->csr_indices) {
-        if (f->csr_offsets) { free(f->csr_offsets); f->csr_offsets = NULL; }
-        if (f->csr_indices) { free(f->csr_indices); f->csr_indices = NULL; }
-        f->csr_initialized = 0;
+    if (!f->sorted_indices || !f->sorted_levels) {
+        if (f->sorted_indices) { free(f->sorted_indices); f->sorted_indices = NULL; }
+        if (f->sorted_levels) { free(f->sorted_levels); f->sorted_levels = NULL; }
+        f->sorted_initialized = 0;
         return -1;
     }
 
-    /* Count observations per level (use existing counts as double, convert to int) */
+    /* Use counting sort since levels are in range [1, num_levels] */
+    /* This is O(N + L) which is faster than radix sort for small L */
     ST_int *counts = (ST_int *)calloc(num_levels, sizeof(ST_int));
-    if (!counts) {
-        free(f->csr_offsets); f->csr_offsets = NULL;
-        free(f->csr_indices); f->csr_indices = NULL;
-        f->csr_initialized = 0;
+    ST_int *offsets = (ST_int *)malloc((num_levels + 1) * sizeof(ST_int));
+
+    if (!counts || !offsets) {
+        if (counts) free(counts);
+        if (offsets) free(offsets);
+        free(f->sorted_indices); f->sorted_indices = NULL;
+        free(f->sorted_levels); f->sorted_levels = NULL;
+        f->sorted_initialized = 0;
         return -1;
     }
 
     /* Count observations per level */
     for (ST_int i = 0; i < N; i++) {
-        counts[levels[i] - 1]++;  /* levels are 1-indexed */
+        counts[levels[i] - 1]++;
     }
 
-    /* Compute prefix sums for offsets */
-    f->csr_offsets[0] = 0;
+    /* Compute prefix sums for starting positions */
+    offsets[0] = 0;
     for (ST_int l = 0; l < num_levels; l++) {
-        f->csr_offsets[l + 1] = f->csr_offsets[l] + counts[l];
+        offsets[l + 1] = offsets[l] + counts[l];
     }
 
     /* Reset counts to use as insertion pointers */
     memset(counts, 0, num_levels * sizeof(ST_int));
 
-    /* Fill indices array: group observation indices by level */
+    /* Fill sorted arrays */
     for (ST_int i = 0; i < N; i++) {
         ST_int l = levels[i] - 1;  /* 0-indexed level */
-        ST_int pos = f->csr_offsets[l] + counts[l];
-        f->csr_indices[pos] = i;
+        ST_int pos = offsets[l] + counts[l];
+        f->sorted_indices[pos] = i;
+        f->sorted_levels[pos] = levels[i];  /* Keep 1-indexed for compatibility */
         counts[l]++;
     }
 
     free(counts);
-    f->csr_initialized = 1;
+    free(offsets);
+    f->sorted_initialized = 1;
     return 0;
 }
 
-void free_csr_format(FE_Factor *f)
+void free_sorted_indices(FE_Factor *f)
 {
     if (f) {
-        if (f->csr_offsets) { free(f->csr_offsets); f->csr_offsets = NULL; }
-        if (f->csr_indices) { free(f->csr_indices); f->csr_indices = NULL; }
-        f->csr_initialized = 0;
-    }
-}
-
-/* ========================================================================
- * CSR-accelerated FE projection
- *
- * Instead of:
- *   for i in 0..N:
- *     means[levels[i]-1] += y[i]  // scatter (poor locality)
- *     proj[i] = means[levels[i]-1]  // gather (poor locality)
- *
- * We do:
- *   for level in 0..num_levels:
- *     for pos in offsets[level]..offsets[level+1]:
- *       means[level] += y[indices[pos]]  // still gather, but we cache level
- *     for pos in offsets[level]..offsets[level+1]:
- *       proj[indices[pos]] = means[level]  // scatter with cached mean
- *
- * Benefits:
- * - Level mean is in register during inner loop
- * - Access patterns are more predictable for prefetcher
- * - Can parallelize over levels if num_levels is large
- * ======================================================================== */
-
-void project_one_fe_csr(const ST_double * RESTRICT y,
-                        const FE_Factor * RESTRICT f,
-                        ST_int N,
-                        const ST_double * RESTRICT weights,
-                        ST_double * RESTRICT proj,
-                        ST_double * RESTRICT means)
-{
-    const ST_int num_levels = f->num_levels;
-    const ST_int * RESTRICT offsets = f->csr_offsets;
-    const ST_int * RESTRICT indices = f->csr_indices;
-    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
-        ? f->weighted_counts : f->counts;
-
-    (void)N;  /* N is implicit in offsets */
-
-    if (weights == NULL) {
-        /* Unweighted case - NO nested parallelism (outer CG loop is parallel) */
-        for (ST_int level = 0; level < num_levels; level++) {
-            ST_double sum = 0.0;
-            const ST_int start = offsets[level];
-            const ST_int end = offsets[level + 1];
-
-            /* Accumulate y values for this level */
-            for (ST_int pos = start; pos < end; pos++) {
-                sum += y[indices[pos]];
-            }
-
-            /* Compute mean and broadcast */
-            ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
-            means[level] = mean;
-
-            for (ST_int pos = start; pos < end; pos++) {
-                proj[indices[pos]] = mean;
-            }
-        }
-    } else {
-        /* Weighted case - NO nested parallelism */
-        for (ST_int level = 0; level < num_levels; level++) {
-            ST_double sum = 0.0;
-            const ST_int start = offsets[level];
-            const ST_int end = offsets[level + 1];
-
-            for (ST_int pos = start; pos < end; pos++) {
-                ST_int i = indices[pos];
-                sum += y[i] * weights[i];
-            }
-
-            ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
-            means[level] = mean;
-
-            for (ST_int pos = start; pos < end; pos++) {
-                proj[indices[pos]] = mean;
-            }
-        }
+        if (f->sorted_indices) { free(f->sorted_indices); f->sorted_indices = NULL; }
+        if (f->sorted_levels) { free(f->sorted_levels); f->sorted_levels = NULL; }
+        f->sorted_initialized = 0;
     }
 }
 
@@ -189,59 +128,11 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
 }
 
 /* ========================================================================
- * Project onto a single fixed effect using thread-local means buffer
- * ======================================================================== */
-
-void project_one_fe_threaded(const ST_double * RESTRICT y,
-                             const FE_Factor * RESTRICT f,
-                             ST_int N,
-                             const ST_double * RESTRICT weights,
-                             ST_double * RESTRICT proj,
-                             ST_double * RESTRICT means)
-{
-    ST_int i, level;
-    const ST_int num_levels = f->num_levels;
-    const ST_int * RESTRICT levels = f->levels;
-
-    /* Use weighted_counts when weights are present, otherwise use unweighted counts */
-    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
-        ? f->weighted_counts : f->counts;
-
-    memset(means, 0, num_levels * sizeof(ST_double));
-
-    if (weights == NULL) {
-        /* Unweighted: accumulate y values */
-        for (i = 0; i < N; i++) {
-            means[levels[i] - 1] += y[i];
-        }
-    } else {
-        /* Weighted: accumulate y * weight values */
-        for (i = 0; i < N; i++) {
-            means[levels[i] - 1] += y[i] * weights[i];
-        }
-    }
-
-    /* Divide by counts (weighted or unweighted as appropriate) */
-    #pragma omp simd
-    for (level = 0; level < num_levels; level++) {
-        if (counts[level] > 0) {
-            means[level] /= counts[level];
-        }
-    }
-
-    /* Broadcast means to projection (gather operation) */
-    for (i = 0; i < N; i++) {
-        proj[i] = means[levels[i] - 1];
-    }
-}
-
-/* ========================================================================
  * Symmetric Kaczmarz transformation with thread-local buffers
  * ======================================================================== */
 
 /*
  * Fused project-and-subtract: computes means and subtracts in-place.
- * Eliminates the intermediate proj array, reducing memory traffic.
  */
 static void project_and_subtract_fe(ST_double * RESTRICT ans,
                                     const FE_Factor * RESTRICT f,
@@ -252,32 +143,26 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
     ST_int i, level;
     const ST_int num_levels = f->num_levels;
     const ST_int * RESTRICT levels = f->levels;
-    /* Use precomputed inverse counts to replace division with multiplication */
     const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
         ? f->inv_weighted_counts : f->inv_counts;
 
     memset(means, 0, num_levels * sizeof(ST_double));
 
     if (weights == NULL) {
-        /* Unweighted: accumulate ans values */
         for (i = 0; i < N; i++) {
             means[levels[i] - 1] += ans[i];
         }
     } else {
-        /* Weighted: accumulate ans * weight values */
         for (i = 0; i < N; i++) {
             means[levels[i] - 1] += ans[i] * weights[i];
         }
     }
 
-    /* Multiply by inverse counts (faster than division) */
     #pragma omp simd
     for (level = 0; level < num_levels; level++) {
         means[level] *= inv_counts[level];
     }
 
-    /* Subtract means in-place (fused with gather) */
-    #pragma omp simd
     for (i = 0; i < N; i++) {
         ans[i] -= means[levels[i] - 1];
     }
@@ -286,7 +171,6 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
 void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
                                      const ST_double * RESTRICT y,
                                      ST_double * RESTRICT ans,
-                                     ST_double * RESTRICT proj,
                                      ST_double ** RESTRICT fe_means,
                                      ST_int thread_id)
 {
@@ -294,17 +178,15 @@ void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
     const ST_int N = S->N;
     const ST_int G = S->G;
 
-    (void)proj;  /* Not used in fused version */
-
     memcpy(ans, y, N * sizeof(ST_double));
 
-    /* Forward sweep - fused project-and-subtract */
+    /* Forward sweep */
     for (g = 0; g < G; g++) {
         project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
                                 fe_means[thread_id * G + g]);
     }
 
-    /* Backward sweep - fused project-and-subtract */
+    /* Backward sweep */
     for (g = G - 2; g >= 0; g--) {
         project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
                                 fe_means[thread_id * G + g]);
@@ -327,23 +209,21 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
     ST_double * RESTRICT r = S->thread_cg_r[thread_id];
     ST_double * RESTRICT u = S->thread_cg_u[thread_id];
     ST_double * RESTRICT v = S->thread_cg_v[thread_id];
-    ST_double * RESTRICT proj = S->thread_proj[thread_id];
     ST_double ssr, ssr_old, alpha, beta;
     ST_double improvement_potential, recent_ssr, update_error, uv;
     const ST_int N = S->N;
     const ST_double * RESTRICT weights = S->weights;
     const ST_int has_weights = S->has_weights;
 
-    /* Use weighted dot products when weights are present */
     if (has_weights && weights != NULL) {
         improvement_potential = weighted_dot_product(y, y, weights, N);
 
-        transform_sym_kaczmarz_threaded(S, y, r, proj, S->thread_fe_means, thread_id);
+        transform_sym_kaczmarz_threaded(S, y, r, S->thread_fe_means, thread_id);
         ssr = weighted_dot_product(r, r, weights, N);
         memcpy(u, r, N * sizeof(ST_double));
 
         for (iter = 1; iter <= S->maxiter; iter++) {
-            transform_sym_kaczmarz_threaded(S, u, v, proj, S->thread_fe_means, thread_id);
+            transform_sym_kaczmarz_threaded(S, u, v, S->thread_fe_means, thread_id);
 
             uv = weighted_dot_product(u, v, weights, N);
             alpha = (fabs(uv) < 1e-30) ? 0.0 : ssr / uv;
@@ -351,7 +231,6 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            /* Fused update loop with SIMD */
             #pragma omp simd
             for (i = 0; i < N; i++) {
                 y[i] -= alpha * u[i];
@@ -373,15 +252,14 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             }
         }
     } else {
-        /* Unweighted case - original code */
         improvement_potential = dot_product(y, y, N);
 
-        transform_sym_kaczmarz_threaded(S, y, r, proj, S->thread_fe_means, thread_id);
+        transform_sym_kaczmarz_threaded(S, y, r, S->thread_fe_means, thread_id);
         ssr = dot_product(r, r, N);
         memcpy(u, r, N * sizeof(ST_double));
 
         for (iter = 1; iter <= S->maxiter; iter++) {
-            transform_sym_kaczmarz_threaded(S, u, v, proj, S->thread_fe_means, thread_id);
+            transform_sym_kaczmarz_threaded(S, u, v, S->thread_fe_means, thread_id);
 
             uv = dot_product(u, v, N);
             alpha = (fabs(uv) < 1e-30) ? 0.0 : ssr / uv;
@@ -389,7 +267,6 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            /* Fused update loop with SIMD */
             #pragma omp simd
             for (i = 0; i < N; i++) {
                 y[i] -= alpha * u[i];

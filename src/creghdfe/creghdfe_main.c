@@ -467,11 +467,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
     N = N_orig;
 
     if (drop_singletons) {
-        /* Build array of level pointers for shared utility */
+        /* Build array of level pointers for shared utility (cast to ST_int* for API compatibility) */
         ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
         if (fe_levels) {
             for (g = 0; g < G; g++) {
-                fe_levels[g] = factors[g].levels;
+                fe_levels[g] = (ST_int *)factors[g].levels;
             }
 
             num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask, max_iter_singleton, (verbose >= 1));
@@ -633,7 +633,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         g_state->factors[g].has_intercept = 1;
         g_state->factors[g].levels = (ST_int *)malloc(N * sizeof(ST_int));
         g_state->factors[g].counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
-        g_state->factors[g].means = (ST_double *)malloc(factors[g].num_levels * sizeof(ST_double));
+        g_state->factors[g].means = NULL;  /* Not used in creghdfe - CG solver uses thread_fe_means */
         g_state->factors[g].weighted_counts = NULL;
 
         /* Allocate weighted_counts if using weights */
@@ -641,7 +641,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
             g_state->factors[g].weighted_counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
         }
 
-        if (!g_state->factors[g].levels || !g_state->factors[g].counts || !g_state->factors[g].means ||
+        if (!g_state->factors[g].levels || !g_state->factors[g].counts ||
             (has_weights && !g_state->factors[g].weighted_counts)) {
             cleanup_state();
             for (i = 0; i < G; i++) {
@@ -713,22 +713,22 @@ ST_retcode do_full_regression(int argc, char *argv[])
             g_state->factors[g].inv_weighted_counts = NULL;
         }
 
-        /* Initialize CSR fields (not used currently) */
-        g_state->factors[g].csr_offsets = NULL;
-        g_state->factors[g].csr_indices = NULL;
-        g_state->factors[g].csr_initialized = 0;
+        /* Initialize sorted indices fields (not used - sequential ans access is better) */
+        g_state->factors[g].sorted_indices = NULL;
+        g_state->factors[g].sorted_levels = NULL;
+        g_state->factors[g].sorted_initialized = 0;
     }
 
     /* Allocate thread buffers */
     g_state->thread_cg_r = (ST_double **)calloc(num_threads, sizeof(ST_double *));
     g_state->thread_cg_u = (ST_double **)calloc(num_threads, sizeof(ST_double *));
     g_state->thread_cg_v = (ST_double **)calloc(num_threads, sizeof(ST_double *));
-    g_state->thread_proj = (ST_double **)calloc(num_threads, sizeof(ST_double *));
+    g_state->thread_proj = NULL;  /* Not used in creghdfe - CG solver uses fused Kaczmarz */
     g_state->thread_fe_means = (ST_double **)calloc(num_threads * G, sizeof(ST_double *));
 
     /* Check array allocations */
     if (!g_state->thread_cg_r || !g_state->thread_cg_u || !g_state->thread_cg_v ||
-        !g_state->thread_proj || !g_state->thread_fe_means) {
+        !g_state->thread_fe_means) {
         cleanup_state();
         for (i = 0; i < G; i++) {
             if (factors[i].levels) free(factors[i].levels);
@@ -748,9 +748,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         g_state->thread_cg_r[t] = (ST_double *)malloc(N * sizeof(ST_double));
         g_state->thread_cg_u[t] = (ST_double *)malloc(N * sizeof(ST_double));
         g_state->thread_cg_v[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        g_state->thread_proj[t] = (ST_double *)malloc(N * sizeof(ST_double));
         if (!g_state->thread_cg_r[t] || !g_state->thread_cg_u[t] ||
-            !g_state->thread_cg_v[t] || !g_state->thread_proj[t]) {
+            !g_state->thread_cg_v[t]) {
             thread_alloc_failed = 1;
             break;
         }

@@ -30,9 +30,9 @@ void cleanup_state(void)
             if (g_state->factors[g].weighted_counts != NULL) free(g_state->factors[g].weighted_counts);
             if (g_state->factors[g].inv_weighted_counts != NULL) free(g_state->factors[g].inv_weighted_counts);
             if (g_state->factors[g].means != NULL) free(g_state->factors[g].means);
-            /* Free CSR format data */
-            if (g_state->factors[g].csr_offsets != NULL) free(g_state->factors[g].csr_offsets);
-            if (g_state->factors[g].csr_indices != NULL) free(g_state->factors[g].csr_indices);
+            /* Free sorted indices */
+            if (g_state->factors[g].sorted_indices != NULL) free(g_state->factors[g].sorted_indices);
+            if (g_state->factors[g].sorted_levels != NULL) free(g_state->factors[g].sorted_levels);
         }
         free(g_state->factors);
     }
@@ -57,12 +57,6 @@ void cleanup_state(void)
             if (g_state->thread_cg_v[t]) free(g_state->thread_cg_v[t]);
         }
         free(g_state->thread_cg_v);
-    }
-    if (g_state->thread_proj != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_proj[t]) free(g_state->thread_proj[t]);
-        }
-        free(g_state->thread_proj);
     }
     if (g_state->thread_fe_means != NULL) {
         for (t = 0; t < g_state->num_threads * g_state->G; t++) {
@@ -446,9 +440,8 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
                     }
                 }
 
-                /* Allocate means buffer */
-                g_state->factors[g].means = (ST_double *)malloc(
-                    factors[g].num_levels * sizeof(ST_double));
+                /* means not used in creghdfe - CG solver uses thread_fe_means */
+                g_state->factors[g].means = NULL;
             }
         }
     }

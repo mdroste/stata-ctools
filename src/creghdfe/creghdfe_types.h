@@ -14,7 +14,6 @@
 #include <math.h>
 #include <stdio.h>
 #include <time.h>
-
 #ifdef _OPENMP
 #include <omp.h>
 #define OMP_NUM_THREADS 8
@@ -43,16 +42,16 @@ typedef struct {
     ST_int max_level;            /* Maximum level value (for array indexing) */
     ST_int has_intercept;
     ST_int num_slopes;
-    ST_int *levels;
+    ST_int *levels;              /* Level assignment per obs (1-indexed) */
     ST_double *counts;           /* Unweighted counts per level */
     ST_double *inv_counts;       /* Precomputed 1/counts for fast division */
     ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
     ST_double *inv_weighted_counts; /* Precomputed 1/weighted_counts */
     ST_double *means;
-    /* CSR format for fast projection - observations sorted by level */
-    ST_int *csr_offsets;         /* offsets[L+1]: start of each level's observations */
-    ST_int *csr_indices;         /* indices[N]: observation indices grouped by level */
-    ST_int csr_initialized;      /* Flag: 1 if CSR format is built */
+    /* Sorted observation indices for cache-friendly projection (not currently used) */
+    ST_int *sorted_indices;      /* indices[N]: observation indices sorted by level */
+    ST_int *sorted_levels;       /* levels[N]: level values in sorted order */
+    ST_int sorted_initialized;   /* Flag: 1 if sorted format is built */
 } FE_Factor;
 
 /* ========================================================================
@@ -78,7 +77,7 @@ typedef struct {
     ST_double **thread_cg_r;
     ST_double **thread_cg_u;
     ST_double **thread_cg_v;
-    ST_double **thread_proj;
+    ST_double **thread_proj;      /* Not used in creghdfe but needed by cqreg/civreghdfe */
     ST_double **thread_fe_means;  /* Per-thread means buffers for each FE */
     ST_int num_threads;
     /* Cached data from HDFE init for reuse in partial_out */
