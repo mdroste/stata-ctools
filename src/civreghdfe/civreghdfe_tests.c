@@ -831,9 +831,9 @@ void civreghdfe_compute_cstat(
         }
     }
 
-    /* Build Z_rest (instruments not being tested) */
-    ST_double *Z_rest = (ST_double *)malloc(N * K_rest * sizeof(ST_double));
-    ST_double *Z_test = (ST_double *)malloc(N * n_orthog * sizeof(ST_double));
+    /* Build Z_rest (instruments not being tested) - cast to size_t to prevent 32-bit overflow */
+    ST_double *Z_rest = (ST_double *)malloc((size_t)N * K_rest * sizeof(ST_double));
+    ST_double *Z_test = (ST_double *)malloc((size_t)N * n_orthog * sizeof(ST_double));
     if (!Z_rest || !Z_test) {
         free(test_mask);
         if (Z_rest) free(Z_rest);
@@ -1128,9 +1128,9 @@ void civreghdfe_compute_redundant(
         }
     }
 
-    /* Build Z_rest and Z_test */
-    ST_double *Z_rest = (ST_double *)malloc(N * K_rest * sizeof(ST_double));
-    ST_double *Z_test = (ST_double *)malloc(N * n_redund * sizeof(ST_double));
+    /* Build Z_rest and Z_test - cast to size_t to prevent 32-bit overflow */
+    ST_double *Z_rest = (ST_double *)malloc((size_t)N * K_rest * sizeof(ST_double));
+    ST_double *Z_test = (ST_double *)malloc((size_t)N * n_redund * sizeof(ST_double));
     if (!Z_rest || !Z_test) {
         free(test_mask);
         if (Z_rest) free(Z_rest);

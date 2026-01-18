@@ -943,9 +943,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    /* Allocate for OLS */
+    /* Allocate for OLS - cast to size_t to prevent 32-bit overflow */
     ST_int K_with_cons = K_keep + 1;
-    data_keep = (ST_double *)malloc(N * (K_keep + 1) * sizeof(ST_double));
+    data_keep = (ST_double *)malloc((size_t)N * (K_keep + 1) * sizeof(ST_double));
     xtx_keep = (ST_double *)malloc(K_keep * K_keep * sizeof(ST_double));
     xty_keep = (ST_double *)malloc(K_keep * sizeof(ST_double));
     beta_keep = (ST_double *)malloc(K_with_cons * sizeof(ST_double));
@@ -1121,8 +1121,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     free(side);
     free(inv_xx_x);
 
-    /* Build data with constant for VCE */
-    ST_double *data_with_cons = (ST_double *)malloc(N * (K_with_cons + 1) * sizeof(ST_double));
+    /* Build data with constant for VCE - cast to size_t to prevent 32-bit overflow */
+    ST_double *data_with_cons = (ST_double *)malloc((size_t)N * (K_with_cons + 1) * sizeof(ST_double));
     if (!data_with_cons) {
         free(data_keep); free(xtx_keep); free(xty_keep);
         free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);

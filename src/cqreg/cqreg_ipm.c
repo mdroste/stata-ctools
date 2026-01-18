@@ -1015,9 +1015,9 @@ static ST_int solve_subsample_qr(
 {
     ST_int i, j;
 
-    /* Allocate subsample data */
-    ST_double *y_sub = (ST_double *)malloc(m * sizeof(ST_double));
-    ST_double *X_sub = (ST_double *)malloc(m * K * sizeof(ST_double));
+    /* Allocate subsample data - cast to size_t to prevent 32-bit overflow */
+    ST_double *y_sub = (ST_double *)malloc((size_t)m * sizeof(ST_double));
+    ST_double *X_sub = (ST_double *)malloc((size_t)m * K * sizeof(ST_double));
     if (!y_sub || !X_sub) {
         free(y_sub);
         free(X_sub);

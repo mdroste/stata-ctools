@@ -275,17 +275,17 @@ static ST_retcode do_iv_regression(void)
         return 2001;
     }
 
-    /* Compact data to remove invalid observations */
-    ST_double *y_c = (ST_double *)malloc(N_valid * sizeof(ST_double));
-    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)malloc(N_valid * K_endog * sizeof(ST_double)) : NULL;
-    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)malloc(N_valid * K_exog * sizeof(ST_double)) : NULL;
-    ST_double *Z_c = (ST_double *)malloc(N_valid * K_iv * sizeof(ST_double));
-    ST_double *weights_c = has_weights ? (ST_double *)malloc(N_valid * sizeof(ST_double)) : NULL;
-    ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc(N_valid * sizeof(ST_int)) : NULL;
-    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc(N_valid * sizeof(ST_int)) : NULL;
-    ST_int **fe_levels_c = (ST_int **)malloc(G * sizeof(ST_int *));
+    /* Compact data to remove invalid observations - cast to size_t to prevent 32-bit overflow */
+    ST_double *y_c = (ST_double *)malloc((size_t)N_valid * sizeof(ST_double));
+    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)malloc((size_t)N_valid * K_endog * sizeof(ST_double)) : NULL;
+    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)malloc((size_t)N_valid * K_exog * sizeof(ST_double)) : NULL;
+    ST_double *Z_c = (ST_double *)malloc((size_t)N_valid * K_iv * sizeof(ST_double));
+    ST_double *weights_c = has_weights ? (ST_double *)malloc((size_t)N_valid * sizeof(ST_double)) : NULL;
+    ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
+    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
+    ST_int **fe_levels_c = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
     for (ST_int g = 0; g < G; g++) {
-        fe_levels_c[g] = (ST_int *)malloc(N_valid * sizeof(ST_int));
+        fe_levels_c[g] = (ST_int *)malloc((size_t)N_valid * sizeof(ST_int));
     }
 
     ST_int idx = 0;
@@ -756,13 +756,67 @@ static ST_retcode do_iv_regression(void)
     /* Remap cluster IDs to contiguous 1-based indices using shared utility */
     ST_int num_clusters = 0;
     if (has_cluster) {
-        ctools_remap_cluster_ids(cluster_ids_c, N, &num_clusters);
+        if (ctools_remap_cluster_ids(cluster_ids_c, N, &num_clusters) != 0) {
+            SF_error("civreghdfe: Failed to remap cluster IDs (memory allocation error)\n");
+            free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            free(fe_levels_c); free(singleton_mask);
+            /* Cleanup state */
+            for (ST_int t = 0; t < num_threads; t++) {
+                free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
+                free(state->thread_cg_v[t]); free(state->thread_proj[t]);
+                for (ST_int fg = 0; fg < G; fg++) {
+                    if (state->thread_fe_means[t * G + fg])
+                        free(state->thread_fe_means[t * G + fg]);
+                }
+            }
+            free(state->thread_cg_r); free(state->thread_cg_u);
+            free(state->thread_cg_v); free(state->thread_proj);
+            free(state->thread_fe_means);
+            for (ST_int fg = 0; fg < G; fg++) {
+                free(state->factors[fg].counts);
+                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+                free(state->factors[fg].means);
+            }
+            free(state->factors);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
     }
 
     /* Remap cluster2 IDs for two-way clustering */
     ST_int num_clusters2 = 0;
     if (has_cluster2) {
-        ctools_remap_cluster_ids(cluster2_ids_c, N, &num_clusters2);
+        if (ctools_remap_cluster_ids(cluster2_ids_c, N, &num_clusters2) != 0) {
+            SF_error("civreghdfe: Failed to remap cluster2 IDs (memory allocation error)\n");
+            free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            free(fe_levels_c); free(singleton_mask);
+            /* Cleanup state */
+            for (ST_int t = 0; t < num_threads; t++) {
+                free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
+                free(state->thread_cg_v[t]); free(state->thread_proj[t]);
+                for (ST_int fg = 0; fg < G; fg++) {
+                    if (state->thread_fe_means[t * G + fg])
+                        free(state->thread_fe_means[t * G + fg]);
+                }
+            }
+            free(state->thread_cg_r); free(state->thread_cg_u);
+            free(state->thread_cg_v); free(state->thread_proj);
+            free(state->thread_fe_means);
+            for (ST_int fg = 0; fg < G; fg++) {
+                free(state->factors[fg].counts);
+                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+                free(state->factors[fg].means);
+            }
+            free(state->factors);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
     }
 
     /* Update K_total after possible FWL reduction of K_exog */
