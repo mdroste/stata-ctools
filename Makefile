@@ -80,13 +80,22 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
 CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c
 
 # cimport module
-CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c
+CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
+               $(SRC_DIR)/cimport/cimport_arena.c \
+               $(SRC_DIR)/cimport/cimport_mmap.c \
+               $(SRC_DIR)/cimport/cimport_parse.c
 
 # cexport module
 CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c
 
 # cmerge module
-CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c
+CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
+              $(SRC_DIR)/cmerge/cmerge_memory.c \
+              $(SRC_DIR)/cmerge/cmerge_radix_sort.c \
+              $(SRC_DIR)/cmerge/cmerge_keys.c \
+              $(SRC_DIR)/cmerge/cmerge_group_search.c \
+              $(SRC_DIR)/cmerge/cmerge_join.c \
+              $(SRC_DIR)/cmerge/cmerge_io.c
 
 # creghdfe module
 CREGHDFE_SRCS = $(SRC_DIR)/creghdfe/creghdfe_types.c \
@@ -140,11 +149,21 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
 
 CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h
 
-CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h
+CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
+                  $(SRC_DIR)/cimport/cimport_context.h \
+                  $(SRC_DIR)/cimport/cimport_arena.h \
+                  $(SRC_DIR)/cimport/cimport_mmap.h \
+                  $(SRC_DIR)/cimport/cimport_parse.h
 
 CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h
 
-CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h
+CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h \
+                 $(SRC_DIR)/cmerge/cmerge_memory.h \
+                 $(SRC_DIR)/cmerge/cmerge_radix_sort.h \
+                 $(SRC_DIR)/cmerge/cmerge_keys.h \
+                 $(SRC_DIR)/cmerge/cmerge_group_search.h \
+                 $(SRC_DIR)/cmerge/cmerge_join.h \
+                 $(SRC_DIR)/cmerge/cmerge_io.h
 
 CREGHDFE_HEADERS = $(SRC_DIR)/creghdfe/creghdfe_types.h \
                    $(SRC_DIR)/creghdfe/creghdfe_utils.h \

@@ -237,6 +237,44 @@ CTOOLS_PARALLEL_FOR(my_worker, args, 8, sizeof(args[0]), result);
 
 ---
 
+## Threading Model (OpenMP vs Persistent Pool)
+
+ctools uses a mixed threading model. OpenMP is preferred for tight, regular loops or divide-and-conquer tasks. The persistent pool is preferred for batches of heterogeneous work items (e.g., per-variable I/O) where thread creation overhead would dominate.
+
+### OpenMP usage (parallel loops/tasks)
+
+- Sorting algorithms: `ctools_sort_merge.c`, `ctools_sort_counting.c`, `ctools_sort_ips4o.c`, `ctools_sort_sample.c`, `ctools_sort_timsort.c`, `ctools_sort_radix_msd.c` (recursive tasks)
+- Merge: `cmerge/cmerge_impl.c` (parallel loop for merge steps)
+- Regression/HDFE: `creghdfe/*.c`, `civreghdfe/*.c` (parallel loops and SIMD for linear algebra/partialling)
+- Quantile regression: `cqreg/*.c` (parallel loops, tasking, and SIMD)
+
+### Global persistent pool usage (ctools_persistent_pool)
+
+- Stata I/O: `ctools_data_io.c` (load/store variables in parallel)
+- Merge helpers: `cmerge/cmerge_impl.c` (histogram/scatter for radix-based merge paths)
+- Apply-permutation stages: `ctools_sort_radix_lsd.c`, `ctools_sort_radix_msd.c`, `ctools_sort_timsort.c`
+
+### When to pick which
+
+- **OpenMP**: tight, uniform loops where per-iteration work is similar and data access is contiguous.
+- **Persistent pool**: many small/medium independent tasks, per-variable work, or repeated batches across a command where thread reuse saves overhead.
+- Avoid nested parallelism (e.g., OpenMP inside code already using the persistent pool) to reduce oversubscription.
+
+### Potential swap opportunities
+
+- `ctools_sort_radix_msd.c` top-level histogram/scatter currently create pthreads per call; this could move to the global persistent pool to reduce thread creation overhead when sorting is called repeatedly in a session.
+- If OpenMP regions are inside phases that already use the persistent pool (e.g., sort + apply-permutation + I/O), consider serializing one layer or lowering OpenMP threads to avoid oversubscribing cores.
+
+### OpenMP tuning tips
+
+- `OMP_NUM_THREADS`: set to physical cores for compute-bound code; keep below `CTOOLS_IO_MAX_THREADS + OMP_NUM_THREADS` to avoid oversubscription.
+- `OMP_PROC_BIND=spread` and `OMP_PLACES=cores`: keep threads pinned and reduce cache thrash.
+- `OMP_DYNAMIC=FALSE`: avoid runtime thread count changes that interfere with sizing heuristics.
+- `OMP_WAIT_POLICY=PASSIVE` (lower CPU use when waiting) or `ACTIVE` (lower latency for short tasks).
+- `GOMP_CPU_AFFINITY` (GNU OpenMP) or `KMP_AFFINITY` (Intel/OpenMP) for explicit pinning when needed.
+
+---
+
 ## Timing and Profiling
 
 Include: `#include "ctools_timer.h"`

@@ -56,6 +56,10 @@ You are welcome to use ctools however you like. For instance, ./src/ctools_data_
 
 See DEVELOPERS.md for additional information on ctools' architecture and core logic.
 
+## Threading Model (quick note)
+
+ctools uses OpenMP for tight, regular loops (sorting, linear algebra, HDFE work) and a global persistent thread pool for per-variable I/O and other repeated batch work (to avoid thread creation overhead). See DEVELOPERS.md for a detailed list of where each is used and tuning suggestions.
+
 ## Usage Notes and Limitations
 
 - All ctools programs work by copying Stata data in memory, operating on it, and returning results. Because these programs do not operate on Stata datasets in place, -ctools- requires more memory (RAM) than their Stata/Mata-coded counterpart commands. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. As an extreme case, -csort- requires loading the entire dataset into memory (not just the 'sort key' variables). This means that -csort-'s runtime is heavily dependent on the number of variables in your current dataset (frame), and likewise with -cmerge-. In contrast, other commands like civreghdfe, creghdfe, cbinscatter, and cqreg will only load those variables that are necessary, and do not generally write very much data back to Stata, and this I/O concern is minimal.

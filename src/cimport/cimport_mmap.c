@@ -1,0 +1,142 @@
+/*
+ * cimport_mmap.c
+ * Cross-platform memory-mapped file I/O for cimport
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include "cimport_mmap.h"
+
+/* Need full context definition for file_data, file_size, error_message fields */
+#include "cimport_context.h"
+
+#ifdef CIMPORT_WINDOWS
+
+int cimport_mmap_file(CImportContext *ctx, const char *filename)
+{
+    /* Open file */
+    ctx->file_handle = CreateFileA(filename, GENERIC_READ, FILE_SHARE_READ,
+                                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (ctx->file_handle == INVALID_HANDLE_VALUE) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot open file: error %lu", GetLastError());
+        return -1;
+    }
+
+    /* Get file size */
+    LARGE_INTEGER file_size;
+    if (!GetFileSizeEx(ctx->file_handle, &file_size)) {
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot get file size: error %lu", GetLastError());
+        return -1;
+    }
+
+    ctx->file_size = (size_t)file_size.QuadPart;
+    if (ctx->file_size == 0) {
+        CloseHandle(ctx->file_handle);
+        strcpy(ctx->error_message, "File is empty");
+        return -1;
+    }
+
+    /* Create file mapping */
+    ctx->mapping_handle = CreateFileMappingA(ctx->file_handle, NULL, PAGE_READONLY,
+                                              0, 0, NULL);
+    if (ctx->mapping_handle == NULL) {
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot create file mapping: error %lu", GetLastError());
+        return -1;
+    }
+
+    /* Map view of file */
+    ctx->file_data = (char *)MapViewOfFile(ctx->mapping_handle, FILE_MAP_READ,
+                                            0, 0, ctx->file_size);
+    if (ctx->file_data == NULL) {
+        CloseHandle(ctx->mapping_handle);
+        CloseHandle(ctx->file_handle);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot map file: error %lu", GetLastError());
+        return -1;
+    }
+
+    return 0;
+}
+
+void cimport_munmap_file(CImportContext *ctx)
+{
+    if (ctx->file_data) {
+        UnmapViewOfFile(ctx->file_data);
+        ctx->file_data = NULL;
+    }
+    if (ctx->mapping_handle) {
+        CloseHandle(ctx->mapping_handle);
+        ctx->mapping_handle = NULL;
+    }
+    if (ctx->file_handle) {
+        CloseHandle(ctx->file_handle);
+        ctx->file_handle = NULL;
+    }
+}
+
+#else /* Unix/POSIX */
+
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int cimport_mmap_file(CImportContext *ctx, const char *filename)
+{
+    int fd = open(filename, O_RDONLY);
+    if (fd < 0) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot open file: %s", strerror(errno));
+        return -1;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        close(fd);
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot stat file: %s", strerror(errno));
+        return -1;
+    }
+
+    ctx->file_size = st.st_size;
+    if (ctx->file_size == 0) {
+        close(fd);
+        strcpy(ctx->error_message, "File is empty");
+        return -1;
+    }
+
+    ctx->file_data = mmap(NULL, ctx->file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    close(fd);
+
+    if (ctx->file_data == MAP_FAILED) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Cannot mmap file: %s", strerror(errno));
+        ctx->file_data = NULL;
+        return -1;
+    }
+
+    /* Advise kernel about sequential access pattern */
+#ifdef __linux__
+    madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL | MADV_WILLNEED);
+#elif defined(__APPLE__)
+    madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL);
+#endif
+
+    return 0;
+}
+
+void cimport_munmap_file(CImportContext *ctx)
+{
+    if (ctx->file_data) {
+        munmap(ctx->file_data, ctx->file_size);
+        ctx->file_data = NULL;
+    }
+}
+
+#endif /* CIMPORT_WINDOWS */

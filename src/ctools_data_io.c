@@ -287,21 +287,6 @@ static inline __attribute__((unused)) void stream_doubles_16(double * restrict d
    =========================================================================== */
 
 /*
-    Thread argument structure for multi-variable I/O.
-    Each worker thread processes a range of variables [var_start, var_end).
-*/
-typedef struct {
-    stata_variable *vars;       /* Array of variable structures */
-    int *var_indices;           /* Array of 1-based Stata variable indices */
-    size_t var_start;           /* First variable index (0-based in arrays) */
-    size_t var_end;             /* End variable index (exclusive) */
-    size_t obs1;                /* First observation (1-based) */
-    size_t nobs;                /* Number of observations */
-    int *is_string;             /* Array indicating if each var is string */
-    int success;                /* 1 on success, 0 on failure */
-} ctools_multi_var_io_args;
-
-/*
     Load a single variable from Stata into C memory (internal helper).
     Used by both single-var and multi-var loading.
 */
@@ -421,26 +406,6 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 }
 
 /*
-    Thread function: Load multiple variables from Stata into C memory.
-    Each thread processes variables in range [var_start, var_end).
-*/
-static void *load_multi_variable_thread(void *arg)
-{
-    ctools_multi_var_io_args *args = (ctools_multi_var_io_args *)arg;
-    args->success = 0;
-
-    for (size_t v = args->var_start; v < args->var_end; v++) {
-        if (load_single_variable(&args->vars[v], args->var_indices[v],
-                                  args->obs1, args->nobs, args->is_string[v]) != 0) {
-            return (void *)1;
-        }
-    }
-
-    args->success = 1;
-    return NULL;
-}
-
-/*
     Thread function: Load a single variable from Stata into C memory.
     (Legacy interface for backward compatibility)
 
@@ -546,30 +511,25 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         thread_args[j].success = 0;
     }
 
-    /* Parallel loading with capped thread count.
-     * Cap threads to min(nvars, CTOOLS_IO_MAX_THREADS) to avoid oversubscription.
-     * Each thread processes a chunk of variables for better efficiency. */
+    /* Parallel loading using persistent thread pool.
+     * The pool manages a fixed number of workers that process work items from a queue,
+     * eliminating thread creation overhead for repeated operations. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Determine optimal thread count */
-        size_t num_threads = nvars;
-        if (num_threads > CTOOLS_IO_MAX_THREADS) {
-            num_threads = CTOOLS_IO_MAX_THREADS;
-        }
+        ctools_persistent_pool *pool = ctools_get_global_pool();
 
-        /* If few variables, use legacy one-thread-per-variable approach */
-        if (nvars <= CTOOLS_IO_MAX_THREADS) {
-            /* Legacy path: one thread per variable */
-            ctools_thread_pool pool;
-            if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+        if (pool != NULL) {
+            /* Submit one work item per variable to the persistent pool */
+            if (ctools_persistent_pool_submit_batch(pool, load_variable_thread,
+                                                     thread_args, nvars,
+                                                     sizeof(ctools_var_io_args)) != 0) {
                 free(thread_args);
                 stata_data_free(data);
                 return STATA_ERR_MEMORY;
             }
 
-            int pool_result = ctools_pool_run(&pool, load_variable_thread);
-            ctools_pool_free(&pool);
+            int pool_result = ctools_persistent_pool_wait(pool);
             free(thread_args);
 
             if (pool_result != 0) {
@@ -577,68 +537,15 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
                 return STATA_ERR_MEMORY;
             }
         } else {
-            /* Multi-variable per thread: distribute variables among capped threads */
-            free(thread_args);  /* Don't need single-var args */
-
-            /* Build arrays for multi-var threading */
-            int *var_indices = (int *)malloc(nvars * sizeof(int));
-            int *is_string_arr = (int *)malloc(nvars * sizeof(int));
-            ctools_multi_var_io_args *multi_args = (ctools_multi_var_io_args *)malloc(
-                num_threads * sizeof(ctools_multi_var_io_args));
-
-            if (var_indices == NULL || is_string_arr == NULL || multi_args == NULL) {
-                free(var_indices);
-                free(is_string_arr);
-                free(multi_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-
-            /* Initialize variable info */
+            /* Fallback to sequential if pool initialization failed */
             for (j = 0; j < nvars; j++) {
-                var_indices[j] = (int)(j + 1);
-                is_string_arr[j] = SF_var_is_string((ST_int)(j + 1));
+                if (load_variable_thread(&thread_args[j]) != NULL) {
+                    free(thread_args);
+                    stata_data_free(data);
+                    return STATA_ERR_MEMORY;
+                }
             }
-
-            /* Distribute variables among threads */
-            size_t vars_per_thread = nvars / num_threads;
-            size_t extra_vars = nvars % num_threads;
-
-            size_t var_offset = 0;
-            for (size_t t = 0; t < num_threads; t++) {
-                size_t this_thread_vars = vars_per_thread + (t < extra_vars ? 1 : 0);
-                multi_args[t].vars = data->vars;
-                multi_args[t].var_indices = var_indices;
-                multi_args[t].var_start = var_offset;
-                multi_args[t].var_end = var_offset + this_thread_vars;
-                multi_args[t].obs1 = obs1;
-                multi_args[t].nobs = nobs;
-                multi_args[t].is_string = is_string_arr;
-                multi_args[t].success = 0;
-                var_offset += this_thread_vars;
-            }
-
-            /* Run multi-variable threads */
-            ctools_thread_pool pool;
-            if (ctools_pool_init(&pool, num_threads, multi_args,
-                                  sizeof(ctools_multi_var_io_args)) != 0) {
-                free(var_indices);
-                free(is_string_arr);
-                free(multi_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-
-            int pool_result = ctools_pool_run(&pool, load_multi_variable_thread);
-            ctools_pool_free(&pool);
-            free(var_indices);
-            free(is_string_arr);
-            free(multi_args);
-
-            if (pool_result != 0) {
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
+            free(thread_args);
         }
     } else {
         /* Sequential loading for single variable */
@@ -742,24 +649,6 @@ static void store_single_variable(stata_variable *var, int var_idx, size_t obs1,
 }
 
 /*
-    Thread function: Store multiple variables from C memory to Stata.
-    Each thread processes variables in range [var_start, var_end).
-*/
-static void *store_multi_variable_thread(void *arg)
-{
-    ctools_multi_var_io_args *args = (ctools_multi_var_io_args *)arg;
-    args->success = 0;
-
-    for (size_t v = args->var_start; v < args->var_end; v++) {
-        store_single_variable(&args->vars[v], args->var_indices[v],
-                              args->obs1, args->nobs);
-    }
-
-    args->success = 1;
-    return NULL;
-}
-
-/*
     Thread function: Store a single variable from C memory to Stata.
     (Legacy interface for backward compatibility)
 
@@ -832,85 +721,29 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
         thread_args[j].success = 0;
     }
 
-    /* Parallel storing with capped thread count.
-     * Cap threads to min(nvars, CTOOLS_IO_MAX_THREADS) to avoid oversubscription. */
+    /* Parallel storing using persistent thread pool. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Determine optimal thread count */
-        size_t num_threads = nvars;
-        if (num_threads > CTOOLS_IO_MAX_THREADS) {
-            num_threads = CTOOLS_IO_MAX_THREADS;
-        }
+        ctools_persistent_pool *pool = ctools_get_global_pool();
 
-        /* If few variables, use legacy one-thread-per-variable approach */
-        if (nvars <= CTOOLS_IO_MAX_THREADS) {
-            /* Legacy path: one thread per variable */
-            ctools_thread_pool pool;
-            if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+        if (pool != NULL) {
+            /* Submit one work item per variable to the persistent pool */
+            if (ctools_persistent_pool_submit_batch(pool, store_variable_thread,
+                                                     thread_args, nvars,
+                                                     sizeof(ctools_var_io_args)) != 0) {
                 free(thread_args);
                 return STATA_ERR_MEMORY;
             }
 
-            ctools_pool_run(&pool, store_variable_thread);
-            ctools_pool_free(&pool);
+            ctools_persistent_pool_wait(pool);
             free(thread_args);
         } else {
-            /* Multi-variable per thread: distribute variables among capped threads */
-            free(thread_args);  /* Don't need single-var args */
-
-            /* Build arrays for multi-var threading */
-            int *var_indices = (int *)malloc(nvars * sizeof(int));
-            int *is_string_arr = (int *)malloc(nvars * sizeof(int));
-            ctools_multi_var_io_args *multi_args = (ctools_multi_var_io_args *)malloc(
-                num_threads * sizeof(ctools_multi_var_io_args));
-
-            if (var_indices == NULL || is_string_arr == NULL || multi_args == NULL) {
-                free(var_indices);
-                free(is_string_arr);
-                free(multi_args);
-                return STATA_ERR_MEMORY;
-            }
-
-            /* Initialize variable info */
+            /* Fallback to sequential if pool initialization failed */
             for (j = 0; j < nvars; j++) {
-                var_indices[j] = (int)(j + 1);
-                is_string_arr[j] = 0;  /* Not used by store */
+                store_variable_thread(&thread_args[j]);
             }
-
-            /* Distribute variables among threads */
-            size_t vars_per_thread = nvars / num_threads;
-            size_t extra_vars = nvars % num_threads;
-
-            size_t var_offset = 0;
-            for (size_t t = 0; t < num_threads; t++) {
-                size_t this_thread_vars = vars_per_thread + (t < extra_vars ? 1 : 0);
-                multi_args[t].vars = data->vars;
-                multi_args[t].var_indices = var_indices;
-                multi_args[t].var_start = var_offset;
-                multi_args[t].var_end = var_offset + this_thread_vars;
-                multi_args[t].obs1 = obs1;
-                multi_args[t].nobs = nobs;
-                multi_args[t].is_string = is_string_arr;
-                multi_args[t].success = 0;
-                var_offset += this_thread_vars;
-            }
-
-            /* Run multi-variable threads */
-            ctools_thread_pool pool;
-            if (ctools_pool_init(&pool, num_threads, multi_args,
-                                  sizeof(ctools_multi_var_io_args)) != 0) {
-                free(var_indices);
-                free(is_string_arr);
-                free(multi_args);
-                return STATA_ERR_MEMORY;
-            }
-
-            ctools_pool_run(&pool, store_multi_variable_thread);
-            ctools_pool_free(&pool);
-            free(var_indices);
-            free(is_string_arr);
-            free(multi_args);
+            free(thread_args);
         }
     } else {
         /* Sequential storing for single variable */
@@ -1017,27 +850,38 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
         thread_args[j].success = 0;
     }
 
-    /* Parallel loading when multiple variables - one thread per variable.
-     * Each thread operates on a different Stata variable (column).
-     * Note: This assumes Stata's SPI is thread-safe for column-level access. */
+    /* Parallel loading using persistent thread pool. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Parallel loading using thread pool */
-        ctools_thread_pool pool;
-        if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+
+        if (pool != NULL) {
+            if (ctools_persistent_pool_submit_batch(pool, load_variable_thread,
+                                                     thread_args, nvars,
+                                                     sizeof(ctools_var_io_args)) != 0) {
+                free(thread_args);
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
+
+            int pool_result = ctools_persistent_pool_wait(pool);
             free(thread_args);
-            stata_data_free(data);
-            return STATA_ERR_MEMORY;
-        }
 
-        int pool_result = ctools_pool_run(&pool, load_variable_thread);
-        ctools_pool_free(&pool);
-        free(thread_args);
-
-        if (pool_result != 0) {
-            stata_data_free(data);
-            return STATA_ERR_MEMORY;
+            if (pool_result != 0) {
+                stata_data_free(data);
+                return STATA_ERR_MEMORY;
+            }
+        } else {
+            /* Fallback to sequential if pool initialization failed */
+            for (j = 0; j < nvars; j++) {
+                if (load_variable_thread(&thread_args[j]) != NULL) {
+                    free(thread_args);
+                    stata_data_free(data);
+                    return STATA_ERR_MEMORY;
+                }
+            }
+            free(thread_args);
         }
     } else {
         /* Sequential loading for single variable */
@@ -1106,19 +950,27 @@ stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
         thread_args[j].success = 0;
     }
 
-    /* Parallel storing when multiple variables */
+    /* Parallel storing using persistent thread pool. */
     use_parallel = (nvars >= 2);
 
     if (use_parallel) {
-        /* Parallel storing using thread pool */
-        ctools_thread_pool pool;
-        if (ctools_pool_init(&pool, nvars, thread_args, sizeof(ctools_var_io_args)) != 0) {
-            free(thread_args);
-            return STATA_ERR_MEMORY;
-        }
+        ctools_persistent_pool *pool = ctools_get_global_pool();
 
-        ctools_pool_run(&pool, store_variable_thread);
-        ctools_pool_free(&pool);
+        if (pool != NULL) {
+            if (ctools_persistent_pool_submit_batch(pool, store_variable_thread,
+                                                     thread_args, nvars,
+                                                     sizeof(ctools_var_io_args)) != 0) {
+                free(thread_args);
+                return STATA_ERR_MEMORY;
+            }
+
+            ctools_persistent_pool_wait(pool);
+        } else {
+            /* Fallback to sequential if pool initialization failed */
+            for (j = 0; j < nvars; j++) {
+                store_variable_thread(&thread_args[j]);
+            }
+        }
     } else {
         /* Sequential storing for single variable */
         for (j = 0; j < nvars; j++) {

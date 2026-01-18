@@ -204,4 +204,64 @@ ST_retcode ivest_first_stage_f(
     ST_double *first_stage_F
 );
 
+/*
+    Full k-class IV estimation with VCE and diagnostics.
+
+    This is the main 2SLS/LIML/Fuller/GMM2S/CUE estimation function.
+    Computes coefficients, VCE, first-stage F, and diagnostic tests.
+
+    Parameters:
+    - y: Dependent variable (N x 1)
+    - X_exog: Exogenous regressors (N x K_exog), may be NULL
+    - X_endog: Endogenous regressors (N x K_endog)
+    - Z: Instruments (N x K_iv)
+    - weights, weight_type: Optional weighting
+    - N, K_exog, K_endog, K_iv: Dimensions
+    - beta: Output coefficients (K_total x 1)
+    - V: Output VCE matrix (K_total x K_total)
+    - first_stage_F: Output first-stage F-stats (K_endog x 1), may be NULL
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster, 3=hac, 4=cluster2
+    - cluster_ids, num_clusters: Cluster structure for clustered VCE
+    - cluster2_ids, num_clusters2: Second cluster for two-way clustering
+    - df_a: Absorbed degrees of freedom
+    - nested_adj: Adjustment for nested clusters
+    - verbose: Print debug output
+    - est_method: 0=2SLS, 1=LIML, 2=Fuller, 3=kclass, 4=GMM2S, 5=CUE
+    - kclass_user: User-specified k for kclass estimator
+    - fuller_alpha: Fuller modification parameter
+    - lambda_out: Output LIML lambda (may be NULL)
+    - kernel_type, bw: HAC kernel parameters
+
+    Returns STATA_OK on success.
+*/
+ST_retcode ivest_compute_2sls(
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
+    const ST_double *Z,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_exog,
+    ST_int K_endog,
+    ST_int K_iv,
+    ST_double *beta,
+    ST_double *V,
+    ST_double *first_stage_F,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    const ST_int *cluster2_ids,
+    ST_int num_clusters2,
+    ST_int df_a,
+    ST_int nested_adj,
+    ST_int verbose,
+    ST_int est_method,
+    ST_double kclass_user,
+    ST_double fuller_alpha,
+    ST_double *lambda_out,
+    ST_int kernel_type,
+    ST_int bw
+);
+
 #endif /* CIVREGHDFE_ESTIMATE_H */

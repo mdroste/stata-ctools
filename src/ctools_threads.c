@@ -188,8 +188,9 @@ static void *persistent_worker_thread(void *arg)
 
         /* Execute work item */
         if (item != NULL) {
+            void *result = NULL;
             if (item->func != NULL) {
-                item->func(item->arg);
+                result = item->func(item->arg);
             }
             free(item);
 
@@ -197,6 +198,9 @@ static void *persistent_worker_thread(void *arg)
             pthread_mutex_lock(&pool->queue_mutex);
             pool->active_workers--;
             pool->pending_items--;
+            if (result != NULL) {
+                pool->has_error = 1;  /* Track failure */
+            }
             if (pool->pending_items == 0) {
                 pthread_cond_broadcast(&pool->work_complete);
             }
@@ -335,9 +339,12 @@ int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
 
 /*
  * Wait for all submitted work to complete.
+ * Returns 0 if all work succeeded, -1 if any work failed.
  */
 int ctools_persistent_pool_wait(ctools_persistent_pool *pool)
 {
+    int had_error;
+
     if (pool == NULL || !pool->initialized) {
         return -1;
     }
@@ -348,9 +355,13 @@ int ctools_persistent_pool_wait(ctools_persistent_pool *pool)
         pthread_cond_wait(&pool->work_complete, &pool->queue_mutex);
     }
 
+    /* Check and clear error flag */
+    had_error = pool->has_error;
+    pool->has_error = 0;
+
     pthread_mutex_unlock(&pool->queue_mutex);
 
-    return 0;
+    return had_error ? -1 : 0;
 }
 
 /*

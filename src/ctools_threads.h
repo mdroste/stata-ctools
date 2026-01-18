@@ -172,6 +172,7 @@ typedef struct {
     size_t pending_items;               /* Items submitted but not yet complete */
     int shutdown;                       /* Set to 1 to terminate workers */
     int initialized;                    /* 1 if pool is initialized */
+    int has_error;                      /* Set to 1 if any work item failed */
 } ctools_persistent_pool;
 
 /*

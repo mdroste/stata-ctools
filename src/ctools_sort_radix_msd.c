@@ -41,6 +41,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
+#include "ctools_threads.h"
 
 /* Threshold for switching to insertion sort */
 #define MSD_INSERTION_THRESHOLD 64
@@ -1011,7 +1012,6 @@ static stata_retcode msd_apply_permutation(stata_data *data)
 {
     size_t j;
     size_t nvars = data->nvars;
-    pthread_t *threads;
     msd_permute_args_t *args;
     int all_success = 1;
 
@@ -1019,42 +1019,45 @@ static stata_retcode msd_apply_permutation(stata_data *data)
         return STATA_OK;
     }
 
-    threads = (pthread_t *)malloc(nvars * sizeof(pthread_t));
     args = (msd_permute_args_t *)malloc(nvars * sizeof(msd_permute_args_t));
-
-    if (threads == NULL || args == NULL) {
-        free(threads);
-        free(args);
+    if (args == NULL) {
         return STATA_ERR_MEMORY;
     }
 
-    size_t threads_created = 0;
+    /* Initialize args for each variable */
     for (j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
         args[j].sort_order = data->sort_order;
         args[j].nobs = data->nobs;
         args[j].success = 0;
+    }
 
-        if (pthread_create(&threads[j], NULL, msd_apply_permute_thread, &args[j]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
+    /* Apply permutation using persistent thread pool */
+    ctools_persistent_pool *pool = ctools_get_global_pool();
+
+    if (pool != NULL && nvars >= 2) {
+        if (ctools_persistent_pool_submit_batch(pool, msd_apply_permute_thread,
+                                                 args, nvars,
+                                                 sizeof(msd_permute_args_t)) != 0) {
+            free(args);
+            return STATA_ERR_MEMORY;
+        }
+
+        ctools_persistent_pool_wait(pool);
+    } else {
+        /* Sequential fallback for single variable or pool failure */
+        for (j = 0; j < nvars; j++) {
             msd_apply_permute_thread(&args[j]);
         }
     }
 
-    /* Wait for successfully created threads */
-    for (j = 0; j < threads_created; j++) {
-        pthread_join(threads[j], NULL);
-    }
-    /* Check success for all args (both threaded and fallback) */
+    /* Check success for all args */
     for (j = 0; j < nvars; j++) {
         if (!args[j].success) {
             all_success = 0;
         }
     }
 
-    free(threads);
     free(args);
 
     /* Reset sort_order to identity */

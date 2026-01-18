@@ -48,6 +48,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
+#include "ctools_threads.h"
 
 /*
     NOTE: Aligned memory allocation is now provided by ctools_config.h
@@ -1052,7 +1053,6 @@ static stata_retcode apply_permutation_to_all_vars(stata_data *data)
 {
     size_t j;
     size_t nvars = data->nvars;
-    pthread_t *threads;
     apply_permute_args_t *args;
     int all_success = 1;
 
@@ -1060,43 +1060,45 @@ static stata_retcode apply_permutation_to_all_vars(stata_data *data)
         return STATA_OK;
     }
 
-    threads = (pthread_t *)malloc(nvars * sizeof(pthread_t));
     args = (apply_permute_args_t *)malloc(nvars * sizeof(apply_permute_args_t));
-
-    if (threads == NULL || args == NULL) {
-        free(threads);
-        free(args);
+    if (args == NULL) {
         return STATA_ERR_MEMORY;
     }
 
-    /* Launch threads to apply permutation to each variable */
-    size_t threads_created = 0;
+    /* Initialize args for each variable */
     for (j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
         args[j].sort_order = data->sort_order;
         args[j].nobs = data->nobs;
         args[j].success = 0;
+    }
 
-        if (pthread_create(&threads[j], NULL, apply_permute_thread, &args[j]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
+    /* Apply permutation using persistent thread pool */
+    ctools_persistent_pool *pool = ctools_get_global_pool();
+
+    if (pool != NULL && nvars >= 2) {
+        if (ctools_persistent_pool_submit_batch(pool, apply_permute_thread,
+                                                 args, nvars,
+                                                 sizeof(apply_permute_args_t)) != 0) {
+            free(args);
+            return STATA_ERR_MEMORY;
+        }
+
+        ctools_persistent_pool_wait(pool);
+    } else {
+        /* Sequential fallback for single variable or pool failure */
+        for (j = 0; j < nvars; j++) {
             apply_permute_thread(&args[j]);
         }
     }
 
-    /* Wait for successfully created threads */
-    for (j = 0; j < threads_created; j++) {
-        pthread_join(threads[j], NULL);
-    }
-    /* Check success for all args (both threaded and fallback) */
+    /* Check success for all args */
     for (j = 0; j < nvars; j++) {
         if (!args[j].success) {
             all_success = 0;
         }
     }
 
-    free(threads);
     free(args);
 
     /* Reset sort_order to identity since data is now physically sorted */
