@@ -270,6 +270,16 @@ ST_retcode compute_bin_statistics(
         result->bins[bin_idx].n_obs = counts[b];
         result->bins[bin_idx].sum_weights = sum_w[b];
 
+        /* Skip mean computation if sum of weights is zero */
+        if (sum_w[b] <= 0.0) {
+            result->bins[bin_idx].y_mean = 0.0;
+            result->bins[bin_idx].x_mean = 0.0;
+            result->bins[bin_idx].y_se = 0.0;
+            result->bins[bin_idx].x_se = 0.0;
+            bin_idx++;
+            continue;
+        }
+
         /* Compute weighted means */
         mean_y = sum_y[b] / sum_w[b];
         mean_x = sum_x[b] / sum_w[b];
@@ -519,6 +529,18 @@ ST_retcode compute_bins_single_group(
         }
 
         ST_double total_weight = cum_weights[HISTOGRAM_BUCKETS - 1];
+
+        /* Handle zero total weight - assign all to bin 1 */
+        if (total_weight <= 0.0) {
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+            }
+            free(bucket_weights);
+            free(cum_weights);
+            free(bucket_to_bin);
+            goto compute_stats;
+        }
+
         ST_double weight_per_bin = total_weight / nq;
 
         /* Map buckets to bins based on cumulative weight */
@@ -569,6 +591,15 @@ ST_retcode compute_bins_single_group(
                 total_weight += weights[orig_idx];
             }
             cum_weight[i] = total_weight;
+        }
+
+        /* Handle zero total weight - assign all to bin 1 */
+        if (total_weight <= 0.0) {
+            for (i = 0; i < N; i++) {
+                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+            }
+            free(cum_weight);
+            goto compute_stats;
         }
 
         ST_double weight_per_bin = total_weight / nq;

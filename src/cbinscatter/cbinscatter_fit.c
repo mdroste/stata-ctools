@@ -67,6 +67,14 @@ static ST_retcode fit_linear_fast(
         }
     }
 
+    /* Check for zero total weight */
+    if (sum_w <= 0.0) {
+        coefs[0] = 0.0;
+        coefs[1] = 0.0;
+        *r2 = 0.0;
+        return CBINSCATTER_OK;
+    }
+
     /* Compute means */
     ST_double x_mean = sum_x / sum_w;
     ST_double y_mean = sum_y / sum_w;
@@ -329,7 +337,12 @@ ST_retcode fit_polynomial(
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     /* Compute R² with second pass for RSS (TSS = Σw(y-ȳ)² = Σwy² - (Σwy)²/Σw) */
-    ST_double tss = sum_yy - sum_y * sum_y / sum_w;
+    ST_double tss;
+    if (sum_w <= 0.0) {
+        tss = 0.0;
+    } else {
+        tss = sum_yy - sum_y * sum_y / sum_w;
+    }
 
     if (tss > 0.0) {
         ST_double rss = 0.0;

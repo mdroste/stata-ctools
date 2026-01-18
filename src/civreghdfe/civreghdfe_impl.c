@@ -414,6 +414,18 @@ static ST_retcode do_iv_regression(void)
         ST_int *remap = (ST_int *)calloc(max_level + 1, sizeof(ST_int));
         if (!remap) {
             SF_error("civreghdfe: Memory allocation failed for level remap\n");
+            /* Clean up previously allocated factors */
+            for (ST_int fg = 0; fg < g; fg++) {
+                free(state->factors[fg].counts);
+                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+                free(state->factors[fg].means);
+            }
+            free(state->factors);
+            free(state);
+            free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            for (ST_int fg = 0; fg < G; fg++) free(fe_levels_c[fg]);
+            free(fe_levels_c); free(singleton_mask);
             return 920;
         }
 

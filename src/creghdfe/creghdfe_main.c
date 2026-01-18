@@ -828,8 +828,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int N_eff_df = (weight_type == 2) ? (ST_int)g_state->sum_weights : N;
     df_r = N_eff_df - df_a;
 
-    /* Allocate for collinearity detection */
-    xtx = (ST_double *)malloc(K_x * K_x * sizeof(ST_double));
+    /* Allocate for collinearity detection - cast to size_t to prevent 32-bit overflow */
+    xtx = (ST_double *)malloc((size_t)K_x * K_x * sizeof(ST_double));
     is_collinear = (ST_int *)malloc(K_x * sizeof(ST_int));
 
     if (!xtx || !is_collinear) {

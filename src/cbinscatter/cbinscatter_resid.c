@@ -140,7 +140,7 @@ ST_retcode ols_residualize(
     (void)weight_type;  /* Currently unused, reserved for future */
 
     /* Allocate working arrays */
-    XtX = (ST_double *)malloc(K * K * sizeof(ST_double));
+    XtX = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
     Xty = (ST_double *)calloc(K, sizeof(ST_double));
     Xtx = (ST_double *)calloc(K, sizeof(ST_double));
     beta_y = (ST_double *)malloc(K * sizeof(ST_double));
@@ -462,7 +462,7 @@ ST_retcode ols_residualize_y_only(
     (void)weight_type;  /* Currently unused, reserved for future */
 
     /* Allocate working arrays */
-    XtX = (ST_double *)malloc(K * K * sizeof(ST_double));
+    XtX = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
     Xty = (ST_double *)calloc(K, sizeof(ST_double));
     beta_y = (ST_double *)malloc(K * sizeof(ST_double));
 

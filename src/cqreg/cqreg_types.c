@@ -109,10 +109,10 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
     ipm->D = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
     if (ipm->D == NULL) goto cleanup;
 
-    /* Allocate normal equations storage */
-    ipm->XDX = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->XDXcopy = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->L = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    /* Allocate normal equations storage - cast to size_t to prevent 32-bit overflow */
+    ipm->XDX = (ST_double *)cqreg_aligned_alloc((size_t)K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->XDXcopy = (ST_double *)cqreg_aligned_alloc((size_t)K * K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->L = (ST_double *)cqreg_aligned_alloc((size_t)K * K * sizeof(ST_double), CQREG_CACHE_LINE);
     ipm->rhs = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
     if (ipm->XDX == NULL || ipm->XDXcopy == NULL || ipm->L == NULL || ipm->rhs == NULL) goto cleanup;
 

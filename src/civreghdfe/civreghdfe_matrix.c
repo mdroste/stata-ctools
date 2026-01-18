@@ -158,7 +158,8 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
 ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x)
 {
     ST_int i, j;
-    ST_double *L = (ST_double *)malloc(K * K * sizeof(ST_double));
+    /* Cast to size_t to prevent 32-bit overflow */
+    ST_double *L = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
     if (!L) return -1;
 
     memcpy(L, A, K * K * sizeof(ST_double));
