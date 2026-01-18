@@ -7,6 +7,7 @@
  */
 
 #include "creghdfe_vce.h"
+#include "creghdfe_utils.h"  /* For sort_by_cluster */
 
 /* ========================================================================
  * Compute unadjusted VCE: V = sigma^2 * (X'X)^(-1)
@@ -162,10 +163,12 @@ void compute_vce_cluster(
     ST_int df_a_nested          /* Degrees of freedom nested within cluster (for adjustment) */
 )
 {
-    ST_int i, j, k, idx, c;
+    ST_int i, j, k, idx;
     ST_double *XeeX = NULL;      /* Accumulates sum_c X_c'e_c e_c'X_c */
     ST_double *temp = NULL;
-    ST_double *all_ecX = NULL;   /* Per-cluster e'X sums (includes constant) */
+    ST_double *ecX = NULL;       /* Single cluster e'X buffer */
+    ST_int *sort_perm = NULL;    /* Permutation to sort by cluster */
+    ST_int *boundaries = NULL;   /* Cluster boundaries in sorted order */
 
     /* reghdfe's DOF adjustment: (N-1)/(N - nested_adj - df_m - S.df_a) * M/(M-1)
      * Use N_eff for fweight (sum of weights) */
@@ -184,53 +187,75 @@ void compute_vce_cluster(
         for (idx = 0; idx < N; idx++) w_norm[idx] = weights[idx] * scale;
     }
 
+    /* Allocate buffers - note: no all_ecX[num_clusters * K] needed!
+     * We only need a single ecX[K] buffer and sort/stream by cluster. */
     XeeX = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
     temp = (ST_double *)malloc(K_with_cons * K_with_cons * sizeof(ST_double));
-    all_ecX = (ST_double *)calloc(num_clusters * K_with_cons, sizeof(ST_double));
+    ecX = (ST_double *)malloc(K_with_cons * sizeof(ST_double));
+    sort_perm = (ST_int *)malloc(N * sizeof(ST_int));
+    boundaries = (ST_int *)malloc((num_clusters + 1) * sizeof(ST_int));
 
-    if (!XeeX || !temp || !all_ecX) {
+    if (!XeeX || !temp || !ecX || !sort_perm || !boundaries) {
         if (XeeX) free(XeeX);
         if (temp) free(temp);
-        if (all_ecX) free(all_ecX);
+        if (ecX) free(ecX);
+        if (sort_perm) free(sort_perm);
+        if (boundaries) free(boundaries);
         if (w_norm) free(w_norm);
         return;
     }
 
-    /* Accumulate e'X for each cluster (reghdfe.mata line 3956: w = sol.resid :* w)
-     * For cluster VCE, use: e * w_norm (for aw/pw) or e * w (for fw) */
-    for (idx = 0; idx < N; idx++) {
-        c = cluster_ids[idx];
-        ST_double e_w;
-
-        if (weights == NULL) {
-            e_w = resid[idx];
-        } else if (weight_type == 2) {
-            /* fweight: e * w */
-            e_w = resid[idx] * weights[idx];
-        } else {
-            /* aweight or pweight: e * w_norm */
-            e_w = resid[idx] * w_norm[idx];
-        }
-
-        for (k = 0; k < K_with_cons; k++) {
-            all_ecX[c * K_with_cons + k] += e_w * data[(k + 1) * N + idx];
-        }
+    /* Sort observations by cluster using counting sort - O(N + num_clusters) */
+    if (sort_by_cluster(cluster_ids, N, num_clusters, sort_perm, boundaries) != 0) {
+        free(XeeX); free(temp); free(ecX);
+        free(sort_perm); free(boundaries);
+        if (w_norm) free(w_norm);
+        return;
     }
 
-    if (w_norm) free(w_norm);
+    /* Stream through clusters, accumulating ecX for each cluster then updating XeeX.
+     * This avoids allocating O(num_clusters * K) memory. */
+    for (ST_int c = 0; c < num_clusters; c++) {
+        ST_int start = boundaries[c];
+        ST_int end = boundaries[c + 1];
 
-    /* Compute meat: M = sum_c (e'X)_c (e'X)_c' - parallelized with reduction */
-    #pragma omp parallel for schedule(static) reduction(+:XeeX[:K_with_cons*K_with_cons])
-    for (c = 0; c < num_clusters; c++) {
-        ST_int jj, kk;
-        for (jj = 0; jj < K_with_cons; jj++) {
-            for (kk = 0; kk < K_with_cons; kk++) {
-                XeeX[jj * K_with_cons + kk] += all_ecX[c * K_with_cons + jj] * all_ecX[c * K_with_cons + kk];
+        /* Reset ecX buffer for this cluster */
+        for (k = 0; k < K_with_cons; k++) {
+            ecX[k] = 0.0;
+        }
+
+        /* Accumulate e'X for this cluster */
+        for (ST_int pos = start; pos < end; pos++) {
+            idx = sort_perm[pos];  /* Original observation index */
+            ST_double e_w;
+
+            if (weights == NULL) {
+                e_w = resid[idx];
+            } else if (weight_type == 2) {
+                /* fweight: e * w */
+                e_w = resid[idx] * weights[idx];
+            } else {
+                /* aweight or pweight: e * w_norm */
+                e_w = resid[idx] * w_norm[idx];
+            }
+
+            for (k = 0; k < K_with_cons; k++) {
+                ecX[k] += e_w * data[(k + 1) * N + idx];
+            }
+        }
+
+        /* Accumulate outer product ecX * ecX' into XeeX */
+        for (ST_int jj = 0; jj < K_with_cons; jj++) {
+            for (ST_int kk = 0; kk < K_with_cons; kk++) {
+                XeeX[jj * K_with_cons + kk] += ecX[jj] * ecX[kk];
             }
         }
     }
 
-    free(all_ecX);
+    free(ecX);
+    free(sort_perm);
+    free(boundaries);
+    if (w_norm) free(w_norm);
 
     /* Compute temp = D * M = (X'X)^(-1) * XeeX */
     for (i = 0; i < K_with_cons; i++) {

@@ -24,6 +24,18 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
                                ST_int N);
 
 /* ========================================================================
+ * CSR Format for Fast Projection
+ * ======================================================================== */
+
+/* Build CSR (Compressed Sparse Row) format from levels array.
+ * This enables cache-friendly projection by grouping observations by level.
+ * Returns 0 on success, non-zero on error. */
+int build_csr_format(FE_Factor *f, ST_int N);
+
+/* Free CSR format data */
+void free_csr_format(FE_Factor *f);
+
+/* ========================================================================
  * Fixed Effect Projection
  * ======================================================================== */
 
@@ -33,6 +45,14 @@ void project_one_fe_threaded(const ST_double * RESTRICT y,
                              const ST_double * RESTRICT weights,
                              ST_double * RESTRICT proj,
                              ST_double * RESTRICT means);
+
+/* CSR-accelerated projection - faster for large FEs */
+void project_one_fe_csr(const ST_double * RESTRICT y,
+                        const FE_Factor * RESTRICT f,
+                        ST_int N,
+                        const ST_double * RESTRICT weights,
+                        ST_double * RESTRICT proj,
+                        ST_double * RESTRICT means);
 
 /* ========================================================================
  * Symmetric Kaczmarz Transformation

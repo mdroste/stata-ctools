@@ -21,6 +21,165 @@ ST_double dot_product(const ST_double * RESTRICT x,
 }
 
 /* ========================================================================
+ * CSR Format Construction for Fast Projection
+ *
+ * CSR format stores observations grouped by level for cache-friendly access.
+ * Instead of scatter-gather over N observations with indirect indexing,
+ * we can iterate over levels and access contiguous observation indices.
+ * ======================================================================== */
+
+int build_csr_format(FE_Factor *f, ST_int N)
+{
+    if (!f || !f->levels || f->num_levels <= 0) return -1;
+
+    const ST_int num_levels = f->num_levels;
+    const ST_int * RESTRICT levels = f->levels;
+
+    /* Allocate offsets and indices */
+    f->csr_offsets = (ST_int *)malloc((num_levels + 1) * sizeof(ST_int));
+    f->csr_indices = (ST_int *)malloc(N * sizeof(ST_int));
+
+    if (!f->csr_offsets || !f->csr_indices) {
+        if (f->csr_offsets) { free(f->csr_offsets); f->csr_offsets = NULL; }
+        if (f->csr_indices) { free(f->csr_indices); f->csr_indices = NULL; }
+        f->csr_initialized = 0;
+        return -1;
+    }
+
+    /* Count observations per level (use existing counts as double, convert to int) */
+    ST_int *counts = (ST_int *)calloc(num_levels, sizeof(ST_int));
+    if (!counts) {
+        free(f->csr_offsets); f->csr_offsets = NULL;
+        free(f->csr_indices); f->csr_indices = NULL;
+        f->csr_initialized = 0;
+        return -1;
+    }
+
+    /* Count observations per level */
+    for (ST_int i = 0; i < N; i++) {
+        counts[levels[i] - 1]++;  /* levels are 1-indexed */
+    }
+
+    /* Compute prefix sums for offsets */
+    f->csr_offsets[0] = 0;
+    for (ST_int l = 0; l < num_levels; l++) {
+        f->csr_offsets[l + 1] = f->csr_offsets[l] + counts[l];
+    }
+
+    /* Reset counts to use as insertion pointers */
+    memset(counts, 0, num_levels * sizeof(ST_int));
+
+    /* Fill indices array: group observation indices by level */
+    for (ST_int i = 0; i < N; i++) {
+        ST_int l = levels[i] - 1;  /* 0-indexed level */
+        ST_int pos = f->csr_offsets[l] + counts[l];
+        f->csr_indices[pos] = i;
+        counts[l]++;
+    }
+
+    free(counts);
+    f->csr_initialized = 1;
+    return 0;
+}
+
+void free_csr_format(FE_Factor *f)
+{
+    if (f) {
+        if (f->csr_offsets) { free(f->csr_offsets); f->csr_offsets = NULL; }
+        if (f->csr_indices) { free(f->csr_indices); f->csr_indices = NULL; }
+        f->csr_initialized = 0;
+    }
+}
+
+/* ========================================================================
+ * CSR-accelerated FE projection
+ *
+ * Instead of:
+ *   for i in 0..N:
+ *     means[levels[i]-1] += y[i]  // scatter (poor locality)
+ *     proj[i] = means[levels[i]-1]  // gather (poor locality)
+ *
+ * We do:
+ *   for level in 0..num_levels:
+ *     for pos in offsets[level]..offsets[level+1]:
+ *       means[level] += y[indices[pos]]  // still gather, but we cache level
+ *     for pos in offsets[level]..offsets[level+1]:
+ *       proj[indices[pos]] = means[level]  // scatter with cached mean
+ *
+ * Benefits:
+ * - Level mean is in register during inner loop
+ * - Access patterns are more predictable for prefetcher
+ * - Can parallelize over levels if num_levels is large
+ * ======================================================================== */
+
+void project_one_fe_csr(const ST_double * RESTRICT y,
+                        const FE_Factor * RESTRICT f,
+                        ST_int N,
+                        const ST_double * RESTRICT weights,
+                        ST_double * RESTRICT proj,
+                        ST_double * RESTRICT means)
+{
+    const ST_int num_levels = f->num_levels;
+    const ST_int * RESTRICT offsets = f->csr_offsets;
+    const ST_int * RESTRICT indices = f->csr_indices;
+    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
+        ? f->weighted_counts : f->counts;
+
+    (void)N;  /* N is implicit in offsets */
+
+    if (weights == NULL) {
+        /* Unweighted case - parallelize over levels for large FEs */
+        #ifdef _OPENMP
+        #pragma omp parallel for if(num_levels > 1000) schedule(static)
+        #endif
+        for (ST_int level = 0; level < num_levels; level++) {
+            ST_double sum = 0.0;
+            const ST_int start = offsets[level];
+            const ST_int end = offsets[level + 1];
+
+            /* Accumulate y values for this level */
+            for (ST_int pos = start; pos < end; pos++) {
+                sum += y[indices[pos]];
+            }
+
+            /* Compute mean */
+            ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
+            means[level] = mean;
+
+            /* Broadcast mean to proj array */
+            for (ST_int pos = start; pos < end; pos++) {
+                proj[indices[pos]] = mean;
+            }
+        }
+    } else {
+        /* Weighted case */
+        #ifdef _OPENMP
+        #pragma omp parallel for if(num_levels > 1000) schedule(static)
+        #endif
+        for (ST_int level = 0; level < num_levels; level++) {
+            ST_double sum = 0.0;
+            const ST_int start = offsets[level];
+            const ST_int end = offsets[level + 1];
+
+            /* Accumulate weighted y values for this level */
+            for (ST_int pos = start; pos < end; pos++) {
+                ST_int i = indices[pos];
+                sum += y[i] * weights[i];
+            }
+
+            /* Compute mean */
+            ST_double mean = (counts[level] > 0) ? sum / counts[level] : 0.0;
+            means[level] = mean;
+
+            /* Broadcast mean to proj array */
+            for (ST_int pos = start; pos < end; pos++) {
+                proj[indices[pos]] = mean;
+            }
+        }
+    }
+}
+
+/* ========================================================================
  * Weighted dot product: sum(w[i] * x[i] * y[i])
  * ======================================================================== */
 
@@ -103,20 +262,32 @@ void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
 
     memcpy(ans, y, N * sizeof(ST_double));
 
-    /* Forward sweep */
+    /* Forward sweep - use CSR projection when available */
     for (g = 0; g < G; g++) {
-        project_one_fe_threaded(ans, &S->factors[g], N, S->weights, proj,
-                                fe_means[thread_id * G + g]);
+        const FE_Factor *f = &S->factors[g];
+        if (f->csr_initialized) {
+            project_one_fe_csr(ans, f, N, S->weights, proj,
+                               fe_means[thread_id * G + g]);
+        } else {
+            project_one_fe_threaded(ans, f, N, S->weights, proj,
+                                    fe_means[thread_id * G + g]);
+        }
         #pragma omp simd
         for (i = 0; i < N; i++) {
             ans[i] -= proj[i];
         }
     }
 
-    /* Backward sweep */
+    /* Backward sweep - use CSR projection when available */
     for (g = G - 2; g >= 0; g--) {
-        project_one_fe_threaded(ans, &S->factors[g], N, S->weights, proj,
-                                fe_means[thread_id * G + g]);
+        const FE_Factor *f = &S->factors[g];
+        if (f->csr_initialized) {
+            project_one_fe_csr(ans, f, N, S->weights, proj,
+                               fe_means[thread_id * G + g]);
+        } else {
+            project_one_fe_threaded(ans, f, N, S->weights, proj,
+                                    fe_means[thread_id * G + g]);
+        }
         #pragma omp simd
         for (i = 0; i < N; i++) {
             ans[i] -= proj[i];

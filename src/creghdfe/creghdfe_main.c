@@ -14,6 +14,7 @@
 #include "creghdfe_vce.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
+#include "../ctools_types.h"  /* For ctools_data_load_selective */
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -46,7 +47,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
-    IntHashTable **hash_tables = NULL;
     char msg[256];
     char scalar_name[64];
     double t_start, t_read, t_singleton, t_dof, t_partial, t_ols, t_vce;
@@ -123,14 +123,36 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 198;
     }
 
-    /* Count valid observations */
+    /* Count valid observations AND build selection index array.
+     * This is the ONLY place we call SF_ifobs - all subsequent code uses sel_idx.
+     * Optimization: If all observations selected (common case), use direct indexing. */
+    ST_int N_range = in2 - in1 + 1;
+    ST_int *sel_idx = (ST_int *)malloc(N_range * sizeof(ST_int));
+    ST_int sel_is_identity = 0;  /* 1 if sel_idx[i] == i for all i (no filtering) */
+
+    if (!sel_idx) {
+        SF_error("creghdfe: memory allocation failed\n");
+        return 1;
+    }
+
     N_orig = 0;
     for (obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) N_orig++;
+        if (SF_ifobs(obs)) {
+            sel_idx[N_orig] = obs - in1;
+            N_orig++;
+        }
     }
+
     if (N_orig <= 0) {
+        free(sel_idx);
         SF_error("creghdfe: no observations\n");
         return 198;
+    }
+
+    /* If all observations selected, sel_idx is identity - can use direct indexing */
+    if (N_orig == N_range) {
+        sel_is_identity = 1;
+        /* Keep sel_idx allocated but we'll use direct idx in hot loops */
     }
 
     /* Determine threads */
@@ -149,16 +171,52 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* ================================================================
-     * STEP 1: Read ALL data and FE variables in a SINGLE PASS
-     * This is the key optimization - everything read once
+     * STEP 1: PARALLEL data loading using ctools_data_load_selective
+     * This replaces the sequential SF_vdata loop with parallel column loading
      * ================================================================ */
 
-    /* Allocate factor structures */
+    /* Calculate total variables to load:
+     * K numeric (depvar + indepvars) + G FE vars + (1 cluster if vcetype==2) + (1 weight if has_weights) */
+    ST_int total_vars = K + G + (vcetype == 2 ? 1 : 0) + (has_weights ? 1 : 0);
+
+    /* Build variable indices array (1-based for Stata) */
+    int *var_indices = (int *)malloc(total_vars * sizeof(int));
+    if (!var_indices) {
+        free(sel_idx);
+        SF_error("creghdfe: memory allocation failed\n");
+        return 1;
+    }
+
+    /* Variables 1..K are numeric data, K+1..K+G are FE vars */
+    for (i = 0; i < total_vars; i++) {
+        var_indices[i] = i + 1;
+    }
+
+    /* Load all variables in parallel using thread pool */
+    stata_data loaded_data;
+    stata_data_init(&loaded_data);
+
+    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices, total_vars, 0, 0);
+    free(var_indices);
+
+    if (load_rc != STATA_OK) {
+        stata_data_free(&loaded_data);
+        free(sel_idx);
+        SF_error("creghdfe: parallel data load failed\n");
+        return 920;
+    }
+
+    /* Verify we got the expected number of observations */
+    if ((ST_int)loaded_data.nobs != N_orig) {
+        /* N_orig was computed from SF_ifobs, loaded_data.nobs is the full range */
+        /* This is OK - we'll handle the if/in filtering below */
+    }
+
+    /* Allocate factor structures (no hash tables needed with sort-based remapping) */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
-    hash_tables = (IntHashTable **)calloc(G, sizeof(IntHashTable *));
     mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
 
-    /* Allocate data matrix */
+    /* Allocate data matrix (column-major) */
     data = (ST_double *)ctools_safe_malloc3((size_t)N_orig, (size_t)K, sizeof(ST_double));
     means = (ST_double *)malloc(K * sizeof(ST_double));
     stdevs = (ST_double *)malloc(K * sizeof(ST_double));
@@ -170,16 +228,17 @@ ST_retcode do_full_regression(int argc, char *argv[])
         weights = (ST_double *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_double));
     }
 
-    if (!factors || !hash_tables || !mask || !data || !means || !stdevs || !tss ||
+    if (!factors || !mask || !data || !means || !stdevs || !tss ||
         (has_weights && !weights)) {
         if (factors) free(factors);
-        if (hash_tables) free(hash_tables);
         if (mask) free(mask);
         if (data) free(data);
         if (means) free(means);
         if (stdevs) free(stdevs);
         if (tss) free(tss);
         if (weights) free(weights);
+        stata_data_free(&loaded_data);
+        free(sel_idx);
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -188,81 +247,58 @@ ST_retcode do_full_regression(int argc, char *argv[])
     for (i = 0; i < N_orig; i++) mask[i] = 1;
     for (k = 0; k < K; k++) means[k] = 0.0;
 
-    /* Allocate per-factor arrays */
+    /* Allocate per-factor level arrays */
     for (g = 0; g < G; g++) {
         factors[g].levels = (ST_int *)malloc(N_orig * sizeof(ST_int));
         factors[g].num_obs = N_orig;
-        hash_tables[g] = hash_create(N_orig);
+        factors[g].counts = NULL;
+        factors[g].num_levels = 0;
 
-        if (!factors[g].levels || !hash_tables[g]) {
-            for (i = 0; i <= g; i++) {
+        if (!factors[g].levels) {
+            for (i = 0; i < g; i++) {
                 if (factors[i].levels) free(factors[i].levels);
-                if (factors[i].counts) free(factors[i].counts);
-                if (hash_tables[i]) hash_destroy(hash_tables[i]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
+            stata_data_free(&loaded_data);
+            free(sel_idx);
             return 1;
         }
     }
 
-    /* SINGLE PASS: Read all K data variables AND G FE variables */
-    idx = 0;
-    for (obs = in1; obs <= in2; obs++) {
-        if (!SF_ifobs(obs)) continue;
-
-        /* Read K data variables (depvar + indepvars) */
+    /* Copy numeric data from loaded_data to column-major data array.
+     * Also compute means. Optimize for identity case (no if/in filtering). */
+    if (sel_is_identity) {
+        /* Fast path: direct copy without indirection */
         for (k = 0; k < K; k++) {
-            if (SF_vdata(k + 1, obs, &val)) {
-                for (g = 0; g < G; g++) {
-                    if (factors[g].levels) free(factors[g].levels);
-                    if (factors[g].counts) free(factors[g].counts);
-                    if (hash_tables[g]) hash_destroy(hash_tables[g]);
-                }
-                free(factors); free(hash_tables); free(mask);
-                free(data); free(means); free(stdevs); free(tss);
-                if (weights) free(weights);
-                return 198;
+            double *src = loaded_data.vars[k].data.dbl;
+            double *dst = &data[k * N_orig];
+            double sum = 0.0;
+            for (idx = 0; idx < N_orig; idx++) {
+                dst[idx] = src[idx];
+                sum += src[idx];
             }
-            data[k * N_orig + idx] = val;
-            means[k] += val;
+            means[k] = sum;
         }
-
-        /* Read G FE variables (at positions K+1 to K+G) */
-        for (g = 0; g < G; g++) {
-            if (SF_vdata(K + g + 1, obs, &val)) {
-                for (i = 0; i < G; i++) {
-                    if (factors[i].levels) free(factors[i].levels);
-                    if (factors[i].counts) free(factors[i].counts);
-                    if (hash_tables[i]) hash_destroy(hash_tables[i]);
-                }
-                free(factors); free(hash_tables); free(mask);
-                free(data); free(means); free(stdevs); free(tss);
-                if (weights) free(weights);
-                return 198;
-            }
-            factors[g].levels[idx] = hash_insert_or_get(hash_tables[g], (ST_int)val);
-        }
-
-        /* Read weight variable if using weights */
-        /* Weight var position: K + G + (1 if cluster) + 1 */
         if (has_weights) {
-            ST_int weight_var_idx = K + G + (vcetype == 2 ? 1 : 0) + 1;
-            if (SF_vdata(weight_var_idx, obs, &val)) {
-                for (i = 0; i < G; i++) {
-                    if (factors[i].levels) free(factors[i].levels);
-                    if (factors[i].counts) free(factors[i].counts);
-                    if (hash_tables[i]) hash_destroy(hash_tables[i]);
-                }
-                free(factors); free(hash_tables); free(mask);
-                free(data); free(means); free(stdevs); free(tss);
-                free(weights);
-                return 198;
-            }
-            weights[idx] = val;
+            ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
+            memcpy(weights, loaded_data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
         }
-
-        idx++;
+    } else {
+        /* Slow path: use sel_idx for filtered access */
+        for (idx = 0; idx < N_orig; idx++) {
+            ST_int src_idx = sel_idx[idx];
+            for (k = 0; k < K; k++) {
+                val = loaded_data.vars[k].data.dbl[src_idx];
+                data[k * N_orig + idx] = val;
+                means[k] += val;
+            }
+            if (has_weights) {
+                ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
+                weights[idx] = loaded_data.vars[weight_var_pos].data.dbl[src_idx];
+            }
+        }
     }
 
     /* Compute means */
@@ -270,17 +306,125 @@ ST_retcode do_full_regression(int argc, char *argv[])
         means[k] /= N_orig;
     }
 
-    /* Finalize hash tables and allocate counts */
+    /* Use sort-based remapping for FE variables (much faster than hash tables).
+     * Optimize for identity case (no if/in filtering). */
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+    #endif
     for (g = 0; g < G; g++) {
-        factors[g].num_levels = hash_tables[g]->size;
+        /* Remap to contiguous levels using radix sort.
+         * For identity case, pass loaded_data directly to avoid extra copy. */
+        ST_int num_levels_g = 0;
+
+        if (sel_is_identity) {
+            /* Fast path: use loaded_data directly */
+            if (remap_values_sorted(loaded_data.vars[K + g].data.dbl, N_orig,
+                                    factors[g].levels, &num_levels_g) == 0) {
+                factors[g].num_levels = num_levels_g;
+            }
+        } else {
+            /* Slow path: extract filtered values first */
+            double *fe_values = (double *)malloc(N_orig * sizeof(double));
+            if (!fe_values) continue;
+
+            for (ST_int local_idx = 0; local_idx < N_orig; local_idx++) {
+                ST_int src_idx = sel_idx[local_idx];
+                fe_values[local_idx] = loaded_data.vars[K + g].data.dbl[src_idx];
+            }
+
+            if (remap_values_sorted(fe_values, N_orig, factors[g].levels, &num_levels_g) == 0) {
+                factors[g].num_levels = num_levels_g;
+            }
+
+            free(fe_values);
+        }
+    }
+
+    /* Save cluster variable raw values BEFORE freeing loaded_data (if clustering).
+     * Also check if cluster variable matches any FE variable (common optimization). */
+    double *cluster_raw_values = NULL;
+    ST_int cluster_matches_fe = -1;  /* -1 = no match, 0..G-1 = which FE it matches */
+
+    if (vcetype == 2) {
+        /* Cluster variable is at position K+G in loaded_data */
+        cluster_raw_values = (double *)malloc(N_orig * sizeof(double));
+        if (cluster_raw_values) {
+            /* Extract cluster values - optimize for identity case */
+            if (sel_is_identity) {
+                memcpy(cluster_raw_values, loaded_data.vars[K + G].data.dbl, N_orig * sizeof(double));
+            } else {
+                for (idx = 0; idx < N_orig; idx++) {
+                    cluster_raw_values[idx] = loaded_data.vars[K + G].data.dbl[sel_idx[idx]];
+                }
+            }
+
+            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)).
+             * Quick rejection using sample values, then memcmp for identity case. */
+            double *cluster_data = loaded_data.vars[K + G].data.dbl;
+            for (g = 0; g < G; g++) {
+                double *fe_data = loaded_data.vars[K + g].data.dbl;
+
+                /* Quick rejection: check first, middle, and last values */
+                if ((ST_int)cluster_data[0] != (ST_int)fe_data[0] ||
+                    (ST_int)cluster_data[N_orig/2] != (ST_int)fe_data[N_orig/2] ||
+                    (ST_int)cluster_data[N_orig-1] != (ST_int)fe_data[N_orig-1]) {
+                    continue;
+                }
+
+                /* Full comparison - fast path for identity case */
+                ST_int all_match = 1;
+                if (sel_is_identity) {
+                    /* Can compare arrays directly */
+                    for (idx = 0; idx < N_orig && all_match; idx++) {
+                        if ((ST_int)cluster_data[idx] != (ST_int)fe_data[idx]) {
+                            all_match = 0;
+                        }
+                    }
+                } else {
+                    for (idx = 0; idx < N_orig && all_match; idx++) {
+                        ST_int src_idx = sel_idx[idx];
+                        if ((ST_int)cluster_data[src_idx] != (ST_int)fe_data[src_idx]) {
+                            all_match = 0;
+                        }
+                    }
+                }
+
+                if (all_match) {
+                    cluster_matches_fe = g;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Free loaded_data and sel_idx - we've extracted what we need */
+    stata_data_free(&loaded_data);
+    free(sel_idx);
+
+    /* Verify FE remapping succeeded */
+    for (g = 0; g < G; g++) {
+        if (factors[g].num_levels == 0) {
+            for (i = 0; i < G; i++) {
+                if (factors[i].levels) free(factors[i].levels);
+                if (factors[i].counts) free(factors[i].counts);
+            }
+            free(factors); free(mask);
+            free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
+            SF_error("creghdfe: FE remapping failed\n");
+            return 1;
+        }
+    }
+
+    /* Allocate and compute counts per FE level */
+    for (g = 0; g < G; g++) {
         factors[g].counts = (ST_int *)calloc(factors[g].num_levels, sizeof(ST_int));
         if (!factors[g].counts) {
             for (i = 0; i < G; i++) {
                 if (factors[i].levels) free(factors[i].levels);
                 if (factors[i].counts) free(factors[i].counts);
-                if (hash_tables[i]) hash_destroy(hash_tables[i]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
             if (weights) free(weights);
             return 1;
@@ -302,9 +446,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 for (i = 0; i < G; i++) {
                     if (factors[i].levels) free(factors[i].levels);
                     if (factors[i].counts) free(factors[i].counts);
-                    if (hash_tables[i]) hash_destroy(hash_tables[i]);
                 }
-                free(factors); free(hash_tables); free(mask);
+                free(factors); free(mask);
                 free(data); free(means); free(stdevs); free(tss);
                 free(weights);
                 return 1;
@@ -351,9 +494,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         if (weights) free(weights);
         return 2001;  /* Custom error code for singleton issue */
@@ -395,8 +537,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         ST_int *fe2_compact = (ST_int *)malloc(N * sizeof(ST_int));
 
         if (fe1_compact && fe2_compact) {
-            ST_int *remap1 = (ST_int *)calloc(hash_tables[0]->size + 1, sizeof(ST_int));
-            ST_int *remap2 = (ST_int *)calloc(hash_tables[1]->size + 1, sizeof(ST_int));
+            ST_int *remap1 = (ST_int *)calloc(factors[0].num_levels + 1, sizeof(ST_int));
+            ST_int *remap2 = (ST_int *)calloc(factors[1].num_levels + 1, sizeof(ST_int));
 
             if (remap1 && remap2) {
                 ST_int next1 = 1, next2 = 1;
@@ -449,9 +591,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -480,9 +621,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -507,9 +647,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
             for (i = 0; i < G; i++) {
                 if (factors[i].levels) free(factors[i].levels);
                 if (factors[i].counts) free(factors[i].counts);
-                if (hash_tables[i]) hash_destroy(hash_tables[i]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
             if (weights) free(weights);
             for (i = 0; i < G; i++) {
@@ -519,15 +658,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
 
         /* Remap to contiguous levels and copy */
-        ST_int *remap = (ST_int *)calloc(hash_tables[g]->size + 1, sizeof(ST_int));
+        ST_int *remap = (ST_int *)calloc(factors[g].num_levels + 1, sizeof(ST_int));
         if (!remap) {
             cleanup_state();
             for (i = 0; i < G; i++) {
                 if (factors[i].levels) free(factors[i].levels);
                 if (factors[i].counts) free(factors[i].counts);
-                if (hash_tables[i]) hash_destroy(hash_tables[i]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
             if (weights) free(weights);
             for (i = 0; i < G; i++) {
@@ -553,6 +691,18 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
         }
         free(remap);
+
+        /* Build CSR format for fast projection */
+        g_state->factors[g].csr_offsets = NULL;
+        g_state->factors[g].csr_indices = NULL;
+        g_state->factors[g].csr_initialized = 0;
+        if (build_csr_format(&g_state->factors[g], N) != 0) {
+            /* CSR build failed - continue without CSR acceleration */
+            if (verbose >= 2) {
+                sprintf(msg, "{txt}   Warning: CSR build failed for FE %d, using fallback\n", g + 1);
+                SF_display(msg);
+            }
+        }
     }
 
     /* Allocate thread buffers */
@@ -569,9 +719,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (i = 0; i < G; i++) {
             if (factors[i].levels) free(factors[i].levels);
             if (factors[i].counts) free(factors[i].counts);
-            if (hash_tables[i]) hash_destroy(hash_tables[i]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         if (weights) free(weights);
         for (i = 0; i < G; i++) {
@@ -605,9 +754,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (i = 0; i < G; i++) {
             if (factors[i].levels) free(factors[i].levels);
             if (factors[i].counts) free(factors[i].counts);
-            if (hash_tables[i]) hash_destroy(hash_tables[i]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         if (weights) free(weights);
         for (i = 0; i < G; i++) {
@@ -629,9 +777,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -673,9 +820,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
             for (g = 0; g < G; g++) {
                 if (factors[g].levels) free(factors[g].levels);
                 if (factors[g].counts) free(factors[g].counts);
-                if (hash_tables[g]) hash_destroy(hash_tables[g]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(stdevs); free(tss);
             free(weights);
             for (g = 0; g < G; g++) {
@@ -779,9 +925,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -839,9 +984,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -878,9 +1022,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -914,9 +1057,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 0;
     }
@@ -929,9 +1071,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -966,9 +1107,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -1018,9 +1158,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -1035,9 +1174,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 198;
     }
@@ -1050,9 +1188,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -1081,9 +1218,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -1131,9 +1267,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
             if (factors[g].counts) free(factors[g].counts);
-            if (hash_tables[g]) hash_destroy(hash_tables[g]);
         }
-        free(factors); free(hash_tables); free(mask);
+        free(factors); free(mask);
         free(data); free(means); free(stdevs); free(tss);
         return 1;
     }
@@ -1171,136 +1306,165 @@ ST_retcode do_full_regression(int argc, char *argv[])
             for (g = 0; g < G; g++) {
                 if (factors[g].levels) free(factors[g].levels);
                 if (factors[g].counts) free(factors[g].counts);
-                if (hash_tables[g]) hash_destroy(hash_tables[g]);
             }
-            free(factors); free(hash_tables); free(mask);
+            free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
             return 1;
         }
 
-        /* Cluster variable is at position K+G+1 */
-        ST_int cluster_var_idx = K + G + 1;
-        IntHashTable *cluster_ht = hash_create(N);
+        /* FAST PATH: If cluster variable matches an FE variable (e.g., vce(cluster i) with absorb(i t)),
+         * we can reuse the existing FE levels as cluster IDs - no hashing or SF_vdata needed! */
+        if (cluster_matches_fe >= 0) {
+            /* Use existing FE levels (converted to 0-based) as cluster_ids */
+            ST_int *fe_levels_for_cluster = g_state->factors[cluster_matches_fe].levels;
+            num_clusters = g_state->factors[cluster_matches_fe].num_levels;
 
-        if (!cluster_ht) {
-            free(cluster_ids);
-            free(data_with_cons);
-            free(data_keep); free(xtx_keep); free(xty_keep);
-            free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
-            free(keep_idx); free(xtx); free(is_collinear);
-            cleanup_state();
+            for (idx = 0; idx < N; idx++) {
+                cluster_ids[idx] = fe_levels_for_cluster[idx] - 1;  /* Convert 1-based to 0-based */
+            }
+
+            /* When cluster == FE, that FE is trivially nested within cluster */
             for (g = 0; g < G; g++) {
-                if (factors[g].levels) free(factors[g].levels);
-                if (factors[g].counts) free(factors[g].counts);
-                if (hash_tables[g]) hash_destroy(hash_tables[g]);
-            }
-            free(factors); free(hash_tables); free(mask);
-            free(data); free(means); free(stdevs); free(tss);
-            return 1;
-        }
+                if (g == cluster_matches_fe) {
+                    /* This FE is the cluster variable - it's nested */
+                    df_a_nested_computed += g_state->factors[g].num_levels;
+                    sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
+                    SF_scal_save(scalar_name, 1.0);
+                } else {
+                    /* Check if this FE is nested within cluster */
+                    ST_int *fe_levels_g = g_state->factors[g].levels;
+                    ST_int num_fe_levels = g_state->factors[g].num_levels;
+                    ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
+                    ST_int is_nested = 0;
 
-        /* Read cluster IDs and check for FE variables nested within cluster */
-        ST_int *cluster_raw = (ST_int *)malloc(N * sizeof(ST_int));
-        if (!cluster_raw) {
-            hash_destroy(cluster_ht);
-            free(cluster_ids);
-            free(data_with_cons);
-            free(data_keep); free(xtx_keep); free(xty_keep);
-            free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
-            free(keep_idx); free(xtx); free(is_collinear);
-            cleanup_state();
+                    if (fe_to_cluster) {
+                        for (i = 0; i < num_fe_levels; i++) fe_to_cluster[i] = -1;
+                        is_nested = 1;
+                        for (idx = 0; idx < N && is_nested; idx++) {
+                            ST_int fe_level = fe_levels_g[idx] - 1;
+                            ST_int clust_id = cluster_ids[idx];
+                            if (fe_to_cluster[fe_level] == -1) {
+                                fe_to_cluster[fe_level] = clust_id;
+                            } else if (fe_to_cluster[fe_level] != clust_id) {
+                                is_nested = 0;
+                            }
+                        }
+                        if (is_nested) df_a_nested_computed += num_fe_levels;
+                        free(fe_to_cluster);
+                    }
+                    sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
+                    SF_scal_save(scalar_name, (ST_double)is_nested);
+                }
+            }
+        } else {
+            /* Cluster variable is different from all FE variables.
+             * Use saved cluster_raw_values and remap with sort (still much faster than SF_vdata + hash). */
+            if (!cluster_raw_values) {
+                free(cluster_ids);
+                free(data_with_cons);
+                free(data_keep); free(xtx_keep); free(xty_keep);
+                free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
+                free(keep_idx); free(xtx); free(is_collinear);
+                cleanup_state();
+                for (g = 0; g < G; g++) {
+                    if (factors[g].levels) free(factors[g].levels);
+                    if (factors[g].counts) free(factors[g].counts);
+                }
+                free(factors); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                return 1;
+            }
+
+            /* Extract cluster values for non-singleton observations and remap using sort */
+            double *cluster_values_compact = (double *)malloc(N * sizeof(double));
+            ST_int *cluster_levels = (ST_int *)malloc(N * sizeof(ST_int));
+
+            if (!cluster_values_compact || !cluster_levels) {
+                if (cluster_values_compact) free(cluster_values_compact);
+                if (cluster_levels) free(cluster_levels);
+                free(cluster_raw_values);
+                free(cluster_ids);
+                free(data_with_cons);
+                free(data_keep); free(xtx_keep); free(xty_keep);
+                free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
+                free(keep_idx); free(xtx); free(is_collinear);
+                cleanup_state();
+                for (g = 0; g < G; g++) {
+                    if (factors[g].levels) free(factors[g].levels);
+                    if (factors[g].counts) free(factors[g].counts);
+                }
+                free(factors); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                return 1;
+            }
+
+            /* Compact cluster values (remove singletons) */
+            idx = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) {
+                    cluster_values_compact[idx] = cluster_raw_values[i];
+                    idx++;
+                }
+            }
+
+            /* Remap using sort (much faster than hash table) */
+            ST_int num_cluster_levels = 0;
+            if (remap_values_sorted(cluster_values_compact, N, cluster_levels, &num_cluster_levels) != 0) {
+                free(cluster_values_compact);
+                free(cluster_levels);
+                free(cluster_raw_values);
+                free(cluster_ids);
+                free(data_with_cons);
+                free(data_keep); free(xtx_keep); free(xty_keep);
+                free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
+                free(keep_idx); free(xtx); free(is_collinear);
+                cleanup_state();
+                for (g = 0; g < G; g++) {
+                    if (factors[g].levels) free(factors[g].levels);
+                    if (factors[g].counts) free(factors[g].counts);
+                }
+                free(factors); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                return 1;
+            }
+
+            num_clusters = num_cluster_levels;
+            for (idx = 0; idx < N; idx++) {
+                cluster_ids[idx] = cluster_levels[idx] - 1;  /* Convert 1-based to 0-based */
+            }
+
+            free(cluster_values_compact);
+            free(cluster_levels);
+
+            /* Check if any FE is nested within cluster */
             for (g = 0; g < G; g++) {
-                if (factors[g].levels) free(factors[g].levels);
-                if (factors[g].counts) free(factors[g].counts);
-                if (hash_tables[g]) hash_destroy(hash_tables[g]);
-            }
-            free(factors); free(hash_tables); free(mask);
-            free(data); free(means); free(stdevs); free(tss);
-            return 1;
-        }
+                ST_int *fe_levels_g = g_state->factors[g].levels;
+                ST_int num_fe_levels = g_state->factors[g].num_levels;
+                ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
+                ST_int is_nested = 0;
 
-        idx = 0;
-        i = 0;
-        for (obs = in1; obs <= in2; obs++) {
-            if (!SF_ifobs(obs)) continue;
-
-            if (mask[i]) {  /* Not a singleton */
-                if (SF_vdata(cluster_var_idx, obs, &val)) {
-                    free(cluster_raw);
-                    hash_destroy(cluster_ht);
-                    free(cluster_ids);
-                    free(data_with_cons);
-                    free(data_keep); free(xtx_keep); free(xty_keep);
-                    free(beta_keep); free(inv_xx_keep); free(V_keep); free(means_x);
-                    free(keep_idx); free(xtx); free(is_collinear);
-                    cleanup_state();
-                    for (g = 0; g < G; g++) {
-                        if (factors[g].levels) free(factors[g].levels);
-                        if (factors[g].counts) free(factors[g].counts);
-                        if (hash_tables[g]) hash_destroy(hash_tables[g]);
+                if (fe_to_cluster) {
+                    for (i = 0; i < num_fe_levels; i++) fe_to_cluster[i] = -1;
+                    is_nested = 1;
+                    for (idx = 0; idx < N && is_nested; idx++) {
+                        ST_int fe_level = fe_levels_g[idx] - 1;
+                        ST_int clust_id = cluster_ids[idx];
+                        if (fe_to_cluster[fe_level] == -1) {
+                            fe_to_cluster[fe_level] = clust_id;
+                        } else if (fe_to_cluster[fe_level] != clust_id) {
+                            is_nested = 0;
+                        }
                     }
-                    free(factors); free(hash_tables);
-                    free(data); free(means); free(stdevs); free(tss);
-                    return 198;
+                    if (is_nested) df_a_nested_computed += num_fe_levels;
+                    free(fe_to_cluster);
                 }
-                cluster_raw[idx] = (ST_int)val;
-                cluster_ids[idx] = hash_insert_or_get(cluster_ht, (ST_int)val) - 1;  /* 0-based */
-                idx++;
+                sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
+                SF_scal_save(scalar_name, (ST_double)is_nested);
             }
-            i++;
         }
 
-        num_clusters = cluster_ht->size;
-        hash_destroy(cluster_ht);
-
-        /* Check if any FE variable is nested within cluster variable.
-         * FE is nested if each FE level maps to exactly one cluster.
-         * Algorithm: Use array lookup - for each FE level, track which cluster it belongs to.
-         * If we see the same FE level with a different cluster, it's not nested. */
-        ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));
-
-        for (g = 0; g < G; g++) {
-            /* Use the already-remapped FE levels from g_state (0 to num_levels-1) */
-            ST_int *fe_levels_g = g_state->factors[g].levels;
-            ST_int num_fe_levels = g_state->factors[g].num_levels;
-
-            /* Allocate array to track which cluster each FE level belongs to.
-             * Initialize to -1 meaning "no cluster assigned yet". */
-            ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
-            if (fe_to_cluster) {
-                for (i = 0; i < num_fe_levels; i++) {
-                    fe_to_cluster[i] = -1;
-                }
-
-                /* Check if each FE level maps to exactly one cluster */
-                ST_int is_nested = 1;
-                for (idx = 0; idx < N && is_nested; idx++) {
-                    ST_int fe_level = fe_levels_g[idx];
-                    ST_int clust_id = cluster_ids[idx];
-
-                    if (fe_to_cluster[fe_level] == -1) {
-                        /* First time seeing this FE level - record its cluster */
-                        fe_to_cluster[fe_level] = clust_id;
-                    } else if (fe_to_cluster[fe_level] != clust_id) {
-                        /* FE level appears in multiple clusters - not nested */
-                        is_nested = 0;
-                    }
-                }
-
-                if (is_nested) {
-                    fe_nested[g] = 1;
-                    df_a_nested_computed += num_fe_levels;
-                }
-                free(fe_to_cluster);
-            }
-
-            /* Save per-FE nested status to Stata scalar */
-            sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
-            SF_scal_save(scalar_name, (ST_double)fe_nested[g]);
-        }
-
-        free(fe_nested);
-        free(cluster_raw);
+        /* Free saved cluster raw values */
+        if (cluster_raw_values) free(cluster_raw_values);
     } else {
         /* No clustering - save 0 for all FE nested status */
         for (g = 0; g < G; g++) {
@@ -1540,9 +1704,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     for (g = 0; g < G; g++) {
         if (factors[g].levels) free(factors[g].levels);
         if (factors[g].counts) free(factors[g].counts);
-        if (hash_tables[g]) hash_destroy(hash_tables[g]);
     }
-    free(factors); free(hash_tables); free(mask);
+    free(factors); free(mask);
     free(data); free(means); free(stdevs); free(tss);
 
     /* Clean up global state to prevent memory leaks between calls */

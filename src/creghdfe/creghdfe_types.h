@@ -47,6 +47,10 @@ typedef struct {
     ST_double *counts;           /* Unweighted counts per level */
     ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
     ST_double *means;
+    /* CSR format for fast projection - observations sorted by level */
+    ST_int *csr_offsets;         /* offsets[L+1]: start of each level's observations */
+    ST_int *csr_indices;         /* indices[N]: observation indices grouped by level */
+    ST_int csr_initialized;      /* Flag: 1 if CSR format is built */
 } FE_Factor;
 
 /* ========================================================================

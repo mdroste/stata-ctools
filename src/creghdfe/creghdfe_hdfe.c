@@ -28,6 +28,9 @@ void cleanup_state(void)
             if (g_state->factors[g].counts != NULL) free(g_state->factors[g].counts);
             if (g_state->factors[g].weighted_counts != NULL) free(g_state->factors[g].weighted_counts);
             if (g_state->factors[g].means != NULL) free(g_state->factors[g].means);
+            /* Free CSR format data */
+            if (g_state->factors[g].csr_offsets != NULL) free(g_state->factors[g].csr_offsets);
+            if (g_state->factors[g].csr_indices != NULL) free(g_state->factors[g].csr_indices);
         }
         free(g_state->factors);
     }
