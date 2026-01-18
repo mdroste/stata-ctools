@@ -67,8 +67,9 @@ static stata_retcode counting_sort_numeric_seq(perm_idx_t * COUNTING_RESTRICT or
                                                const double * COUNTING_RESTRICT data,
                                                size_t nobs)
 {
-    double min_val_d = data[order[0]];
-    double max_val_d = data[order[0]];
+    double min_val_d = 0;
+    double max_val_d = 0;
+    int found_valid = 0;
     int64_t min_val;
     size_t range;
     size_t *counts = NULL;
@@ -78,7 +79,7 @@ static stata_retcode counting_sort_numeric_seq(perm_idx_t * COUNTING_RESTRICT or
     size_t missing_bucket;
     stata_retcode rc = STATA_OK;
 
-    /* Find min/max */
+    /* Find min/max, guarding against all-missing data */
     for (i = 0; i < nobs; i++) {
         double v = data[order[i]];
         if (SF_is_missing(v)) {
@@ -87,8 +88,19 @@ static stata_retcode counting_sort_numeric_seq(perm_idx_t * COUNTING_RESTRICT or
         if (v != floor(v)) {
             return STATA_ERR_UNSUPPORTED_TYPE;
         }
-        if (v < min_val_d) min_val_d = v;
-        if (v > max_val_d) max_val_d = v;
+        if (!found_valid) {
+            min_val_d = v;
+            max_val_d = v;
+            found_valid = 1;
+        } else {
+            if (v < min_val_d) min_val_d = v;
+            if (v > max_val_d) max_val_d = v;
+        }
+    }
+
+    /* Handle all-missing case - order is already valid */
+    if (!found_valid) {
+        return STATA_OK;
     }
 
     min_val = (int64_t)min_val_d;
@@ -184,6 +196,7 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     double *thread_min = NULL;
     double *thread_max = NULL;
     int *thread_has_non_integer = NULL;
+    int *thread_found_valid = NULL;
 
     /* Histogram data */
     size_t **local_counts = NULL;
@@ -197,6 +210,7 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     size_t range, missing_bucket;
     size_t chunk_size;
     int has_non_integer = 0;
+    int found_any_valid = 0;
     int t;
 
     chunk_size = (nobs + num_threads - 1) / num_threads;
@@ -205,8 +219,9 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     thread_min = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
     thread_max = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
     thread_has_non_integer = (int *)calloc(num_threads, sizeof(int));
+    thread_found_valid = (int *)calloc(num_threads, sizeof(int));
 
-    if (!thread_min || !thread_max || !thread_has_non_integer) {
+    if (!thread_min || !thread_max || !thread_has_non_integer || !thread_found_valid) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
@@ -219,9 +234,10 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
 
-        double local_min = data[order[start < nobs ? start : 0]];
-        double local_max = local_min;
+        double local_min = 0;
+        double local_max = 0;
         int local_non_int = 0;
+        int local_found_valid = 0;
 
         for (size_t i = start; i < end; i++) {
             double v = data[order[i]];
@@ -232,22 +248,48 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
                 local_non_int = 1;
             }
 
-            if (v < local_min) local_min = v;
-            if (v > local_max) local_max = v;
+            if (!local_found_valid) {
+                local_min = v;
+                local_max = v;
+                local_found_valid = 1;
+            } else {
+                if (v < local_min) local_min = v;
+                if (v > local_max) local_max = v;
+            }
         }
 
         thread_min[tid] = local_min;
         thread_max[tid] = local_max;
         thread_has_non_integer[tid] = local_non_int;
+        thread_found_valid[tid] = local_found_valid;
     }
 
-    /* Combine thread results */
-    global_min = thread_min[0];
-    global_max = thread_max[0];
-
+    /* Combine thread results - find first thread with valid data */
     for (t = 0; t < num_threads; t++) {
+        if (thread_found_valid[t]) {
+            global_min = thread_min[t];
+            global_max = thread_max[t];
+            found_any_valid = 1;
+            break;
+        }
+    }
+
+    /* Handle all-missing case - order is already valid */
+    if (!found_any_valid) {
+        rc = STATA_OK;
+        goto cleanup;
+    }
+
+    /* Combine remaining thread results */
+    for (; t < num_threads; t++) {
+        if (!thread_found_valid[t]) continue;
         if (thread_min[t] < global_min) global_min = thread_min[t];
         if (thread_max[t] > global_max) global_max = thread_max[t];
+        if (thread_has_non_integer[t]) has_non_integer = 1;
+    }
+
+    /* Check all threads for non-integer flag */
+    for (t = 0; t < num_threads; t++) {
         if (thread_has_non_integer[t]) has_non_integer = 1;
     }
 
@@ -410,6 +452,7 @@ cleanup:
     ctools_aligned_free(thread_min);
     ctools_aligned_free(thread_max);
     free(thread_has_non_integer);
+    free(thread_found_valid);
     free(global_counts);
     free(global_offsets);
     ctools_aligned_free(temp_order);

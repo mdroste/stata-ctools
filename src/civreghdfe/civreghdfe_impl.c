@@ -112,29 +112,37 @@ static ST_retcode do_iv_regression(void)
 
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
 
-    /* Allocate data arrays */
-    ST_double *y = (ST_double *)malloc(N_total * sizeof(ST_double));
-    ST_double *X_endog = (K_endog > 0) ? (ST_double *)malloc(N_total * K_endog * sizeof(ST_double)) : NULL;
-    ST_double *X_exog = (K_exog > 0) ? (ST_double *)malloc(N_total * K_exog * sizeof(ST_double)) : NULL;
-    ST_double *Z = (ST_double *)malloc(N_total * K_iv * sizeof(ST_double));
-    ST_double *weights = has_weights ? (ST_double *)malloc(N_total * sizeof(ST_double)) : NULL;
-    ST_int *cluster_ids = has_cluster ? (ST_int *)malloc(N_total * sizeof(ST_int)) : NULL;
-    ST_int *cluster2_ids = has_cluster2 ? (ST_int *)malloc(N_total * sizeof(ST_int)) : NULL;
+    /* Allocate data arrays - cast to size_t to prevent 32-bit overflow */
+    ST_double *y = (ST_double *)malloc((size_t)N_total * sizeof(ST_double));
+    ST_double *X_endog = (K_endog > 0) ? (ST_double *)malloc((size_t)N_total * K_endog * sizeof(ST_double)) : NULL;
+    ST_double *X_exog = (K_exog > 0) ? (ST_double *)malloc((size_t)N_total * K_exog * sizeof(ST_double)) : NULL;
+    ST_double *Z = (ST_double *)malloc((size_t)N_total * K_iv * sizeof(ST_double));
+    ST_double *weights = has_weights ? (ST_double *)malloc((size_t)N_total * sizeof(ST_double)) : NULL;
+    ST_int *cluster_ids = has_cluster ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
+    ST_int *cluster2_ids = has_cluster2 ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
 
-    /* Allocate FE level arrays */
-    ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
-    for (ST_int g = 0; g < G; g++) {
-        fe_levels[g] = (ST_int *)malloc(N_total * sizeof(ST_int));
+    /* Allocate FE level arrays - cast to size_t to prevent 32-bit overflow */
+    ST_int **fe_levels = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
+    int fe_alloc_failed = 0;
+    if (fe_levels) {
+        for (ST_int g = 0; g < G; g++) {
+            fe_levels[g] = (ST_int *)malloc((size_t)N_total * sizeof(ST_int));
+            if (!fe_levels[g]) fe_alloc_failed = 1;
+        }
+    } else {
+        fe_alloc_failed = 1;
     }
 
     if (!y || !Z || (K_endog > 0 && !X_endog) || (K_exog > 0 && !X_exog) ||
         (has_weights && !weights) || (has_cluster && !cluster_ids) ||
-        (has_cluster2 && !cluster2_ids)) {
+        (has_cluster2 && !cluster2_ids) || fe_alloc_failed) {
         SF_error("civreghdfe: Memory allocation failed\n");
         free(y); free(X_endog); free(X_exog); free(Z);
         free(weights); free(cluster_ids); free(cluster2_ids);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        if (fe_levels) {
+            for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+            free(fe_levels);
+        }
         return 920;
     }
 
@@ -147,7 +155,7 @@ static ST_retcode do_iv_regression(void)
     if (N_ifobs == 0) {
         SF_error("civreghdfe: No observations selected\n");
         free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids);
+        free(weights); free(cluster_ids); free(cluster2_ids);
         for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
         free(fe_levels);
         return 2001;
@@ -323,17 +331,17 @@ static ST_retcode do_iv_regression(void)
     if (num_singletons_total > 0) {
         ST_int N_after = N - num_singletons_total;
 
-        /* Allocate compacted arrays */
-        ST_double *y_new = (ST_double *)malloc(N_after * sizeof(ST_double));
-        ST_double *X_endog_new = (K_endog > 0) ? (ST_double *)malloc(N_after * K_endog * sizeof(ST_double)) : NULL;
-        ST_double *X_exog_new = (K_exog > 0) ? (ST_double *)malloc(N_after * K_exog * sizeof(ST_double)) : NULL;
-        ST_double *Z_new = (ST_double *)malloc(N_after * K_iv * sizeof(ST_double));
-        ST_double *weights_new = has_weights ? (ST_double *)malloc(N_after * sizeof(ST_double)) : NULL;
-        ST_int *cluster_ids_new = has_cluster ? (ST_int *)malloc(N_after * sizeof(ST_int)) : NULL;
-        ST_int *cluster2_ids_new = has_cluster2 ? (ST_int *)malloc(N_after * sizeof(ST_int)) : NULL;
-        ST_int **fe_levels_new = (ST_int **)malloc(G * sizeof(ST_int *));
+        /* Allocate compacted arrays - cast to size_t to prevent 32-bit overflow */
+        ST_double *y_new = (ST_double *)malloc((size_t)N_after * sizeof(ST_double));
+        ST_double *X_endog_new = (K_endog > 0) ? (ST_double *)malloc((size_t)N_after * K_endog * sizeof(ST_double)) : NULL;
+        ST_double *X_exog_new = (K_exog > 0) ? (ST_double *)malloc((size_t)N_after * K_exog * sizeof(ST_double)) : NULL;
+        ST_double *Z_new = (ST_double *)malloc((size_t)N_after * K_iv * sizeof(ST_double));
+        ST_double *weights_new = has_weights ? (ST_double *)malloc((size_t)N_after * sizeof(ST_double)) : NULL;
+        ST_int *cluster_ids_new = has_cluster ? (ST_int *)malloc((size_t)N_after * sizeof(ST_int)) : NULL;
+        ST_int *cluster2_ids_new = has_cluster2 ? (ST_int *)malloc((size_t)N_after * sizeof(ST_int)) : NULL;
+        ST_int **fe_levels_new = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
         for (ST_int g = 0; g < G; g++) {
-            fe_levels_new[g] = (ST_int *)malloc(N_after * sizeof(ST_int));
+            fe_levels_new[g] = (ST_int *)malloc((size_t)N_after * sizeof(ST_int));
         }
 
         /* Compact using shared utilities */
@@ -505,7 +513,7 @@ static ST_retcode do_iv_regression(void)
         }
 
         /* Build matrix P of partial variables (N x n_partial) */
-        ST_double *P = (ST_double *)malloc(N * n_partial * sizeof(ST_double));
+        ST_double *P = (ST_double *)malloc((size_t)N * n_partial * sizeof(ST_double));
         for (ST_int pi = 0; pi < n_partial; pi++) {
             ST_int idx = partial_indices[pi] - 1;  /* Convert to 0-based */
             memcpy(P + pi * N, X_exog_c + idx * N, N * sizeof(ST_double));
@@ -638,7 +646,7 @@ static ST_retcode do_iv_regression(void)
             /* Build reduced X_exog with partialled variables removed */
             ST_int K_exog_new = K_exog - n_partial;
             if (K_exog_new > 0) {
-                ST_double *X_exog_reduced = (ST_double *)malloc(N * K_exog_new * sizeof(ST_double));
+                ST_double *X_exog_reduced = (ST_double *)malloc((size_t)N * K_exog_new * sizeof(ST_double));
                 ST_int new_idx = 0;
                 for (ST_int k = 0; k < K_exog; k++) {
                     if (!is_partial[k]) {
@@ -678,7 +686,7 @@ static ST_retcode do_iv_regression(void)
     ST_int total_cols = 1 + K_endog + K_exog + K_iv;
 
     /* Combine all data into one array for parallel processing */
-    ST_double *all_data = (ST_double *)malloc(N * total_cols * sizeof(ST_double));
+    ST_double *all_data = (ST_double *)malloc((size_t)N * total_cols * sizeof(ST_double));
 
     /* Copy y */
     memcpy(all_data, y_c, N * sizeof(ST_double));
