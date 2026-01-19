@@ -1,4 +1,4 @@
-* Test csort split timing (sort vs permutation)
+* Test csort split timing (sort vs permutation) for ALL algorithms
 * This tests the new timing breakdown showing sort computation vs permutation application
 
 clear all
@@ -17,67 +17,70 @@ gen x = runiform()
 gen y = rnormal()
 gen str20 name = "name" + string(_n)
 
-* Test 1: Default IPS4O algorithm with verbose timing
+* Test 1: IPS4O (default)
 di as text ""
 di as text "========================================"
-di as text "Test 1: IPS4O (default) with verbose"
+di as text "Test 1: IPS4O (default)"
 di as text "========================================"
 csort x, verbose
-
-* Check that timing scalars exist
-di as text ""
-di as text "Timing scalars:"
-di as text "  _csort_time_load = " _csort_time_load
-di as text "  _csort_time_sort = " _csort_time_sort
-di as text "  _csort_time_permute = " _csort_time_permute
-di as text "  _csort_time_store = " _csort_time_store
-di as text "  _csort_time_cleanup = " _csort_time_cleanup
-di as text "  _csort_time_total = " _csort_time_total
-
-* Verify permutation time is > 0 for IPS4O
 assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
 
-* Test 2: LSD radix sort with verbose timing
+* Test 2: LSD radix sort
 di as text ""
 di as text "========================================"
-di as text "Test 2: LSD radix sort with verbose"
+di as text "Test 2: LSD radix sort"
 di as text "========================================"
 csort y, verbose alg(lsd)
-
-* Check that timing scalars exist
-di as text ""
-di as text "Timing scalars:"
-di as text "  _csort_time_load = " _csort_time_load
-di as text "  _csort_time_sort = " _csort_time_sort
-di as text "  _csort_time_permute = " _csort_time_permute
-di as text "  _csort_time_store = " _csort_time_store
-di as text "  _csort_time_cleanup = " _csort_time_cleanup
-di as text "  _csort_time_total = " _csort_time_total
-
-* Verify permutation time is > 0 for LSD
 assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
 
-* Test 3: Merge sort (uses combined timing - permutation time should be 0)
+* Test 3: MSD radix sort
 di as text ""
 di as text "========================================"
-di as text "Test 3: Merge sort with verbose"
+di as text "Test 3: MSD radix sort"
+di as text "========================================"
+csort x, verbose alg(msd)
+assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
+
+* Test 4: Timsort
+di as text ""
+di as text "========================================"
+di as text "Test 4: Timsort"
+di as text "========================================"
+csort y, verbose alg(timsort)
+assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
+
+* Test 5: Sample sort
+di as text ""
+di as text "========================================"
+di as text "Test 5: Sample sort"
+di as text "========================================"
+csort x, verbose alg(sample)
+assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
+
+* Test 6: Merge sort
+di as text ""
+di as text "========================================"
+di as text "Test 6: Merge sort"
 di as text "========================================"
 csort id, verbose alg(merge)
+assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
 
-* Check that timing scalars exist
+* Test 7: Counting sort (integer data)
 di as text ""
-di as text "Timing scalars:"
-di as text "  _csort_time_load = " _csort_time_load
-di as text "  _csort_time_sort = " _csort_time_sort
-di as text "  _csort_time_permute = " _csort_time_permute
-di as text "  _csort_time_store = " _csort_time_store
-di as text "  _csort_time_cleanup = " _csort_time_cleanup
-di as text "  _csort_time_total = " _csort_time_total
-
-* For merge sort, permutation time should be 0 (combined with sort)
-assert _csort_time_permute == 0
+di as text "========================================"
+di as text "Test 7: Counting sort"
+di as text "========================================"
+csort id, verbose alg(counting)
+assert _csort_time_permute > 0
+di as text "  PASS: permutation time = " %8.4f _csort_time_permute
 
 di as text ""
 di as text "========================================"
-di as text "All tests passed!"
+di as text "All 7 algorithm tests passed!"
 di as text "========================================"

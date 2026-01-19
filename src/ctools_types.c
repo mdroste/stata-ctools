@@ -8,6 +8,7 @@
 #include <math.h>
 #include "ctools_types.h"
 #include "ctools_config.h"
+#include "ctools_threads.h"
 
 /*
     NOTE: Use ctools_aligned_free() from ctools_config.h for freeing aligned memory.
@@ -220,16 +221,74 @@ int ctools_uint64_to_str_fast(uint64_t val, char *buf)
 }
 
 /* ===========================================================================
-   Permutation Application
+   Permutation Application - Optimized for Large Datasets
    =========================================================================== */
 
 #ifdef _OPENMP
 #include <omp.h>
 #endif
 
+/* Prefetch distances for permutation operations - multiple levels for better pipelining */
+#define PERM_PREFETCH_NEAR  8
+#define PERM_PREFETCH_FAR   32
+
+/*
+    Apply permutation using GATHER pattern with multi-level prefetching.
+    new_data[i] = old_data[perm[i]] -- random read from old_data, sequential write
+
+    GATHER is preferred over SCATTER for large datasets because:
+    1. Sequential writes can use streaming stores (bypass cache)
+    2. Random reads with prefetching are cheaper than random writes
+    3. No overhead to compute inverse permutation
+
+    NOTE: These functions do NOT use internal parallelism since they're called
+    from an outer parallel region that parallelizes across variables.
+*/
+static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
+                                             const double * CTOOLS_RESTRICT old_data,
+                                             const perm_idx_t * CTOOLS_RESTRICT perm,
+                                             size_t nobs)
+{
+    size_t i;
+    /* Process with multi-level prefetching */
+    for (i = 0; i < nobs; i++) {
+        /* Far prefetch - into L2/L3 */
+        if (i + PERM_PREFETCH_FAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+        }
+        /* Near prefetch - into L1 */
+        if (i + PERM_PREFETCH_NEAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_NEAR]]);
+        }
+        new_data[i] = old_data[perm[i]];
+    }
+}
+
+static inline void apply_perm_gather_ptr(char ** CTOOLS_RESTRICT new_data,
+                                          char ** CTOOLS_RESTRICT old_data,
+                                          const perm_idx_t * CTOOLS_RESTRICT perm,
+                                          size_t nobs)
+{
+    size_t i;
+    for (i = 0; i < nobs; i++) {
+        if (i + PERM_PREFETCH_FAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+        }
+        if (i + PERM_PREFETCH_NEAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_NEAR]]);
+        }
+        new_data[i] = old_data[perm[i]];
+    }
+}
+
 /*
     Apply permutation (sort_order) to all variables in the dataset.
     After calling, data is physically reordered and sort_order is reset to identity.
+
+    Uses GATHER pattern (random reads, sequential writes) which is optimal because:
+    - Sequential writes are cache-friendly and can be optimized by the CPU
+    - Random reads benefit from prefetching
+    - No memory overhead for inverse permutation
 
     @param data  [in/out] stata_data with computed sort_order
     @return      STATA_OK on success, STATA_ERR_MEMORY on allocation failure
@@ -239,15 +298,19 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     size_t nvars = data->nvars;
     size_t nobs = data->nobs;
     perm_idx_t *perm = data->sort_order;
+    size_t j;
 
     if (nvars == 0 || nobs == 0) return STATA_OK;
 
-#ifdef _OPENMP
+    /* Apply permutation to each variable in parallel across variables */
+    #ifdef _OPENMP
     int success = 1;
-
     #pragma omp parallel for schedule(dynamic, 1)
-    for (size_t j = 0; j < nvars; j++) {
+    #endif
+    for (j = 0; j < nvars; j++) {
+        #ifdef _OPENMP
         if (!success) continue;
+        #endif
 
         stata_variable *var = &data->vars[j];
 
@@ -255,71 +318,49 @@ stata_retcode ctools_apply_permutation(stata_data *data)
             double *old_data = var->data.dbl;
             double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
             if (!new_data) {
+                #ifdef _OPENMP
                 #pragma omp atomic write
                 success = 0;
                 continue;
+                #else
+                return STATA_ERR_MEMORY;
+                #endif
             }
 
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
+            apply_perm_gather_double(new_data, old_data, perm, nobs);
 
             ctools_aligned_free(old_data);
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE,
+                                                             nobs * sizeof(char *));
             if (!new_data) {
+                #ifdef _OPENMP
                 #pragma omp atomic write
                 success = 0;
                 continue;
+                #else
+                return STATA_ERR_MEMORY;
+                #endif
             }
 
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
+            apply_perm_gather_ptr(new_data, old_data, perm, nobs);
 
             ctools_aligned_free(old_data);
             var->data.str = new_data;
         }
     }
 
+    #ifdef _OPENMP
     if (!success) return STATA_ERR_MEMORY;
-#else
-    for (size_t j = 0; j < nvars; j++) {
-        stata_variable *var = &data->vars[j];
-
-        if (var->type == STATA_TYPE_DOUBLE) {
-            double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
-            if (!new_data) return STATA_ERR_MEMORY;
-
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
-
-            ctools_aligned_free(old_data);
-            var->data.dbl = new_data;
-        } else {
-            char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
-            if (!new_data) return STATA_ERR_MEMORY;
-
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
-
-            ctools_aligned_free(old_data);
-            var->data.str = new_data;
-        }
-    }
-#endif
+    #endif
 
     /* Reset sort_order to identity */
     #ifdef _OPENMP
-    #pragma omp parallel for
+    #pragma omp parallel for schedule(static)
     #endif
-    for (size_t j = 0; j < nobs; j++) {
+    for (j = 0; j < nobs; j++) {
         perm[j] = (perm_idx_t)j;
     }
 
