@@ -1114,3 +1114,47 @@ stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
     /* Apply the permutation to all variables (this resets sort_order to identity) */
     return ips4o_apply_permutation(data);
 }
+
+/*
+    ctools_sort_ips4o_order_only - IPS4o sort without applying permutation
+
+    Computes sort_order but does NOT apply the permutation to data.
+    After this call, data->sort_order contains the permutation but data is unchanged.
+    Call ctools_apply_permutation() separately to apply the permutation.
+
+    This is useful when you need to time sort vs permutation separately,
+    or when you want to inspect the permutation before applying it.
+
+    @param data       Dataset to sort
+    @param sort_vars  Array of 1-based variable indices to sort by
+    @param nsort      Number of sort variables
+
+    @return STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_ips4o_order_only(stata_data *data, int *sort_vars, size_t nsort)
+{
+    if (!data || !sort_vars || data->nobs == 0 || nsort == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    /* Sort from last key to first for stable multi-key sort */
+    for (int k = (int)nsort - 1; k >= 0; k--) {
+        int var_idx = sort_vars[k] - 1;
+
+        if (var_idx < 0 || var_idx >= (int)data->nvars) {
+            return STATA_ERR_INVALID_INPUT;
+        }
+
+        stata_retcode rc;
+        if (data->vars[var_idx].type == STATA_TYPE_DOUBLE) {
+            rc = ips4o_sort_by_numeric_var(data, var_idx);
+        } else {
+            rc = ips4o_sort_by_string_var(data, var_idx);
+        }
+
+        if (rc != STATA_OK) return rc;
+    }
+
+    /* Do NOT apply permutation - caller will do it separately */
+    return STATA_OK;
+}

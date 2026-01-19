@@ -27,9 +27,10 @@
 #define matmul_atdb civreghdfe_matmul_atdb
 #define compute_liml_lambda civreghdfe_compute_liml_lambda
 
-/* Forward declarations from creghdfe_solver */
-extern int cholesky(double *A, int K);
-extern int invert_from_cholesky(const double *L, int K, double *A_inv);
+/* Shared OLS functions */
+#include "../ctools_ols.h"
+#define cholesky ctools_cholesky
+#define invert_from_cholesky ctools_invert_from_cholesky
 
 /*
     Initialize IV estimation context and compute basic matrices.

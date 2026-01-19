@@ -642,3 +642,47 @@ stata_retcode ctools_sort_counting(stata_data *data, int *sort_vars, size_t nsor
 
     return STATA_OK;
 }
+
+/*
+    ctools_sort_counting_order_only - Counting sort without applying permutation
+
+    Computes sort_order but does NOT apply the permutation to data.
+    After this call, data->sort_order contains the permutation but data is unchanged.
+    Call ctools_apply_permutation() separately to apply the permutation.
+
+    @param data       Dataset to sort
+    @param sort_vars  Array of 1-based variable indices to sort by
+    @param nsort      Number of sort variables
+
+    @return STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, size_t nsort)
+{
+    int k;
+    int var_idx;
+    stata_retcode rc;
+
+    if (data == NULL || sort_vars == NULL || data->nobs == 0 || nsort == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    for (k = (int)nsort - 1; k >= 0; k--) {
+        var_idx = sort_vars[k] - 1;
+
+        if (var_idx < 0 || var_idx >= (int)data->nvars) {
+            return STATA_ERR_INVALID_INPUT;
+        }
+
+        if (data->vars[var_idx].type != STATA_TYPE_DOUBLE) {
+            return STATA_ERR_UNSUPPORTED_TYPE;
+        }
+
+        rc = counting_sort_by_numeric_var(data, var_idx);
+        if (rc != STATA_OK) {
+            return rc;
+        }
+    }
+
+    /* Do NOT apply permutation - caller will do it separately */
+    return STATA_OK;
+}

@@ -64,7 +64,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int *is_collinear = NULL, *keep_idx = NULL;
     ST_int num_collinear, K_keep, K_x, vcetype, df_r, df_a_nested;
     ST_double tss_within, rss;
-    ST_int *iter_results = NULL;
     ST_double *means = NULL, *stdevs = NULL, *tss = NULL;
     ST_int maxiter, standardize;
     ST_int num_threads;
@@ -931,40 +930,13 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    /* Partial out via CG solver */
-    iter_results = (ST_int *)malloc(K * sizeof(ST_int));
-    if (!iter_results) {
-        cleanup_state();
-        for (g = 0; g < G; g++) {
-            if (factors[g].levels) free(factors[g].levels);
-            if (factors[g].counts) free(factors[g].counts);
-        }
-        free(factors); free(mask);
-        free(data); free(means); free(stdevs); free(tss);
-        return 1;
-    }
-
+    /* Partial out via CG solver using shared helper */
     if (verbose >= 1) {
         SF_display("{txt}   Partialling out and solving OLS...\n");
     }
 
-#ifdef _OPENMP
-    #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
-#endif
-    for (k = 0; k < K; k++) {
-        int tid = 0;
-#ifdef _OPENMP
-        tid = omp_get_thread_num();
-#endif
-        iter_results[k] = cg_solve_column_threaded(g_state, &data[k * N], tid);
-    }
-
-    /* Find max iterations */
-    ST_int max_iters = 0;
-    for (k = 0; k < K; k++) {
-        ST_int iters = iter_results[k] < 0 ? -iter_results[k] : iter_results[k];
-        if (iters > max_iters) max_iters = iters;
-    }
+    ST_int max_iters = partial_out_columns(g_state, data, N, K, num_threads);
+    if (max_iters < 0) max_iters = -max_iters;  /* Handle failure indicator */
 
     /* Save iteration count to Stata scalar */
     SF_scal_save("__creghdfe_iterations", (ST_double)max_iters);
@@ -973,8 +945,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         sprintf(msg, "{txt}   Converged in %d iterations\n", max_iters);
         SF_display(msg);
     }
-
-    free(iter_results);
 
     t_partial = get_time_sec();
 

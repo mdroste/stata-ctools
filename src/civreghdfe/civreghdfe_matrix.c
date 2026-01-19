@@ -16,10 +16,11 @@
 #include "civreghdfe_matrix.h"
 #include "../ctools_config.h"
 #include "../ctools_unroll.h"
+#include "../ctools_ols.h"
 
-/* Forward declarations for functions from creghdfe_solver */
-extern int cholesky(double *A, int K);
-extern int invert_from_cholesky(const double *L, int K, double *A_inv);
+/* Use shared Cholesky functions from ctools_ols */
+#define cholesky ctools_cholesky
+#define invert_from_cholesky ctools_invert_from_cholesky
 
 /*
     Matrix multiply C = A' * B
@@ -31,17 +32,17 @@ void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restr
                            ST_int N, ST_int K1, ST_int K2,
                            ST_double * restrict C)
 {
-    ST_int i, j;
+    ST_int j;
 
     memset(C, 0, K1 * K2 * sizeof(ST_double));
 
-    /* Parallelize over output columns when K2 is large enough */
+    /* Parallelize over output columns - i must be private to avoid race condition */
     #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
     for (j = 0; j < K2; j++) {
-        const ST_double * restrict b_col = B + j * N;
+        ST_int i;  /* Declare inside parallel region to make it private */
+        const ST_double *b_col = B + j * N;
         for (i = 0; i < K1; i++) {
-            const ST_double * restrict a_col = A + i * N;
-            /* Use K-way unrolled dot product for the inner loop */
+            const ST_double *a_col = A + i * N;
             C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
         }
     }
@@ -57,7 +58,7 @@ void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restri
                           ST_int K1, ST_int K2, ST_int K3,
                           ST_double * restrict C)
 {
-    ST_int i, j, k;
+    ST_int j;
 
     memset(C, 0, K1 * K3 * sizeof(ST_double));
 
@@ -70,11 +71,12 @@ void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restri
     /* This allows sequential access to A columns and B columns */
     #pragma omp parallel for schedule(static) if(K1 * K3 > 16)
     for (j = 0; j < K3; j++) {
-        const ST_double * restrict b_col = B + j * K2;
-        ST_double * restrict c_col = C + j * K1;
+        ST_int i, k;  /* Private to each thread */
+        const ST_double *b_col = B + j * K2;
+        ST_double *c_col = C + j * K1;
         for (k = 0; k < K2; k++) {
             ST_double b_kj = b_col[k];
-            const ST_double * restrict a_col = A + k * K1;
+            const ST_double *a_col = A + k * K1;
             #pragma omp simd
             for (i = 0; i < K1; i++) {
                 c_col[i] += a_col[i] * b_kj;
@@ -92,7 +94,7 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
                             const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
                             ST_double * restrict C)
 {
-    ST_int i, j;
+    ST_int j;
 
     memset(C, 0, K1 * K2 * sizeof(ST_double));
 
@@ -100,9 +102,10 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
         /* Weighted case: use unrolled weighted dot product */
         #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
-            const ST_double * restrict b_col = B + j * N;
+            ST_int i;  /* Private to each thread */
+            const ST_double *b_col = B + j * N;
             for (i = 0; i < K1; i++) {
-                const ST_double * restrict a_col = A + i * N;
+                const ST_double *a_col = A + i * N;
                 /* K-way unrolled weighted dot product */
                 ST_int k;
                 CTOOLS_DECLARE_ACCUM(sum);
@@ -143,9 +146,10 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
         /* Unweighted case: use standard unrolled dot product */
         #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
-            const ST_double * restrict b_col = B + j * N;
+            ST_int i;  /* Private to each thread */
+            const ST_double *b_col = B + j * N;
             for (i = 0; i < K1; i++) {
-                const ST_double * restrict a_col = A + i * N;
+                const ST_double *a_col = A + i * N;
                 C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
             }
         }

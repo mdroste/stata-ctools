@@ -22,12 +22,19 @@
 
 #include "civreghdfe_impl.h"
 #include "../ctools_config.h"
+#include "../ctools_timer.h"
+#include "../ctools_ols.h"
+#include "../ctools_types.h"  /* For ctools_data_load_selective */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_unroll.h"
+
+/* Shared OLS functions */
+#define cholesky ctools_cholesky
+#define invert_from_cholesky ctools_invert_from_cholesky
 
 /* Debug flag */
 #define CIVREGHDFE_DEBUG 0
@@ -50,6 +57,11 @@
 */
 static ST_retcode do_iv_regression(void)
 {
+    /* Start total timing */
+    double t_total_start = ctools_timer_seconds();
+    double t_load = 0, t_singleton = 0, t_hdfe_setup = 0, t_fwl = 0, t_partial_out = 0;
+    double t_postproc = 0, t_estimate = 0, t_store = 0;
+
     ST_int in1 = SF_in1();
     ST_int in2 = SF_in2();
     ST_int N_total = in2 - in1 + 1;
@@ -101,18 +113,81 @@ static ST_retcode do_iv_regression(void)
 
     /* Calculate variable positions */
     /* Layout: [y, X_endog (Ke), X_exog (Kx), Z (Kz), FE (G), cluster?, cluster2?, weight?] */
-    ST_int var_y = 1;
-    ST_int var_endog_start = 2;
-    ST_int var_exog_start = var_endog_start + K_endog;
-    ST_int var_iv_start = var_exog_start + K_exog;
-    ST_int var_fe_start = var_iv_start + K_iv;
-    ST_int var_cluster = has_cluster ? (var_fe_start + G) : 0;
-    ST_int var_cluster2 = has_cluster2 ? (var_fe_start + G + 1) : 0;
-    ST_int var_weight = has_weights ? (var_fe_start + G + (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0)) : 0;
+    ST_int var_y_idx = 0;  /* Index in loaded_data.vars[] */
+    ST_int var_endog_start_idx = 1;
+    ST_int var_exog_start_idx = var_endog_start_idx + K_endog;
+    ST_int var_iv_start_idx = var_exog_start_idx + K_exog;
+    ST_int var_fe_start_idx = var_iv_start_idx + K_iv;
+    ST_int var_cluster_idx = has_cluster ? (var_fe_start_idx + G) : -1;
+    ST_int var_cluster2_idx = has_cluster2 ? (var_fe_start_idx + G + (has_cluster ? 1 : 0)) : -1;
+    ST_int var_weight_idx = has_weights ? (var_fe_start_idx + G + (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0)) : -1;
 
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
 
-    /* Allocate data arrays - cast to size_t to prevent 32-bit overflow */
+    /* Start data load timing */
+    double t_load_start = ctools_timer_seconds();
+
+    /* ================================================================
+     * PARALLEL DATA LOADING using ctools_data_load_selective
+     * ================================================================ */
+
+    /* Calculate total variables to load */
+    ST_int total_vars = 1 + K_endog + K_exog + K_iv + G +
+                        (has_cluster ? 1 : 0) + (has_cluster2 ? 1 : 0) + (has_weights ? 1 : 0);
+
+    /* Build variable indices array (1-based for Stata) */
+    int *var_indices = (int *)malloc(total_vars * sizeof(int));
+    if (!var_indices) {
+        SF_error("civreghdfe: Memory allocation failed\n");
+        return 920;
+    }
+    for (ST_int i = 0; i < total_vars; i++) {
+        var_indices[i] = i + 1;  /* 1-based Stata variable indices */
+    }
+
+    /* Load all variables in parallel using thread pool */
+    stata_data loaded_data;
+    stata_data_init(&loaded_data);
+
+    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices, total_vars, 0, 0);
+    free(var_indices);
+
+    if (load_rc != STATA_OK) {
+        stata_data_free(&loaded_data);
+        SF_error("civreghdfe: Parallel data load failed\n");
+        return 920;
+    }
+
+    /* Build selection index for if/in filtering */
+    ST_int N_range = in2 - in1 + 1;
+    ST_int *sel_idx = (ST_int *)malloc(N_range * sizeof(ST_int));
+    if (!sel_idx) {
+        stata_data_free(&loaded_data);
+        SF_error("civreghdfe: Memory allocation failed\n");
+        return 920;
+    }
+
+    ST_int N_ifobs = 0;
+    for (ST_int obs = in1; obs <= in2; obs++) {
+        if (SF_ifobs(obs)) {
+            sel_idx[N_ifobs] = obs - in1;  /* 0-based index into loaded_data */
+            N_ifobs++;
+        }
+    }
+
+    if (N_ifobs == 0) {
+        SF_error("civreghdfe: No observations selected\n");
+        free(sel_idx);
+        stata_data_free(&loaded_data);
+        return 2001;
+    }
+
+    /* Check if selection is identity (no filtering needed) */
+    ST_int sel_is_identity = (N_ifobs == N_range) ? 1 : 0;
+
+    N_total = N_ifobs;
+
+    /* Allocate output arrays */
     ST_double *y = (ST_double *)malloc((size_t)N_total * sizeof(ST_double));
     ST_double *X_endog = (K_endog > 0) ? (ST_double *)malloc((size_t)N_total * K_endog * sizeof(ST_double)) : NULL;
     ST_double *X_exog = (K_exog > 0) ? (ST_double *)malloc((size_t)N_total * K_exog * sizeof(ST_double)) : NULL;
@@ -121,7 +196,7 @@ static ST_retcode do_iv_regression(void)
     ST_int *cluster_ids = has_cluster ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
     ST_int *cluster2_ids = has_cluster2 ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
 
-    /* Allocate FE level arrays - cast to size_t to prevent 32-bit overflow */
+    /* Allocate FE level arrays */
     ST_int **fe_levels = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
     int fe_alloc_failed = 0;
     if (fe_levels) {
@@ -143,81 +218,108 @@ static ST_retcode do_iv_regression(void)
             for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
             free(fe_levels);
         }
+        free(sel_idx);
+        stata_data_free(&loaded_data);
         return 920;
     }
 
-    /* Count observations that pass the if/in condition */
-    ST_int N_ifobs = 0;
-    for (ST_int obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) N_ifobs++;
-    }
+    /* Extract data from loaded_data into output arrays with if/in filtering */
+    ST_int i;
+    if (sel_is_identity) {
+        /* Fast path: direct copy */
+        memcpy(y, loaded_data.vars[var_y_idx].data.dbl, N_total * sizeof(ST_double));
 
-    if (N_ifobs == 0) {
-        SF_error("civreghdfe: No observations selected\n");
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
-        return 2001;
-    }
-
-    /* Reallocate arrays to actual size based on if/in condition */
-    N_total = N_ifobs;
-
-    /* Read data from Stata - only include observations where SF_ifobs() is true */
-    ST_double val;
-    ST_int i = 0;
-    for (ST_int obs = in1; obs <= in2; obs++) {
-        if (!SF_ifobs(obs)) continue;  /* Skip observations not in sample */
-
-        /* y */
-        SF_vdata(var_y, obs, &val);
-        y[i] = val;
-
-        /* X_endog */
         for (ST_int k = 0; k < K_endog; k++) {
-            SF_vdata(var_endog_start + k, obs, &val);
-            X_endog[k * N_ifobs + i] = val;
+            memcpy(X_endog + k * N_total, loaded_data.vars[var_endog_start_idx + k].data.dbl,
+                   N_total * sizeof(ST_double));
         }
-
-        /* X_exog */
         for (ST_int k = 0; k < K_exog; k++) {
-            SF_vdata(var_exog_start + k, obs, &val);
-            X_exog[k * N_ifobs + i] = val;
+            memcpy(X_exog + k * N_total, loaded_data.vars[var_exog_start_idx + k].data.dbl,
+                   N_total * sizeof(ST_double));
         }
-
-        /* Z (instruments) */
         for (ST_int k = 0; k < K_iv; k++) {
-            SF_vdata(var_iv_start + k, obs, &val);
-            Z[k * N_ifobs + i] = val;
+            memcpy(Z + k * N_total, loaded_data.vars[var_iv_start_idx + k].data.dbl,
+                   N_total * sizeof(ST_double));
         }
-
-        /* FE levels */
         for (ST_int g = 0; g < G; g++) {
-            SF_vdata(var_fe_start + g, obs, &val);
-            fe_levels[g][i] = (ST_int)val;
+            double *src = loaded_data.vars[var_fe_start_idx + g].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                fe_levels[g][i] = (ST_int)src[i];
+            }
         }
-
-        /* Cluster */
         if (has_cluster) {
-            SF_vdata(var_cluster, obs, &val);
-            cluster_ids[i] = (ST_int)val;
+            double *src = loaded_data.vars[var_cluster_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                cluster_ids[i] = (ST_int)src[i];
+            }
         }
-
-        /* Cluster2 (for two-way clustering) */
         if (has_cluster2) {
-            SF_vdata(var_cluster2, obs, &val);
-            cluster2_ids[i] = (ST_int)val;
+            double *src = loaded_data.vars[var_cluster2_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                cluster2_ids[i] = (ST_int)src[i];
+            }
         }
-
-        /* Weight */
         if (has_weights) {
-            SF_vdata(var_weight, obs, &val);
-            weights[i] = val;
+            memcpy(weights, loaded_data.vars[var_weight_idx].data.dbl, N_total * sizeof(ST_double));
+        }
+    } else {
+        /* Slow path: selective copy using sel_idx */
+        double *src_y = loaded_data.vars[var_y_idx].data.dbl;
+        for (i = 0; i < N_total; i++) {
+            y[i] = src_y[sel_idx[i]];
         }
 
-        i++;
+        for (ST_int k = 0; k < K_endog; k++) {
+            double *src = loaded_data.vars[var_endog_start_idx + k].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                X_endog[k * N_total + i] = src[sel_idx[i]];
+            }
+        }
+        for (ST_int k = 0; k < K_exog; k++) {
+            double *src = loaded_data.vars[var_exog_start_idx + k].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                X_exog[k * N_total + i] = src[sel_idx[i]];
+            }
+        }
+        for (ST_int k = 0; k < K_iv; k++) {
+            double *src = loaded_data.vars[var_iv_start_idx + k].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                Z[k * N_total + i] = src[sel_idx[i]];
+            }
+        }
+        for (ST_int g = 0; g < G; g++) {
+            double *src = loaded_data.vars[var_fe_start_idx + g].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                fe_levels[g][i] = (ST_int)src[sel_idx[i]];
+            }
+        }
+        if (has_cluster) {
+            double *src = loaded_data.vars[var_cluster_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                cluster_ids[i] = (ST_int)src[sel_idx[i]];
+            }
+        }
+        if (has_cluster2) {
+            double *src = loaded_data.vars[var_cluster2_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                cluster2_ids[i] = (ST_int)src[sel_idx[i]];
+            }
+        }
+        if (has_weights) {
+            double *src = loaded_data.vars[var_weight_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                weights[i] = src[sel_idx[i]];
+            }
+        }
     }
+
+    /* Free loaded_data and sel_idx - we've extracted what we need */
+    stata_data_free(&loaded_data);
+    free(sel_idx);
+
+    /* End data load, start missing value check timing */
+    t_load = ctools_timer_seconds() - t_load_start;
+    double t_missing_start = ctools_timer_seconds();
 
     /* Drop observations with missing values */
     ST_int *valid_mask = (ST_int *)calloc(N_total, sizeof(ST_int));
@@ -345,6 +447,10 @@ static ST_retcode do_iv_regression(void)
 
     ST_int N = N_valid;
 
+    /* End missing value check/compact timing, start singleton timing */
+    double t_missing = ctools_timer_seconds() - t_missing_start;
+    double t_singleton_start = ctools_timer_seconds();
+
     /* Singleton detection using shared utility from ctools_hdfe_utils */
     ST_int *singleton_mask = (ST_int *)malloc((size_t)N * sizeof(ST_int));
     if (!singleton_mask) {
@@ -415,6 +521,10 @@ static ST_retcode do_iv_regression(void)
         free(fe_levels_c);
         return 2001;
     }
+
+    /* End singleton timing, start HDFE setup timing */
+    t_singleton = ctools_timer_seconds() - t_singleton_start;
+    double t_hdfe_setup_start = ctools_timer_seconds();
 
     /* Initialize HDFE state (reuse creghdfe infrastructure) */
     /* This requires setting up FE_Factor structures */
@@ -542,9 +652,14 @@ static ST_retcode do_iv_regression(void)
     }
 
     state->factors_initialized = 1;
+    state->num_threads = num_threads;  /* Required for partial_out_columns */
 
     /* Set global state for creghdfe solver functions */
     g_state = state;
+
+    /* End HDFE setup timing, start FWL timing */
+    t_hdfe_setup = ctools_timer_seconds() - t_hdfe_setup_start;
+    double t_fwl_start = ctools_timer_seconds();
 
     /* FWL partialling: partial out specified exogenous variables before FE absorption */
     ST_double dval_partial;
@@ -742,6 +857,10 @@ static ST_retcode do_iv_regression(void)
         free(PtP_inv);
     }
 
+    /* End FWL timing, start partial out timing */
+    t_fwl = ctools_timer_seconds() - t_fwl_start;
+    double t_partial_start = ctools_timer_seconds();
+
     /* Partial out FEs from all variables using CG solver */
     if (verbose) {
         SF_display("civreghdfe: Partialling out fixed effects...\n");
@@ -798,12 +917,12 @@ static ST_retcode do_iv_regression(void)
     /* Copy Z */
     memcpy(all_data + N * (1 + K_endog + K_exog), Z_c, N * K_iv * sizeof(ST_double));
 
-    /* Demean all columns in parallel */
-    #pragma omp parallel for num_threads(num_threads) schedule(dynamic)
-    for (ST_int k = 0; k < total_cols; k++) {
-        int tid = omp_get_thread_num();
-        cg_solve_column_threaded(state, all_data + k * N, tid);
-    }
+    /* Demean all columns in parallel using shared helper */
+    partial_out_columns(state, all_data, N, total_cols, num_threads);
+
+    /* End partial out timing, start post-processing timing */
+    t_partial_out = ctools_timer_seconds() - t_partial_start;
+    double t_postproc_start = ctools_timer_seconds();
 
     if (verbose) {
         SF_display("civreghdfe: Fixed effects partialled out\n");
@@ -917,6 +1036,59 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
+    /* Detect FEs nested within cluster variable
+       An FE is nested if every FE level maps to exactly one cluster.
+       This is done by checking if for each FE level, all observations have the same cluster_id.
+       We use a simple approach: for each FE, track first seen cluster_id per level. */
+    ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));  /* 1 if nested, 0 otherwise */
+    if (has_cluster && fe_nested) {
+        for (ST_int g = 0; g < G; g++) {
+            ST_int num_levels = state->factors[g].num_levels;
+            /* Allocate array to store first-seen cluster for each level */
+            ST_int *level_cluster = (ST_int *)malloc(num_levels * sizeof(ST_int));
+            if (!level_cluster) continue;
+
+            /* Initialize to -1 (not yet seen) */
+            for (ST_int lev = 0; lev < num_levels; lev++) {
+                level_cluster[lev] = -1;
+            }
+
+            /* Check each observation */
+            int is_nested = 1;
+            for (ST_int i = 0; i < N && is_nested; i++) {
+                ST_int lev = fe_levels_c[g][i] - 1;  /* 0-based level index */
+                ST_int clust = cluster_ids_c[i];
+                if (level_cluster[lev] == -1) {
+                    /* First time seeing this level */
+                    level_cluster[lev] = clust;
+                } else if (level_cluster[lev] != clust) {
+                    /* This level maps to multiple clusters - not nested */
+                    is_nested = 0;
+                }
+            }
+
+            fe_nested[g] = is_nested;
+            free(level_cluster);
+
+            /* Store nested status to Stata scalar */
+            char scalar_name[64];
+            snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
+            SF_scal_save(scalar_name, (ST_double)is_nested);
+        }
+
+        if (verbose) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "civreghdfe: FE nested detection complete\n");
+            SF_display(buf);
+            for (ST_int g = 0; g < G; g++) {
+                snprintf(buf, sizeof(buf), "  FE %d: %s\n", (int)(g + 1),
+                         fe_nested[g] ? "nested" : "not nested");
+                SF_display(buf);
+            }
+        }
+    }
+    if (fe_nested) free(fe_nested);
+
     /* Update K_total after possible FWL reduction of K_exog */
     K_total = K_exog + K_endog;
 
@@ -924,6 +1096,10 @@ static ST_retcode do_iv_regression(void)
     ST_double *beta = (ST_double *)calloc(K_total, sizeof(ST_double));
     ST_double *V = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     ST_double *first_stage_F = (ST_double *)calloc(K_endog, sizeof(ST_double));
+
+    /* End post-processing timing, start estimation timing */
+    t_postproc = ctools_timer_seconds() - t_postproc_start;
+    double t_estimate_start = ctools_timer_seconds();
 
     /* Compute k-class IV estimation (2SLS, LIML, Fuller, etc.) */
     /* For cluster VCE, pass df_a_for_vce (excluding nested FE levels) and nested_adj */
@@ -958,6 +1134,7 @@ static ST_retcode do_iv_regression(void)
         free(state->thread_cg_v); free(state->thread_proj);
         free(state->thread_fe_means);
         for (ST_int g = 0; g < G; g++) {
+            free(state->factors[g].levels);  /* Same as fe_levels_c[g] */
             free(state->factors[g].counts);
             if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
             if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
@@ -969,6 +1146,10 @@ static ST_retcode do_iv_regression(void)
         g_state = NULL;
         return rc;
     }
+
+    /* End estimation timing (includes VCE), start stats computation */
+    t_estimate = ctools_timer_seconds() - t_estimate_start;
+    double t_stats_start = ctools_timer_seconds();
 
     /* Compute RSS, TSS, R-squared, Root MSE, and F-statistic */
     /* These are computed on demeaned (partialled-out) data */
@@ -1018,6 +1199,10 @@ static ST_retcode do_iv_regression(void)
         f_stat = (r2 / K_total) / ((1.0 - r2) / df_r_val);
     }
 
+    /* End stats timing, start store timing */
+    double t_stats = ctools_timer_seconds() - t_stats_start;
+    double t_store_start = ctools_timer_seconds();
+
     /* Store results to Stata */
     /* Scalars */
     SF_scal_save("__civreghdfe_N", (ST_double)N);
@@ -1043,16 +1228,27 @@ static ST_retcode do_iv_regression(void)
         SF_scal_save("__civreghdfe_lambda", lambda);
     }
 
-    /* Matrices: e(b) and e(V) */
-    /* Create matrix __civreghdfe_b (1 x K_total) */
-    for (ST_int k = 0; k < K_total; k++) {
-        SF_mat_store("__civreghdfe_b", 1, k + 1, beta[k]);
+    /* Matrices: e(b) and e(V) - reorder from [exog, endog] to [endog, exog] */
+    /* Internal order: beta[0..K_exog-1] = exog, beta[K_exog..K_total-1] = endog
+       Stata order: [endog, exog] to match ivreghdfe convention */
+
+    /* Store beta in [endog, exog] order */
+    for (ST_int e = 0; e < K_endog; e++) {
+        SF_mat_store("__civreghdfe_b", 1, e + 1, beta[K_exog + e]);
+    }
+    for (ST_int x = 0; x < K_exog; x++) {
+        SF_mat_store("__civreghdfe_b", 1, K_endog + x + 1, beta[x]);
     }
 
-    /* Create matrix __civreghdfe_V (K_total x K_total) */
-    for (ST_int i = 0; i < K_total; i++) {
-        for (ST_int j = 0; j < K_total; j++) {
-            SF_mat_store("__civreghdfe_V", i + 1, j + 1, V[j * K_total + i]);
+    /* Store V in [endog, exog] order - need to reorder rows and columns */
+    /* new_order: [endog_0, ..., endog_{Ke-1}, exog_0, ..., exog_{Kx-1}]
+       For new index i in [0, K_endog): old index = K_exog + i
+       For new index i in [K_endog, K_total): old index = i - K_endog */
+    for (ST_int new_i = 0; new_i < K_total; new_i++) {
+        ST_int old_i = (new_i < K_endog) ? (K_exog + new_i) : (new_i - K_endog);
+        for (ST_int new_j = 0; new_j < K_total; new_j++) {
+            ST_int old_j = (new_j < K_endog) ? (K_exog + new_j) : (new_j - K_endog);
+            SF_mat_store("__civreghdfe_V", new_i + 1, new_j + 1, V[old_j * K_total + old_i]);
         }
     }
 
@@ -1062,6 +1258,22 @@ static ST_retcode do_iv_regression(void)
         snprintf(name, sizeof(name), "__civreghdfe_F1_%d", (int)(e + 1));
         SF_scal_save(name, first_stage_F[e]);
     }
+
+    /* End store timing, compute total */
+    t_store = ctools_timer_seconds() - t_store_start;
+    double t_total = ctools_timer_seconds() - t_total_start;
+
+    /* Save timing scalars */
+    SF_scal_save("_civreghdfe_time_load", t_load + t_missing);  /* Combine load and missing check */
+    SF_scal_save("_civreghdfe_time_singleton", t_singleton);
+    SF_scal_save("_civreghdfe_time_setup", t_hdfe_setup);
+    SF_scal_save("_civreghdfe_time_fwl", t_fwl);
+    SF_scal_save("_civreghdfe_time_partial", t_partial_out);
+    SF_scal_save("_civreghdfe_time_postproc", t_postproc);
+    SF_scal_save("_civreghdfe_time_estimate", t_estimate);
+    SF_scal_save("_civreghdfe_time_stats", t_stats);
+    SF_scal_save("_civreghdfe_time_store", t_store);
+    SF_scal_save("_civreghdfe_time_total", t_total);
 
     /* Cleanup */
     free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);

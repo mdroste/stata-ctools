@@ -7,7 +7,7 @@ sysuse auto, clear
 csort price
 
 * List of obs
-local n_obs_list 1e5 1e6 1e7 1e8
+local n_obs_list 1e5 1e6 1e7
 
 * Setup: matrix to store results and track current row
 matrix A = J(4,5,.)
@@ -39,11 +39,11 @@ foreach N in `n_obs_list' {
 	
 	* Csort times
 	timer on 3
-	csort float2
+	noi csort float2, verbose
 	timer off 3
 	
 	timer on 4
-	csort int2
+	noi csort int2, verbose
 	timer off 4
 	
 	* Save timers to a row
@@ -65,3 +65,5 @@ gen relative_time_float = time_sort_float/time_csort_float
 gen relative_time_int = time_sort_int/time_csort_int
 
 twoway (scatter relative_time_float n_obs)
+gen n_obs_2 = _n
+twoway (scatter relative_time_float n_obs_2), xlabel(1 "100k" 2 "1m" 3 "10m" 4 "100m") xtitle("")

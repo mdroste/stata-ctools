@@ -368,13 +368,24 @@ program define cbinscatter, eclass sortpreserve
 
     * Display timing if requested
     if "`timeit'" != "" | "`verbose'" != "" {
+        local plugin_overhead = r(t99) - __cbinscatter_time_total
+        if `plugin_overhead' < 0 local plugin_overhead = 0
         di as text ""
-        di as text "Timing breakdown:"
-        di as text "  Load:       " as result %8.4f __cbinscatter_time_load " sec"
-        di as text "  Residualize:" as result %8.4f __cbinscatter_time_resid " sec"
-        di as text "  Bin comp:   " as result %8.4f __cbinscatter_time_bins " sec"
-        di as text "  Line fit:   " as result %8.4f __cbinscatter_time_fit " sec"
-        di as text "  Total:      " as result %8.4f __cbinscatter_time_total " sec"
+        di as text "{hline 55}"
+        di as text "cbinscatter timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f __cbinscatter_time_load " sec"
+        di as text "    Residualize:            " as result %8.4f __cbinscatter_time_resid " sec"
+        di as text "    Bin computation:        " as result %8.4f __cbinscatter_time_bins " sec"
+        di as text "    Line fitting:           " as result %8.4f __cbinscatter_time_fit " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f __cbinscatter_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Plugin call overhead:     " as result %8.4f `plugin_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f r(t99) " sec"
+        di as text "{hline 55}"
     }
 
     * Display summary

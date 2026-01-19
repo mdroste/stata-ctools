@@ -946,7 +946,7 @@ static ST_retcode cmerge_execute(const char *args)
             }
         }
         cmerge_arena_free(str_arena);
-        free(output_data.vars);
+        cmerge_aligned_free(output_data.vars);
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
@@ -980,7 +980,7 @@ static ST_retcode cmerge_execute(const char *args)
             }
         }
         cmerge_arena_free(str_arena);
-        free(output_data.vars);
+        cmerge_aligned_free(output_data.vars);
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);

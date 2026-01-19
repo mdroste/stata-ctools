@@ -305,3 +305,40 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
 
     return -S->maxiter;
 }
+
+/* ========================================================================
+ * Partial Out Multiple Columns (Shared Helper)
+ *
+ * Partials out fixed effects from K columns of data in parallel.
+ * ======================================================================== */
+
+ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads)
+{
+    ST_int k;
+    ST_int max_iters = 0;
+    ST_int any_failed = 0;
+
+    (void)N;  /* N is stored in S->N */
+    (void)num_threads;  /* Use S->num_threads or OpenMP default */
+
+    #pragma omp parallel for num_threads(S->num_threads) schedule(dynamic)
+    for (k = 0; k < K; k++) {
+        int tid = 0;
+#ifdef _OPENMP
+        tid = omp_get_thread_num();
+#endif
+        ST_int iters = cg_solve_column_threaded(S, data + k * S->N, tid);
+
+        #pragma omp critical
+        {
+            if (iters < 0) {
+                any_failed = 1;
+            }
+            if (iters > max_iters) {
+                max_iters = iters;
+            }
+        }
+    }
+
+    return any_failed ? -max_iters : max_iters;
+}

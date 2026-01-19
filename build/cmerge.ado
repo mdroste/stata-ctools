@@ -852,11 +852,12 @@ program define cmerge, rclass
         local __p2_sort_master = scalar(_cmerge_p2_sort_master)
         local __p2_merge_join = scalar(_cmerge_p2_merge_join)
         local __p2_reorder = scalar(_cmerge_p2_reorder)
-        local __p2_write_keepusing = scalar(_cmerge_p2_write_keepusing)
-        local __p2_stream_master = scalar(_cmerge_p2_stream_master)
+        local __p2_permute = scalar(_cmerge_p2_permute)
+        local __p2_store = scalar(_cmerge_p2_store)
+        local __p2_write_meta = scalar(_cmerge_p2_write_meta)
         local __p2_cleanup = scalar(_cmerge_p2_cleanup)
         local __p2_total = scalar(_cmerge_p2_total)
-        local __n_stream_vars = scalar(_cmerge_n_stream_vars)
+        local __n_output_vars = scalar(_cmerge_n_output_vars)
 
         * Calculate overhead
         local __p1_overhead = `__time_plugin1' - `__p1_total'
@@ -903,44 +904,43 @@ program define cmerge, rclass
 
     * Display comprehensive timing breakdown
     if `__do_timing' {
-        di as text _n "cmerge timing breakdown:"
-        di as text _n "  [Phase 1: Load using data into C]"
-        di as text "    Load keys:            " as result %8.4f `__p1_load_keys' " sec"
-        di as text "    Load keepusing:       " as result %8.4f `__p1_load_keepusing' " sec"
-        di as text "    Sort using:           " as result %8.4f `__p1_sort' " sec"
-        di as text "    Apply permutation:    " as result %8.4f `__p1_apply_perm' " sec"
-        di as text "    --------------------------------"
-        di as text "    Phase 1 C total:      " as result %8.4f `__p1_total' " sec"
-
-        di as text _n "  [Phase 2: Execute merge]"
-        di as text "    Load master keys:     " as result %8.4f `__p2_load_master' " sec"
-        di as text "    Sort master:          " as result %8.4f `__p2_sort_master' " sec"
-        di as text "    Merge join:           " as result %8.4f `__p2_merge_join' " sec"
-        di as text "    Reorder output:       " as result %8.4f `__p2_reorder' " sec"
-        di as text "    Write keepusing:      " as result %8.4f `__p2_write_keepusing' " sec"
-        di as text "    Stream master (" as result `__n_stream_vars' as text " vars):" _col(27) as result %8.4f `__p2_stream_master' " sec"
-        di as text "    Cleanup:              " as result %8.4f `__p2_cleanup' " sec"
-        di as text "    --------------------------------"
-        di as text "    Phase 2 C total:      " as result %8.4f `__p2_total' " sec"
-
-        di as text _n "  [Outside C code]"
-        di as text "    Pre-plugin1 ado:      " as result %8.4f `__time_preplugin1' " sec" as text "  (load using.dta, parse)"
-        di as text "    Plugin1 overhead:     " as result %8.4f `__p1_overhead' " sec" as text "  (Stata's plugin framework)"
-        di as text "    Inter-plugin ado:     " as result %8.4f `__time_interplugin' " sec" as text "  (breakdown below)"
-        di as text "      - restore:          " as result %8.4f `__time_restore' " sec"
-        di as text "      - append vars:      " as result %8.4f `__time_addvar' " sec" as text "  (create placeholders, _merge)"
-        di as text "      - st_store row:     " as result %8.4f `__time_storerow' " sec" as text "  (fill _orig_row)"
-        di as text "      - set obs:          " as result %8.4f `__time_setobs' " sec" as text "  (expand to max output)"
-        di as text "    Plugin2 overhead:     " as result %8.4f `__p2_overhead' " sec" as text "  (Stata's plugin framework)"
-        di as text "    Post-plugin ado:      " as result %8.4f `__time_postplugin' " sec" as text "  (labels, cleanup)"
-        di as text "    --------------------------------"
-        di as text "    Non-C total:          " as result %8.4f (`__ado_total' + `__overhead_total') " sec"
-
-        di as text _n "  [Summary]"
-        di as text "    Wall clock total:     " as result %8.4f `__time_total' " sec"
-        di as text "    C code:               " as result %8.1f (100 * `__c_total' / `__time_total') "%%"
-        di as text "    Plugin overhead:      " as result %8.1f (100 * `__overhead_total' / `__time_total') "%%"
-        di as text "    Ado-file overhead:    " as result %8.1f (100 * `__ado_total' / `__time_total') "%%"
+        di as text ""
+        di as text "{hline 55}"
+        di as text "cmerge timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals (Phase 1: Load using data):"
+        di as text "    Load keys:              " as result %8.4f `__p1_load_keys' " sec"
+        di as text "    Load keepusing:         " as result %8.4f `__p1_load_keepusing' " sec"
+        di as text "    Sort using:             " as result %8.4f `__p1_sort' " sec"
+        di as text "    Apply permutation:      " as result %8.4f `__p1_apply_perm' " sec"
+        di as text "  {hline 53}"
+        di as text "    Phase 1 C total:        " as result %8.4f `__p1_total' " sec"
+        di as text "  {hline 53}"
+        di as text "  C plugin internals (Phase 2: Execute merge):"
+        di as text "    Load master keys:       " as result %8.4f `__p2_load_master' " sec"
+        di as text "    Sort master:            " as result %8.4f `__p2_sort_master' " sec"
+        di as text "    Merge join:             " as result %8.4f `__p2_merge_join' " sec"
+        di as text "    Reorder output:         " as result %8.4f `__p2_reorder' " sec"
+        di as text "    Permute data:           " as result %8.4f `__p2_permute' " sec"
+        di as text "    Store to Stata:         " as result %8.4f `__p2_store' " sec"
+        di as text "    Write metadata:         " as result %8.4f `__p2_write_meta' " sec"
+        di as text "    Cleanup:                " as result %8.4f `__p2_cleanup' " sec"
+        di as text "  {hline 53}"
+        di as text "    Phase 2 C total:        " as result %8.4f `__p2_total' " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f `__c_total' " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin1 parsing:    " as result %8.4f `__time_preplugin1' " sec"
+        di as text "    Plugin1 call overhead:  " as result %8.4f `__p1_overhead' " sec"
+        di as text "    Inter-plugin work:      " as result %8.4f `__time_interplugin' " sec"
+        di as text "    Plugin2 call overhead:  " as result %8.4f `__p2_overhead' " sec"
+        di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
+        di as text "  {hline 53}"
+        di as text "    Stata overhead total:   " as result %8.4f (`__ado_total' + `__overhead_total') " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
 
         * Clear timers
         timer clear 90

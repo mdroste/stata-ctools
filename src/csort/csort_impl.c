@@ -245,38 +245,48 @@ ST_retcode csort_main(const char *args)
 #endif
 
     timer.sort_time = ctools_timer_seconds();
+    double t_permute = 0.0;  /* Permutation time */
 
-    /* Call the selected sort algorithm */
+    /* Call the selected sort algorithm using _order_only variants
+       to track sort vs permutation timing separately for all algorithms. */
     switch (algorithm) {
         case SORT_ALG_MSD:
-            rc = ctools_sort_radix_msd(&data, sort_vars, nsort);
+            rc = ctools_sort_radix_msd_order_only(&data, sort_vars, nsort);
             break;
         case SORT_ALG_TIMSORT:
-            rc = ctools_sort_timsort(&data, sort_vars, nsort);
+            rc = ctools_sort_timsort_order_only(&data, sort_vars, nsort);
             break;
         case SORT_ALG_SAMPLE:
-            rc = ctools_sort_sample(&data, sort_vars, nsort);
+            rc = ctools_sort_sample_order_only(&data, sort_vars, nsort);
             break;
         case SORT_ALG_COUNTING:
-            rc = ctools_sort_counting(&data, sort_vars, nsort);
+            rc = ctools_sort_counting_order_only(&data, sort_vars, nsort);
             /* If counting sort not suitable, fall back to LSD radix */
             if (rc == STATA_ERR_UNSUPPORTED_TYPE) {
-                rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+                rc = ctools_sort_radix_lsd_order_only(&data, sort_vars, nsort);
             }
             break;
         case SORT_ALG_MERGE:
-            rc = ctools_sort_merge(&data, sort_vars, nsort);
+            rc = ctools_sort_merge_order_only(&data, sort_vars, nsort);
             break;
         case SORT_ALG_LSD:
-            rc = ctools_sort_radix_lsd(&data, sort_vars, nsort);
+            rc = ctools_sort_radix_lsd_order_only(&data, sort_vars, nsort);
             break;
         case SORT_ALG_IPS4O:
         default:
-            rc = ctools_sort_ips4o(&data, sort_vars, nsort);
+            rc = ctools_sort_ips4o_order_only(&data, sort_vars, nsort);
             break;
     }
 
+    /* Record sort computation time */
     timer.sort_time = ctools_timer_seconds() - timer.sort_time;
+
+    /* Apply permutation separately (timed) */
+    if (rc == STATA_OK) {
+        t_permute = ctools_timer_seconds();
+        rc = ctools_apply_permutation(&data);
+        t_permute = ctools_timer_seconds() - t_permute;
+    }
 
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: sort failed (error %d)\n", rc);
@@ -338,6 +348,7 @@ ST_retcode csort_main(const char *args)
     /* Store timing results in Stata scalars */
     SF_scal_save("_csort_time_load", timer.load_time);
     SF_scal_save("_csort_time_sort", timer.sort_time);
+    SF_scal_save("_csort_time_permute", t_permute);
     SF_scal_save("_csort_time_store", timer.store_time);
     SF_scal_save("_csort_time_cleanup", t_cleanup);
     SF_scal_save("_csort_time_total", timer.total_time);

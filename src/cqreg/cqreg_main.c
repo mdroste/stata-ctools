@@ -211,7 +211,8 @@ static ST_int load_clusters(cqreg_state *state,
 {
     ST_int idx, obs;
 
-    state->cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
+    /* Use cqreg_aligned_alloc to match cqreg_aligned_free in cqreg_state_free */
+    state->cluster_ids = (ST_int *)cqreg_aligned_alloc(N * sizeof(ST_int), CQREG_CACHE_LINE);
     if (state->cluster_ids == NULL) {
         return -1;
     }

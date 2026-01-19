@@ -9,6 +9,11 @@
 #define CREGHDFE_OLS_H
 
 #include "creghdfe_types.h"
+#include "../ctools_ols.h"
+
+/* Backward compatibility macros - use shared implementations */
+#define cholesky ctools_cholesky
+#define invert_from_cholesky ctools_invert_from_cholesky
 
 /* ========================================================================
  * Dot product variants for numerical precision
@@ -49,11 +54,8 @@ void compute_xtx_xty_weighted(
     ST_double *xty             /* Output: (K-1) x 1 */
 );
 
-/* Cholesky decomposition: A = L * L' (in-place, returns L in lower triangle) */
-ST_int cholesky(ST_double *A, ST_int n);
-
-/* Matrix inversion via Cholesky (for positive definite matrices) */
-ST_int invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv);
+/* Cholesky decomposition and inversion are provided by ctools_ols.h
+ * via the macros defined above */
 
 /* ========================================================================
  * Collinearity detection

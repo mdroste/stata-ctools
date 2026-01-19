@@ -2,7 +2,7 @@
 *! civreghdfe: C-accelerated instrumental variables regression with HDFE
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
-program define civreghdfe, eclass sortpreserve
+program define civreghdfe, eclass
     version 14.0
 
     * Parse syntax
@@ -52,11 +52,6 @@ program define civreghdfe, eclass sortpreserve
         capture scalar drop __civreghdfe_orthog_`i'
         capture scalar drop __civreghdfe_endogtest_`i'
         capture scalar drop __civreghdfe_partial_`i'
-    }
-
-    * Start timing
-    if "`timeit'" != "" {
-        local t0 = clock("", "hms")
     }
 
     * Parse the varlist with parentheses for endogenous vars and instruments
@@ -587,7 +582,14 @@ program define civreghdfe, eclass sortpreserve
     }
 
     * Call the C plugin
+    timer clear 99
+    timer on 99
     plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe iv_regression"
+    timer off 99
+    qui timer list 99
+    local t_plugin = r(t99)
+    timer clear 98
+    timer on 98
 
     * Retrieve results
     local N_used = __civreghdfe_N
@@ -607,26 +609,11 @@ program define civreghdfe, eclass sortpreserve
         local fe_nested_`g' = 0
     }
 
-    * Detect FEs nested within cluster variable (for df_a adjustment)
+    * Read nested FE detection from C plugin (computed during plugin call)
     if `vce_type' == 2 & "`cluster_var'" != "" {
         forval g = 1/`G' {
-            local fevar : word `g' of `absorb'
-            * Check if this absorbed FE variable is the same as the cluster variable
-            if "`fevar'" == "`cluster_var'" {
-                * This FE is identical to the cluster variable - all its levels are nested
-                local fe_nested_`g' = 1
-            }
-            else {
-                * Check if FE is nested within cluster (every FE level maps to exactly one cluster)
-                tempvar fe_clust_check
-                qui bysort `fevar' (`cluster_var'): gen byte `fe_clust_check' = (`cluster_var'[1] != `cluster_var'[_N]) if `touse'
-                qui summ `fe_clust_check' if `touse', meanonly
-                if r(max) == 0 {
-                    * Each FE level maps to exactly one cluster - FE is nested within cluster
-                    local fe_nested_`g' = 1
-                }
-                drop `fe_clust_check'
-            }
+            capture local fe_nested_`g' = __civreghdfe_fe_nested_`g'
+            if _rc != 0 local fe_nested_`g' = 0
         }
     }
 
@@ -638,21 +625,11 @@ program define civreghdfe, eclass sortpreserve
         if _rc != 0 local N_clust2 = 0
     }
 
-    * Get coefficient vector and VCE
+    * Get coefficient vector and VCE (already in [endog, exog] order from C)
     matrix `b_temp' = __civreghdfe_b
     matrix `V_temp' = __civreghdfe_V
 
-    * Build variable names for matrices
-    * ivreghdfe convention: [endog, exog] - we need to reorder from C's [exog, endog]
-    local varnames_c ""
-    foreach v of local exogvars {
-        local varnames_c `varnames_c' `v'
-    }
-    foreach v of local endogvars {
-        local varnames_c `varnames_c' `v'
-    }
-
-    * Reorder to match ivreghdfe: [endog, exog]
+    * Build variable names in [endog, exog] order (matching C output)
     * Exclude partialled variables from varnames
     local varnames ""
     foreach v of local endogvars {
@@ -673,54 +650,7 @@ program define civreghdfe, eclass sortpreserve
 
     * Update K_exog to reflect partialled variables removed
     local K_exog = `K_exog' - `n_partial'
-
-    * Reorder coefficient vector and VCE matrix
-    * C code returns [exog, endog], we want [endog, exog]
     local K_total = `K_exog' + `K_endog'
-
-    if `K_endog' > 0 & `K_exog' > 0 {
-        * Need to reorder
-        tempname b_reorder V_reorder
-        matrix `b_reorder' = J(1, `K_total', 0)
-        matrix `V_reorder' = J(`K_total', `K_total', 0)
-
-        * Copy endogenous coefficients (from end of C output to start of reordered)
-        forvalues e = 1/`K_endog' {
-            local c_idx = `K_exog' + `e'
-            matrix `b_reorder'[1, `e'] = `b_temp'[1, `c_idx']
-        }
-
-        * Copy exogenous coefficients (from start of C output to end of reordered)
-        forvalues x = 1/`K_exog' {
-            local new_idx = `K_endog' + `x'
-            matrix `b_reorder'[1, `new_idx'] = `b_temp'[1, `x']
-        }
-
-        * Reorder VCE matrix
-        * Build mapping: new_order[i] = old_index
-        * For i = 1..K_endog: old index is K_exog + i
-        * For i = K_endog+1..K_total: old index is i - K_endog
-        forvalues i = 1/`K_total' {
-            if `i' <= `K_endog' {
-                local old_i = `K_exog' + `i'
-            }
-            else {
-                local old_i = `i' - `K_endog'
-            }
-            forvalues j = 1/`K_total' {
-                if `j' <= `K_endog' {
-                    local old_j = `K_exog' + `j'
-                }
-                else {
-                    local old_j = `j' - `K_endog'
-                }
-                matrix `V_reorder'[`i', `j'] = `V_temp'[`old_i', `old_j']
-            }
-        }
-
-        matrix `b_temp' = `b_reorder'
-        matrix `V_temp' = `V_reorder'
-    }
 
     * Force VCE symmetry (numerical precision fix)
     tempname V_sym
@@ -1333,12 +1263,36 @@ program define civreghdfe, eclass sortpreserve
         di as text "Estimation stored as: `rfprefix'main"
     }
 
-    * Timing
-    if "`timeit'" != "" {
-        local t1 = clock("", "hms")
-        local elapsed = (`t1' - `t0') / 1000
+    * Capture post-processing time (before cleanup)
+    timer off 98
+    qui timer list 98
+    local t_stata_post = r(t98)
+
+    * Display timing breakdown if verbose or timeit specified
+    if "`verbose'" != "" | "`timeit'" != "" {
+        local t_total_wall = `t_plugin' + `t_stata_post'
         di as text ""
-        di as text "Total time: " as result %6.3f `elapsed' " seconds"
+        di as text "{hline 55}"
+        di as text "civreghdfe timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f _civreghdfe_time_load " sec"
+        di as text "    Singleton removal:      " as result %8.4f _civreghdfe_time_singleton " sec"
+        di as text "    HDFE setup:             " as result %8.4f _civreghdfe_time_setup " sec"
+        di as text "    FWL partialling:        " as result %8.4f _civreghdfe_time_fwl " sec"
+        di as text "    HDFE partial out:       " as result %8.4f _civreghdfe_time_partial " sec"
+        di as text "    Post-processing:        " as result %8.4f _civreghdfe_time_postproc " sec"
+        di as text "    IV estimation + VCE:    " as result %8.4f _civreghdfe_time_estimate " sec"
+        di as text "    Stats computation:      " as result %8.4f _civreghdfe_time_stats " sec"
+        di as text "    Store results:          " as result %8.4f _civreghdfe_time_store " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _civreghdfe_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Plugin call (wall clock): " as result %8.4f `t_plugin' " sec"
+        di as text "  Stata post-processing:    " as result %8.4f `t_stata_post' " sec"
+        di as text "  {hline 53}"
+        di as text "  Total wall clock:         " as result %8.4f `t_total_wall' " sec"
+        di as text "{hline 55}"
     }
 
     * Clean up temp scalars and matrices
@@ -1421,10 +1375,27 @@ program define civreghdfe, eclass sortpreserve
     capture scalar drop __civreghdfe_redund_stat
     capture scalar drop __civreghdfe_redund_df
 
+    * Clean up nested FE scalars
+    forval i = 1/20 {
+        capture scalar drop __civreghdfe_fe_nested_`i'
+    }
+
     * Clean up partial scalars
     capture scalar drop __civreghdfe_n_partial
     forval i = 1/10 {
         capture scalar drop __civreghdfe_partial_`i'
     }
+
+    * Clean up timing scalars
+    capture scalar drop _civreghdfe_time_load
+    capture scalar drop _civreghdfe_time_singleton
+    capture scalar drop _civreghdfe_time_setup
+    capture scalar drop _civreghdfe_time_fwl
+    capture scalar drop _civreghdfe_time_partial
+    capture scalar drop _civreghdfe_time_postproc
+    capture scalar drop _civreghdfe_time_estimate
+    capture scalar drop _civreghdfe_time_stats
+    capture scalar drop _civreghdfe_time_store
+    capture scalar drop _civreghdfe_time_total
 
 end

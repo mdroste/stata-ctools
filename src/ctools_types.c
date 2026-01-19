@@ -219,6 +219,117 @@ int ctools_uint64_to_str_fast(uint64_t val, char *buf)
     return len;
 }
 
+/* ===========================================================================
+   Permutation Application
+   =========================================================================== */
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
+/*
+    Apply permutation (sort_order) to all variables in the dataset.
+    After calling, data is physically reordered and sort_order is reset to identity.
+
+    @param data  [in/out] stata_data with computed sort_order
+    @return      STATA_OK on success, STATA_ERR_MEMORY on allocation failure
+*/
+stata_retcode ctools_apply_permutation(stata_data *data)
+{
+    size_t nvars = data->nvars;
+    size_t nobs = data->nobs;
+    perm_idx_t *perm = data->sort_order;
+
+    if (nvars == 0 || nobs == 0) return STATA_OK;
+
+#ifdef _OPENMP
+    int success = 1;
+
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (size_t j = 0; j < nvars; j++) {
+        if (!success) continue;
+
+        stata_variable *var = &data->vars[j];
+
+        if (var->type == STATA_TYPE_DOUBLE) {
+            double *old_data = var->data.dbl;
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
+            if (!new_data) {
+                #pragma omp atomic write
+                success = 0;
+                continue;
+            }
+
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+
+            ctools_aligned_free(old_data);
+            var->data.dbl = new_data;
+        } else {
+            char **old_data = var->data.str;
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
+            if (!new_data) {
+                #pragma omp atomic write
+                success = 0;
+                continue;
+            }
+
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+
+            ctools_aligned_free(old_data);
+            var->data.str = new_data;
+        }
+    }
+
+    if (!success) return STATA_ERR_MEMORY;
+#else
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+
+        if (var->type == STATA_TYPE_DOUBLE) {
+            double *old_data = var->data.dbl;
+            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
+            if (!new_data) return STATA_ERR_MEMORY;
+
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+
+            ctools_aligned_free(old_data);
+            var->data.dbl = new_data;
+        } else {
+            char **old_data = var->data.str;
+            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
+            if (!new_data) return STATA_ERR_MEMORY;
+
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+
+            ctools_aligned_free(old_data);
+            var->data.str = new_data;
+        }
+    }
+#endif
+
+    /* Reset sort_order to identity */
+    #ifdef _OPENMP
+    #pragma omp parallel for
+    #endif
+    for (size_t j = 0; j < nobs; j++) {
+        perm[j] = (perm_idx_t)j;
+    }
+
+    return STATA_OK;
+}
+
+/* ===========================================================================
+   Type Conversion Utilities Implementation
+   =========================================================================== */
+
 bool ctools_parse_double_fast(const char *str, int len, double *result, double missval)
 {
     const char *p = str;

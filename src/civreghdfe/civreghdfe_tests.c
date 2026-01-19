@@ -18,9 +18,10 @@
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_vce.h"
 
-/* Forward declarations from creghdfe_solver */
-extern int cholesky(double *A, int K);
-extern int invert_from_cholesky(const double *L, int K, double *A_inv);
+/* Shared OLS functions */
+#include "../ctools_ols.h"
+#define cholesky ctools_cholesky
+#define invert_from_cholesky ctools_invert_from_cholesky
 
 /*
     Compute first-stage F statistics for each endogenous variable.

@@ -1,0 +1,532 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do benchmark/test_civreghdfe_opt.do 
+
+. * Test civreghdfe after optimization changes
+. * Tests: sortpreserve removed, coef reordering in C, nested FE detection in C
+. 
+. clear all
+
+. 
+. * Add build directory to ado path
+. adopath + build
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "build"
+
+. 
+. set seed 12345
+
+. set obs 100000
+Number of observations (_N) was 0, now 100,000.
+
+. 
+. * Generate data - standard IV setup (fewer FE levels to avoid near-singularit
+> y)
+. gen firm = ceil(_n/500)
+
+. gen year = mod(_n-1, 10) + 2000
+
+. gen industry = ceil(_n/1000)
+
+. 
+. * Exogenous variables
+. gen x1 = rnormal()
+
+. gen x2 = rnormal()
+
+. 
+. * Instruments
+. gen z1 = rnormal()
+
+. gen z2 = rnormal()
+
+. 
+. * Error term
+. gen u = rnormal()
+
+. 
+. * Endogenous variable (correlated with u, but z1/z2 are valid instruments)
+. gen endogx = 0.8*z1 + 0.4*z2 + 0.5*u + rnormal(0, 0.5)
+
+. 
+. * Outcome
+. gen y = 0.5*endogx + 0.3*x1 + 0.2*x2 + 0.8*u + rnormal()
+
+. 
+. * Load plugin
+. local plugin_name "ctools_mac_arm.plugin"
+
+. capture program ctools_plugin, plugin using("build/`plugin_name'")
+
+. 
+. di as text _n "============================================="
+
+=============================================
+
+. di as text "Test 1: Basic IV regression (no controls)"
+Test 1: Basic IV regression (no controls)
+
+. di as text "=============================================" _n
+=============================================
+
+
+. 
+. timer clear 1
+
+. timer on 1
+
+. civreghdfe y (endogx = z1 z2), absorb(firm year) vce(cluster firm) verbose ti
+> meit
+
+------------------------------------------------------------
+civreghdfe: C-Accelerated IV Regression with HDFE
+------------------------------------------------------------
+Dependent variable:    y
+Endogenous variables:  endogx (1)
+Exogenous variables:    (0)
+Excluded instruments:  z1 z2 (2)
+Absorbed FE:           firm year (2)
+Observations:          100000
+VCE:                   Cluster (firm)
+------------------------------------------------------------
+Estimation method:     2SLS
+civreghdfe: N=100000, K_endog=1, K_exog=0, K_iv=2, G=2
+civreghdfe: 100000 valid observations (dropped 0)
+civreghdfe: No singletons found
+civreghdfe: Partialling out fixed effects...
+civreghdfe: Fixed effects partialled out
+civreghdfe: nested_fe_index=1, df_a=209, df_a_nested=200, df_a_for_vce=9, neste
+> d_adj=1
+civreghdfe: FE nested detection complete
+  FE 1: nested
+  FE 2: not nested
+civreghdfe: Computing 2SLS estimation
+  N=100000, K_exog=0, K_endog=1, K_iv=2
+  beta[0] = 0.499995
+  First-stage F[0] = 80004.3 (R^2 = 0.615423)
+civreghdfe: Done
+
+IV (2SLS) estimation
+--------------------
+
+Estimates efficient for homoskedasticity only
+Statistics robust to heteroskedasticity and clustering on firm
+
+Number of clusters (firm) =       200                 Number of obs =  100,000
+                                                      F(  1,   199) = 10860.17
+                                                      Prob > F      =   0.0000
+Total (centered) SS     =  249249.3                   Centered R2   =   0.2891
+Total (uncentered) SS   =  249249.3                   Uncentered R2 =   0.2891
+Residual SS             =  177186.1                   Root MSE      =        1
+
+                                 (Std. err. adjusted for 200 clusters in firm)
+------------------------------------------------------------------------------
+             |               Cluster
+           y | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+      endogx |   .4999952   .0047979   104.21   0.000     .4905915     .509399
+------------------------------------------------------------------------------
+Underidentification test (Kleibergen-Paap rk LM statistic):            198.676
+                                                   Chi-sq(2) P-val =    0.0000
+------------------------------------------------------------------------------
+Weak identification test (Cragg-Donald Wald F statistic):            80004.330
+                         (Kleibergen-Paap rk Wald F statistic):      68437.071
+Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
+                                         15% maximal IV size             11.59
+                                         20% maximal IV size              8.75
+                                         25% maximal IV size              7.25
+Source: Stock-Yogo (2005).  Reproduced by permission.
+NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
+------------------------------------------------------------------------------
+Hansen J statistic (overidentification test of all instruments):         1.010
+                                                   Chi-sq(1) P-val =    0.3150
+------------------------------------------------------------------------------
+Instrumented:         endogx
+Excluded instruments: z1 z2
+Partialled-out:       _cons
+                      nb: total SS, model F and R2s are after partialling-out;
+                          any small-sample adjustments include partialled-out
+                          variables in regressor count K
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+        firm |       200         200           0   *|
+        year |        10           1           9    |
+-----------------------------------------------------+
+* = FE nested within cluster; treated as redundant for DoF computation
+
+
+-------------------------------------------------------
+civreghdfe timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Data load:                0.0062 sec
+    Singleton removal:        0.0003 sec
+    HDFE setup:               0.0013 sec
+    FWL partialling:          0.0000 sec
+    HDFE partial out:         0.0033 sec
+    Post-processing:          0.0001 sec
+    IV estimation + VCE:      0.0027 sec
+    Stats computation:        0.0003 sec
+    Store results:            0.0000 sec
+  -----------------------------------------------------
+    C plugin total:           0.0142 sec
+  -----------------------------------------------------
+  Plugin call (wall clock):   0.0150 sec
+  Stata post-processing:      0.0420 sec
+  -----------------------------------------------------
+  Total wall clock:           0.0570 sec
+-------------------------------------------------------
+
+. timer off 1
+
+. qui timer list 1
+
+. di as text _n "Total Stata-side elapsed time: " r(t1) " seconds" _n
+
+Total Stata-side elapsed time: .06 seconds
+
+
+. 
+. * Check coefficients are in expected order
+. di as text "Coefficient vector:"
+Coefficient vector:
+
+. matrix list e(b)
+
+symmetric e(b)[1,1]
+       endogx
+y1  .49999523
+
+. 
+. di as text _n "============================================="
+
+=============================================
+
+. di as text "Test 2: Quick correctness check"
+Test 2: Quick correctness check
+
+. di as text "=============================================" _n
+=============================================
+
+
+. 
+. * Verify coefficient signs make sense
+. di as text "endogx coef (expected ~0.5): " _b[endogx]
+endogx coef (expected ~0.5): .49999523
+
+. 
+. * Check N and df
+. di as text _n "N = " e(N) " (expected ~100000)"
+
+N = 100000 (expected ~100000)
+
+. di as text "N_clust = " e(N_clust)
+N_clust = 200
+
+. 
+. di as text _n "============================================="
+
+=============================================
+
+. di as text "Test 3: With exogenous controls"
+Test 3: With exogenous controls
+
+. di as text "=============================================" _n
+=============================================
+
+
+. 
+. civreghdfe y (endogx = z1 z2) x1 x2, absorb(firm year) vce(cluster firm) time
+> it verbose
+
+------------------------------------------------------------
+civreghdfe: C-Accelerated IV Regression with HDFE
+------------------------------------------------------------
+Dependent variable:    y
+Endogenous variables:  endogx (1)
+Exogenous variables:   x1 x2 (2)
+Excluded instruments:  z1 z2 (2)
+Absorbed FE:           firm year (2)
+Observations:          100000
+VCE:                   Cluster (firm)
+------------------------------------------------------------
+Estimation method:     2SLS
+civreghdfe: N=100000, K_endog=1, K_exog=2, K_iv=4, G=2
+civreghdfe: 100000 valid observations (dropped 0)
+civreghdfe: No singletons found
+civreghdfe: Partialling out fixed effects...
+civreghdfe: Fixed effects partialled out
+civreghdfe: nested_fe_index=1, df_a=209, df_a_nested=200, df_a_for_vce=9, neste
+> d_adj=1
+civreghdfe: FE nested detection complete
+  FE 1: nested
+  FE 2: not nested
+civreghdfe: Computing 2SLS estimation
+  N=100000, K_exog=2, K_endog=1, K_iv=4
+  beta[0] = 0.306776
+  beta[1] = 0.195749
+  beta[2] = 0.498052
+  First-stage F[0] = 80006.1 (R^2 = 0.615433)
+civreghdfe: Done
+
+IV (2SLS) estimation
+--------------------
+
+Estimates efficient for homoskedasticity only
+Statistics robust to heteroskedasticity and clustering on firm
+
+Number of clusters (firm) =       200                 Number of obs =  100,000
+                                                      F(  3,   199) =  7450.98
+                                                      Prob > F      =   0.0000
+Total (centered) SS     =  249249.3                   Centered R2   =   0.3414
+Total (uncentered) SS   =  249249.3                   Uncentered R2 =   0.3414
+Residual SS             =  164163.5                   Root MSE      =        1
+
+                                 (Std. err. adjusted for 200 clusters in firm)
+------------------------------------------------------------------------------
+             |               Cluster
+           y | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+      endogx |   .4980517   .0044316   112.39   0.000     .4893657    .5067377
+          x1 |   .3067764   .0040315    76.10   0.000     .2988747     .314678
+          x2 |   .1957495   .0042137    46.46   0.000     .1874906    .2040083
+------------------------------------------------------------------------------
+Underidentification test (Kleibergen-Paap rk LM statistic):            198.688
+                                                   Chi-sq(2) P-val =    0.0000
+------------------------------------------------------------------------------
+Weak identification test (Cragg-Donald Wald F statistic):            80006.114
+                         (Kleibergen-Paap rk Wald F statistic):      68654.598
+Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
+                                         15% maximal IV size             11.59
+                                         20% maximal IV size              8.75
+                                         25% maximal IV size              7.25
+Source: Stock-Yogo (2005).  Reproduced by permission.
+NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
+------------------------------------------------------------------------------
+Hansen J statistic (overidentification test of all instruments):         0.225
+                                                   Chi-sq(1) P-val =    0.6350
+------------------------------------------------------------------------------
+Instrumented:         endogx
+Included instruments: x1 x2
+Excluded instruments: z1 z2
+Partialled-out:       _cons
+                      nb: total SS, model F and R2s are after partialling-out;
+                          any small-sample adjustments include partialled-out
+                          variables in regressor count K
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+        firm |       200         200           0   *|
+        year |        10           1           9    |
+-----------------------------------------------------+
+* = FE nested within cluster; treated as redundant for DoF computation
+
+
+-------------------------------------------------------
+civreghdfe timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Data load:                0.0051 sec
+    Singleton removal:        0.0003 sec
+    HDFE setup:               0.0005 sec
+    FWL partialling:          0.0000 sec
+    HDFE partial out:         0.0044 sec
+    Post-processing:          0.0001 sec
+    IV estimation + VCE:      0.0046 sec
+    Stats computation:        0.0003 sec
+    Store results:            0.0000 sec
+  -----------------------------------------------------
+    C plugin total:           0.0153 sec
+  -----------------------------------------------------
+  Plugin call (wall clock):   0.0160 sec
+  Stata post-processing:      0.0040 sec
+  -----------------------------------------------------
+  Total wall clock:           0.0200 sec
+-------------------------------------------------------
+
+. di as text "Coefficients with controls:"
+Coefficients with controls:
+
+. di as text "endogx coef (expected ~0.5): " _b[endogx]
+endogx coef (expected ~0.5): .49805168
+
+. di as text "x1 coef (expected ~0.3): " _b[x1]
+x1 coef (expected ~0.3): .30677637
+
+. di as text "x2 coef (expected ~0.2): " _b[x2]
+x2 coef (expected ~0.2): .19574947
+
+. 
+. di as text _n "============================================="
+
+=============================================
+
+. di as text "Test 4: Large dataset performance (1M obs)"
+Test 4: Large dataset performance (1M obs)
+
+. di as text "=============================================" _n
+=============================================
+
+
+. 
+. clear
+
+. set obs 1000000
+Number of observations (_N) was 0, now 1,000,000.
+
+. 
+. * Generate large dataset (fewer FE levels)
+. gen firm = ceil(_n/500)
+
+. gen year = mod(_n-1, 10) + 2000
+
+. gen z1 = rnormal()
+
+. gen z2 = rnormal()
+
+. gen u = rnormal()
+
+. gen endogx = 0.8*z1 + 0.4*z2 + 0.5*u + rnormal(0, 0.5)
+
+. gen y = 0.5*endogx + 0.8*u + rnormal()
+
+. 
+. timer clear 2
+
+. timer on 2
+
+. civreghdfe y (endogx = z1 z2), absorb(firm year) vce(cluster firm) timeit
+
+IV (2SLS) estimation
+--------------------
+
+Estimates efficient for homoskedasticity only
+Statistics robust to heteroskedasticity and clustering on firm
+
+Number of clusters (firm) =     2,000                 Number of obs =1,000,000
+                                                      F(  1,  1999) =117255.07
+                                                      Prob > F      =   0.0000
+Total (centered) SS     =  2360440.6                  Centered R2   =   0.3070
+Total (uncentered) SS   =  2360440.6                  Uncentered R2 =   0.3070
+Residual SS             =  1635834.9                  Root MSE      =        1
+
+                               (Std. err. adjusted for 2,000 clusters in firm)
+------------------------------------------------------------------------------
+             |               Cluster
+           y | Coefficient  std. err.      t    P>|t|     [95% conf. interval]
+-------------+----------------------------------------------------------------
+      endogx |   .5002724    .001461   342.43   0.000      .497409    .5031359
+------------------------------------------------------------------------------
+Underidentification test (Kleibergen-Paap rk LM statistic):           1989.371
+                                                   Chi-sq(2) P-val =    0.0000
+------------------------------------------------------------------------------
+Weak identification test (Cragg-Donald Wald F statistic):           798032.812
+                         (Kleibergen-Paap rk Wald F statistic):     793124.743
+Stock-Yogo weak ID test critical values: 10% maximal IV size             19.93
+                                         15% maximal IV size             11.59
+                                         20% maximal IV size              8.75
+                                         25% maximal IV size              7.25
+Source: Stock-Yogo (2005).  Reproduced by permission.
+NB: Critical values are for Cragg-Donald F statistic and i.i.d. errors.
+------------------------------------------------------------------------------
+Hansen J statistic (overidentification test of all instruments):         1.406
+                                                   Chi-sq(1) P-val =    0.2357
+------------------------------------------------------------------------------
+Instrumented:         endogx
+Excluded instruments: z1 z2
+Partialled-out:       _cons
+                      nb: total SS, model F and R2s are after partialling-out;
+                          any small-sample adjustments include partialled-out
+                          variables in regressor count K
+------------------------------------------------------------------------------
+
+Absorbed degrees of freedom:
+-----------------------------------------------------+
+ Absorbed FE | Categories  - Redundant  = Num. Coefs |
+-------------+---------------------------------------|
+        firm |     2,000       2,000           0   *|
+        year |        10           1           9    |
+-----------------------------------------------------+
+* = FE nested within cluster; treated as redundant for DoF computation
+
+
+-------------------------------------------------------
+civreghdfe timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Data load:                0.0282 sec
+    Singleton removal:        0.0029 sec
+    HDFE setup:               0.0046 sec
+    FWL partialling:          0.0000 sec
+    HDFE partial out:         0.0338 sec
+    Post-processing:          0.0010 sec
+    IV estimation + VCE:      0.0270 sec
+    Stats computation:        0.0029 sec
+    Store results:            0.0000 sec
+  -----------------------------------------------------
+    C plugin total:           0.1003 sec
+  -----------------------------------------------------
+  Plugin call (wall clock):   0.1030 sec
+  Stata post-processing:      0.0050 sec
+  -----------------------------------------------------
+  Total wall clock:           0.1080 sec
+-------------------------------------------------------
+
+. timer off 2
+
+. qui timer list 2
+
+. di as text _n "Large dataset elapsed time: " r(t2) " seconds"
+
+Large dataset elapsed time: .114 seconds
+
+. 
+. di as text _n "============================================="
+
+=============================================
+
+. di as text "All tests completed successfully!"
+All tests completed successfully!
+
+. di as text "============================================="
+=============================================
+
+. 
+end of do-file

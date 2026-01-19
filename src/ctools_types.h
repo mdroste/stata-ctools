@@ -200,6 +200,38 @@ stata_retcode ctools_sort_ips4o(stata_data *data, int *sort_vars, size_t nsort);
 stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
                                            size_t nsort, size_t *perm_out);
 
+// Sort data using IPS4o but only compute sort_order (don't apply permutation)
+// After this call, data->sort_order contains the permutation but data is unchanged.
+// Call ctools_apply_permutation() separately to apply the permutation.
+stata_retcode ctools_sort_ips4o_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using LSD radix sort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_radix_lsd_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using MSD radix sort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_radix_msd_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Timsort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_timsort_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Sample sort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_sample_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Counting sort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Sort data using Merge sort but only compute sort_order (don't apply permutation)
+stata_retcode ctools_sort_merge_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+/* ---------------------------------------------------------------------------
+   Permutation Application
+   --------------------------------------------------------------------------- */
+
+// Apply permutation (sort_order) to all variables in the dataset.
+// After calling, data is physically reordered and sort_order is reset to identity.
+// This is used when sorting was done with _order_only variants.
+stata_retcode ctools_apply_permutation(stata_data *data);
+
 /* ---------------------------------------------------------------------------
    Sort Algorithm Selection
    --------------------------------------------------------------------------- */

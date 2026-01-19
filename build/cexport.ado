@@ -257,15 +257,25 @@ program define cexport, rclass
 
     * Display timing if requested
     if "`timeit'" != "" | "`verbose'" != "" {
+        local plugin_overhead = `elapsed' - _cexport_time_total
+        if `plugin_overhead' < 0 local plugin_overhead = 0
         di as text ""
-        di as text "Timing breakdown:"
-        di as text "  Load:  " as result %8.4f _cexport_time_load " sec"
-        di as text "  Write: " as result %8.4f _cexport_time_write " sec"
-        di as text "  Total: " as result %8.4f _cexport_time_total " sec"
-
+        di as text "{hline 55}"
+        di as text "cexport timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f _cexport_time_load " sec"
+        di as text "    Write to file:          " as result %8.4f _cexport_time_write " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cexport_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Plugin call overhead:     " as result %8.4f `plugin_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
+        di as text "{hline 55}"
         if `elapsed' > 0 {
             local rows_per_sec = `nobs' / `elapsed'
-            di as text "  Speed: " as result %12.0fc `rows_per_sec' as text " rows/sec"
+            di as text "    Throughput:             " as result %12.0fc `rows_per_sec' as text " rows/sec"
         }
     }
 
