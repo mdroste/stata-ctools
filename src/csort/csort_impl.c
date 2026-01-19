@@ -17,9 +17,40 @@
 #include "ctools_types.h"
 #include "ctools_timer.h"
 #include "csort_impl.h"
+#include "csort_stream.h"
 
 /* Debug flag - set to 1 to enable debug output */
 #define CSORT_DEBUG 0
+
+/*
+    Parse memory-efficient mode option from argument string.
+    Looks for "memeff" to enable memory-efficient streaming mode.
+
+    Memory-efficient mode:
+    - Only loads key (sort) variables into C memory
+    - Streams permutation application to non-key variables in blocks
+    - Dramatically reduces memory usage for wide datasets
+    - Best when: many non-key columns, limited memory
+
+    Returns 1 if memory-efficient mode enabled, 0 otherwise.
+*/
+static int parse_memeff_option(const char *args)
+{
+    const char *p;
+
+    /* Look for "memeff" in the arguments */
+    p = strstr(args, "memeff");
+    if (p == NULL) {
+        return 0;
+    }
+
+    /* Check if it's "memeff=0" (explicitly disabled) */
+    if (p[6] == '=' && p[7] == '0') {
+        return 0;
+    }
+
+    return 1;
+}
 
 /*
     Parse algorithm option from argument string.
@@ -183,6 +214,61 @@ ST_retcode csort_main(const char *args)
         return 2000;
     }
 
+    /* Check for memory-efficient mode option */
+    int use_memeff = parse_memeff_option(args);
+
+    /* ================================================================
+       MEMORY-EFFICIENT MODE: For large datasets with many columns
+       Only loads key variables, streams permutation to non-keys
+       ================================================================ */
+    if (use_memeff) {
+        csort_stream_timings stream_timings = {0};
+
+        /* Build array of all variable indices (1-based) */
+        int *all_var_indices = (int *)malloc(nvars * sizeof(int));
+        if (!all_var_indices) {
+            SF_error("csort: memory allocation failed\n");
+            free(sort_vars);
+            return 920;
+        }
+        for (size_t j = 0; j < nvars; j++) {
+            all_var_indices[j] = (int)(j + 1);
+        }
+
+        /* Call streaming sort */
+        rc = csort_stream_sort(sort_vars, nsort, all_var_indices, nvars,
+                                algorithm, 0, &stream_timings);
+
+        free(all_var_indices);
+        free(sort_vars);
+
+        if (rc != STATA_OK) {
+            snprintf(msg, sizeof(msg), "csort: streaming sort failed (error %d)\n", rc);
+            SF_error(msg);
+            return 920;
+        }
+
+        /* Calculate total time */
+        t_end = ctools_timer_seconds();
+        timer.total_time = t_end - t_start;
+
+        /* Store timing results in Stata scalars for memeff mode */
+        SF_scal_save("_csort_memeff", 1.0);  /* Flag indicating memeff mode was used */
+        SF_scal_save("_csort_time_load", stream_timings.load_keys_time);
+        SF_scal_save("_csort_time_sort", stream_timings.sort_time);
+        SF_scal_save("_csort_time_permute", stream_timings.permute_keys_time);
+        SF_scal_save("_csort_time_store", stream_timings.store_keys_time);
+        SF_scal_save("_csort_time_stream", stream_timings.stream_nonkeys_time);
+        SF_scal_save("_csort_time_cleanup", 0.0);  /* Minimal cleanup in memeff mode */
+        SF_scal_save("_csort_time_total", timer.total_time);
+
+        return 0;
+    }
+
+    /* ================================================================
+       STANDARD MODE: Load all data, sort, store
+       ================================================================ */
+
     /* ================================================================
        PHASE 1: Load data from Stata to C
        ================================================================ */
@@ -345,11 +431,13 @@ ST_retcode csort_main(const char *args)
     t_end = ctools_timer_seconds();
     timer.total_time = t_end - t_start;
 
-    /* Store timing results in Stata scalars */
+    /* Store timing results in Stata scalars (standard mode) */
+    SF_scal_save("_csort_memeff", 0.0);  /* Flag indicating standard mode was used */
     SF_scal_save("_csort_time_load", timer.load_time);
     SF_scal_save("_csort_time_sort", timer.sort_time);
     SF_scal_save("_csort_time_permute", t_permute);
     SF_scal_save("_csort_time_store", timer.store_time);
+    SF_scal_save("_csort_time_stream", 0.0);  /* No streaming in standard mode */
     SF_scal_save("_csort_time_cleanup", t_cleanup);
     SF_scal_save("_csort_time_total", timer.total_time);
 

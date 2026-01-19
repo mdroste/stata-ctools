@@ -21,7 +21,7 @@ int ctools_pool_init(ctools_thread_pool *pool, size_t count,
         return -1;
     }
 
-    pool->threads = (pthread_t *)malloc(count * sizeof(pthread_t));
+    pool->threads = (pthread_t *)ctools_safe_malloc2(count, sizeof(pthread_t));
     if (pool->threads == NULL) {
         return -1;
     }
@@ -224,7 +224,7 @@ int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers
 
     memset(pool, 0, sizeof(*pool));
 
-    pool->workers = (pthread_t *)malloc(num_workers * sizeof(pthread_t));
+    pool->workers = (pthread_t *)ctools_safe_malloc2(num_workers, sizeof(pthread_t));
     if (pool->workers == NULL) {
         return -1;
     }

@@ -89,6 +89,19 @@ static inline void *aligned_alloc_cacheline(size_t size)
 }
 
 /*
+    Overflow-safe version of aligned_alloc_cacheline for (count * element_size).
+    Returns NULL on overflow or allocation failure.
+*/
+static inline void *aligned_alloc_cacheline_safe2(size_t count, size_t element_size)
+{
+    size_t size;
+    if (ctools_safe_mul_size(count, element_size, &size) != 0) {
+        return NULL;
+    }
+    return aligned_alloc_cacheline(size);
+}
+
+/*
     Free cache-line aligned memory.
 */
 static inline void aligned_free(void *ptr)
@@ -475,15 +488,15 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
     data->nobs = (size_t)nobs;
     data->nvars = nvars;
 
-    /* Allocate array of variables (cache-line aligned for better access) */
-    data->vars = (stata_variable *)aligned_alloc_cacheline(nvars * sizeof(stata_variable));
+    /* Allocate array of variables (cache-line aligned, overflow-safe) */
+    data->vars = (stata_variable *)aligned_alloc_cacheline_safe2(nvars, sizeof(stata_variable));
     if (data->vars == NULL) {
         return STATA_ERR_MEMORY;
     }
     memset(data->vars, 0, nvars * sizeof(stata_variable));
 
-    /* Allocate sort order array (cache-line aligned, uses perm_idx_t for 50% memory savings) */
-    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(nobs * sizeof(perm_idx_t));
+    /* Allocate sort order array (cache-line aligned, overflow-safe) */
+    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline_safe2(nobs, sizeof(perm_idx_t));
     if (data->sort_order == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
@@ -494,8 +507,8 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         data->sort_order[i] = (perm_idx_t)i;
     }
 
-    /* Allocate thread arguments (used for both parallel and sequential) */
-    thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
+    /* Allocate thread arguments (overflow-safe) */
+    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
@@ -705,8 +718,8 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
     nobs = data->nobs;
     nvars = data->nvars;
 
-    /* Allocate thread arguments (used for both parallel and sequential) */
-    thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
+    /* Allocate thread arguments (overflow-safe) */
+    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -833,8 +846,8 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
         data->sort_order[i] = (perm_idx_t)i;
     }
 
-    /* Allocate thread arguments */
-    thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
+    /* Allocate thread arguments (overflow-safe) */
+    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
@@ -934,8 +947,8 @@ stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
 
     nobs = data->nobs;
 
-    /* Allocate thread arguments */
-    thread_args = (ctools_var_io_args *)malloc(nvars * sizeof(ctools_var_io_args));
+    /* Allocate thread arguments (overflow-safe) */
+    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         return STATA_ERR_MEMORY;
     }
@@ -1020,8 +1033,8 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
     int is_string = SF_var_is_string(stata_var);
 
     if (is_string) {
-        /* String variable: allocate buffer, gather, scatter */
-        char **buf = (char **)aligned_alloc_cacheline(output_nobs * sizeof(char *));
+        /* String variable: allocate buffer, gather, scatter (overflow-safe) */
+        char **buf = (char **)aligned_alloc_cacheline_safe2(output_nobs, sizeof(char *));
         if (!buf) return STATA_ERR_MEMORY;
         memset(buf, 0, output_nobs * sizeof(char *));  /* Zero-init for safe cleanup */
 
@@ -1104,8 +1117,8 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         aligned_free(buf);
 
     } else {
-        /* Numeric variable: allocate aligned buffer, gather, scatter */
-        double *buf = (double *)aligned_alloc_cacheline(output_nobs * sizeof(double));
+        /* Numeric variable: allocate aligned buffer, gather, scatter (overflow-safe) */
+        double *buf = (double *)aligned_alloc_cacheline_safe2(output_nobs, sizeof(double));
         if (!buf) return STATA_ERR_MEMORY;
 
         /* GATHER: Read from source positions with prefetching */

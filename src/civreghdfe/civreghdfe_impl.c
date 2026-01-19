@@ -567,7 +567,8 @@ static ST_retcode do_iv_regression(void)
             free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int fg = 0; fg < G; fg++) free(fe_levels_c[fg]);
-            free(fe_levels_c); free(singleton_mask);
+            free(fe_levels_c);
+            /* Note: singleton_mask already freed after singleton removal */
             return 920;
         }
 
@@ -975,7 +976,7 @@ static ST_retcode do_iv_regression(void)
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
             free(fe_levels_c);
-            /* Cleanup state (singleton_mask already freed at line 375) */
+            /* Cleanup state (singleton_mask already freed after singleton removal) */
             for (ST_int t = 0; t < num_threads; t++) {
                 free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
                 free(state->thread_cg_v[t]); free(state->thread_proj[t]);
@@ -1010,7 +1011,7 @@ static ST_retcode do_iv_regression(void)
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
             free(fe_levels_c);
-            /* Cleanup state (singleton_mask already freed at line 375) */
+            /* Cleanup state (singleton_mask already freed after singleton removal) */
             for (ST_int t = 0; t < num_threads; t++) {
                 free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
                 free(state->thread_cg_v[t]); free(state->thread_proj[t]);

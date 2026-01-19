@@ -1,0 +1,336 @@
+
+  ___  ____  ____  ____  ____ ®
+ /__    /   ____/   /   ____/      StataNow 18.5
+___/   /   /___/   /   /___/       MP—Parallel Edition
+
+ Statistics and Data Science       Copyright 1985-2023 StataCorp LLC
+                                   StataCorp
+                                   4905 Lakeway Drive
+                                   College Station, Texas 77845 USA
+                                   800-782-8272        https://www.stata.com
+                                   979-696-4600        service@stata.com
+
+Stata license: Unlimited-user 16-core network, expiring  2 Jul 2026
+Serial number: 501909320077
+  Licensed to: Michael Droste
+               Stanford University GSB
+
+Notes:
+      1. Stata is running in batch mode.
+      2. Unicode is supported; see help unicode_advice.
+      3. More than 2 billion observations are allowed; see help obs_advice.
+      4. Maximum number of variables is set to 5,000 but can be increased;
+          see help set_maxvar.
+
+
+Running /Users/Mike/Documents/Stata/profile.do ...
+
+. do test_memeff.do 
+
+. /*
+>     test_memeff.do
+>     Test and benchmark memory-efficient sorting mode
+> 
+>     Compares standard csort vs memory-efficient (memeff) mode.
+>     Memory-efficient mode is best for:
+>     - Wide datasets (many columns)
+>     - Limited memory situations
+>     - Large datasets that don't fit in RAM with standard approach
+> */
+. 
+. clear all
+
+. set more off
+
+. 
+. * Add ctools build directory to adopath
+. * Use the directory where this script is located
+. local script_dir = c(pwd)
+
+. adopath + "`script_dir'/../build"
+  [1]  (BASE)      "/Applications/Stata/ado/base/"
+  [2]  (SITE)      "/Applications/Stata/ado/site/"
+  [3]              "."
+  [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
+  [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
+  [6]  (OLDPLACE)  "~/ado/"
+  [7]              "/Users/Mike/Documents/GitHub/stata-ctools/benchmark/../buil
+> d"
+
+. di "Added to adopath: `script_dir'/../build"
+Added to adopath: /Users/Mike/Documents/GitHub/stata-ctools/benchmark/../build
+
+. 
+. * Create test dataset with many columns (simulates wide dataset)
+. local nobs = 500000
+
+. local ncols = 100
+
+. 
+. di as text ""
+
+
+. di as text "=============================================="
+==============================================
+
+. di as text "Memory-Efficient Sort Test"
+Memory-Efficient Sort Test
+
+. di as text "=============================================="
+==============================================
+
+. di as text "Observations: `nobs'"
+Observations: 500000
+
+. di as text "Columns: `ncols' (1 sort key + `=`ncols'-1' data columns)"
+Columns: 100 (1 sort key + 99 data columns)
+
+. di as text ""
+
+
+. 
+. * Generate sort key and many data columns
+. set seed 12345
+
+. set obs `nobs'
+Number of observations (_N) was 0, now 500,000.
+
+. 
+. * Sort key (random integers)
+. gen sort_key = ceil(runiform() * 10000)
+
+. 
+. * Generate many data columns to simulate wide dataset
+. forvalues i = 1/`=`ncols'-1' {
+  2.     gen col`i' = runiform()
+  3. }
+
+. 
+. * Save original for verification
+. tempfile original
+
+. save "`original'"
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St10384.000001 saved
+    as .dta format
+
+. 
+. * ============================================
+. * Test 1: Standard sort
+. * ============================================
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. di as text "Test 1: Standard csort"
+Test 1: Standard csort
+
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. 
+. use "`original'", clear
+
+. 
+. timer clear 1
+
+. timer on 1
+
+. csort sort_key, timeit
+
+-------------------------------------------------------
+csort timing breakdown:
+-------------------------------------------------------
+  C plugin internals:
+    Data load:                0.1045 sec
+    Sort (compute order):     0.0046 sec
+    Sort (apply permute):     0.0178 sec
+    Data store:               0.0483 sec
+    Memory cleanup:           0.0056 sec
+  -----------------------------------------------------
+    C plugin total:           0.1807 sec
+  -----------------------------------------------------
+  Stata overhead:
+    Pre-plugin parsing:       0.1250 sec
+    Plugin call overhead:     0.0003 sec
+    Post-plugin sort:         0.0160 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.1413 sec
+-------------------------------------------------------
+    Wall clock total:         0.3220 sec
+-------------------------------------------------------
+
+. timer off 1
+
+. 
+. quietly timer list 1
+
+. local time_standard = r(t1)
+
+. di as text "Total time: " as result %8.4f `time_standard' " sec"
+Total time:   0.3230 sec
+
+. 
+. * Save sorted data for comparison
+. tempfile sorted_standard
+
+. save "`sorted_standard'"
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St10384.000002 saved
+    as .dta format
+
+. 
+. * ============================================
+. * Test 2: Memory-efficient sort
+. * ============================================
+. di as text ""
+
+
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. di as text "Test 2: Memory-efficient csort (memeff)"
+Test 2: Memory-efficient csort (memeff)
+
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. 
+. use "`original'", clear
+
+. 
+. timer clear 2
+
+. timer on 2
+
+. csort sort_key, timeit memeff
+
+-------------------------------------------------------
+csort timing breakdown (memory-efficient mode):
+-------------------------------------------------------
+  C plugin internals:
+    Load key vars:            0.0081 sec
+    Sort (compute order):     0.0030 sec
+    Permute keys in C:        0.0012 sec
+    Store sorted keys:        0.0024 sec
+    Stream non-key vars:      0.1842 sec
+  -----------------------------------------------------
+    C plugin total:           0.1998 sec
+  -----------------------------------------------------
+  Stata overhead:
+    Pre-plugin parsing:       0.0010 sec
+    Plugin call overhead:     0.0002 sec
+    Post-plugin sort:         0.0160 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.0172 sec
+-------------------------------------------------------
+    Wall clock total:         0.2170 sec
+-------------------------------------------------------
+
+. timer off 2
+
+. 
+. quietly timer list 2
+
+. local time_memeff = r(t2)
+
+. di as text "Total time: " as result %8.4f `time_memeff' " sec"
+Total time:   0.2180 sec
+
+. 
+. * Save sorted data for comparison
+. tempfile sorted_memeff
+
+. save "`sorted_memeff'"
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St10384.000003 saved
+    as .dta format
+
+. 
+. * ============================================
+. * Verify correctness
+. * ============================================
+. di as text ""
+
+
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. di as text "Verification"
+Verification
+
+. di as text "----------------------------------------------"
+----------------------------------------------
+
+. 
+. * Compare the two sorted datasets
+. use "`sorted_standard'", clear
+
+. tempfile std
+
+. save "`std'"
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St10384.000004 saved
+    as .dta format
+
+. 
+. use "`sorted_memeff'", clear
+
+. cf _all using "`std'"
+
+. 
+. if _rc == 0 {
+.     di as result "PASS: Both methods produce identical results"
+PASS: Both methods produce identical results
+. }
+
+. else {
+.     di as error "FAIL: Results differ between methods"
+. }
+
+. 
+. * ============================================
+. * Summary
+. * ============================================
+. di as text ""
+
+
+. di as text "=============================================="
+==============================================
+
+. di as text "Summary"
+Summary
+
+. di as text "=============================================="
+==============================================
+
+. di as text "Standard sort:  " as result %8.4f `time_standard' " sec"
+Standard sort:    0.3230 sec
+
+. di as text "Memeff sort:    " as result %8.4f `time_memeff' " sec"
+Memeff sort:      0.2180 sec
+
+. local speedup = `time_standard' / `time_memeff'
+
+. if `speedup' >= 1 {
+.     di as text "Memeff is " as result %5.2f `speedup' "x" as text " faster"
+Memeff is  1.48x faster
+. }
+
+. else {
+.     local slowdown = 1 / `speedup'
+.     di as text "Memeff is " as result %5.2f `slowdown' "x" as text " slower"
+. }
+
+. di as text ""
+
+
+. di as text "Note: Memory-efficient mode trades some speed for"
+Note: Memory-efficient mode trades some speed for
+
+. di as text "dramatically lower memory usage. Best for wide datasets"
+dramatically lower memory usage. Best for wide datasets
+
+. di as text "or when memory is constrained."
+or when memory is constrained.
+
+. di as text "=============================================="
+==============================================
+
+. 
+end of do-file

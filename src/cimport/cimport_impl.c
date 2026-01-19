@@ -865,10 +865,10 @@ static void cimport_build_column_cache(CImportContext *ctx) {
         CImportColumnCache *cache = &ctx->col_cache[i];
 
         if (col->type == CIMPORT_COL_STRING) {
-            cache->string_data = calloc(ctx->total_rows, sizeof(char *));
+            cache->string_data = ctools_safe_calloc2(ctx->total_rows, sizeof(char *));
             cache->numeric_data = NULL;
         } else {
-            cache->numeric_data = malloc(ctx->total_rows * sizeof(double));
+            cache->numeric_data = ctools_safe_malloc2(ctx->total_rows, sizeof(double));
             cache->string_data = NULL;
         }
         cache->count = 0;

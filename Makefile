@@ -78,7 +78,8 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_sort_ips4o.c
 
 # csort module
-CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c
+CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c \
+             $(SRC_DIR)/csort/csort_stream.c
 
 # cimport module
 CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
@@ -149,7 +150,8 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_args.h \
                $(SRC_DIR)/ctools_spi.h
 
-CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h
+CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h \
+                $(SRC_DIR)/csort/csort_stream.h
 
 CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
                   $(SRC_DIR)/cimport/cimport_context.h \
