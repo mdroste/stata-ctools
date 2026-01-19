@@ -272,6 +272,16 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
         }
         memcpy(f->counts, tmp_counts, num_levels * sizeof(ST_double));
         free(tmp_counts);
+
+        /* Compute inverse counts for fast division in projection */
+        f->inv_counts = (ST_double *)malloc(num_levels * sizeof(ST_double));
+        if (f->inv_counts) {
+            for (ST_int lev = 0; lev < num_levels; lev++) {
+                f->inv_counts[lev] = (f->counts[lev] > 0) ? 1.0 / f->counts[lev] : 0.0;
+            }
+        }
+        f->inv_weighted_counts = NULL;  /* cqreg doesn't use weights */
+        f->weighted_counts = NULL;
     }
 
     /* Determine thread count */
@@ -340,6 +350,7 @@ cleanup:
             for (g = 0; g < G; g++) {
                 free(hdfe->factors[g].levels);
                 free(hdfe->factors[g].counts);
+                if (hdfe->factors[g].inv_counts) free(hdfe->factors[g].inv_counts);
                 free(hdfe->factors[g].means);
             }
             free(hdfe->factors);
@@ -485,6 +496,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
         for (g = 0; g < hdfe->G; g++) {
             free(hdfe->factors[g].levels);
             free(hdfe->factors[g].counts);
+            if (hdfe->factors[g].inv_counts) free(hdfe->factors[g].inv_counts);
             free(hdfe->factors[g].means);
         }
         free(hdfe->factors);

@@ -143,8 +143,12 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
     ST_int i, level;
     const ST_int num_levels = f->num_levels;
     const ST_int * RESTRICT levels = f->levels;
+
+    /* Use precomputed inverse counts if available, otherwise fall back to counts */
     const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
         ? f->inv_weighted_counts : f->inv_counts;
+    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
+        ? f->weighted_counts : f->counts;
 
     memset(means, 0, num_levels * sizeof(ST_double));
 
@@ -158,9 +162,19 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
         }
     }
 
-    #pragma omp simd
-    for (level = 0; level < num_levels; level++) {
-        means[level] *= inv_counts[level];
+    /* Use inverse counts (multiply) if available, otherwise divide by counts */
+    if (inv_counts != NULL) {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            means[level] *= inv_counts[level];
+        }
+    } else {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            if (counts[level] > 0) {
+                means[level] /= counts[level];
+            }
+        }
     }
 
     for (i = 0; i < N; i++) {

@@ -269,7 +269,7 @@ static ST_retcode do_iv_regression(void)
     if (N_valid < K_total + K_iv + 1) {
         SF_error("civreghdfe: Insufficient observations\n");
         free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(valid_mask);
+        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
         for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
         free(fe_levels);
         return 2001;
@@ -410,7 +410,7 @@ static ST_retcode do_iv_regression(void)
     if (N < K_total + K_iv + 1) {
         SF_error("civreghdfe: Insufficient observations after singleton removal\n");
         free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
-        free(weights_c); free(cluster_ids_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
         return 2001;
@@ -494,6 +494,26 @@ static ST_retcode do_iv_regression(void)
         }
 
         free(remap);
+
+        /* Compute inverse counts for fast division in projection */
+        state->factors[g].inv_counts = (ST_double *)malloc(num_levels * sizeof(ST_double));
+        if (state->factors[g].inv_counts) {
+            for (ST_int lev = 0; lev < num_levels; lev++) {
+                state->factors[g].inv_counts[lev] =
+                    (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
+            }
+        }
+        if (has_weights && state->factors[g].weighted_counts) {
+            state->factors[g].inv_weighted_counts = (ST_double *)malloc(num_levels * sizeof(ST_double));
+            if (state->factors[g].inv_weighted_counts) {
+                for (ST_int lev = 0; lev < num_levels; lev++) {
+                    state->factors[g].inv_weighted_counts[lev] =
+                        (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
+                }
+            }
+        } else {
+            state->factors[g].inv_weighted_counts = NULL;
+        }
     }
 
     /* Allocate CG solver buffers */
@@ -751,7 +771,9 @@ static ST_retcode do_iv_regression(void)
         free(state->thread_fe_means);
         for (ST_int fg = 0; fg < G; fg++) {
             free(state->factors[fg].counts);
+            if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
             if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+            if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
             free(state->factors[fg].means);
         }
         free(state->factors);
@@ -848,7 +870,9 @@ static ST_retcode do_iv_regression(void)
             free(state->thread_fe_means);
             for (ST_int fg = 0; fg < G; fg++) {
                 free(state->factors[fg].counts);
+                if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
                 if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+                if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
                 free(state->factors[fg].means);
             }
             free(state->factors);
@@ -881,7 +905,9 @@ static ST_retcode do_iv_regression(void)
             free(state->thread_fe_means);
             for (ST_int fg = 0; fg < G; fg++) {
                 free(state->factors[fg].counts);
+                if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
                 if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
+                if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
                 free(state->factors[fg].means);
             }
             free(state->factors);
@@ -933,7 +959,9 @@ static ST_retcode do_iv_regression(void)
         free(state->thread_fe_means);
         for (ST_int g = 0; g < G; g++) {
             free(state->factors[g].counts);
+            if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
             if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
+            if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
             free(state->factors[g].means);
         }
         free(state->factors);
@@ -1053,12 +1081,15 @@ static ST_retcode do_iv_regression(void)
     free(state->thread_cg_v); free(state->thread_proj);
     free(state->thread_fe_means);
     for (ST_int g = 0; g < G; g++) {
+        free(state->factors[g].levels);  /* Same as fe_levels_c[g] */
         free(state->factors[g].counts);
+        if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
         if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
+        if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
         free(state->factors[g].means);
-        /* Note: levels are in fe_levels_c which we already freed, but we passed the pointer */
     }
     free(state->factors);
+    free(fe_levels_c);  /* Free the pointer array */
     free(state);
     g_state = NULL;
 
