@@ -75,7 +75,7 @@ ctools uses OpenMP for tight, regular loops (sorting, linear algebra, HDFE work)
 
 ## Thanks
 
-Thanks to [Sergio Correa](https://github.com/sergiocorrea) for creating [ftools](https://github.com/sergiocorrea/ftools)/ and [reghdfe](https://github.com/sergiocorreia/reghdfe), and thanks to [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating [gtools](https://github.com/mcaceresb/gtools). Thanks also to Christopher (Kit) Baum for creating ivreg2, from which both ivreghdfe and civreghdfe are based. Lastly, thanks to Sascha Witt for his "In Place Parallel 
+Thanks to [Sergio Correia](https://github.com/sergiocorreia) for creating [ftools](https://github.com/sergiocorreia/ftools) and [reghdfe](https://github.com/sergiocorreia/reghdfe), and thanks to [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating [gtools](https://github.com/mcaceresb/gtools). Thanks also to Christopher (Kit) Baum for creating ivreg2, from which both ivreghdfe and civreghdfe are based. Lastly, thanks to Sascha Witt for the "In Place Parallel Scalar Supersort (ips4o) sorting algorithm that works really well. 
 
 
 ## License
