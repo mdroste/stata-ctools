@@ -1116,6 +1116,7 @@ ST_retcode cexport_main(const char *args)
     SF_scal_save("_cexport_time_load", g_ctx.time_load);
     SF_scal_save("_cexport_time_write", g_ctx.time_format);
     SF_scal_save("_cexport_time_total", g_ctx.time_total);
+    CTOOLS_SAVE_THREAD_INFO("_cexport");
 
     if (g_ctx.verbose) {
         snprintf(msg, sizeof(msg), "  Write time:  %.3f sec\n", g_ctx.time_format);

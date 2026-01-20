@@ -1293,6 +1293,18 @@ program define civreghdfe, eclass
         di as text "  {hline 53}"
         di as text "  Total wall clock:         " as result %8.4f `t_total_wall' " sec"
         di as text "{hline 55}"
+
+        * Display thread diagnostics
+        capture local __threads_max = _civreghdfe_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _civreghdfe_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
     }
 
     * Clean up temp scalars and matrices
@@ -1397,5 +1409,7 @@ program define civreghdfe, eclass
     capture scalar drop _civreghdfe_time_stats
     capture scalar drop _civreghdfe_time_store
     capture scalar drop _civreghdfe_time_total
+    capture scalar drop _civreghdfe_threads_max
+    capture scalar drop _civreghdfe_openmp_enabled
 
 end

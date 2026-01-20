@@ -386,6 +386,18 @@ program define cbinscatter, eclass sortpreserve
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f r(t99) " sec"
         di as text "{hline 55}"
+
+        * Display thread diagnostics
+        capture local __threads_max = __cbinscatter_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = __cbinscatter_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
     }
 
     * Display summary

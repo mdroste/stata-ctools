@@ -1275,6 +1275,7 @@ static ST_retcode do_iv_regression(void)
     SF_scal_save("_civreghdfe_time_stats", t_stats);
     SF_scal_save("_civreghdfe_time_store", t_store);
     SF_scal_save("_civreghdfe_time_total", t_total);
+    CTOOLS_SAVE_THREAD_INFO("_civreghdfe");
 
     /* Cleanup */
     free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);

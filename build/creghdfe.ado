@@ -623,10 +623,23 @@ program define creghdfe, eclass
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
 
+        * Display thread diagnostics
+        capture local __threads_max = _creghdfe_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _creghdfe_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
+
         * Clean up timing scalars
         capture scalar drop _creghdfe_time_read _creghdfe_time_singleton
         capture scalar drop _creghdfe_time_dof _creghdfe_time_partial
         capture scalar drop _creghdfe_time_ols _creghdfe_time_vce _creghdfe_time_total
+        capture scalar drop _creghdfe_threads_max _creghdfe_openmp_enabled
     }
 
     timer clear 98

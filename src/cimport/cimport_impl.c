@@ -1132,6 +1132,15 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         cimport_display_msg(msg);
     }
 
+    /* Save timing and thread diagnostics to Stata scalars */
+    SF_scal_save("_cimport_time_mmap", ctx->time_mmap);
+    SF_scal_save("_cimport_time_parse", ctx->time_parse);
+    SF_scal_save("_cimport_time_infer", ctx->time_type_infer);
+    SF_scal_save("_cimport_time_cache", ctx->time_cache);
+    SF_scal_save("_cimport_time_store", time_spi);
+    SF_scal_save("_cimport_time_total", ctx->time_mmap + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi);
+    CTOOLS_SAVE_THREAD_INFO("_cimport");
+
     cimport_clear_cached_context();
 
     return 0;

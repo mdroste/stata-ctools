@@ -834,6 +834,7 @@ ST_retcode cqreg_full_regression(const char *args)
     SF_scal_save("_cqreg_time_ipm", state->time_ipm);
     SF_scal_save("_cqreg_time_vce", state->time_vce);
     SF_scal_save("_cqreg_time_total", state->time_total);
+    CTOOLS_SAVE_THREAD_INFO("_cqreg");
 
     /* ========================================================================
      * Cleanup

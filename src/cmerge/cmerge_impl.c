@@ -319,6 +319,7 @@ static ST_retcode cmerge_load_using(const char *args)
     SF_scal_save("_cmerge_p1_sort", t_sort / 1000.0);
     SF_scal_save("_cmerge_p1_apply_perm", t_apply_perm / 1000.0);
     SF_scal_save("_cmerge_p1_total", t_phase1_total / 1000.0);
+    CTOOLS_SAVE_THREAD_INFO("_cmerge");
 
     return 0;
 }
@@ -1148,6 +1149,7 @@ static ST_retcode cmerge_execute(const char *args)
     SF_scal_save("_cmerge_p2_cleanup", t_cleanup / 1000.0);
     SF_scal_save("_cmerge_p2_total", t_total / 1000.0);
     SF_scal_save("_cmerge_n_output_vars", (double)n_output_vars);
+    CTOOLS_SAVE_THREAD_INFO("_cmerge");
 
     return STATA_OK;
 }

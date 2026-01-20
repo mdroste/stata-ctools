@@ -277,6 +277,18 @@ program define cexport, rclass
             local rows_per_sec = `nobs' / `elapsed'
             di as text "    Throughput:             " as result %12.0fc `rows_per_sec' as text " rows/sec"
         }
+
+        * Display thread diagnostics
+        capture local __threads_max = _cexport_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _cexport_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
     }
 
     * Return results
