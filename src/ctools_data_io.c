@@ -479,9 +479,19 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
         return STATA_ERR_INVALID_INPUT;
     }
 
-    /* Cache observation bounds */
-    obs1 = (size_t)SF_in1();
-    nobs = (size_t)(SF_in2() - SF_in1() + 1);
+    /* Cache observation bounds with validation */
+    {
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
+        if (in1 < 1 || in2 < in1) {
+            /* Invalid range - treat as zero rows */
+            obs1 = 1;
+            nobs = 0;
+        } else {
+            obs1 = (size_t)in1;
+            nobs = (size_t)(in2 - in1 + 1);
+        }
+    }
 
     /* Initialize the data structure */
     stata_data_init(data);

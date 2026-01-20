@@ -29,7 +29,7 @@ program define cqreg, eclass
     local cmdline "cqreg `0'"
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) DENmethod(string) BWmethod(string) Verbose TIMEit TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
@@ -223,26 +223,6 @@ program define cqreg, eclass
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_nopreprocess = `nopreprocess'
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "cqreg: C-Accelerated Quantile Regression"
-        di as text "{hline 60}"
-        di as text "Quantile:   " as result `quantile'
-        di as text "Depvar:     " as result "`depvar'"
-        di as text "Indepvars:  " as result "`indepvars'"
-        if `nfe' > 0 {
-            di as text "Absorb:     " as result "`absorb'"
-        }
-        di as text "Obs:        " as result `nobs'
-        di as text "VCE type:   " as result cond(`vcetype'==0, "iid", cond(`vcetype'==1, "robust", "cluster(`clustervar_orig')"))
-        di as text "Density:    " as result "`denmethod_name'"
-        di as text "Bandwidth:  " as result cond(`bwmethod_num'==0, "Hall-Sheather", cond(`bwmethod_num'==1, "Bofinger", "Chamberlain"))
-        di as text "{hline 60}"
-        di ""
-    }
-
     * Record start time
     timer clear 99
     timer on 99
@@ -418,11 +398,35 @@ program define cqreg, eclass
     * Display coefficient table
     ereturn display
 
-    * Show timing if verbose or timeit
-    if "`verbose'" != "" | "`timeit'" != "" {
+    * Show timing breakdown if verbose
+    if "`verbose'" != "" {
+        * Calculate Stata overhead
+        local __stata_overhead = `elapsed' - _cqreg_time_total
+
         di as text ""
-        di as text "Iterations: " as result `iterations' as text ", converged: " as result cond(`converged', "yes", "no")
-        di as text "Total time: " as result %9.3f `elapsed' as text " seconds"
+        di as text "{hline 55}"
+        di as text "cqreg timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f _cqreg_time_load " sec"
+        if `nfe' > 0 {
+            di as text "    HDFE partial out:       " as result %8.4f _cqreg_time_hdfe " sec"
+        }
+        di as text "    IPM solver:             " as result %8.4f _cqreg_time_ipm " sec"
+        di as text "    VCE computation:        " as result %8.4f _cqreg_time_vce " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cqreg_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
+        di as text "{hline 55}"
+        di as text ""
+        di as text "  Iterations: " as result `iterations' as text ", converged: " as result cond(`converged', "yes", "no")
+
+        * Clean up timing scalars
+        capture scalar drop _cqreg_time_load _cqreg_time_hdfe
+        capture scalar drop _cqreg_time_ipm _cqreg_time_vce _cqreg_time_total
     }
 
     * Clean up scalars

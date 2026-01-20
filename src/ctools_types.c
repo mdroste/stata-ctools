@@ -316,7 +316,7 @@ stata_retcode ctools_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
             if (!new_data) {
                 #ifdef _OPENMP
                 #pragma omp atomic write
@@ -333,8 +333,8 @@ stata_retcode ctools_apply_permutation(stata_data *data)
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE,
-                                                             nobs * sizeof(char *));
+            char **new_data = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE,
+                                                                   nobs, sizeof(char *));
             if (!new_data) {
                 #ifdef _OPENMP
                 #pragma omp atomic write

@@ -64,6 +64,19 @@
 */
 
 /* ============================================================================
+   Safe String Comparison
+   ============================================================================ */
+
+/* NULL-safe string comparison: treats NULL as empty string */
+static IPS4O_INLINE int safe_strcmp(const char *a, const char *b)
+{
+    if (a == NULL && b == NULL) return 0;
+    if (a == NULL) return -1;  /* NULL < non-NULL */
+    if (b == NULL) return 1;   /* non-NULL > NULL */
+    return strcmp(a, b);
+}
+
+/* ============================================================================
    Branchless Classifier
    ============================================================================ */
 
@@ -97,7 +110,7 @@ static IPS4O_INLINE int ips4o_classify_string(const char *key, char ** IPS4O_RES
 {
     int pos = 1;
     for (int level = 0; level < log_buckets; level++) {
-        pos = 2 * pos + (strcmp(key, tree[pos]) > 0);
+        pos = 2 * pos + (safe_strcmp(key, tree[pos]) > 0);
     }
     return pos - num_buckets;
 }
@@ -111,7 +124,7 @@ static int compare_uint64(const void *a, const void *b)
 
 static int compare_string_ptr(const void *a, const void *b)
 {
-    return strcmp(*(const char **)a, *(const char **)b);
+    return safe_strcmp(*(const char **)a, *(const char **)b);
 }
 
 /* Build binary search tree from sorted splitters */
@@ -161,7 +174,7 @@ static void insertion_sort_string(perm_idx_t * IPS4O_RESTRICT order,
         perm_idx_t temp = order[i];
         const char *temp_str = strings[temp];
         size_t j = i;
-        while (j > start && strcmp(strings[order[j - 1]], temp_str) > 0) {
+        while (j > start && safe_strcmp(strings[order[j - 1]], temp_str) > 0) {
             order[j] = order[j - 1];
             j--;
         }
@@ -251,7 +264,7 @@ static void radix_sort_string(perm_idx_t * IPS4O_RESTRICT order,
 
     for (size_t i = 0; i < len; i++) {
         const char *s = strings[order[start + i]];
-        size_t slen = strlen(s);
+        size_t slen = s ? strlen(s) : 0;
         int c = (char_pos < slen) ? (unsigned char)s[char_pos] + 1 : 0;
         counts[c]++;
     }
@@ -274,7 +287,7 @@ static void radix_sort_string(perm_idx_t * IPS4O_RESTRICT order,
 
     for (size_t i = 0; i < len; i++) {
         const char *s = strings[order[start + i]];
-        size_t slen = strlen(s);
+        size_t slen = s ? strlen(s) : 0;
         int c = (char_pos < slen) ? (unsigned char)s[char_pos] + 1 : 0;
         temp[offsets[c]++] = order[start + i];
     }
@@ -509,7 +522,7 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
     /* Allocate global temp buffer */
-    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
+    perm_idx_t *temp = (perm_idx_t *)ctools_safe_aligned_alloc2(64, nobs, sizeof(perm_idx_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     /* Use thread count as bucket count for top-level partition */
@@ -725,7 +738,7 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     int num_threads = omp_get_max_threads();
     if (num_threads > 16) num_threads = 16;
 
-    perm_idx_t *temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
+    perm_idx_t *temp = (perm_idx_t *)ctools_safe_aligned_alloc2(64, nobs, sizeof(perm_idx_t));
     if (!temp) return STATA_ERR_MEMORY;
 
     int log_buckets = 0;
@@ -847,7 +860,7 @@ static stata_retcode ips4o_sort_by_numeric_var(stata_data *data, int var_idx)
     size_t nobs = data->nobs;
 
     /* Allocate keys */
-    uint64_t *keys = (uint64_t *)ctools_aligned_alloc(64, nobs * sizeof(uint64_t));
+    uint64_t *keys = (uint64_t *)ctools_safe_aligned_alloc2(64, nobs, sizeof(uint64_t));
     if (!keys) return STATA_ERR_MEMORY;
 
     /* Parallel key conversion */
@@ -887,7 +900,7 @@ static stata_retcode ips4o_sort_by_string_var(stata_data *data, int var_idx)
     char **strings = data->vars[var_idx].data.str;
     size_t nobs = data->nobs;
 
-    /* Calculate max string length */
+    /* Calculate max string length (handle NULL strings as empty) */
     size_t max_len = 0;
     #ifdef _OPENMP
     #pragma omp parallel
@@ -895,7 +908,7 @@ static stata_retcode ips4o_sort_by_string_var(stata_data *data, int var_idx)
         size_t local_max = 0;
         #pragma omp for nowait
         for (size_t i = 0; i < nobs; i++) {
-            size_t len = strlen(strings[i]);
+            size_t len = strings[i] ? strlen(strings[i]) : 0;
             if (len > local_max) local_max = len;
         }
         #pragma omp critical
@@ -905,7 +918,7 @@ static stata_retcode ips4o_sort_by_string_var(stata_data *data, int var_idx)
     }
     #else
     for (size_t i = 0; i < nobs; i++) {
-        size_t len = strlen(strings[i]);
+        size_t len = strings[i] ? strlen(strings[i]) : 0;
         if (len > max_len) max_len = len;
     }
     #endif
@@ -956,7 +969,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
             if (!new_data) {
                 #pragma omp atomic write
                 success = 0;
@@ -971,7 +984,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
+            char **new_data = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
             if (!new_data) {
                 #pragma omp atomic write
                 success = 0;
@@ -994,7 +1007,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
+            double *new_data = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
             if (!new_data) return STATA_ERR_MEMORY;
 
             for (size_t i = 0; i < nobs; i++) {
@@ -1005,7 +1018,7 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
+            char **new_data = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
             if (!new_data) return STATA_ERR_MEMORY;
 
             for (size_t i = 0; i < nobs; i++) {

@@ -99,6 +99,7 @@ CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
               $(SRC_DIR)/cmerge/cmerge_join.c \
               $(SRC_DIR)/cmerge/cmerge_io.c
 
+
 # creghdfe module
 CREGHDFE_SRCS = $(SRC_DIR)/creghdfe/creghdfe_types.c \
                 $(SRC_DIR)/creghdfe/creghdfe_utils.c \
@@ -169,6 +170,7 @@ CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h \
                  $(SRC_DIR)/cmerge/cmerge_join.h \
                  $(SRC_DIR)/cmerge/cmerge_io.h
 
+
 CREGHDFE_HEADERS = $(SRC_DIR)/creghdfe/creghdfe_types.h \
                    $(SRC_DIR)/creghdfe/creghdfe_utils.h \
                    $(SRC_DIR)/creghdfe/creghdfe_hdfe.h \
@@ -200,10 +202,9 @@ CIVREGHDFE_HEADERS = $(SRC_DIR)/civreghdfe/civreghdfe_matrix.h \
                      $(SRC_DIR)/civreghdfe/civreghdfe_tests.h \
                      $(SRC_DIR)/civreghdfe/civreghdfe_impl.h
 
-HEADERS = $(CORE_HEADERS) $(CSORT_HEADERS) $(CIMPORT_HEADERS) $(CEXPORT_HEADERS) $(CMERGE_HEADERS) $(CREGHDFE_HEADERS) $(CQREG_HEADERS) $(CBINSCATTER_HEADERS) $(CIVREGHDFE_HEADERS)
 
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe
 
 # ------------------------------------------------------------------------------
 # Output Configuration

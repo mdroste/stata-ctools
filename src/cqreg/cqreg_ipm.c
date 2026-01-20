@@ -681,12 +681,6 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
             w[i] = (w_val < 1e-12) ? 1e-12 : ((w_val > 1e12) ? 1e12 : w_val);
         }
 
-        /* Debug output */
-        if (ipm->config.verbose && (iter % 10 == 0 || iter < 5)) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "IPM iter %3d: mu=%10.4e obj=%10.2f\n", iter, mu, obj);
-            SF_display(buf);
-        }
 
         /* Form weighted normal equations: (X'WX) Δβ = X'g
          * Parallelized across columns with 8x loop unrolling for CPU pipelining */
@@ -906,35 +900,6 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
 
     ipm->iterations = iter + 1;
 
-    /* Debug: print solution statistics */
-    if (ipm->config.verbose) {
-        ST_double sum_u = 0.0, sum_v = 0.0, sum_u_lam_u = 0.0, sum_v_lam_v = 0.0;
-        ST_double min_u = 1e30, min_v = 1e30, max_u = 0.0, max_v = 0.0;
-        ST_double min_lu = 1e30, min_lv = 1e30, max_lu = 0.0, max_lv = 0.0;
-        for (ST_int i = 0; i < N; i++) {
-            sum_u += ipm->u[i];
-            sum_v += ipm->v[i];
-            sum_u_lam_u += ipm->u[i] * ipm->lambda_u[i];
-            sum_v_lam_v += ipm->v[i] * ipm->lambda_v[i];
-            if (ipm->u[i] < min_u) min_u = ipm->u[i];
-            if (ipm->v[i] < min_v) min_v = ipm->v[i];
-            if (ipm->u[i] > max_u) max_u = ipm->u[i];
-            if (ipm->v[i] > max_v) max_v = ipm->v[i];
-            if (ipm->lambda_u[i] < min_lu) min_lu = ipm->lambda_u[i];
-            if (ipm->lambda_v[i] < min_lv) min_lv = ipm->lambda_v[i];
-            if (ipm->lambda_u[i] > max_lu) max_lu = ipm->lambda_u[i];
-            if (ipm->lambda_v[i] > max_lv) max_lv = ipm->lambda_v[i];
-        }
-        char buf[512];
-        snprintf(buf, sizeof(buf), "Solution stats: sum_u=%.2f sum_v=%.2f sum_u+v=%.2f\n", sum_u, sum_v, sum_u + sum_v);
-        SF_display(buf);
-        snprintf(buf, sizeof(buf), "  u: min=%.6e max=%.2f  v: min=%.6e max=%.2f\n", min_u, max_u, min_v, max_v);
-        SF_display(buf);
-        snprintf(buf, sizeof(buf), "  lu: min=%.6e max=%.6f  lv: min=%.6e max=%.6f\n", min_lu, max_lu, min_lv, max_lv);
-        SF_display(buf);
-        snprintf(buf, sizeof(buf), "  compl: sum(u*lu)=%.6e sum(v*lv)=%.6e\n", sum_u_lam_u, sum_v_lam_v);
-        SF_display(buf);
-    }
 
     /* Copy solution */
     cqreg_vcopy(beta, ipm->beta, ipm->K);
@@ -1238,9 +1203,6 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
     ST_int i, j;
     ST_int total_iters = 0;
 
-    if (ipm->config.verbose) {
-        SF_display("Preprocessing QR solver (Chernozhukov et al. 2020)\n");
-    }
 
     /* Step 1: Initial subsample size
      * Per Chernozhukov, Fernández-Val, Melly (2020), use:
@@ -1271,12 +1233,6 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
     if (m_init > (ST_int)(0.8 * N)) m_init = N;  /* Fall through to full solve */
     if (m_init > N) m_init = N;
 
-    if (ipm->config.verbose) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "  Initial subsample size: %d (of %d, %.1f%%)\n",
-                 m_init, N, 100.0 * m_init / N);
-        SF_display(buf);
-    }
 
     /* Step 2: Compute OLS solution for initial residuals */
     /* Compute X'X */
@@ -1404,20 +1360,10 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
     ST_int max_outer_iters = 20;
     for (ST_int outer_iter = 0; outer_iter < max_outer_iters; outer_iter++) {
 
-        if (ipm->config.verbose) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "  Outer iteration %d: active set size = %d\n",
-                     outer_iter + 1, m);
-            SF_display(buf);
-        }
-
         /* Solve QR on active set */
         ST_int iters = solve_subsample_qr(y, X, N, K, active_set, m, q, beta, &ipm->config);
         if (iters < 0) {
             /* Solver failed - fall back to full solve */
-            if (ipm->config.verbose) {
-                SF_display("  Subsample solve failed, falling back to full solve\n");
-            }
             free(resid_order);
             free(active_set);
             free(in_active_set);
@@ -1433,19 +1379,7 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
 
         if (n_violations == 0) {
             /* Optimal! */
-            if (ipm->config.verbose) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "  Converged in %d outer iterations, %d total IPM iterations\n",
-                         outer_iter + 1, total_iters);
-                SF_display(buf);
-            }
             break;
-        }
-
-        if (ipm->config.verbose) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "  Found %d violations\n", n_violations);
-            SF_display(buf);
         }
 
         /* Add violated observations to active set */
@@ -1459,9 +1393,6 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
 
         /* If active set is now the full sample, just solve directly */
         if (m >= N) {
-            if (ipm->config.verbose) {
-                SF_display("  Active set expanded to full sample\n");
-            }
             free(resid_order);
             free(active_set);
             free(in_active_set);

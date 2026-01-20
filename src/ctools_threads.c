@@ -8,6 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "ctools_threads.h"
 #include "ctools_config.h"
 
@@ -405,15 +410,50 @@ void ctools_persistent_pool_destroy(ctools_persistent_pool *pool)
 
 /* Global persistent pool (singleton) */
 static ctools_persistent_pool g_global_pool;
-static int g_global_pool_initialized = 0;
-static pthread_mutex_t g_global_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile int g_global_pool_initialized = 0;
+static volatile int g_global_pool_lock = 0;
+
+/*
+ * Simple spinlock acquire/release for global pool protection.
+ * Avoids PTHREAD_MUTEX_INITIALIZER which can crash on Windows DLL load.
+ */
+static void global_pool_lock_acquire(void)
+{
+#if defined(_WIN32)
+    while (InterlockedCompareExchange((volatile long *)&g_global_pool_lock, 1, 0) != 0) {
+        /* Spin - in practice this is rarely contended */
+    }
+#elif defined(__GNUC__) || defined(__clang__)
+    while (__sync_lock_test_and_set(&g_global_pool_lock, 1)) {
+        /* Spin */
+    }
+#else
+    /* Fallback: no locking (unsafe for concurrent init, but rare) */
+#endif
+}
+
+static void global_pool_lock_release(void)
+{
+#if defined(_WIN32)
+    InterlockedExchange((volatile long *)&g_global_pool_lock, 0);
+#elif defined(__GNUC__) || defined(__clang__)
+    __sync_lock_release(&g_global_pool_lock);
+#else
+    g_global_pool_lock = 0;
+#endif
+}
 
 /*
  * Get a global persistent pool (singleton).
  */
 ctools_persistent_pool *ctools_get_global_pool(void)
 {
-    pthread_mutex_lock(&g_global_pool_mutex);
+    /* Fast path: already initialized */
+    if (g_global_pool_initialized) {
+        return &g_global_pool;
+    }
+
+    global_pool_lock_acquire();
 
     if (!g_global_pool_initialized) {
         if (ctools_persistent_pool_init(&g_global_pool, CTOOLS_IO_MAX_THREADS) == 0) {
@@ -421,7 +461,7 @@ ctools_persistent_pool *ctools_get_global_pool(void)
         }
     }
 
-    pthread_mutex_unlock(&g_global_pool_mutex);
+    global_pool_lock_release();
 
     return g_global_pool_initialized ? &g_global_pool : NULL;
 }
@@ -431,12 +471,12 @@ ctools_persistent_pool *ctools_get_global_pool(void)
  */
 void ctools_destroy_global_pool(void)
 {
-    pthread_mutex_lock(&g_global_pool_mutex);
+    global_pool_lock_acquire();
 
     if (g_global_pool_initialized) {
         ctools_persistent_pool_destroy(&g_global_pool);
         g_global_pool_initialized = 0;
     }
 
-    pthread_mutex_unlock(&g_global_pool_mutex);
+    global_pool_lock_release();
 }

@@ -41,7 +41,7 @@
 #endif
 
 /* Timing instrumentation for performance analysis */
-#define FN_TIMING 1
+#define FN_TIMING 0
 
 #if FN_TIMING
 #include "../ctools_timer.h"

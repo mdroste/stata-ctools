@@ -583,9 +583,6 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
 
-    if (verbose) {
-        ctools_msg("cqreg", "N=%d, K=%d, G=%d, quantile=%.3f", N, K, G, quantile);
-    }
 
     main_debug_log("Step 1 done: N=%d, K=%d, G=%d, q=%.3f\n", N, K, G, quantile);
 
@@ -668,10 +665,6 @@ ST_retcode cqreg_full_regression(const char *args)
         state->df_a = cqreg_hdfe_get_df_absorbed(state);
         state->time_hdfe = ctools_timer_seconds() - hdfe_start;
 
-        if (verbose) {
-            ctools_msg("cqreg", "HDFE: df_absorbed=%d, time=%.3fs",
-                       state->df_a, state->time_hdfe);
-        }
     }
 
     /* ========================================================================
@@ -719,9 +712,6 @@ ST_retcode cqreg_full_regression(const char *args)
 
     if (use_preprocess) {
         main_debug_log("Using preprocessing solver (N=%d > 5000)\n", N);
-        if (verbose) {
-            ctools_msg("cqreg", "Using preprocessing solver (Chernozhukov et al. 2020)");
-        }
         ipm_result = cqreg_preprocess_solve(state->ipm, state->y, state->X, quantile, state->beta);
     } else {
         main_debug_log("Using direct Frisch-Newton solver\n");
@@ -746,10 +736,6 @@ ST_retcode cqreg_full_regression(const char *args)
 
 
 
-    if (verbose) {
-        ctools_msg("cqreg", "IPM: iterations=%d, converged=%d, objective=%.4f, time=%.3fs",
-                   state->iterations, state->converged, state->sum_adev, state->time_ipm);
-    }
 
     if (!state->converged) {
         ctools_error("cqreg", "IPM solver did not converge in %d iterations", maxiter);
@@ -819,12 +805,6 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("Sparsity=%.4f, bandwidth=%.6f\n", state->sparsity, state->bandwidth);
 
-    if (verbose) {
-        const char *method_name = (state->density_method == CQREG_DENSITY_FITTED) ? "fitted" :
-                                  (state->density_method == CQREG_DENSITY_RESIDUAL) ? "residual" : "kernel";
-        ctools_msg("cqreg", "Sparsity: %.4f, bandwidth: %.6f (method: %s)",
-                   state->sparsity, state->bandwidth, method_name);
-    }
 
     main_debug_log("Computing VCE...\n");
     /* Compute VCE */
@@ -848,11 +828,12 @@ ST_retcode cqreg_full_regression(const char *args)
 
     state->time_total = ctools_timer_seconds() - time_start;
 
-    if (verbose) {
-        ctools_msg("cqreg", "Total time: %.3fs (load: %.3f, hdfe: %.3f, ipm: %.3f, vce: %.3f)",
-                   state->time_total, state->time_load, state->time_hdfe,
-                   state->time_ipm, state->time_vce);
-    }
+    /* Store timing scalars for verbose display in Stata */
+    SF_scal_save("_cqreg_time_load", state->time_load);
+    SF_scal_save("_cqreg_time_hdfe", state->time_hdfe);
+    SF_scal_save("_cqreg_time_ipm", state->time_ipm);
+    SF_scal_save("_cqreg_time_vce", state->time_vce);
+    SF_scal_save("_cqreg_time_total", state->time_total);
 
     /* ========================================================================
      * Cleanup

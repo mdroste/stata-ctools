@@ -290,4 +290,18 @@ static inline void *ctools_safe_calloc3(size_t a, size_t b, size_t c)
     return calloc(1, size);
 }
 
+/*
+    Overflow-safe aligned allocation for (count * element_size).
+    Returns NULL on overflow or allocation failure.
+    MUST be freed with ctools_aligned_free().
+*/
+static inline void *ctools_safe_aligned_alloc2(size_t alignment, size_t count, size_t element_size)
+{
+    size_t size;
+    if (ctools_safe_mul_size(count, element_size, &size) != 0) {
+        return NULL;  /* Overflow */
+    }
+    return ctools_aligned_alloc(alignment, size);
+}
+
 #endif /* CTOOLS_CONFIG_H */
