@@ -25,84 +25,81 @@ Notes:
 
 Running /Users/Mike/Documents/Stata/profile.do ...
 
-. do benchmark/test_memeff_debug.do 
+. do /tmp/test_memeff_debug.do 
 
-. /*
->     test_memeff_debug.do
->     Debug test with small dataset to trace the issue
-> */
-. 
 . clear all
 
 . set more off
 
 . 
-. adopath + "`c(pwd)'/../build"
+. * Add build directory to adopath
+. adopath + "/Users/Mike/Documents/GitHub/stata-ctools/build"
   [1]  (BASE)      "/Applications/Stata/ado/base/"
   [2]  (SITE)      "/Applications/Stata/ado/site/"
   [3]              "."
   [4]  (PERSONAL)  "/Users/Mike/Documents/Stata/ado/personal/"
   [5]  (PLUS)      "/Users/Mike/Library/Application Support/Stata/ado/plus/"
   [6]  (OLDPLACE)  "~/ado/"
-  [7]              "/Users/Mike/Documents/GitHub/stata-ctools/../build"
+  [7]              "/Users/Mike/Documents/GitHub/stata-ctools/build"
 
 . 
-. * Create very small dataset
-. set obs 10
-Number of observations (_N) was 0, now 10.
+. * Create small test dataset
+. set seed 12345
 
-. gen id = _n
-
-. gen sort_key = 11 - _n  /* 10, 9, 8, ..., 1 - so sorted order should reverse 
-> */
-
-. gen data1 = _n * 100    /* 100, 200, 300, ..., 1000 */
-
-. gen data2 = _n * 10     /* 10, 20, 30, ..., 100 */
+. set obs 100
+Number of observations (_N) was 0, now 100.
 
 . 
-. di "=== ORIGINAL DATA ==="
-=== ORIGINAL DATA ===
-
-. list, noobs
-
-  +-------------------------------+
-  | id   sort_key   data1   data2 |
-  |-------------------------------|
-  |  1         10     100      10 |
-  |  2          9     200      20 |
-  |  3          8     300      30 |
-  |  4          7     400      40 |
-  |  5          6     500      50 |
-  |-------------------------------|
-  |  6          5     600      60 |
-  |  7          4     700      70 |
-  |  8          3     800      80 |
-  |  9          2     900      90 |
-  | 10          1    1000     100 |
-  +-------------------------------+
+. * sort_key is variable 1
+. gen sort_key = ceil(runiform() * 100)
 
 . 
-. * Save original
-. tempfile original
-
-. save "`original'"
-file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St02690.000001 saved
-    as .dta format
+. * 14 more columns
+. forvalues i = 1/14 {
+  2.     gen col`i' = runiform()
+  3. }
 
 . 
-. * Test 1: Standard sort
-. di ""
+. * Show variable order
+. describe, short
 
+Contains data
+ Observations:           100                  
+    Variables:            15                  
+Sorted by: 
+     Note: Dataset has changed since last saved.
 
-. di "=== STANDARD CSORT ==="
-=== STANDARD CSORT ===
+. 
+. di as text "Running csort with memeff..."
+Running csort with memeff...
 
-. use "`original'", clear
+. csort sort_key, timeit memeff
 
-. csort sort_key, verbose
-command csort is unrecognized
-r(199);
+-------------------------------------------------------
+csort timing breakdown (memory-efficient mode):
+-------------------------------------------------------
+  C plugin internals:
+    Load key vars:            0.0000 sec
+    Sort (compute order):     0.0007 sec
+    Permute keys in C:        0.0001 sec
+    Store sorted keys:        0.0000 sec
+    Stream non-key vars:      0.0001 sec
+  -----------------------------------------------------
+    C plugin total:           0.0011 sec
+  -----------------------------------------------------
+  Stata overhead:
+    Pre-plugin parsing:       0.1610 sec
+    Plugin call overhead:    -0.0001 sec
+    Post-plugin sort:         0.0000 sec
+  -----------------------------------------------------
+    Stata overhead total:     0.1609 sec
+-------------------------------------------------------
+    Wall clock total:         0.1620 sec
+-------------------------------------------------------
 
+. 
+. di as text "Done."
+Done.
+
+. 
 end of do-file
-r(199);

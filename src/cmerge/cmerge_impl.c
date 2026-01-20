@@ -220,9 +220,9 @@ static ST_retcode cmerge_load_using(const char *args)
             sort_vars[i] = i + 1;  /* 1-based within keys structure */
         }
 
-        /* Allocate permutation array to capture ordering before it's applied */
+        /* Allocate permutation array to capture ordering before it's applied (overflow-safe) */
         size_t nobs = g_using_cache.nobs;
-        size_t *perm = malloc(nobs * sizeof(size_t));
+        size_t *perm = ctools_safe_malloc2(nobs, sizeof(size_t));
         if (!perm) {
             free(sort_vars);
             stata_data_free(&g_using_cache.keys);
@@ -250,7 +250,7 @@ static ST_retcode cmerge_load_using(const char *args)
             for (int v = 0; v < n_keepusing; v++) {
                 stata_variable *var = &g_using_cache.keepusing.vars[v];
                 if (var->type == STATA_TYPE_DOUBLE) {
-                    double *new_data = malloc(nobs * sizeof(double));
+                    double *new_data = ctools_safe_malloc2(nobs, sizeof(double));
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
@@ -275,7 +275,7 @@ static ST_retcode cmerge_load_using(const char *args)
                     free(var->data.dbl);
                     var->data.dbl = new_data;
                 } else {
-                    char **new_data = malloc(nobs * sizeof(char *));
+                    char **new_data = ctools_safe_malloc2(nobs, sizeof(char *));
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
@@ -507,8 +507,8 @@ static ST_retcode cmerge_execute(const char *args)
             sort_vars[i] = master_key_indices[i];  /* Already 1-based Stata index */
         }
 
-        /* Allocate permutation array to capture sort order */
-        sort_perm = malloc(master_nobs * sizeof(size_t));
+        /* Allocate permutation array to capture sort order (overflow-safe) */
+        sort_perm = ctools_safe_malloc2(master_nobs, sizeof(size_t));
         if (!sort_perm) {
             free(sort_vars);
             stata_data_free(&master_data);
@@ -546,7 +546,7 @@ static ST_retcode cmerge_execute(const char *args)
         size_t u_nobs = g_using_cache.nobs;
         size_t max_nobs = (m_nobs > u_nobs) ? m_nobs : u_nobs;
 
-        output_specs = malloc(max_nobs * sizeof(cmerge_output_spec_t));
+        output_specs = ctools_safe_malloc2(max_nobs, sizeof(cmerge_output_spec_t));
         if (!output_specs) {
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
@@ -638,7 +638,7 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 4: Build master_orig_row mapping using _orig_row variable
      * =================================================================== */
 
-    int64_t *master_orig_rows = malloc(output_nobs * sizeof(int64_t));
+    int64_t *master_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int64_t));
     if (!master_orig_rows) {
         free(output_specs);
         if (sort_perm) free(sort_perm);
@@ -678,7 +678,7 @@ static ST_retcode cmerge_execute(const char *args)
     if (preserve_order && output_nobs > 0) {
         double t_reorder_start = cmerge_get_time_ms();
 
-        cmerge_order_pair_t *pairs = malloc(output_nobs * sizeof(cmerge_order_pair_t));
+        cmerge_order_pair_t *pairs = ctools_safe_malloc2(output_nobs, sizeof(cmerge_order_pair_t));
         if (!pairs) {
             free(output_specs);
             free(master_orig_rows);
@@ -700,8 +700,8 @@ static ST_retcode cmerge_execute(const char *args)
         /* Use radix sort for O(n) performance instead of O(n log n) qsort */
         cmerge_radix_sort_order_pairs(pairs, output_nobs);
 
-        cmerge_output_spec_t *new_specs = malloc(output_nobs * sizeof(cmerge_output_spec_t));
-        int64_t *new_orig_rows = malloc(output_nobs * sizeof(int64_t));
+        cmerge_output_spec_t *new_specs = ctools_safe_malloc2(output_nobs, sizeof(cmerge_output_spec_t));
+        int64_t *new_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int64_t));
         if (!new_specs || !new_orig_rows) {
             free(pairs);
             if (new_specs) free(new_specs);
@@ -795,12 +795,25 @@ static ST_retcode cmerge_execute(const char *args)
         n_output_vars++;
     }
 
-    /* Create output data structure */
+    /* Create output data structure (overflow-safe allocation) */
     stata_data output_data;
     stata_data_init(&output_data);
     output_data.nobs = output_nobs;
     output_data.nvars = n_output_vars;
-    output_data.vars = (stata_variable *)cmerge_aligned_alloc(n_output_vars * sizeof(stata_variable));
+    size_t vars_alloc_size;
+    if (ctools_safe_mul_size(n_output_vars, sizeof(stata_variable), &vars_alloc_size) != 0) {
+        free(output_var_indices);
+        free(output_var_stata_idx);
+        free(output_var_is_key);
+        free(output_var_key_idx);
+        free(output_specs);
+        free(master_orig_rows);
+        if (sort_perm) free(sort_perm);
+        stata_data_free(&master_data);
+        free(all_var_indices);
+        return 920;
+    }
+    output_data.vars = (stata_variable *)cmerge_aligned_alloc(vars_alloc_size);
     if (!output_data.vars) {
         free(output_var_indices);
         free(output_var_stata_idx);
@@ -869,7 +882,12 @@ static ST_retcode cmerge_execute(const char *args)
         dst_var->_arena = NULL;
 
         if (src_var->type == STATA_TYPE_DOUBLE) {
-            dst_var->data.dbl = (double *)cmerge_aligned_alloc(output_nobs * sizeof(double));
+            size_t dbl_alloc_size;
+            if (ctools_safe_mul_size(output_nobs, sizeof(double), &dbl_alloc_size) != 0) {
+                alloc_failed = 1;
+                continue;
+            }
+            dst_var->data.dbl = (double *)cmerge_aligned_alloc(dbl_alloc_size);
             if (!dst_var->data.dbl) {
                 alloc_failed = 1;
                 continue;
@@ -894,7 +912,7 @@ static ST_retcode cmerge_execute(const char *args)
             }
         } else {
             /* String variable - use arena allocator to reduce malloc overhead */
-            dst_var->data.str = (char **)calloc(output_nobs, sizeof(char *));
+            dst_var->data.str = (char **)ctools_safe_calloc2(output_nobs, sizeof(char *));
             if (!dst_var->data.str) {
                 alloc_failed = 1;
                 continue;

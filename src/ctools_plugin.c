@@ -58,7 +58,6 @@ STDLL stata_call(int argc, char *argv[])
     char *space_pos;
     ST_retcode rc;
 
-
     /* Check for arguments */
     if (argc < 1 || argv[0] == NULL || strlen(argv[0]) == 0) {
         SF_error("ctools: no command specified\n");

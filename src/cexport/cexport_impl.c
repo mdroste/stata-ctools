@@ -694,7 +694,7 @@ static int parse_args(const char *args)
 static int load_varnames(void)
 {
     size_t nvars = SF_nvars();
-    g_ctx.varnames = (char **)calloc(nvars, sizeof(char *));
+    g_ctx.varnames = (char **)ctools_safe_calloc2(nvars, sizeof(char *));
     if (g_ctx.varnames == NULL) return -1;
 
     g_ctx.nvars = nvars;
@@ -751,7 +751,7 @@ static int load_varnames(void)
 static int load_vartypes(void)
 {
     size_t nvars = g_ctx.nvars;
-    g_ctx.vartypes = (vartype_t *)malloc(nvars * sizeof(vartype_t));
+    g_ctx.vartypes = (vartype_t *)ctools_safe_malloc2(nvars, sizeof(vartype_t));
     if (g_ctx.vartypes == NULL) return -1;
 
     /* Initialize to double (safest default - most precision) */
@@ -1004,10 +1004,10 @@ ST_retcode cexport_main(const char *args)
         free(row_buf);
         nobs = rows_written;  /* Update count for reporting */
     } else {
-        /* Multi-threaded chunked processing */
-        pthread_t *threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
-        format_chunk_args_t *chunk_args = (format_chunk_args_t *)malloc(num_threads * sizeof(format_chunk_args_t));
-        char **chunk_buffers = (char **)malloc(num_threads * sizeof(char *));
+        /* Multi-threaded chunked processing (overflow-safe allocations) */
+        pthread_t *threads = (pthread_t *)ctools_safe_malloc2(num_threads, sizeof(pthread_t));
+        format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_threads, sizeof(format_chunk_args_t));
+        char **chunk_buffers = (char **)ctools_safe_malloc2(num_threads, sizeof(char *));
 
         if (threads == NULL || chunk_args == NULL || chunk_buffers == NULL) {
             free(threads);

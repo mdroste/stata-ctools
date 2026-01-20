@@ -178,7 +178,7 @@ static int cimport_parse_header(CImportContext *ctx) {
         return -1;
     }
 
-    ctx->columns = calloc(ctx->num_columns, sizeof(CImportColumnInfo));
+    ctx->columns = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnInfo));
     if (!ctx->columns) return -1;
 
     char name_buf[CTOOLS_MAX_STRING_LEN];
@@ -404,11 +404,11 @@ static void *cimport_parse_chunk_parallel(void *arg) {
 
     cimport_arena_init(&chunk->arena);
     chunk->capacity = 16384;
-    chunk->rows = malloc(sizeof(CImportParsedRow *) * chunk->capacity);
+    chunk->rows = ctools_safe_malloc2(chunk->capacity, sizeof(CImportParsedRow *));
     chunk->num_rows = 0;
 
     chunk->num_col_stats = ctx->num_columns;
-    chunk->col_stats = calloc(ctx->num_columns, sizeof(CImportColumnParseStats));
+    chunk->col_stats = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnParseStats));
 
     if (!chunk->rows || !chunk->col_stats) {
         atomic_store(&ctx->error_code, 1);
@@ -566,7 +566,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     }
 
     ctx->num_chunks = num_chunks;
-    ctx->chunks = calloc(ctx->num_chunks, sizeof(CImportParsedChunk));
+    ctx->chunks = ctools_safe_calloc2(ctx->num_chunks, sizeof(CImportParsedChunk));
     if (!ctx->chunks) {
         cimport_free_context(ctx);
         return NULL;
@@ -576,11 +576,11 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         CImportParsedChunk *chunk = &ctx->chunks[0];
         cimport_arena_init(&chunk->arena);
         chunk->capacity = 65536;
-        chunk->rows = malloc(sizeof(CImportParsedRow *) * chunk->capacity);
+        chunk->rows = ctools_safe_malloc2(chunk->capacity, sizeof(CImportParsedRow *));
         chunk->num_rows = 0;
 
         chunk->num_col_stats = ctx->num_columns;
-        chunk->col_stats = calloc(ctx->num_columns, sizeof(CImportColumnParseStats));
+        chunk->col_stats = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnParseStats));
 
         if (!chunk->rows || !chunk->col_stats) {
             cimport_free_context(ctx);
@@ -659,7 +659,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     } else {
         size_t chunk_size = ctx->file_size / num_chunks;
 
-        size_t *boundaries = malloc((num_chunks + 1) * sizeof(size_t));
+        size_t *boundaries = ctools_safe_malloc2((size_t)num_chunks + 1, sizeof(size_t));
         if (!boundaries) {
             cimport_free_context(ctx);
             return NULL;
@@ -857,7 +857,7 @@ static void cimport_build_column_cache(CImportContext *ctx) {
 
     double t_start = cimport_get_time_ms();
 
-    ctx->col_cache = calloc(ctx->num_columns, sizeof(CImportColumnCache));
+    ctx->col_cache = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnCache));
     if (!ctx->col_cache) return;
 
     for (int i = 0; i < ctx->num_columns; i++) {

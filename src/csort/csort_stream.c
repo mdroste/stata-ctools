@@ -6,15 +6,16 @@
     usage by only loading key variables into C, then applying the permutation
     to non-key variables one at a time.
 
+    Optimizations:
+    - Inverse permutation for sequential Stata reads (much faster than random)
+    - String arena allocation to avoid per-row malloc/free
+    - Batched SPI calls for sequential access patterns
+    - Identity permutation detection for early exit
+
     Memory usage:
     - Standard mode: O(nobs * nvars * 8) bytes for all data
     - Memeff mode: O(nobs * nkeys * 8) + O(nobs * 8) bytes
       (keys + one variable buffer at a time)
-
-    Best when:
-    - Wide datasets with many columns
-    - Limited memory situations
-    - Large datasets that don't fit in RAM with standard approach
 */
 
 #include <stdlib.h>
@@ -33,26 +34,323 @@
 #include "csort_stream.h"
 
 /* ============================================================================
-   Configuration and Tuning Constants
+   Configuration
    ============================================================================ */
 
 /* Maximum memory to use for block buffers (default 1GB) */
 #define STREAM_MAX_BUFFER_MEMORY (1024ULL * 1024 * 1024)
 
+/* String arena size per variable (1MB should handle most string columns) */
+#define STRING_ARENA_SIZE (1024 * 1024)
+
 /* ============================================================================
-   Main Streaming Permutation - Variable-at-a-time approach
-
-   We process one variable at a time completely:
-   1. Allocate O(nobs) buffer for one variable
-   2. Read all values in permuted order: buffer[i] = Stata[perm[i]]
-   3. Write all values back: Stata[i] = buffer[i]
-   4. Free buffer, move to next variable
-
-   This uses O(nobs) memory (for one variable) instead of O(nobs * nvars),
-   which is a significant savings for wide datasets.
-
-   Variables are processed in parallel using OpenMP when available.
+   String Arena Allocator (avoids per-row malloc/free)
    ============================================================================ */
+
+typedef struct {
+    char *base;
+    size_t capacity;
+    size_t used;
+} stream_arena;
+
+static stream_arena *stream_arena_create(size_t capacity)
+{
+    stream_arena *arena = (stream_arena *)malloc(sizeof(stream_arena));
+    if (!arena) return NULL;
+
+    arena->base = (char *)malloc(capacity);
+    if (!arena->base) {
+        free(arena);
+        return NULL;
+    }
+    arena->capacity = capacity;
+    arena->used = 0;
+    return arena;
+}
+
+static char *stream_arena_alloc(stream_arena *arena, size_t len)
+{
+    if (!arena || arena->used + len > arena->capacity) {
+        return NULL;  /* Arena full */
+    }
+    char *ptr = arena->base + arena->used;
+    arena->used += len;
+    return ptr;
+}
+
+static void stream_arena_free(stream_arena *arena)
+{
+    if (arena) {
+        free(arena->base);
+        free(arena);
+    }
+}
+
+/* ============================================================================
+   Inverse Permutation Builder + Identity Detection
+
+   Given perm[] where sorted[i] = original[perm[i]], compute inv[] where
+   inv[perm[i]] = i, so we can read Stata sequentially: read original[j],
+   store at buffer[inv[j]].
+
+   Returns 1 if permutation is identity (already sorted), 0 otherwise.
+   ============================================================================ */
+
+static int build_inverse_permutation(
+    const perm_idx_t *perm,
+    perm_idx_t *inv,
+    size_t nobs)
+{
+    size_t i;
+    int is_identity = 1;
+
+    /* Build inverse: inv[perm[i]] = i
+       Also check if permutation is identity (data already sorted) */
+    for (i = 0; i < nobs; i++) {
+        inv[perm[i]] = (perm_idx_t)i;
+        if (perm[i] != i) {
+            is_identity = 0;
+        }
+    }
+
+    return is_identity;
+}
+
+/* ============================================================================
+   Optimized Streaming Permutation
+
+   Key optimizations:
+   1. Parallel variable processing - each thread handles different variables
+   2. Multi-variable batching - process multiple variables per block to amortize
+      permutation lookups
+   3. Prefetching for permutation array and destination buffers
+   4. Cache-blocked processing for better memory locality
+
+   Memory access pattern:
+   - Sequential reads from Stata (cache-friendly on Stata side)
+   - Scattered writes to local buffer via inverse permutation
+   - Sequential writes back to Stata
+   ============================================================================ */
+
+/* Number of variables to process together in multi-var mode */
+#define STREAM_MULTI_VAR_BATCH 4
+
+/* Prefetch distance for permutation lookups */
+#define STREAM_PREFETCH_DIST 32
+
+/*
+    Process a single numeric variable with optimized scatter.
+    Uses prefetching and unrolled loops for better performance.
+*/
+static void stream_permute_numeric_var(
+    ST_int stata_var,
+    const perm_idx_t *inv_perm,
+    size_t nobs,
+    size_t obs1)
+{
+    size_t i;
+    double *num_buf = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE,
+                                                       nobs * sizeof(double));
+    if (!num_buf) return;
+
+    /* Phase 1: Sequential read from Stata, scatter via inverse perm */
+    size_t nobs_batch16 = (nobs / 16) * 16;
+    double batch[16];
+
+    for (i = 0; i < nobs_batch16; i += 16) {
+        /* Prefetch future permutation indices and destination locations */
+        if (i + STREAM_PREFETCH_DIST < nobs) {
+            CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
+            CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST]]);
+        }
+
+        /* Batch read 16 consecutive values from Stata */
+        SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+
+        /* Scatter to buffer positions via inverse permutation */
+        num_buf[inv_perm[i + 0]]  = batch[0];
+        num_buf[inv_perm[i + 1]]  = batch[1];
+        num_buf[inv_perm[i + 2]]  = batch[2];
+        num_buf[inv_perm[i + 3]]  = batch[3];
+        num_buf[inv_perm[i + 4]]  = batch[4];
+        num_buf[inv_perm[i + 5]]  = batch[5];
+        num_buf[inv_perm[i + 6]]  = batch[6];
+        num_buf[inv_perm[i + 7]]  = batch[7];
+        num_buf[inv_perm[i + 8]]  = batch[8];
+        num_buf[inv_perm[i + 9]]  = batch[9];
+        num_buf[inv_perm[i + 10]] = batch[10];
+        num_buf[inv_perm[i + 11]] = batch[11];
+        num_buf[inv_perm[i + 12]] = batch[12];
+        num_buf[inv_perm[i + 13]] = batch[13];
+        num_buf[inv_perm[i + 14]] = batch[14];
+        num_buf[inv_perm[i + 15]] = batch[15];
+    }
+
+    /* Handle remainder */
+    for (i = nobs_batch16; i < nobs; i++) {
+        double val;
+        SF_vdata(stata_var, (ST_int)(i + obs1), &val);
+        num_buf[inv_perm[i]] = val;
+    }
+
+    /* Phase 2: Sequential write back to Stata with batching */
+    for (i = 0; i < nobs_batch16; i += 16) {
+        SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
+    }
+    for (i = nobs_batch16; i < nobs; i++) {
+        SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
+    }
+
+    ctools_aligned_free(num_buf);
+}
+
+/*
+    Process multiple numeric variables together to amortize permutation lookups.
+    This reads/writes multiple variables for each block of rows, keeping the
+    permutation indices in cache.
+*/
+static void stream_permute_multi_numeric(
+    ST_int *stata_vars,
+    int nvars_batch,
+    const perm_idx_t *inv_perm,
+    size_t nobs,
+    size_t obs1)
+{
+    size_t i, v;
+
+    /* Allocate buffers for all variables in batch */
+    double **bufs = (double **)malloc(nvars_batch * sizeof(double *));
+    if (!bufs) return;
+
+    for (v = 0; v < (size_t)nvars_batch; v++) {
+        bufs[v] = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
+        if (!bufs[v]) {
+            for (size_t k = 0; k < v; k++) ctools_aligned_free(bufs[k]);
+            free(bufs);
+            return;
+        }
+    }
+
+    /* Phase 1: Read all variables and scatter - process in row blocks */
+    size_t block_size = 4096;  /* Process 4K rows at a time for cache efficiency */
+
+    for (size_t block_start = 0; block_start < nobs; block_start += block_size) {
+        size_t block_end = block_start + block_size;
+        if (block_end > nobs) block_end = nobs;
+
+        /* Prefetch next block's permutation indices */
+        if (block_end + STREAM_PREFETCH_DIST < nobs) {
+            CTOOLS_PREFETCH(&inv_perm[block_end]);
+        }
+
+        /* Process this block for all variables */
+        for (i = block_start; i < block_end; i++) {
+            perm_idx_t dest = inv_perm[i];
+
+            /* Prefetch destination locations across all buffers */
+            for (v = 0; v < (size_t)nvars_batch; v++) {
+                CTOOLS_PREFETCH(&bufs[v][dest]);
+            }
+
+            /* Read from Stata and scatter for each variable */
+            for (v = 0; v < (size_t)nvars_batch; v++) {
+                double val;
+                SF_vdata(stata_vars[v], (ST_int)(i + obs1), &val);
+                bufs[v][dest] = val;
+            }
+        }
+    }
+
+    /* Phase 2: Write all variables back sequentially */
+    for (v = 0; v < (size_t)nvars_batch; v++) {
+        size_t nobs_batch16 = (nobs / 16) * 16;
+        for (i = 0; i < nobs_batch16; i += 16) {
+            SF_VSTORE_BATCH16(stata_vars[v], (ST_int)(i + obs1), &bufs[v][i]);
+        }
+        for (i = nobs_batch16; i < nobs; i++) {
+            SF_vstore(stata_vars[v], (ST_int)(i + obs1), bufs[v][i]);
+        }
+        ctools_aligned_free(bufs[v]);
+    }
+
+    free(bufs);
+}
+
+/*
+    Process a string variable with arena allocation.
+*/
+static int stream_permute_string_var(
+    ST_int stata_var,
+    const perm_idx_t *inv_perm,
+    size_t nobs,
+    size_t obs1)
+{
+    size_t i;
+
+    /* String variable with arena allocation */
+    size_t arena_size = nobs * 256;  /* Estimate avg 256 bytes per string */
+    if (arena_size < STRING_ARENA_SIZE) arena_size = STRING_ARENA_SIZE;
+
+    stream_arena *arena = stream_arena_create(arena_size);
+    char **str_ptrs = (char **)calloc(nobs, sizeof(char *));
+
+    if (!arena || !str_ptrs) {
+        stream_arena_free(arena);
+        free(str_ptrs);
+        return -1;
+    }
+
+    char strbuf[2048];
+    int use_fallback = 0;
+
+    /* Sequential read from Stata, scatter to buffer via inverse perm */
+    for (i = 0; i < nobs; i++) {
+        SF_sdata(stata_var, (ST_int)(i + obs1), strbuf);
+        size_t len = strlen(strbuf) + 1;
+
+        char *ptr = stream_arena_alloc(arena, len);
+        if (ptr) {
+            memcpy(ptr, strbuf, len);
+            str_ptrs[inv_perm[i]] = ptr;
+        } else {
+            str_ptrs[inv_perm[i]] = strdup(strbuf);
+            use_fallback = 1;
+            if (!str_ptrs[inv_perm[i]]) {
+                /* Cleanup on failure */
+                if (use_fallback) {
+                    for (size_t k = 0; k < nobs; k++) {
+                        if (str_ptrs[k] && (str_ptrs[k] < arena->base ||
+                            str_ptrs[k] >= arena->base + arena->capacity)) {
+                            free(str_ptrs[k]);
+                        }
+                    }
+                }
+                stream_arena_free(arena);
+                free(str_ptrs);
+                return -1;
+            }
+        }
+    }
+
+    /* Sequential write back to Stata */
+    for (i = 0; i < nobs; i++) {
+        SF_sstore(stata_var, (ST_int)(i + obs1), str_ptrs[i] ? str_ptrs[i] : "");
+    }
+
+    /* Free fallback allocations */
+    if (use_fallback) {
+        for (i = 0; i < nobs; i++) {
+            if (str_ptrs[i] && (str_ptrs[i] < arena->base ||
+                str_ptrs[i] >= arena->base + arena->capacity)) {
+                free(str_ptrs[i]);
+            }
+        }
+    }
+    stream_arena_free(arena);
+    free(str_ptrs);
+
+    return 0;
+}
 
 stata_retcode csort_stream_apply_permutation(
     const perm_idx_t *perm,
@@ -63,94 +361,154 @@ stata_retcode csort_stream_apply_permutation(
     size_t block_size)
 {
     size_t v;
-    (void)block_size;  /* Not used in variable-at-a-time approach */
+    perm_idx_t *inv_perm = NULL;
+    int is_identity;
+    (void)block_size;
 
     if (nvars_nonkey == 0 || nobs == 0) {
         return STATA_OK;
     }
 
-    /* Process each non-key variable completely before moving to next */
-    #ifdef _OPENMP
-    int success = 1;
-    #pragma omp parallel for schedule(dynamic, 1) if(nvars_nonkey >= 2)
-    #endif
+    /* Build inverse permutation once (shared across all variables) */
+    inv_perm = (perm_idx_t *)ctools_aligned_alloc(CACHE_LINE_SIZE,
+                                                   nobs * sizeof(perm_idx_t));
+    if (!inv_perm) {
+        return STATA_ERR_MEMORY;
+    }
+
+    is_identity = build_inverse_permutation(perm, inv_perm, nobs);
+
+    /* Early exit if data is already sorted */
+    if (is_identity) {
+        ctools_aligned_free(inv_perm);
+        return STATA_OK;
+    }
+
+    /* Separate string and numeric variables */
+    int *numeric_vars = (int *)malloc(nvars_nonkey * sizeof(int));
+    int *string_vars = (int *)malloc(nvars_nonkey * sizeof(int));
+    size_t n_numeric = 0, n_string = 0;
+
+    if (!numeric_vars || !string_vars) {
+        free(numeric_vars);
+        free(string_vars);
+        ctools_aligned_free(inv_perm);
+        return STATA_ERR_MEMORY;
+    }
+
     for (v = 0; v < nvars_nonkey; v++) {
-        #ifdef _OPENMP
-        if (!success) continue;
-        #endif
-
-        ST_int stata_var = (ST_int)nonkey_var_indices[v];
-        int is_string = SF_var_is_string(stata_var);
-
-        if (is_string) {
-            /* String variable: allocate char* buffer */
-            char **str_buf = (char **)calloc(nobs, sizeof(char *));
-            if (!str_buf) {
-                #ifdef _OPENMP
-                #pragma omp atomic write
-                success = 0;
-                continue;
-                #else
-                return STATA_ERR_MEMORY;
-                #endif
-            }
-
-            char strbuf[2048];
-            /* Read all values in permuted order */
-            for (size_t i = 0; i < nobs; i++) {
-                SF_sdata(stata_var, (ST_int)(perm[i] + obs1), strbuf);
-                str_buf[i] = strdup(strbuf);
-                if (!str_buf[i]) {
-                    /* Cleanup and fail */
-                    for (size_t k = 0; k < i; k++) free(str_buf[k]);
-                    free(str_buf);
-                    #ifdef _OPENMP
-                    #pragma omp atomic write
-                    success = 0;
-                    continue;
-                    #else
-                    return STATA_ERR_MEMORY;
-                    #endif
-                }
-            }
-
-            /* Write all values back in order */
-            for (size_t i = 0; i < nobs; i++) {
-                SF_sstore(stata_var, (ST_int)(i + obs1), str_buf[i] ? str_buf[i] : "");
-            }
-
-            /* Free string buffer */
-            for (size_t i = 0; i < nobs; i++) free(str_buf[i]);
-            free(str_buf);
-
+        if (SF_var_is_string((ST_int)nonkey_var_indices[v])) {
+            string_vars[n_string++] = nonkey_var_indices[v];
         } else {
-            /* Numeric variable: allocate double buffer */
-            double *num_buf = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE,
-                                                               nobs * sizeof(double));
-            if (!num_buf) {
-                #ifdef _OPENMP
-                #pragma omp atomic write
-                success = 0;
-                continue;
-                #else
-                return STATA_ERR_MEMORY;
-                #endif
-            }
-
-            /* Read all values in permuted order */
-            for (size_t i = 0; i < nobs; i++) {
-                SF_vdata(stata_var, (ST_int)(perm[i] + obs1), &num_buf[i]);
-            }
-
-            /* Write all values back in order */
-            for (size_t i = 0; i < nobs; i++) {
-                SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
-            }
-
-            /* Free buffer */
-            ctools_aligned_free(num_buf);
+            numeric_vars[n_numeric++] = nonkey_var_indices[v];
         }
     }
+
+    /* Process numeric variables in parallel with shared buffer pool
+       Each thread gets its own buffer to avoid allocation overhead */
+    #ifdef _OPENMP
+    int success = 1;
+    int nthreads = omp_get_max_threads();
+    if (nthreads > (int)n_numeric) nthreads = (int)n_numeric;
+    if (nthreads < 1) nthreads = 1;
+
+    /* Pre-allocate buffers for each thread */
+    double **thread_bufs = (double **)malloc(nthreads * sizeof(double *));
+    if (!thread_bufs) {
+        free(numeric_vars);
+        free(string_vars);
+        ctools_aligned_free(inv_perm);
+        return STATA_ERR_MEMORY;
+    }
+    for (int t = 0; t < nthreads; t++) {
+        thread_bufs[t] = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
+        if (!thread_bufs[t]) {
+            for (int k = 0; k < t; k++) ctools_aligned_free(thread_bufs[k]);
+            free(thread_bufs);
+            free(numeric_vars);
+            free(string_vars);
+            ctools_aligned_free(inv_perm);
+            return STATA_ERR_MEMORY;
+        }
+    }
+
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+    for (v = 0; v < n_numeric; v++) {
+        int tid = omp_get_thread_num();
+        double *num_buf = thread_bufs[tid];
+        ST_int stata_var = (ST_int)numeric_vars[v];
+        size_t i;
+
+        /* Phase 1: Sequential read, scatter via inverse perm */
+        size_t nobs_batch16 = (nobs / 16) * 16;
+        double batch[16];
+
+        for (i = 0; i < nobs_batch16; i += 16) {
+            if (i + STREAM_PREFETCH_DIST < nobs) {
+                CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
+            }
+            SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+            num_buf[inv_perm[i + 0]]  = batch[0];
+            num_buf[inv_perm[i + 1]]  = batch[1];
+            num_buf[inv_perm[i + 2]]  = batch[2];
+            num_buf[inv_perm[i + 3]]  = batch[3];
+            num_buf[inv_perm[i + 4]]  = batch[4];
+            num_buf[inv_perm[i + 5]]  = batch[5];
+            num_buf[inv_perm[i + 6]]  = batch[6];
+            num_buf[inv_perm[i + 7]]  = batch[7];
+            num_buf[inv_perm[i + 8]]  = batch[8];
+            num_buf[inv_perm[i + 9]]  = batch[9];
+            num_buf[inv_perm[i + 10]] = batch[10];
+            num_buf[inv_perm[i + 11]] = batch[11];
+            num_buf[inv_perm[i + 12]] = batch[12];
+            num_buf[inv_perm[i + 13]] = batch[13];
+            num_buf[inv_perm[i + 14]] = batch[14];
+            num_buf[inv_perm[i + 15]] = batch[15];
+        }
+        for (i = nobs_batch16; i < nobs; i++) {
+            double val;
+            SF_vdata(stata_var, (ST_int)(i + obs1), &val);
+            num_buf[inv_perm[i]] = val;
+        }
+
+        /* Phase 2: Sequential write back */
+        for (i = 0; i < nobs_batch16; i += 16) {
+            SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
+        }
+        for (i = nobs_batch16; i < nobs; i++) {
+            SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
+        }
+    }
+
+    /* Free thread buffers */
+    for (int t = 0; t < nthreads; t++) {
+        ctools_aligned_free(thread_bufs[t]);
+    }
+    free(thread_bufs);
+
+    #else
+    /* Non-OpenMP fallback: process sequentially with single buffer */
+    double *num_buf = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
+    if (num_buf) {
+        for (v = 0; v < n_numeric; v++) {
+            stream_permute_numeric_var((ST_int)numeric_vars[v], inv_perm, nobs, obs1);
+        }
+        ctools_aligned_free(num_buf);
+    }
+    #endif
+
+    /* Process string variables (sequentially - strings are harder to parallelize) */
+    for (v = 0; v < n_string; v++) {
+        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs1) != 0) {
+            #ifdef _OPENMP
+            success = 0;
+            #endif
+        }
+    }
+
+    free(numeric_vars);
+    free(string_vars);
+    ctools_aligned_free(inv_perm);
 
     #ifdef _OPENMP
     if (!success) {
@@ -162,7 +520,7 @@ stata_retcode csort_stream_apply_permutation(
 }
 
 /* ============================================================================
-   Block Size Selection (kept for API compatibility, not currently used)
+   Block Size Selection (kept for API compatibility)
    ============================================================================ */
 
 size_t csort_stream_choose_block_size(
@@ -177,18 +535,14 @@ size_t csort_stream_choose_block_size(
         available_memory = STREAM_MAX_BUFFER_MEMORY;
     }
 
-    /* Estimate bytes per row: doubles + overhead */
-    bytes_per_row = nvars_nonkey * sizeof(double) + 64;  /* 64 bytes overhead per row */
-
-    /* Maximum block size that fits in available memory */
+    bytes_per_row = nvars_nonkey * sizeof(double) + 64;
     max_block = available_memory / bytes_per_row;
 
-    /* Clamp to reasonable range */
     if (max_block < CSORT_STREAM_MIN_BLOCK_SIZE) {
         max_block = CSORT_STREAM_MIN_BLOCK_SIZE;
     }
     if (max_block > CSORT_STREAM_DEFAULT_BLOCK_SIZE * 4) {
-        max_block = CSORT_STREAM_DEFAULT_BLOCK_SIZE * 4;  /* Cap at 256K */
+        max_block = CSORT_STREAM_DEFAULT_BLOCK_SIZE * 4;
     }
     if (max_block > nobs) {
         max_block = nobs;
@@ -202,18 +556,13 @@ int csort_stream_recommended(size_t nobs, size_t nvars, size_t nkeys)
     size_t total_bytes;
     size_t key_bytes;
 
-    /* Estimate total memory for standard approach */
-    total_bytes = nobs * nvars * sizeof(double);  /* Data */
-    total_bytes += nobs * sizeof(perm_idx_t);     /* Permutation */
-    total_bytes += nobs * nvars * sizeof(double); /* Permutation temp */
+    total_bytes = nobs * nvars * sizeof(double);
+    total_bytes += nobs * sizeof(perm_idx_t);
+    total_bytes += nobs * nvars * sizeof(double);
 
-    /* Estimate memory for streaming approach */
     key_bytes = nobs * nkeys * sizeof(double);
     key_bytes += nobs * sizeof(perm_idx_t);
 
-    /* Recommend streaming if:
-       1. Total data exceeds threshold AND
-       2. Streaming saves significant memory (keys are small fraction) */
     if (total_bytes > CSORT_STREAM_THRESHOLD_BYTES &&
         key_bytes < total_bytes / 4) {
         return 1;
@@ -244,11 +593,9 @@ stata_retcode csort_stream_sort(
     int *nonkey_var_indices = NULL;
     int *local_sort_vars = NULL;
 
-    /* Initialize timings */
     csort_stream_timings local_timings = {0};
     t_start = ctools_timer_seconds();
 
-    /* Get observation range */
     obs1 = SF_in1();
     nobs = SF_in2() - obs1 + 1;
 
@@ -271,17 +618,15 @@ stata_retcode csort_stream_sort(
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
-    /* Create sort_var indices relative to key_data (1-based within keys) */
     local_sort_vars = (int *)malloc(nkeys * sizeof(int));
     if (!local_sort_vars) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
     for (i = 0; i < nkeys; i++) {
-        local_sort_vars[i] = (int)(i + 1);  /* Keys are vars 1..nkeys in key_data */
+        local_sort_vars[i] = (int)(i + 1);
     }
 
-    /* Sort using the selected algorithm (order_only to just compute permutation) */
     switch (algorithm) {
         case SORT_ALG_MSD:
             rc = ctools_sort_radix_msd_order_only(&key_data, local_sort_vars, nkeys);
@@ -353,16 +698,38 @@ stata_retcode csort_stream_sort(
         goto cleanup;
     }
 
-    /* Free key data now - we don't need it anymore */
+    /* DEBUG: Verify first key is sorted in Stata after store */
+    #ifdef CSORT_DEBUG_VERIFY
+    {
+        double prev_val, curr_val;
+        int sorted_ok = 1;
+        SF_vdata(key_var_indices[0], (ST_int)obs1, &prev_val);
+        for (size_t check_i = 1; check_i < nobs && sorted_ok; check_i++) {
+            SF_vdata(key_var_indices[0], (ST_int)(check_i + obs1), &curr_val);
+            if (curr_val < prev_val) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "csort DEBUG: Key not sorted at row %zu: prev=%.2f, curr=%.2f\n",
+                    check_i, prev_val, curr_val);
+                SF_display(msg);
+                sorted_ok = 0;
+            }
+            prev_val = curr_val;
+        }
+        if (sorted_ok) {
+            SF_display("csort DEBUG: Keys verified sorted after store\n");
+        }
+    }
+    #endif
+
     stata_data_free(&key_data);
-    stata_data_init(&key_data);  /* Reset to safe state */
+    stata_data_init(&key_data);
 
     /* ================================================================
        Phase 5: Stream-permute non-key variables
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
-    /* Build list of non-key variable indices */
     size_t nvars_nonkey = nvars - nkeys;
 
     if (nvars_nonkey > 0) {
@@ -372,7 +739,6 @@ stata_retcode csort_stream_sort(
             goto cleanup;
         }
 
-        /* Find non-key variables: those in all_var_indices but not in key_var_indices */
         size_t nk = 0;
         for (i = 0; i < nvars; i++) {
             int is_key = 0;
@@ -387,7 +753,12 @@ stata_retcode csort_stream_sort(
             }
         }
 
-        /* Apply permutation to non-key variables using streaming */
+        /* Sanity check: nk should equal nvars_nonkey */
+        if (nk != nvars_nonkey) {
+            rc = STATA_ERR_INVALID_INPUT;
+            goto cleanup;
+        }
+
         rc = csort_stream_apply_permutation(saved_perm, nobs, nonkey_var_indices,
                                              nvars_nonkey, obs1, block_size);
     }
@@ -395,13 +766,11 @@ stata_retcode csort_stream_sort(
     local_timings.stream_nonkeys_time = ctools_timer_seconds() - t_phase;
 
 cleanup:
-    /* Clean up all allocated resources */
     free(local_sort_vars);
     free(nonkey_var_indices);
     ctools_aligned_free(saved_perm);
     stata_data_free(&key_data);
 
-    /* Finalize timings */
     local_timings.total_time = ctools_timer_seconds() - t_start;
     local_timings.block_size = block_size ? block_size : CSORT_STREAM_DEFAULT_BLOCK_SIZE;
     local_timings.num_blocks = (nobs + local_timings.block_size - 1) / local_timings.block_size;
@@ -410,7 +779,6 @@ cleanup:
         *timings = local_timings;
     }
 
-    /* Store timing results in Stata scalars */
     SF_scal_save("_csort_stream_time_load_keys", local_timings.load_keys_time);
     SF_scal_save("_csort_stream_time_sort", local_timings.sort_time);
     SF_scal_save("_csort_stream_time_permute_keys", local_timings.permute_keys_time);

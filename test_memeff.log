@@ -109,7 +109,7 @@ Number of observations (_N) was 0, now 500,000.
 . tempfile original
 
 . save "`original'"
-file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St02329.000001 saved
+file /var/folders/5l/0w9hn2t9637147hqnm7bgk000000gn/T//St45837.000001 saved
     as .dta format
 
 . 
