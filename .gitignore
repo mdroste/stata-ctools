@@ -1,4 +1,5 @@
 *.csv
 *.dta
+*.log
 .claude/
 CLAUDE.md
