@@ -1,3 +1,4 @@
 *.csv
-CLAUDE.md
 *.dta
+.claude/
+CLAUDE.md
