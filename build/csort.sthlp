@@ -27,8 +27,8 @@
 {synoptline}
 {syntab:Options}
 {synopt:{opt alg:orithm(name)}}sorting algorithm (see below){p_end}
-{synopt:{opt v:erbose}}display detailed progress information{p_end}
-{synopt:{opt time:it}}display timing breakdown{p_end}
+{synopt:{opt str:eam}}streaming mode for reduced memory usage{p_end}
+{synopt:{opt v:erbose}}display timing breakdown{p_end}
 {synoptline}
 
 {pstd}
@@ -60,11 +60,15 @@ parallel sorting algorithm. See {help csort##algorithms:Algorithms} for details
 on when to use each algorithm.
 
 {phang}
-{opt verbose} displays detailed information about the sort operation, including
-variable types and sort key indices.
+{opt stream} enables streaming mode, which reduces memory usage for wide datasets.
+In streaming mode, only the sort key variables are loaded into C memory. After
+sorting, the permutation is applied to non-key variables one at a time using
+sequential Stata I/O. This is useful when sorting datasets with many columns
+that would otherwise exceed available memory. Performance is comparable to
+standard mode for most datasets.
 
 {phang}
-{opt timeit} displays a timing breakdown showing time spent in each phase of
+{opt verbose} displays a timing breakdown showing time spent in each phase of
 the sort: loading data to C, sorting, and storing data back to Stata.
 
 
@@ -210,7 +214,7 @@ lexicographic (ASCII) order.
 {phang2}{cmd:. csort foreign mpg}{p_end}
 
 {pstd}Sort with verbose output showing timing:{p_end}
-{phang2}{cmd:. csort price, timeit}{p_end}
+{phang2}{cmd:. csort price, verbose}{p_end}
 
 {pstd}Use MSD radix sort for string sorting:{p_end}
 {phang2}{cmd:. csort make, algorithm(msd)}{p_end}
@@ -230,12 +234,15 @@ lexicographic (ASCII) order.
 {pstd}Sort with detailed progress information:{p_end}
 {phang2}{cmd:. csort price mpg, verbose}{p_end}
 
+{pstd}Use streaming mode for wide datasets with limited memory:{p_end}
+{phang2}{cmd:. csort id, stream}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
 
 {pstd}
-When the {opt timeit} option is specified, {cmd:csort} stores the following
+When the {opt verbose} option is specified, {cmd:csort} stores the following
 in global macros:
 
 {synoptset 24 tabbed}{...}
@@ -243,6 +250,7 @@ in global macros:
 {synopt:{cmd:_csort_time_load}}time to load data from Stata to C (seconds){p_end}
 {synopt:{cmd:_csort_time_sort}}time to sort data (seconds){p_end}
 {synopt:{cmd:_csort_time_store}}time to store data back to Stata (seconds){p_end}
+{synopt:{cmd:_csort_time_stream}}time to stream non-key variables (streaming mode only){p_end}
 {synopt:{cmd:_csort_time_total}}total elapsed time (seconds){p_end}
 
 

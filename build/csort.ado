@@ -11,15 +11,15 @@
 *!   algorithm(counting) - Counting sort - best for integer data with small range
 *!   algorithm(merge)    - Parallel merge sort - stable, predictable O(n log n)
 *!
-*! Memory-efficient mode (memeff option):
+*! Streaming mode (stream option):
 *!   Only loads sort key variables into C memory, then streams the permutation
-*!   to non-key variables in blocks. Dramatically reduces memory for wide datasets.
+*!   to non-key variables. Reduces memory usage for wide datasets.
 *!   Best when: many non-key columns, limited memory, or dataset too large for RAM.
 
 program define csort
     version 14.0
 
-    syntax varlist [if] [in], [Verbose TIMEit ALGorithm(string) MEMeff]
+    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam]
 
     * =========================================================================
     * UPFRONT VALIDATION - check all options before any data manipulation
@@ -69,7 +69,7 @@ program define csort
     * =========================================================================
 
     * Start overall wall-clock timer
-    local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
+    local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
         timer clear 91
@@ -157,26 +157,12 @@ program define csort
         }
     }
 
-    * Build memeff option string
-    local memeff_code ""
-    if "`memeff'" != "" {
-        local memeff_code "memeff"
+    * Build stream option string
+    local stream_code ""
+    if "`stream'" != "" {
+        local stream_code "stream"
     }
 
-    if ("`verbose'" != "") {
-        di as text "csort: Sorting on variables: `varlist'"
-        di as text "       All variables: `allvars'"
-        di as text "       Sort key indices: `var_indices'"
-        if "`alg_code'" != "" {
-            di as text "       Algorithm: `algorithm'"
-        }
-        else {
-            di as text "       Algorithm: ips4o (default)"
-        }
-        if "`memeff'" != "" {
-            di as text "       Mode: memory-efficient (streaming)"
-        }
-    }
 
     * End pre-plugin timer, start plugin timer
     if `__do_timing' {
@@ -185,7 +171,7 @@ program define csort
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code' `memeff_code'"
+    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code' `stream_code'"
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {
@@ -217,9 +203,9 @@ program define csort
         local __ado_overhead = `__time_preplugin' + `__time_postplugin'
         local __ado_total = `__ado_overhead' + `__plugin_call_overhead'
 
-        * Check if memeff mode was used
-        capture local __is_memeff = _csort_memeff
-        if _rc != 0 local __is_memeff = 0
+        * Check if stream mode was used
+        capture local __is_stream = _csort_stream
+        if _rc != 0 local __is_stream = 0
 
         * Check if permutation time is available
         capture local __time_permute = _csort_time_permute
@@ -231,8 +217,8 @@ program define csort
 
         di as text ""
         di as text "{hline 55}"
-        if `__is_memeff' {
-            di as text "csort timing breakdown (memory-efficient mode):"
+        if `__is_stream' {
+            di as text "csort timing breakdown (streaming mode):"
         }
         else {
             di as text "csort timing breakdown:"
@@ -240,7 +226,7 @@ program define csort
         di as text "{hline 55}"
         di as text "  C plugin internals:"
 
-        if `__is_memeff' {
+        if `__is_stream' {
             * Memory-efficient mode timing display
             di as text "    Load key vars:          " as result %8.4f _csort_time_load " sec"
             di as text "    Sort (compute order):   " as result %8.4f _csort_time_sort " sec"

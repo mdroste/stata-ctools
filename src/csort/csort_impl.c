@@ -23,28 +23,28 @@
 #define CSORT_DEBUG 0
 
 /*
-    Parse memory-efficient mode option from argument string.
-    Looks for "memeff" to enable memory-efficient streaming mode.
+    Parse streaming mode option from argument string.
+    Looks for "stream" to enable streaming mode.
 
-    Memory-efficient mode:
+    Streaming mode:
     - Only loads key (sort) variables into C memory
-    - Streams permutation application to non-key variables in blocks
-    - Dramatically reduces memory usage for wide datasets
+    - Streams permutation application to non-key variables
+    - Reduces memory usage for wide datasets
     - Best when: many non-key columns, limited memory
 
-    Returns 1 if memory-efficient mode enabled, 0 otherwise.
+    Returns 1 if streaming mode enabled, 0 otherwise.
 */
-static int parse_memeff_option(const char *args)
+static int parse_stream_option(const char *args)
 {
     const char *p;
 
-    /* Look for "memeff" in the arguments */
-    p = strstr(args, "memeff");
+    /* Look for "stream" in the arguments */
+    p = strstr(args, "stream");
     if (p == NULL) {
         return 0;
     }
 
-    /* Check if it's "memeff=0" (explicitly disabled) */
+    /* Check if it's "stream=0" (explicitly disabled) */
     if (p[6] == '=' && p[7] == '0') {
         return 0;
     }
@@ -214,14 +214,14 @@ ST_retcode csort_main(const char *args)
         return 2000;
     }
 
-    /* Check for memory-efficient mode option */
-    int use_memeff = parse_memeff_option(args);
+    /* Check for streaming mode option */
+    int use_stream = parse_stream_option(args);
 
     /* ================================================================
        MEMORY-EFFICIENT MODE: For large datasets with many columns
        Only loads key variables, streams permutation to non-keys
        ================================================================ */
-    if (use_memeff) {
+    if (use_stream) {
         csort_stream_timings stream_timings = {0};
 
         /* Build array of all variable indices (1-based) */
@@ -252,14 +252,14 @@ ST_retcode csort_main(const char *args)
         t_end = ctools_timer_seconds();
         timer.total_time = t_end - t_start;
 
-        /* Store timing results in Stata scalars for memeff mode */
-        SF_scal_save("_csort_memeff", 1.0);  /* Flag indicating memeff mode was used */
+        /* Store timing results in Stata scalars for streaming mode */
+        SF_scal_save("_csort_stream", 1.0);  /* Flag indicating streaming mode was used */
         SF_scal_save("_csort_time_load", stream_timings.load_keys_time);
         SF_scal_save("_csort_time_sort", stream_timings.sort_time);
         SF_scal_save("_csort_time_permute", stream_timings.permute_keys_time);
         SF_scal_save("_csort_time_store", stream_timings.store_keys_time);
         SF_scal_save("_csort_time_stream", stream_timings.stream_nonkeys_time);
-        SF_scal_save("_csort_time_cleanup", 0.0);  /* Minimal cleanup in memeff mode */
+        SF_scal_save("_csort_time_cleanup", 0.0);  /* Minimal cleanup in streaming mode */
         SF_scal_save("_csort_time_total", timer.total_time);
 
         return 0;
@@ -432,7 +432,7 @@ ST_retcode csort_main(const char *args)
     timer.total_time = t_end - t_start;
 
     /* Store timing results in Stata scalars (standard mode) */
-    SF_scal_save("_csort_memeff", 0.0);  /* Flag indicating standard mode was used */
+    SF_scal_save("_csort_stream", 0.0);  /* Flag indicating standard mode was used */
     SF_scal_save("_csort_time_load", timer.load_time);
     SF_scal_save("_csort_time_sort", timer.sort_time);
     SF_scal_save("_csort_time_permute", t_permute);

@@ -94,6 +94,10 @@ static void stream_arena_free(stream_arena *arena)
    store at buffer[inv[j]].
 
    Returns 1 if permutation is identity (already sorted), 0 otherwise.
+
+   Optimizations:
+   - Parallel construction with OpenMP
+   - Vectorized identity check
    ============================================================================ */
 
 static int build_inverse_permutation(
@@ -101,17 +105,37 @@ static int build_inverse_permutation(
     perm_idx_t *inv,
     size_t nobs)
 {
-    size_t i;
     int is_identity = 1;
 
-    /* Build inverse: inv[perm[i]] = i
-       Also check if permutation is identity (data already sorted) */
-    for (i = 0; i < nobs; i++) {
+    #ifdef _OPENMP
+    /* Parallel inverse permutation build - each thread handles a chunk */
+    #pragma omp parallel
+    {
+        int local_is_identity = 1;
+
+        #pragma omp for schedule(static) nowait
+        for (size_t i = 0; i < nobs; i++) {
+            inv[perm[i]] = (perm_idx_t)i;
+            if (perm[i] != i) {
+                local_is_identity = 0;
+            }
+        }
+
+        /* Reduce identity flag */
+        if (!local_is_identity) {
+            #pragma omp atomic write
+            is_identity = 0;
+        }
+    }
+    #else
+    /* Sequential fallback */
+    for (size_t i = 0; i < nobs; i++) {
         inv[perm[i]] = (perm_idx_t)i;
         if (perm[i] != i) {
             is_identity = 0;
         }
     }
+    #endif
 
     return is_identity;
 }
@@ -135,146 +159,8 @@ static int build_inverse_permutation(
 /* Number of variables to process together in multi-var mode */
 #define STREAM_MULTI_VAR_BATCH 4
 
-/* Prefetch distance for permutation lookups */
-#define STREAM_PREFETCH_DIST 32
-
-/*
-    Process a single numeric variable with optimized scatter.
-    Uses prefetching and unrolled loops for better performance.
-*/
-static void stream_permute_numeric_var(
-    ST_int stata_var,
-    const perm_idx_t *inv_perm,
-    size_t nobs,
-    size_t obs1)
-{
-    size_t i;
-    double *num_buf = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE,
-                                                       nobs * sizeof(double));
-    if (!num_buf) return;
-
-    /* Phase 1: Sequential read from Stata, scatter via inverse perm */
-    size_t nobs_batch16 = (nobs / 16) * 16;
-    double batch[16];
-
-    for (i = 0; i < nobs_batch16; i += 16) {
-        /* Prefetch future permutation indices and destination locations */
-        if (i + STREAM_PREFETCH_DIST < nobs) {
-            CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
-            CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST]]);
-        }
-
-        /* Batch read 16 consecutive values from Stata */
-        SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
-
-        /* Scatter to buffer positions via inverse permutation */
-        num_buf[inv_perm[i + 0]]  = batch[0];
-        num_buf[inv_perm[i + 1]]  = batch[1];
-        num_buf[inv_perm[i + 2]]  = batch[2];
-        num_buf[inv_perm[i + 3]]  = batch[3];
-        num_buf[inv_perm[i + 4]]  = batch[4];
-        num_buf[inv_perm[i + 5]]  = batch[5];
-        num_buf[inv_perm[i + 6]]  = batch[6];
-        num_buf[inv_perm[i + 7]]  = batch[7];
-        num_buf[inv_perm[i + 8]]  = batch[8];
-        num_buf[inv_perm[i + 9]]  = batch[9];
-        num_buf[inv_perm[i + 10]] = batch[10];
-        num_buf[inv_perm[i + 11]] = batch[11];
-        num_buf[inv_perm[i + 12]] = batch[12];
-        num_buf[inv_perm[i + 13]] = batch[13];
-        num_buf[inv_perm[i + 14]] = batch[14];
-        num_buf[inv_perm[i + 15]] = batch[15];
-    }
-
-    /* Handle remainder */
-    for (i = nobs_batch16; i < nobs; i++) {
-        double val;
-        SF_vdata(stata_var, (ST_int)(i + obs1), &val);
-        num_buf[inv_perm[i]] = val;
-    }
-
-    /* Phase 2: Sequential write back to Stata with batching */
-    for (i = 0; i < nobs_batch16; i += 16) {
-        SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
-    }
-    for (i = nobs_batch16; i < nobs; i++) {
-        SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
-    }
-
-    ctools_aligned_free(num_buf);
-}
-
-/*
-    Process multiple numeric variables together to amortize permutation lookups.
-    This reads/writes multiple variables for each block of rows, keeping the
-    permutation indices in cache.
-*/
-static void stream_permute_multi_numeric(
-    ST_int *stata_vars,
-    int nvars_batch,
-    const perm_idx_t *inv_perm,
-    size_t nobs,
-    size_t obs1)
-{
-    size_t i, v;
-
-    /* Allocate buffers for all variables in batch */
-    double **bufs = (double **)malloc(nvars_batch * sizeof(double *));
-    if (!bufs) return;
-
-    for (v = 0; v < (size_t)nvars_batch; v++) {
-        bufs[v] = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
-        if (!bufs[v]) {
-            for (size_t k = 0; k < v; k++) ctools_aligned_free(bufs[k]);
-            free(bufs);
-            return;
-        }
-    }
-
-    /* Phase 1: Read all variables and scatter - process in row blocks */
-    size_t block_size = 4096;  /* Process 4K rows at a time for cache efficiency */
-
-    for (size_t block_start = 0; block_start < nobs; block_start += block_size) {
-        size_t block_end = block_start + block_size;
-        if (block_end > nobs) block_end = nobs;
-
-        /* Prefetch next block's permutation indices */
-        if (block_end + STREAM_PREFETCH_DIST < nobs) {
-            CTOOLS_PREFETCH(&inv_perm[block_end]);
-        }
-
-        /* Process this block for all variables */
-        for (i = block_start; i < block_end; i++) {
-            perm_idx_t dest = inv_perm[i];
-
-            /* Prefetch destination locations across all buffers */
-            for (v = 0; v < (size_t)nvars_batch; v++) {
-                CTOOLS_PREFETCH(&bufs[v][dest]);
-            }
-
-            /* Read from Stata and scatter for each variable */
-            for (v = 0; v < (size_t)nvars_batch; v++) {
-                double val;
-                SF_vdata(stata_vars[v], (ST_int)(i + obs1), &val);
-                bufs[v][dest] = val;
-            }
-        }
-    }
-
-    /* Phase 2: Write all variables back sequentially */
-    for (v = 0; v < (size_t)nvars_batch; v++) {
-        size_t nobs_batch16 = (nobs / 16) * 16;
-        for (i = 0; i < nobs_batch16; i += 16) {
-            SF_VSTORE_BATCH16(stata_vars[v], (ST_int)(i + obs1), &bufs[v][i]);
-        }
-        for (i = nobs_batch16; i < nobs; i++) {
-            SF_vstore(stata_vars[v], (ST_int)(i + obs1), bufs[v][i]);
-        }
-        ctools_aligned_free(bufs[v]);
-    }
-
-    free(bufs);
-}
+/* Prefetch distance for permutation lookups - tuned for L1 cache latency */
+#define STREAM_PREFETCH_DIST 64
 
 /*
     Process a string variable with arena allocation.
@@ -432,7 +318,7 @@ stata_retcode csort_stream_apply_permutation(
         }
     }
 
-    #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+    #pragma omp parallel for schedule(static) num_threads(nthreads)
     for (v = 0; v < n_numeric; v++) {
         int tid = omp_get_thread_num();
         double *num_buf = thread_bufs[tid];
@@ -444,8 +330,14 @@ stata_retcode csort_stream_apply_permutation(
         double batch[16];
 
         for (i = 0; i < nobs_batch16; i += 16) {
+            /* Prefetch future permutation indices and scatter destinations */
             if (i + STREAM_PREFETCH_DIST < nobs) {
                 CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
+                /* Prefetch 4 scatter destinations (spread across cache lines) */
+                CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST]]);
+                CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 4]]);
+                CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 8]]);
+                CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 12]]);
             }
             SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
             num_buf[inv_perm[i + 0]]  = batch[0];
@@ -487,11 +379,48 @@ stata_retcode csort_stream_apply_permutation(
     free(thread_bufs);
 
     #else
-    /* Non-OpenMP fallback: process sequentially with single buffer */
+    /* Non-OpenMP fallback: process sequentially with single reused buffer */
     double *num_buf = (double *)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(double));
     if (num_buf) {
         for (v = 0; v < n_numeric; v++) {
-            stream_permute_numeric_var((ST_int)numeric_vars[v], inv_perm, nobs, obs1);
+            ST_int stata_var = (ST_int)numeric_vars[v];
+            size_t i;
+            size_t nobs_batch16 = (nobs / 16) * 16;
+            double batch[16];
+
+            /* Phase 1: Sequential read, scatter via inverse perm */
+            for (i = 0; i < nobs_batch16; i += 16) {
+                SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+                num_buf[inv_perm[i + 0]]  = batch[0];
+                num_buf[inv_perm[i + 1]]  = batch[1];
+                num_buf[inv_perm[i + 2]]  = batch[2];
+                num_buf[inv_perm[i + 3]]  = batch[3];
+                num_buf[inv_perm[i + 4]]  = batch[4];
+                num_buf[inv_perm[i + 5]]  = batch[5];
+                num_buf[inv_perm[i + 6]]  = batch[6];
+                num_buf[inv_perm[i + 7]]  = batch[7];
+                num_buf[inv_perm[i + 8]]  = batch[8];
+                num_buf[inv_perm[i + 9]]  = batch[9];
+                num_buf[inv_perm[i + 10]] = batch[10];
+                num_buf[inv_perm[i + 11]] = batch[11];
+                num_buf[inv_perm[i + 12]] = batch[12];
+                num_buf[inv_perm[i + 13]] = batch[13];
+                num_buf[inv_perm[i + 14]] = batch[14];
+                num_buf[inv_perm[i + 15]] = batch[15];
+            }
+            for (i = nobs_batch16; i < nobs; i++) {
+                double val;
+                SF_vdata(stata_var, (ST_int)(i + obs1), &val);
+                num_buf[inv_perm[i]] = val;
+            }
+
+            /* Phase 2: Sequential write back */
+            for (i = 0; i < nobs_batch16; i += 16) {
+                SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
+            }
+            for (i = nobs_batch16; i < nobs; i++) {
+                SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
+            }
         }
         ctools_aligned_free(num_buf);
     }
