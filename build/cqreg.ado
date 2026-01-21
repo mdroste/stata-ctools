@@ -424,9 +424,22 @@ program define cqreg, eclass
         di as text ""
         di as text "  Iterations: " as result `iterations' as text ", converged: " as result cond(`converged', "yes", "no")
 
+        * Display thread diagnostics
+        capture local __threads_max = _cqreg_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _cqreg_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
+
         * Clean up timing scalars
         capture scalar drop _cqreg_time_load _cqreg_time_hdfe
         capture scalar drop _cqreg_time_ipm _cqreg_time_vce _cqreg_time_total
+        capture scalar drop _cqreg_threads_max _cqreg_openmp_enabled
     }
 
     * Clean up scalars

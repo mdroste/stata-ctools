@@ -88,7 +88,8 @@ CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
                $(SRC_DIR)/cimport/cimport_parse.c
 
 # cexport module
-CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c
+CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c \
+               $(SRC_DIR)/cexport/cexport_io.c
 
 # cmerge module
 CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
@@ -160,7 +161,8 @@ CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
                   $(SRC_DIR)/cimport/cimport_mmap.h \
                   $(SRC_DIR)/cimport/cimport_parse.h
 
-CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h
+CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h \
+                  $(SRC_DIR)/cexport/cexport_io.h
 
 CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h \
                  $(SRC_DIR)/cmerge/cmerge_memory.h \
@@ -231,13 +233,22 @@ MAC_BASE_FLAGS = -O3 -Wall -Wextra -fPIC -DSYSTEM=APPLEMAC -DSD_FASTMODE \
                  -fno-strict-aliasing $(INCLUDE_DIRS)
 
 # macOS Apple Silicon (arm64) with OpenMP and Accelerate
+# Check for static libomp.a (preferred for bundling)
+LIBOMP_STATIC_ARM := $(shell test -f $(LIBOMP_PREFIX)/lib/libomp.a && echo yes || echo no)
+
 ifeq ($(LIBOMP_EXISTS),yes)
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1 \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include
-    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -L$(LIBOMP_PREFIX)/lib -lomp \
-                      -framework Accelerate
+    ifeq ($(LIBOMP_STATIC_ARM),yes)
+        # Static linking - bundle libomp into the plugin
+        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto $(LIBOMP_PREFIX)/lib/libomp.a \
+                          -framework Accelerate
+    else
+        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -L$(LIBOMP_PREFIX)/lib -lomp \
+                          -framework Accelerate
+    endif
     MAC_ARM_HAS_OMP = yes
 else
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
@@ -248,19 +259,29 @@ else
 endif
 
 # Check for x86_64 libomp (installed via Rosetta Homebrew)
-LIBOMP_INTEL_EXISTS := $(shell test -f /usr/local/opt/libomp/lib/libomp.dylib && \
-                               file /usr/local/opt/libomp/lib/libomp.dylib 2>/dev/null | grep -q x86_64 && \
+LIBOMP_INTEL = /usr/local/opt/libomp
+LIBOMP_INTEL_EXISTS := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.dylib && \
+                               file $(LIBOMP_INTEL)/lib/libomp.dylib 2>/dev/null | grep -q x86_64 && \
                                echo yes || echo no)
+# Use lipo to check .a architecture (file command doesn't show arch for archives)
+LIBOMP_STATIC_X86 := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.a && \
+                             lipo -info $(LIBOMP_INTEL)/lib/libomp.a 2>/dev/null | grep -q x86_64 && \
+                             echo yes || echo no)
 
 # macOS Intel (x86_64) with Accelerate
 ifeq ($(LIBOMP_INTEL_EXISTS),yes)
-    LIBOMP_INTEL = /usr/local/opt/libomp
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
                      -march=x86-64 -mtune=haswell \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
-    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -L$(LIBOMP_INTEL)/lib -lomp \
-                      -framework Accelerate
+    ifeq ($(LIBOMP_STATIC_X86),yes)
+        # Static linking - bundle libomp into the plugin
+        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto $(LIBOMP_INTEL)/lib/libomp.a \
+                          -framework Accelerate
+    else
+        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -L$(LIBOMP_INTEL)/lib -lomp \
+                          -framework Accelerate
+    endif
     MAC_X86_HAS_OMP = yes
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
@@ -278,19 +299,21 @@ LLVM_MINGW_PREFIX = /opt/llvm-mingw
 LLVM_MINGW_EXISTS := $(shell test -x $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang && echo yes || echo no)
 
 ifeq ($(DETECTED_OS),Windows)
-    # Native Windows build
+    # Native Windows build - static link libgomp
     CC_WIN = gcc
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -static -fopenmp
+    LDFLAGS_WIN = -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread
     WIN_HAS_OMP = yes
+    WIN_OMP_STATIC = yes
 else ifeq ($(LLVM_MINGW_EXISTS),yes)
-    # Cross-compile with llvm-mingw (has OpenMP support)
+    # Cross-compile with llvm-mingw (OpenMP requires DLL - bundle libomp.dll with plugin)
     CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
     LDFLAGS_WIN = -fopenmp -lpthread
     WIN_HAS_OMP = yes
+    WIN_OMP_STATIC = no
 else
     # Cross-compile with mingw-w64 (no OpenMP)
     CC_WIN = x86_64-w64-mingw32-gcc
@@ -299,6 +322,7 @@ else
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
     LDFLAGS_WIN = -static-libgcc -lpthread
     WIN_HAS_OMP = no
+    WIN_OMP_STATIC = no
 endif
 
 # ==============================================================================
@@ -318,6 +342,10 @@ LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE
 LINUX_HAS_OMP := $(shell which gcc >/dev/null 2>&1 && \
                          gcc -fopenmp -E - < /dev/null >/dev/null 2>&1 && \
                          echo yes || echo no)
+
+# Note: Static linking of libgomp.a doesn't work on Linux for shared libraries
+# because libgomp uses TLS relocations incompatible with PIC code.
+# Linux plugins require libgomp.so at runtime.
 
 # Check for OpenBLAS on Linux
 LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
@@ -489,7 +517,11 @@ macos-arm: $(BUILD_DIR) $(SOURCES) $(HEADERS)
 	@echo "----------------------------------------------------------------------"
 	@echo "    Compiler:  $(CC_MAC) -arch arm64"
 ifeq ($(MAC_ARM_HAS_OMP),yes)
-	@echo "    OpenMP:    Enabled"
+ifeq ($(LIBOMP_STATIC_ARM),yes)
+	@echo "    OpenMP:    Enabled (static)"
+else
+	@echo "    OpenMP:    Enabled (dynamic)"
+endif
 	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
@@ -514,7 +546,11 @@ macos-intel: $(BUILD_DIR) $(SOURCES) $(HEADERS)
 	@echo "----------------------------------------------------------------------"
 	@echo "    Compiler:  $(CC_MAC) -arch x86_64"
 ifeq ($(MAC_X86_HAS_OMP),yes)
-	@echo "    OpenMP:    Enabled"
+ifeq ($(LIBOMP_STATIC_X86),yes)
+	@echo "    OpenMP:    Enabled (static)"
+else
+	@echo "    OpenMP:    Enabled (dynamic)"
+endif
 	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled (pthread only)"

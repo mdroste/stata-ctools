@@ -30,6 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc make libgomp1
+          # Note: Linux uses dynamic libgomp (static linking not possible for shared libs)
 
       - name: Build Linux plugin
         run: make linux
@@ -38,6 +39,19 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_linux.plugin
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          ldd build/ctools_linux.plugin
+
+          echo ""
+          echo "=== OpenMP status ==="
+          if ldd build/ctools_linux.plugin | grep -q "libgomp"; then
+            echo "✓ OpenMP enabled (libgomp dynamically linked)"
+            echo "  Note: Linux requires libgomp.so at runtime (installed via libgomp1 package)"
+          else
+            echo "OpenMP not linked"
+          fi
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4
@@ -67,7 +81,18 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_mac_arm.plugin
-          otool -L build/ctools_mac_arm.plugin || true
+
+          echo ""
+          echo "=== Checking OpenMP linking ==="
+          if otool -L build/ctools_mac_arm.plugin | grep -q "libomp"; then
+            echo "⚠ libomp is dynamically linked"
+          else
+            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
+          fi
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          otool -L build/ctools_mac_arm.plugin
 
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
@@ -97,7 +122,18 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_mac_x86.plugin
-          otool -L build/ctools_mac_x86.plugin || true
+
+          echo ""
+          echo "=== Checking OpenMP linking ==="
+          if otool -L build/ctools_mac_x86.plugin | grep -q "libomp"; then
+            echo "⚠ libomp is dynamically linked"
+          else
+            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
+          fi
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          otool -L build/ctools_mac_x86.plugin
 
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4
@@ -129,10 +165,12 @@ jobs:
       - name: Build Windows plugin
         shell: msys2 {0}
         run: |
-          # Set compiler flags for Windows with OpenMP
+          # Set compiler flags for Windows with OpenMP (statically linked)
           export CC=gcc
           export CFLAGS="-O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing"
-          export LDFLAGS="-static -fopenmp -static-libgcc"
+          # Use -Wl,-Bstatic to force static linking of libgomp
+          # This avoids runtime dependency on libgomp-1.dll
+          export LDFLAGS="-static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread"
 
           # Build manually since Makefile detection might not work in MSYS2
           mkdir -p build
@@ -141,7 +179,9 @@ jobs:
           SOURCES=$(find src -name "*.c" | tr '\n' ' ')
           INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe"
 
-          echo "Compiling with OpenMP support..."
+          echo "Compiling with OpenMP support (statically linked)..."
+          echo "CFLAGS: $CFLAGS"
+          echo "LDFLAGS: $LDFLAGS"
           gcc $CFLAGS $INCLUDES -o build/ctools_windows.plugin $SOURCES $LDFLAGS
 
           echo "Build complete!"
@@ -150,9 +190,32 @@ jobs:
       - name: Verify build
         shell: msys2 {0}
         run: |
+          echo "=== File type ==="
           file build/ctools_windows.plugin
-          # Check for OpenMP symbols
-          nm build/ctools_windows.plugin | grep -i omp | head -5 || echo "OpenMP symbols check complete"
+
+          echo ""
+          echo "=== Checking OpenMP is statically linked ==="
+          # Verify GOMP symbols are present (indicates OpenMP was compiled in)
+          if nm build/ctools_windows.plugin | grep -q "GOMP_parallel"; then
+            echo "✓ OpenMP symbols found (GOMP_parallel present)"
+          else
+            echo "✗ WARNING: OpenMP symbols NOT found"
+          fi
+
+          # Verify libgomp is NOT in DLL imports (confirms static linking)
+          if objdump -p build/ctools_windows.plugin | grep -qi "libgomp"; then
+            echo "✗ WARNING: libgomp found in DLL imports - OpenMP may be dynamically linked!"
+          else
+            echo "✓ libgomp NOT in DLL imports (confirms static linking)"
+          fi
+
+          echo ""
+          echo "=== DLL dependencies ==="
+          objdump -p build/ctools_windows.plugin | grep "DLL Name" || echo "No DLL dependencies found"
+
+          echo ""
+          echo "=== OpenMP function symbols (sample) ==="
+          nm build/ctools_windows.plugin | grep -E "omp_get_max_threads|GOMP_parallel" | head -5 || echo "No OpenMP symbols found"
 
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4

@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 1.1.0 20Jan2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!
@@ -7,7 +7,7 @@
 *!   with parallel data loading and chunked formatting.
 *!
 *! Syntax:
-*!   cexport delimited [varlist] using filename [if] [in], [options]
+*!   cexport delimited [varlist] [using] filename [if] [in], [options]
 *!
 *! Options:
 *!   delimiter(string)   - Field delimiter (default: ",")
@@ -18,6 +18,14 @@
 *!   nolabel             - Export numeric values instead of value labels
 *!   datafmt             - Use display formats for numeric variables (not yet implemented)
 *!   verbose             - Display progress information
+*!
+*! Performance options:
+*!   mmap                - Use memory-mapped I/O (zero-copy formatting)
+*!   nofsync             - Skip final fsync for faster writes (less durable)
+*!   direct              - Use direct I/O bypassing OS cache (for very large files)
+*!   prefault            - Pre-fault mmap pages to avoid stalls
+*!   crlf                - Use Windows-style CRLF line endings
+*!   noparallel          - Disable parallel I/O (for debugging)
 
 program define cexport, rclass
     version 14.0
@@ -27,13 +35,29 @@ program define cexport, rclass
 
     if "`subcmd'" != "delimited" {
         di as error "cexport: unknown subcommand `subcmd'"
-        di as error "Syntax: cexport delimited [varlist] using filename [, options]"
+        di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
         exit 198
     }
 
     * Parse the rest with export delimited-style syntax
-    syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-        NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit]
+    * Try with 'using' first, then without (allows both syntaxes)
+    capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+        NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit ///
+        MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
+    if _rc {
+        * 'using' not found - try parsing filename directly
+        * Get first token that looks like a filename (has extension or no special chars)
+        gettoken filename 0 : 0, parse(" ,")
+        if `"`filename'"' == "" | `"`filename'"' == "," {
+            di as error "cexport: filename required"
+            di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
+            exit 198
+        }
+        local using `"`filename'"'
+        syntax [varlist] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+            NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit ///
+            MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
+    }
 
     * Mark sample
     marksample touse, novarlist
@@ -172,28 +196,19 @@ program define cexport, rclass
         }
     }
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "cexport delimited: High-Performance CSV Export"
-        di as text "{hline 60}"
-        di as text "File:       " as result `"`using'"'
-        di as text "Variables:  " as result `nvars'
-        di as text "Obs:        " as result `nobs'
-        di as text "Delimiter:  " as result "`delim_display'"
-        di as text "Header:     " as result cond("`novarnames'" == "", "yes", "no")
-        di as text "Quoting:    " as result cond("`quote'" != "", "all strings", cond("`noquoteif'" != "", "none", "as needed"))
-        di as text "Labels:     " as result cond("`nolabel'" == "", "export value labels", "export numeric values")
-        di as text "{hline 60}"
-        di ""
-    }
-
     * Build plugin arguments
     local opt_noheader = cond("`novarnames'" != "", "noheader", "")
     local opt_quote = cond("`quote'" != "", "quote", "")
     local opt_noquoteif = cond("`noquoteif'" != "", "noquoteif", "")
-    local opt_verbose = cond("`verbose'" != "", "verbose", "")
+    local opt_verbose = cond("`verbose'" != "" | "`timeit'" != "", "verbose", "")
+
+    * Performance options
+    local opt_mmap = cond("`mmap'" != "", "mmap", "")
+    local opt_nofsync = cond("`nofsync'" != "", "nofsync", "")
+    local opt_direct = cond("`direct'" != "", "direct", "")
+    local opt_prefault = cond("`prefault'" != "", "prefault", "")
+    local opt_crlf = cond("`crlf'" != "", "crlf", "")
+    local opt_noparallel = cond("`noparallel'" != "", "noparallel", "")
 
     * Pass variable names to the plugin via global macro
     global CEXPORT_VARNAMES `varlist'
@@ -233,7 +248,7 @@ program define cexport, rclass
     * Plugin expects: filename delimiter [options]
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose'"
+        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
 
     local export_rc = _rc
 
@@ -265,6 +280,7 @@ program define cexport, rclass
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Data load:              " as result %8.4f _cexport_time_load " sec"
+        di as text "    Format:                 " as result %8.4f _cexport_time_format " sec"
         di as text "    Write to file:          " as result %8.4f _cexport_time_write " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cexport_time_total " sec"
@@ -276,6 +292,18 @@ program define cexport, rclass
         if `elapsed' > 0 {
             local rows_per_sec = `nobs' / `elapsed'
             di as text "    Throughput:             " as result %12.0fc `rows_per_sec' as text " rows/sec"
+        }
+
+        * Display thread diagnostics
+        capture local __threads_max = _cexport_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _cexport_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
         }
     }
 

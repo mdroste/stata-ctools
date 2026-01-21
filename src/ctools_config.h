@@ -105,13 +105,39 @@
 
 #ifdef _OPENMP
     #include <omp.h>
+    #define CTOOLS_OPENMP_ENABLED 1
 #else
     /* Fallback stubs for OpenMP runtime functions */
     static inline int omp_get_thread_num(void)  { return 0; }
     static inline int omp_get_max_threads(void) { return 1; }
     static inline int omp_get_num_threads(void) { return 1; }
     static inline void omp_set_num_threads(int n) { (void)n; }
+    #define CTOOLS_OPENMP_ENABLED 0
 #endif
+
+/* ============================================================================
+   Thread Diagnostics
+
+   Helper macro to save thread information to Stata scalars for verbose output.
+   Call at the start of each command to report threading configuration.
+
+   Parameters:
+     prefix - scalar name prefix (e.g., "_csort" produces "_csort_threads_max")
+
+   Saves the following scalars:
+     <prefix>_threads_max     - Maximum threads available (omp_get_max_threads)
+     <prefix>_openmp_enabled  - 1 if OpenMP is enabled, 0 otherwise
+   ============================================================================ */
+
+/* Forward declaration - stplugin.h provides SF_scal_save */
+#ifndef SF_scal_save
+    /* Will be defined when stplugin.h is included */
+#endif
+
+#define CTOOLS_SAVE_THREAD_INFO(prefix) do { \
+    SF_scal_save(prefix "_threads_max", (double)omp_get_max_threads()); \
+    SF_scal_save(prefix "_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED); \
+} while(0)
 
 /* ============================================================================
    Cross-platform aligned memory allocation

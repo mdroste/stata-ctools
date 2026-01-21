@@ -15,6 +15,7 @@
 
 #include "stplugin.h"
 #include "ctools_types.h"
+#include "ctools_config.h"
 #include "ctools_timer.h"
 #include "csort_impl.h"
 #include "csort_stream.h"
@@ -262,6 +263,9 @@ ST_retcode csort_main(const char *args)
         SF_scal_save("_csort_time_cleanup", 0.0);  /* Minimal cleanup in streaming mode */
         SF_scal_save("_csort_time_total", timer.total_time);
 
+        /* Store thread diagnostics */
+        CTOOLS_SAVE_THREAD_INFO("_csort");
+
         return 0;
     }
 
@@ -440,6 +444,9 @@ ST_retcode csort_main(const char *args)
     SF_scal_save("_csort_time_stream", 0.0);  /* No streaming in standard mode */
     SF_scal_save("_csort_time_cleanup", t_cleanup);
     SF_scal_save("_csort_time_total", timer.total_time);
+
+    /* Store thread diagnostics */
+    CTOOLS_SAVE_THREAD_INFO("_csort");
 
     return 0;
 }

@@ -1674,6 +1674,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     SF_scal_save("_creghdfe_time_ols", t_ols - t_partial);
     SF_scal_save("_creghdfe_time_vce", t_vce - t_ols);
     SF_scal_save("_creghdfe_time_total", t_vce - t_start);
+    CTOOLS_SAVE_THREAD_INFO("_creghdfe");
 
     /* ================================================================
      * Cleanup

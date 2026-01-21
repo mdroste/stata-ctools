@@ -735,6 +735,7 @@ static ST_retcode do_compute_bins(void) {
     SF_scal_save("__cbinscatter_time_bins", t_bins - t_resid);
     SF_scal_save("__cbinscatter_time_fit", t_fit - t_bins);
     SF_scal_save("__cbinscatter_time_total", t_total);
+    CTOOLS_SAVE_THREAD_INFO("__cbinscatter");
 
     if (config.verbose) {
         char msg[256];

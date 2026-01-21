@@ -388,6 +388,17 @@ program define cimport, rclass
         file close `fh'
         local mbps = (`fsize' / 1048576) / `elapsed'
         di as text "Speed:     " as result %9.1f `mbps' as text " MB/s"
+
+        * Display thread diagnostics
+        capture local __threads_max = _cimport_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _cimport_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "Thread diagnostics:"
+            di as text "  OpenMP enabled:         " as result %4.0f `__openmp_enabled'
+            di as text "  Max threads available:  " as result %4.0f `__threads_max'
+        }
     }
 
     timer clear

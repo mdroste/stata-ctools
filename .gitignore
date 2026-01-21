@@ -3,3 +3,4 @@
 *.log
 .claude/
 CLAUDE.md
+*.plugin
