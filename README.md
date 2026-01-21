@@ -21,7 +21,7 @@ Fast drop-in replacements for a variety of Stata commands.
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with high-dimensional fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
-Some ctools programs include an extended set of options. For instance, -cbinscatter- supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [https://www.aeaweb.org/articles?id=10.1257/aer.20221576](Cattaneo et al. (2024)). Internal help files for each ctools program provides complete documentation.
+Some ctools programs include an extended set of options. For instance, -cbinscatter- supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [https://www.aeaweb.org/articles?id=10.1257/aer.20221576](Cattaneo et al. 2024). Internal help files for each ctools program provides complete documentation.
 
 
 ## Compatibility and Requirements
