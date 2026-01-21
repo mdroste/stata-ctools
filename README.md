@@ -24,7 +24,7 @@ High-performance C-accelerated drop-in replacements for Stata commands.
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 16.0+. It does not require any dependencies. Precompiled plugins for Windows (64-bit), Mac (Intel), Mac (M-series), and Linux (x86_64) are automatically included with installation, and ctools will automatically load the correct platform-specific plugin for your machine.
+ctools is compatible with Stata 16.0+. It does not require any dependencies. Precompiled plugins for Windows, Mac OSX, and Linux are automatically included with installation, and ctools will automatically load the correct platform-specific plugin for your machine.
 
 
 ## Installation
