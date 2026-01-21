@@ -64,7 +64,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 
 ## Usage Notes and Limitations
 
-- All ctools programs work by copying data in memory into C structures, operating on those structures, and returning data to Stata from C. This means that ctools programs require more memory than the programs they replace. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance, in practice, the runtime of `csort` is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
+- All ctools programs work by copying data in memory into C structures, operating on those structures, and returning data to Stata from C. This means that ctools programs require more memory than the programs they replace. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance, the runtime of `csort` is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
 - ctools only works with datasets smaller than 2^31-1 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed if Stata updates their API for interfacing with C plugins. 
 
 
