@@ -13,13 +13,6 @@
    ============================================================================ */
 
 /*
-    Minimum total bytes to justify parallel I/O (load/store).
-    Below this threshold, thread creation overhead exceeds benefit.
-    Default: 1MB (assumes ~100us thread creation overhead)
-*/
-#define MIN_PARALLEL_BYTES (1 * 1024 * 1024)
-
-/*
     Minimum observations per thread for parallel sort.
     Below this, sequential radix sort is faster due to better cache locality.
 */

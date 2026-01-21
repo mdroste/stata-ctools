@@ -149,7 +149,6 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_hdfe_utils.h \
                $(SRC_DIR)/ctools_ols.h \
                $(SRC_DIR)/ctools_config.h \
-               $(SRC_DIR)/ctools_args.h \
                $(SRC_DIR)/ctools_spi.h
 
 CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h \

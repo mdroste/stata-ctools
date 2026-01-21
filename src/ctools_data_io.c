@@ -273,28 +273,6 @@ static inline void stream_doubles_8(double * restrict dst, const double * restri
 #endif
 }
 
-/*
-    Non-temporal store for 16 doubles (bypasses cache).
-    Note: Currently unused but kept for future optimization opportunities.
-*/
-static inline __attribute__((unused)) void stream_doubles_16(double * restrict dst, const double * restrict src)
-{
-#if defined(CTOOLS_X86) && defined(__SSE2__)
-    _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
-    _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
-    _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
-    _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
-    _mm_stream_pd(&dst[8], _mm_loadu_pd(&src[8]));
-    _mm_stream_pd(&dst[10], _mm_loadu_pd(&src[10]));
-    _mm_stream_pd(&dst[12], _mm_loadu_pd(&src[12]));
-    _mm_stream_pd(&dst[14], _mm_loadu_pd(&src[14]));
-#elif defined(CTOOLS_ARM64)
-    copy_doubles_16(dst, src);
-#else
-    copy_doubles_16(dst, src);
-#endif
-}
-
 /* ===========================================================================
    Data Loading (Stata -> C)
    =========================================================================== */
