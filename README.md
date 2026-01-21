@@ -50,19 +50,15 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-A lot of ctools operations appear to be memory bandwidth bound. If your CPU has a very large L3 cache, you might explore playing around with the settings in ./src/ctools_config.h.
+If you have a workstation CPU (e.g. Threadripper or Xeon) with lots of L3 cache, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
 
 You are welcome to use ctools however you like. For instance, ./src/ctools_data_io.c implements what I think are pretty efficient methods to transport data from Stata to C and vice versa; if you want to write a Stata C plugin, you do not need to reinvent the wheel, and the "common" ctools functions are intended to be modular and portable to other projects.
 
-See DEVELOPERS.md for additional information on ctools' architecture and core logic.
-
-## Threading Model (quick note)
-
-ctools uses OpenMP for tight, regular loops (sorting, linear algebra, HDFE work) and a global persistent thread pool for per-variable I/O and other repeated batch work (to avoid thread creation overhead). See DEVELOPERS.md for a detailed list of where each is used and tuning suggestions.
+See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
 ## Usage Notes and Limitations
 
-- All ctools programs work by copying Stata data in memory, operating on it, and returning results. Because these programs do not operate on Stata datasets in place, -ctools- requires more memory (RAM) than their Stata/Mata-coded counterpart commands. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. As an extreme case, -csort- requires loading the entire dataset into memory (not just the 'sort key' variables). This means that -csort-'s runtime is heavily dependent on the number of variables in your current dataset (frame), and likewise with -cmerge-. In contrast, other commands like civreghdfe, creghdfe, cbinscatter, and cqreg will only load those variables that are necessary, and do not generally write very much data back to Stata, and this I/O concern is minimal.
+- All ctools programs work by copying Stata data in memory, operating on it, and returning results. Because these programs do not operate on Stata datasets in place, -ctools- requires more memory (RAM) than their Stata/Mata-coded counterpart commands. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. 
 - ctools only works with datasets smaller than 2^31-1 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed if Stata updates their API for interfacing with C plugins. 
 
 ## Compatibility
