@@ -1120,7 +1120,8 @@ ST_retcode ivest_compute_2sls(
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
         free(ZtZ_inv_Zty); free(XkX_copy);
-        if (XtX) free(XtX); if (Xty) free(Xty);
+        if (XtX) free(XtX);
+        if (Xty) free(Xty);
         free(XkX); free(Xky);
         return 198;
     }
@@ -1281,7 +1282,8 @@ ST_retcode ivest_compute_2sls(
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
         free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
-        if (XtX) free(XtX); if (Xty) free(Xty);
+        if (XtX) free(XtX);
+        if (Xty) free(Xty);
         free(XkX); free(Xky);
         return 198;
     }

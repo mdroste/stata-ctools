@@ -496,12 +496,17 @@ static ST_retcode do_iv_regression(void)
 
         /* Free old arrays and swap in new ones */
         free(y_c); y_c = y_new;
-        if (X_endog_c) free(X_endog_c); X_endog_c = X_endog_new;
-        if (X_exog_c) free(X_exog_c); X_exog_c = X_exog_new;
+        if (X_endog_c) free(X_endog_c);
+        X_endog_c = X_endog_new;
+        if (X_exog_c) free(X_exog_c);
+        X_exog_c = X_exog_new;
         free(Z_c); Z_c = Z_new;
-        if (weights_c) free(weights_c); weights_c = weights_new;
-        if (cluster_ids_c) free(cluster_ids_c); cluster_ids_c = cluster_ids_new;
-        if (cluster2_ids_c) free(cluster2_ids_c); cluster2_ids_c = cluster2_ids_new;
+        if (weights_c) free(weights_c);
+        weights_c = weights_new;
+        if (cluster_ids_c) free(cluster_ids_c);
+        cluster_ids_c = cluster_ids_new;
+        if (cluster2_ids_c) free(cluster2_ids_c);
+        cluster2_ids_c = cluster2_ids_new;
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
         fe_levels_c = fe_levels_new;

@@ -331,14 +331,12 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         char **str_ptr = var->data.str;
 
         /* Create arena for all strings - estimate avg 64 bytes per string */
-        /* Overflow check: nobs * 64 */
-        size_t arena_capacity = 0;
+        /* Overflow check: nobs * 64 - skip arena if overflow, rely on strdup fallback */
+        string_arena *arena = NULL;
         if (nobs <= SIZE_MAX / 64) {
-            arena_capacity = nobs * 64;
-        } else {
-            arena_capacity = SIZE_MAX;  /* Will likely fail, triggering strdup fallback */
+            size_t arena_capacity = nobs * 64;
+            arena = arena_create(arena_capacity);
         }
-        string_arena *arena = arena_create(arena_capacity);
         if (arena != NULL) {
             var->_arena = arena;
         }
@@ -1051,14 +1049,12 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         char strbuf[2048];
 
         /* Create arena for string storage (estimate 64 bytes avg per string) */
-        /* Overflow check: output_nobs * 64 */
-        size_t arena_capacity = 0;
+        /* Overflow check: output_nobs * 64 - skip arena if overflow, rely on strdup fallback */
+        string_arena *arena = NULL;
         if (output_nobs <= SIZE_MAX / 64) {
-            arena_capacity = output_nobs * 64;
-        } else {
-            arena_capacity = SIZE_MAX;  /* Will likely fail, triggering strdup fallback */
+            size_t arena_capacity = output_nobs * 64;
+            arena = arena_create(arena_capacity);
         }
-        string_arena *arena = arena_create(arena_capacity);
         /* Arena failure is ok - we fall back to strdup */
 
         /* GATHER: Read from source positions with prefetching */
