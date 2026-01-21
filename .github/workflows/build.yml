@@ -31,6 +31,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc make libgomp1
 
+          # Check if static libgomp.a is available
+          LIBGOMP_A=$(gcc -print-file-name=libgomp.a)
+          if [ -f "$LIBGOMP_A" ]; then
+            echo "✓ Static libgomp.a found: $LIBGOMP_A"
+          else
+            echo "⚠ Static libgomp.a not found, will use dynamic linking"
+          fi
+
       - name: Build Linux plugin
         run: make linux
 
@@ -38,6 +46,26 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_linux.plugin
+
+          echo ""
+          echo "=== Checking OpenMP linking ==="
+          # Check if libgomp is dynamically linked
+          if ldd build/ctools_linux.plugin | grep -q "libgomp"; then
+            echo "⚠ libgomp is dynamically linked"
+          else
+            echo "✓ libgomp is NOT in dynamic dependencies (static or not used)"
+          fi
+
+          # Check for GOMP symbols
+          if nm build/ctools_linux.plugin 2>/dev/null | grep -q "GOMP_parallel"; then
+            echo "✓ OpenMP symbols found (GOMP_parallel present)"
+          else
+            echo "Note: OpenMP symbols not visible (may be stripped or static)"
+          fi
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          ldd build/ctools_linux.plugin
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4
@@ -67,7 +95,18 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_mac_arm.plugin
-          otool -L build/ctools_mac_arm.plugin || true
+
+          echo ""
+          echo "=== Checking OpenMP linking ==="
+          if otool -L build/ctools_mac_arm.plugin | grep -q "libomp"; then
+            echo "⚠ libomp is dynamically linked"
+          else
+            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
+          fi
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          otool -L build/ctools_mac_arm.plugin
 
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
@@ -97,7 +136,18 @@ jobs:
         run: |
           ls -la build/
           file build/ctools_mac_x86.plugin
-          otool -L build/ctools_mac_x86.plugin || true
+
+          echo ""
+          echo "=== Checking OpenMP linking ==="
+          if otool -L build/ctools_mac_x86.plugin | grep -q "libomp"; then
+            echo "⚠ libomp is dynamically linked"
+          else
+            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
+          fi
+
+          echo ""
+          echo "=== Dynamic dependencies ==="
+          otool -L build/ctools_mac_x86.plugin
 
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4

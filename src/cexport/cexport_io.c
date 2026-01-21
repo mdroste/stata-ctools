@@ -768,21 +768,61 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
     }
 
     if (contiguous && count <= IOV_MAX) {
-        /* All entries are contiguous - use single pwritev */
-        struct iovec *iov = (struct iovec *)malloc(count * sizeof(struct iovec));
-        if (iov == NULL) {
-            /* Fallback to individual writes */
-            contiguous = 0;
+        /* All entries are contiguous - optimize with single syscall */
+#ifdef __APPLE__
+        /* macOS: pwritev only available on 11.0+, use combined buffer fallback */
+        if (__builtin_available(macOS 11.0, *)) {
+            struct iovec *iov = (struct iovec *)malloc(count * sizeof(struct iovec));
+            if (iov != NULL) {
+                for (size_t i = 0; i < count; i++) {
+                    iov[i].iov_base = (void *)entries[i].buf;
+                    iov[i].iov_len = entries[i].len;
+                }
+                ssize_t written = pwritev(file->fd, iov, (int)count,
+                                           (off_t)entries[0].offset);
+                free(iov);
+                if (written < 0) {
+                    snprintf(file->error_message, sizeof(file->error_message),
+                             "pwritev failed: %s", strerror(errno));
+                    return -1;
+                }
+                return written;
+            }
         } else {
+            /* Older macOS: combine buffers into single pwrite (avoids N syscalls) */
+            size_t total_len = 0;
+            for (size_t i = 0; i < count; i++) {
+                total_len += entries[i].len;
+            }
+            char *combined = (char *)malloc(total_len);
+            if (combined != NULL) {
+                char *ptr = combined;
+                for (size_t i = 0; i < count; i++) {
+                    memcpy(ptr, entries[i].buf, entries[i].len);
+                    ptr += entries[i].len;
+                }
+                ssize_t written = pwrite(file->fd, combined, total_len,
+                                          (off_t)entries[0].offset);
+                free(combined);
+                if (written < 0) {
+                    snprintf(file->error_message, sizeof(file->error_message),
+                             "pwrite failed: %s", strerror(errno));
+                    return -1;
+                }
+                return written;
+            }
+        }
+#else
+        /* Linux/FreeBSD: pwritev always available */
+        struct iovec *iov = (struct iovec *)malloc(count * sizeof(struct iovec));
+        if (iov != NULL) {
             for (size_t i = 0; i < count; i++) {
                 iov[i].iov_base = (void *)entries[i].buf;
                 iov[i].iov_len = entries[i].len;
             }
-
             ssize_t written = pwritev(file->fd, iov, (int)count,
                                        (off_t)entries[0].offset);
             free(iov);
-
             if (written < 0) {
                 snprintf(file->error_message, sizeof(file->error_message),
                          "pwritev failed: %s", strerror(errno));
@@ -790,10 +830,11 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
             }
             return written;
         }
+#endif
     }
 #endif
 
-    /* Non-contiguous or no pwritev: individual writes */
+    /* Non-contiguous or allocation failed: individual writes */
     ssize_t total = 0;
     for (size_t i = 0; i < count; i++) {
         ssize_t written = cexport_io_write_at(file, entries[i].buf,

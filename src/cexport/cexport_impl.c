@@ -1309,7 +1309,7 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
 ST_retcode cexport_main(const char *args)
 {
     double t_start, t_phase;
-    char msg[256];
+    char msg[512];
     ST_retcode rc;
     size_t nobs, nvars;
 
