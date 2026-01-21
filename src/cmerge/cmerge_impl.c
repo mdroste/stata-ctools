@@ -250,7 +250,7 @@ static ST_retcode cmerge_load_using(const char *args)
             for (int v = 0; v < n_keepusing; v++) {
                 stata_variable *var = &g_using_cache.keepusing.vars[v];
                 if (var->type == STATA_TYPE_DOUBLE) {
-                    double *new_data = ctools_safe_malloc2(nobs, sizeof(double));
+                    double *new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
@@ -262,7 +262,7 @@ static ST_retcode cmerge_load_using(const char *args)
                     for (size_t i = 0; i < nobs; i++) {
                         /* Bounds check on permutation index */
                         if (perm[i] >= nobs) {
-                            free(new_data);
+                            ctools_aligned_free(new_data);
                             free(perm);
                             free(sort_vars);
                             stata_data_free(&g_using_cache.keys);
@@ -272,10 +272,10 @@ static ST_retcode cmerge_load_using(const char *args)
                         }
                         new_data[i] = var->data.dbl[perm[i]];
                     }
-                    free(var->data.dbl);
+                    ctools_aligned_free(var->data.dbl);
                     var->data.dbl = new_data;
                 } else {
-                    char **new_data = ctools_safe_malloc2(nobs, sizeof(char *));
+                    char **new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
@@ -287,7 +287,7 @@ static ST_retcode cmerge_load_using(const char *args)
                     for (size_t i = 0; i < nobs; i++) {
                         /* Bounds check on permutation index */
                         if (perm[i] >= nobs) {
-                            free(new_data);
+                            ctools_aligned_free(new_data);
                             free(perm);
                             free(sort_vars);
                             stata_data_free(&g_using_cache.keys);
@@ -297,7 +297,7 @@ static ST_retcode cmerge_load_using(const char *args)
                         }
                         new_data[i] = var->data.str[perm[i]];
                     }
-                    free(var->data.str);
+                    ctools_aligned_free(var->data.str);
                     var->data.str = new_data;
                 }
             }
