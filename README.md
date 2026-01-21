@@ -22,12 +22,17 @@ High-performance C-accelerated drop-in replacements for Stata commands.
 | `qreg` | `cqreg` | Quantile regression | **4x** |
 
 
+## Compatibility and Requirements
+
+ctools is compatible with Stata 16.0+. It does not require any dependencies. Precompiled plugins for Windows (64-bit), Mac (Intel), Mac (M-series), and Linux (x86_64) are automatically included with installation, and ctools will automatically load the correct platform-specific plugin for your machine.
+
+
 ## Installation
 
 ### From GitHub (recommended)
 
 ```stata
-net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build")
+net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools/main/build") replace
 ```
 
 ### Manual Installation
@@ -50,24 +55,26 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-If you have a workstation CPU (e.g. Threadripper or Xeon) with lots of L3 cache, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
-
-You are welcome to use ctools however you like. For instance, ./src/ctools_data_io.c implements what I think are pretty efficient methods to transport data from Stata to C and vice versa; if you want to write a Stata C plugin, you do not need to reinvent the wheel, and the "common" ctools functions are intended to be modular and portable to other projects.
+If you have a workstation/server CPU with lots of L3 cache, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
 
 See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' architecture and core logic.
+
 
 ## Usage Notes and Limitations
 
 - All ctools programs work by copying Stata data in memory, operating on it, and returning results. Because these programs do not operate on Stata datasets in place, -ctools- requires more memory (RAM) than their Stata/Mata-coded counterpart commands. In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. 
 - ctools only works with datasets smaller than 2^31-1 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed if Stata updates their API for interfacing with C plugins. 
 
+
 ## Compatibility
 
 - Stata 16.0+ for full compatibility; Stata 14.0+ probably works (untested).
 
+
 ## Authorship
 
 99.9% of the code for ctools repository was written using Claude Opus 4.5 and Claude Code.
+
 
 ## Thanks
 
@@ -77,6 +84,7 @@ Thanks to [Sergio Correia](https://github.com/sergiocorreia) for creating [ftool
 ## License
 
 This program is MIT-licensed. 
+
 
 ## Contributing
 
