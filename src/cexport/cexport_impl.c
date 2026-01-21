@@ -45,6 +45,7 @@
 #include "ctools_config.h"
 #include "ctools_timer.h"
 #include "cexport_impl.h"
+#include "cexport_io.h"
 
 /* ========================================================================
    Configuration Constants
@@ -81,7 +82,7 @@ typedef enum {
 typedef struct {
     /* Output file */
     char *filename;
-    FILE *fp;
+    FILE *fp;                    /* Legacy: only used for fallback single-threaded path */
 
     /* Formatting options */
     char delimiter;
@@ -89,6 +90,20 @@ typedef struct {
     bool quote_strings;
     bool quote_if_needed;
     bool verbose;
+
+    /* Line ending configuration (for binary mode with explicit endings) */
+    char line_ending[3];         /* "\n" or "\r\n" + null terminator */
+    int line_ending_len;         /* 1 for LF, 2 for CRLF */
+    bool use_crlf;               /* True for Windows-style CRLF */
+
+    /* I/O backend configuration */
+    cexport_io_backend_t io_backend;  /* PWRITE or MMAP */
+    cexport_io_flags_t io_flags;      /* I/O flags (DIRECT, NOFSYNC, PREFAULT) */
+    bool use_parallel_io;        /* True to use parallel offset writes */
+
+    /* Adaptive sizing (computed at runtime) */
+    size_t actual_avg_row_size;  /* Sampled average row size */
+    size_t adaptive_chunk_size;  /* Rows per chunk (adaptive) */
 
     /* Data from Stata */
     stata_data data;
@@ -243,18 +258,74 @@ static int format_decimal_fast(double val, char *buf)
 }
 
 /*
-    Fast double to string conversion with type-appropriate precision.
+    Powers of 10 for fast decimal formatting.
+    POW10[i] = 10^i for i in [0, 16]
+*/
+static const uint64_t POW10[17] = {
+    1ULL,
+    10ULL,
+    100ULL,
+    1000ULL,
+    10000ULL,
+    100000ULL,
+    1000000ULL,
+    10000000ULL,
+    100000000ULL,
+    1000000000ULL,
+    10000000000ULL,
+    100000000000ULL,
+    1000000000000ULL,
+    10000000000000ULL,
+    100000000000000ULL,
+    1000000000000000ULL,
+    10000000000000000ULL
+};
 
-    Features:
-    - FAST PATH: Direct integer conversion for whole numbers (5-10x faster)
-    - Handles Stata missing values as empty string or "."
-    - Uses 8 significant digits for float, 16 for double (matches Stata's export delimited)
-    - Falls back to snprintf only for decimals/scientific notation
+/*
+    Format unsigned integer with leading zeros to exactly 'width' digits.
+    Used for fractional part formatting.
+    Returns number of characters written.
+*/
+static inline int format_frac_digits(uint64_t val, char *buf, int width)
+{
+    /* Format right-to-left */
+    char temp[20];
+    int pos = width;
+    temp[pos] = '\0';
+
+    while (pos > 0) {
+        pos--;
+        temp[pos] = '0' + (val % 10);
+        val /= 10;
+    }
+
+    /* Copy and strip trailing zeros */
+    int len = width;
+    while (len > 1 && temp[len - 1] == '0') {
+        len--;
+    }
+
+    memcpy(buf, temp, len);
+    return len;
+}
+
+/*
+    Fast double to string - optimized version.
+
+    Key optimizations:
+    1. Fast path for integers (handles ~80% of typical data)
+    2. Fast path for "simple decimals" with few decimal places
+    3. Direct formatting without leading zero (Stata style)
+    4. Single-pass trailing zero removal
+    5. Fallback to snprintf only for complex cases (scientific notation)
 
     Returns: number of characters written (not including null terminator)
 */
 static int double_to_str(double val, char *buf, int buf_size, bool missing_as_dot, vartype_t vtype)
 {
+    (void)buf_size;  /* Used for safety in fallback path */
+
+    /* Handle Stata missing values */
     if (is_stata_missing(val)) {
         if (missing_as_dot) {
             buf[0] = '.';
@@ -282,85 +353,185 @@ static int double_to_str(double val, char *buf, int buf_size, bool missing_as_do
         }
     }
 
-    /* FAST PATH: Check if value is an exact integer that fits in int64
-     * This handles ~80% of typical Stata data (IDs, counts, years, etc.)
-     * Also covers byte, int, long storage types perfectly.
+    /* FAST PATH 1: Exact integers
+     * Handles ~80% of typical Stata data (IDs, counts, years, etc.)
      */
     if (val == (double)(int64_t)val && val >= -9007199254740992.0 && val <= 9007199254740992.0) {
         return ctools_int64_to_str((int64_t)val, buf);
     }
 
-    /* Determine precision based on storage type
-     * Match Stata's export delimited behavior:
-     * - float: 8 significant digits (Stata outputs like .35762972)
-     * - double: 16 significant digits (Stata outputs like .2076905268617547)
-     */
-    int precision;
-    if (vtype == VARTYPE_FLOAT) {
-        precision = 8;
-    } else {
-        /* double, or integer types that somehow have decimal values */
-        precision = 16;
+    /* Determine precision based on storage type */
+    int max_frac_digits = (vtype == VARTYPE_FLOAT) ? 8 : 16;
+
+    /* Handle sign */
+    int pos = 0;
+    double abs_val = val;
+    if (val < 0) {
+        buf[pos++] = '-';
+        abs_val = -val;
     }
 
-    /* Format with type-appropriate precision
-     * Use snprintf to match Stata's exact output format.
-     * We skip format_decimal_fast because it uses 15 digits while Stata uses 16 for double.
+    /* FAST PATH 2: Simple decimals (most common in real data)
+     * Values that can be represented exactly with limited decimal places.
+     * Handles values like 1.5, 0.25, 123.456, etc.
+     *
+     * Upper bound: 1e9 to avoid precision issues with large floats.
+     * Values >= 1e9 may not convert back exactly when reconstructed.
      */
+    if (abs_val < 1e9 && abs_val > 1e-10) {
+        /* Extract integer and fractional parts */
+        double int_part_d = floor(abs_val);
+        double frac_part = abs_val - int_part_d;
+
+        /* Check if fractional part is "simple" (few decimal places needed) */
+        if (frac_part > 0) {
+            /* Try progressively more decimal places until we get exact match */
+            for (int decimals = 1; decimals <= max_frac_digits && decimals <= 15; decimals++) {
+                double scale = (double)POW10[decimals];
+                double scaled_frac = frac_part * scale;
+                uint64_t frac_int = (uint64_t)(scaled_frac + 0.5);
+
+                /* Check for rounding to next integer */
+                if (frac_int >= POW10[decimals]) {
+                    int_part_d += 1.0;
+                    frac_int = 0;
+                    frac_part = 0;
+                    break;
+                }
+
+                /* Check if this representation is exact enough */
+                double reconstructed = int_part_d + (double)frac_int / scale;
+                double rel_error = fabs(reconstructed - abs_val) / abs_val;
+
+                if (rel_error < 1e-15 || (vtype == VARTYPE_FLOAT && rel_error < 1e-7)) {
+                    /* Found exact representation! Format directly. */
+                    uint64_t int_part = (uint64_t)int_part_d;
+
+                    if (int_part == 0) {
+                        /* Value between -1 and 1: Stata omits leading zero */
+                        buf[pos++] = '.';
+                    } else {
+                        /* Format integer part */
+                        pos += ctools_uint64_to_str_fast(int_part, buf + pos);
+                        buf[pos++] = '.';
+                    }
+
+                    /* Format fractional part with trailing zeros stripped */
+                    if (frac_int == 0) {
+                        /* No fractional part after rounding - remove decimal point */
+                        pos--;
+                    } else {
+                        pos += format_frac_digits(frac_int, buf + pos, decimals);
+                    }
+
+                    buf[pos] = '\0';
+                    return pos;
+                }
+            }
+        } else {
+            /* No fractional part - should have been caught by integer path,
+             * but handle it anyway */
+            uint64_t int_part = (uint64_t)int_part_d;
+            pos += ctools_uint64_to_str_fast(int_part, buf + pos);
+            buf[pos] = '\0';
+            return pos;
+        }
+    }
+
+    /* FALLBACK: Use snprintf for complex cases
+     * - Very small numbers (scientific notation)
+     * - Very large numbers
+     * - Numbers requiring many decimal places
+     *
+     * Stata uses scientific notation for very small numbers (< 0.0001)
+     * with format like "1.00000000000e-10" (11 decimal places in mantissa)
+     */
+    char temp[48];
     int len;
-    if (precision == 8) {
-        len = snprintf(buf, buf_size, "%.8g", val);
+
+    /* Check if this will use scientific notation (very small numbers) */
+    if (abs_val > 0 && abs_val < 0.0001) {
+        /* Use Stata-compatible scientific notation format
+         * Stata uses 11 decimal places for doubles, 7 for floats */
+        if (vtype == VARTYPE_FLOAT) {
+            len = snprintf(temp, sizeof(temp), "%.7e", val);
+        } else {
+            len = snprintf(temp, sizeof(temp), "%.11e", val);
+        }
+        /* Copy directly - no post-processing needed for scientific notation */
+        memcpy(buf + pos, temp + (temp[0] == '-' ? 1 : 0), len - (temp[0] == '-' ? 1 : 0));
+        pos += len - (temp[0] == '-' ? 1 : 0);
+        buf[pos] = '\0';
+        return pos;
+    }
+
+    /* For other cases, use %g format */
+    if (vtype == VARTYPE_FLOAT) {
+        len = snprintf(temp, sizeof(temp), "%.8g", val);
     } else {
-        len = snprintf(buf, buf_size, "%.16g", val);
+        len = snprintf(temp, sizeof(temp), "%.16g", val);
     }
 
-    /* Remove leading zero to match Stata's format (e.g., 0.5 -> .5)
-     * Stata omits leading zero for values between -1 and 1 */
-    if (len >= 2 && buf[0] == '0' && buf[1] == '.') {
-        /* Shift string left to remove leading zero */
-        memmove(buf, buf + 1, len);  /* includes null terminator */
-        len--;
-    } else if (len >= 3 && buf[0] == '-' && buf[1] == '0' && buf[2] == '.') {
-        /* Handle negative: -0.5 -> -.5 */
-        memmove(buf + 1, buf + 2, len - 1);  /* includes null terminator */
-        len--;
+    /* Process snprintf output in single pass:
+     * - Skip leading zero for values between -1 and 1
+     * - Strip trailing zeros after decimal point
+     */
+    int src = 0;
+    int has_sign = (temp[0] == '-');
+    if (has_sign) {
+        src++;
     }
 
-    /* Remove trailing zeros after decimal point (Stata also does this) */
-    char *dot = strchr(buf, '.');
-    if (dot != NULL) {
-        char *end = buf + len - 1;
-        char *exp = strchr(buf, 'e');
-        if (exp == NULL) exp = strchr(buf, 'E');
+    /* Skip leading zero: "0." -> "." */
+    int skip_zero = (temp[src] == '0' && temp[src + 1] == '.');
+    if (skip_zero) {
+        src++;
+    }
 
-        char *last_digit = (exp != NULL) ? exp - 1 : end;
-
-        while (last_digit > dot && *last_digit == '0') {
-            last_digit--;
-        }
-
-        if (last_digit == dot) {
-            /* Remove the decimal point too if no fractional digits */
-            if (exp != NULL) {
-                memmove(dot, exp, strlen(exp) + 1);
-                len = (int)strlen(buf);
-            } else {
-                *dot = '\0';
-                len = (int)(dot - buf);
-            }
-        } else if (last_digit < end - 1 || (exp != NULL && last_digit < exp - 1)) {
-            /* Remove trailing zeros */
-            if (exp != NULL) {
-                memmove(last_digit + 1, exp, strlen(exp) + 1);
-                len = (int)strlen(buf);
-            } else {
-                *(last_digit + 1) = '\0';
-                len = (int)(last_digit - buf + 1);
-            }
+    /* Find decimal point and exponent positions */
+    int dot_pos = -1;
+    int exp_pos = -1;
+    for (int i = src; i < len; i++) {
+        if (temp[i] == '.') dot_pos = i;
+        else if (temp[i] == 'e' || temp[i] == 'E') {
+            exp_pos = i;
+            break;
         }
     }
 
-    return len;
+    /* Copy to output, stripping trailing zeros */
+    pos = 0;
+    if (has_sign) {
+        buf[pos++] = '-';
+    }
+
+    if (dot_pos >= 0 && exp_pos < 0) {
+        /* Has decimal, no exponent - can strip trailing zeros */
+        int last_nonzero = len - 1;
+        while (last_nonzero > dot_pos && temp[last_nonzero] == '0') {
+            last_nonzero--;
+        }
+        /* If only decimal point left, remove it too */
+        if (last_nonzero == dot_pos) {
+            last_nonzero--;
+        }
+        for (int i = src; i <= last_nonzero; i++) {
+            buf[pos++] = temp[i];
+        }
+    } else if (dot_pos >= 0 && exp_pos > 0) {
+        /* Has decimal and exponent - copy as-is (Stata keeps trailing zeros in sci notation) */
+        for (int i = src; i < len; i++) {
+            buf[pos++] = temp[i];
+        }
+    } else {
+        /* No decimal point - copy as-is */
+        for (int i = src; i < len; i++) {
+            buf[pos++] = temp[i];
+        }
+    }
+
+    buf[pos] = '\0';
+    return pos;
 }
 
 /* ========================================================================
@@ -447,6 +618,37 @@ typedef struct {
 } format_chunk_args_t;
 
 /*
+    Thread arguments for parallel offset writes.
+*/
+typedef struct {
+    cexport_io_file *file;   /* Output file handle */
+    const char *buffer;      /* Data to write */
+    size_t len;              /* Number of bytes to write */
+    size_t offset;           /* File offset to write at */
+    int success;             /* 1 on success, 0 on failure */
+} write_chunk_args_t;
+
+/*
+    Thread function: Write a chunk at a specific offset.
+    Used for parallel I/O with non-overlapping ranges.
+*/
+static void *write_chunk_thread(void *arg)
+{
+    write_chunk_args_t *args = (write_chunk_args_t *)arg;
+
+    if (args->len == 0) {
+        args->success = 1;
+        return NULL;
+    }
+
+    ssize_t written = cexport_io_write_at(args->file, args->buffer,
+                                           args->len, args->offset);
+    args->success = (written == (ssize_t)args->len);
+
+    return args->success ? NULL : (void *)(intptr_t)-1;
+}
+
+/*
     Format a single row of ALL NUMERIC variables into the output buffer.
 
     FAST PATH: No type checking, no string handling.
@@ -459,22 +661,30 @@ static int format_row_numeric(size_t row_idx, char *buf, size_t buf_size)
     size_t pos = 0;
     size_t nvars = g_ctx.data.nvars;
     char delimiter = g_ctx.delimiter;
+    const char *line_end = g_ctx.line_ending;
+    int line_end_len = g_ctx.line_ending_len;
 
     for (size_t j = 0; j < nvars; j++) {
         double val = g_ctx.data.vars[j].data.dbl[row_idx];
         vartype_t vtype = g_ctx.vartypes[j];
 
-        /* Check buffer space (assume max 32 chars for number) */
-        if (pos + 34 > buf_size) {
+        /* Check buffer space (assume max 32 chars for number + delimiter/newline) */
+        if (pos + 34 + line_end_len > buf_size) {
             return -1;
         }
 
         /* Write directly to output buffer */
-        int field_len = double_to_str(val, buf + pos, 32, true, vtype);
+        int field_len = double_to_str(val, buf + pos, 32, false, vtype);
         pos += field_len;
 
-        /* Add delimiter or newline */
-        buf[pos++] = (j < nvars - 1) ? delimiter : '\n';
+        /* Add delimiter or line ending */
+        if (j < nvars - 1) {
+            buf[pos++] = delimiter;
+        } else {
+            /* Copy line ending (1 or 2 bytes) */
+            memcpy(buf + pos, line_end, line_end_len);
+            pos += line_end_len;
+        }
     }
 
     return (int)pos;
@@ -496,6 +706,8 @@ static int format_row(size_t row_idx, char *buf, size_t buf_size)
     size_t pos = 0;
     size_t nvars = g_ctx.data.nvars;
     char delimiter = g_ctx.delimiter;
+    const char *line_end = g_ctx.line_ending;
+    int line_end_len = g_ctx.line_ending_len;
 
     for (size_t j = 0; j < nvars; j++) {
         stata_variable *var = &g_ctx.data.vars[j];
@@ -506,13 +718,13 @@ static int format_row(size_t row_idx, char *buf, size_t buf_size)
             double val = var->data.dbl[row_idx];
             vartype_t vtype = g_ctx.vartypes[j];
 
-            /* Check buffer space (assume max 32 chars for number) */
-            if (pos + 34 > buf_size) {
+            /* Check buffer space (assume max 32 chars for number + line ending) */
+            if (pos + 34 + line_end_len > buf_size) {
                 return -1;
             }
 
             /* Write directly to output buffer */
-            field_len = double_to_str(val, buf + pos, sizeof(field_buf), true, vtype);
+            field_len = double_to_str(val, buf + pos, sizeof(field_buf), false, vtype);
             pos += field_len;
         } else {
             /* String variable */
@@ -524,21 +736,23 @@ static int format_row(size_t row_idx, char *buf, size_t buf_size)
 
             if (need_quote) {
                 field_len = write_quoted_string(str, field_buf, sizeof(field_buf));
-                if (pos + field_len + 2 > buf_size) return -1;
+                if (pos + field_len + 2 + line_end_len > buf_size) return -1;
                 memcpy(buf + pos, field_buf, field_len);
             } else {
                 field_len = (int)strlen(str);
-                if (pos + field_len + 2 > buf_size) return -1;
+                if (pos + field_len + 2 + line_end_len > buf_size) return -1;
                 memcpy(buf + pos, str, field_len);
             }
             pos += field_len;
         }
 
-        /* Add delimiter or newline */
+        /* Add delimiter or line ending */
         if (j < nvars - 1) {
             buf[pos++] = delimiter;
         } else {
-            buf[pos++] = '\n';
+            /* Copy line ending (1 or 2 bytes) */
+            memcpy(buf + pos, line_end, line_end_len);
+            pos += line_end_len;
         }
     }
 
@@ -585,10 +799,16 @@ static void *format_chunk_thread(void *arg)
    Header Writing
    ======================================================================== */
 
-static int write_header(FILE *fp)
+/*
+    Format the header row into a buffer.
+    Returns the number of bytes written, or -1 on error.
+    The caller must provide a buffer of sufficient size.
+*/
+static int format_header(char *buf, size_t buf_size)
 {
-    char line_buf[65536];
     size_t pos = 0;
+    const char *line_end = g_ctx.line_ending;
+    int line_end_len = g_ctx.line_ending_len;
 
     for (size_t j = 0; j < g_ctx.nvars; j++) {
         const char *name = g_ctx.varnames[j];
@@ -599,29 +819,31 @@ static int write_header(FILE *fp)
                          (g_ctx.quote_if_needed && string_needs_quoting(name, g_ctx.delimiter));
 
         if (need_quote) {
-            int quoted_len = write_quoted_string(name, line_buf + pos, sizeof(line_buf) - pos);
-            pos += quoted_len;
-        } else {
-            if (pos + name_len + 2 > sizeof(line_buf)) {
+            if (pos + name_len * 2 + 4 + line_end_len > buf_size) {
                 return -1;
             }
-            memcpy(line_buf + pos, name, name_len);
+            int quoted_len = write_quoted_string(name, buf + pos, buf_size - pos);
+            pos += quoted_len;
+        } else {
+            if (pos + name_len + 2 + line_end_len > buf_size) {
+                return -1;
+            }
+            memcpy(buf + pos, name, name_len);
             pos += name_len;
         }
 
         if (j < g_ctx.nvars - 1) {
-            line_buf[pos++] = g_ctx.delimiter;
+            buf[pos++] = g_ctx.delimiter;
         } else {
-            line_buf[pos++] = '\n';
+            /* Copy line ending (1 or 2 bytes) */
+            memcpy(buf + pos, line_end, line_end_len);
+            pos += line_end_len;
         }
     }
 
-    if (fwrite(line_buf, 1, pos, fp) != pos) {
-        return -1;
-    }
-
-    return 0;
+    return (int)pos;
 }
+
 
 /* ========================================================================
    Main Export Function
@@ -631,7 +853,7 @@ static int write_header(FILE *fp)
     Parse command arguments.
 
     Format: filename delimiter [options...]
-    Options: noheader, quote, quoteif, verbose
+    Options: noheader, quote, quoteif, verbose, crlf, mmap
 */
 static int parse_args(const char *args)
 {
@@ -649,6 +871,22 @@ static int parse_args(const char *args)
     g_ctx.quote_strings = false;
     g_ctx.quote_if_needed = true;  /* Default: quote only if needed */
     g_ctx.verbose = false;
+
+    /* Line ending defaults: LF (Unix-style) for consistency with Stata */
+    g_ctx.use_crlf = false;
+    g_ctx.line_ending[0] = '\n';
+    g_ctx.line_ending[1] = '\0';
+    g_ctx.line_ending[2] = '\0';
+    g_ctx.line_ending_len = 1;
+
+    /* I/O backend defaults: pwrite with parallel I/O enabled */
+    g_ctx.io_backend = CEXPORT_IO_PWRITE;
+    g_ctx.io_flags = CEXPORT_IO_FLAG_NONE;
+    g_ctx.use_parallel_io = true;
+
+    /* Adaptive sizing defaults (computed later) */
+    g_ctx.actual_avg_row_size = 0;
+    g_ctx.adaptive_chunk_size = CTOOLS_EXPORT_CHUNK_SIZE;
 
     token = strtok_r(args_copy, " \t", &saveptr);
     while (token != NULL) {
@@ -672,6 +910,28 @@ static int parse_args(const char *args)
                 g_ctx.quote_if_needed = false;
             } else if (strcmp(token, "verbose") == 0) {
                 g_ctx.verbose = true;
+            } else if (strcmp(token, "crlf") == 0) {
+                /* Windows-style line endings */
+                g_ctx.use_crlf = true;
+                g_ctx.line_ending[0] = '\r';
+                g_ctx.line_ending[1] = '\n';
+                g_ctx.line_ending[2] = '\0';
+                g_ctx.line_ending_len = 2;
+            } else if (strcmp(token, "mmap") == 0) {
+                /* Use memory-mapped I/O backend */
+                g_ctx.io_backend = CEXPORT_IO_MMAP;
+            } else if (strcmp(token, "noparallel") == 0) {
+                /* Disable parallel I/O (for debugging/comparison) */
+                g_ctx.use_parallel_io = false;
+            } else if (strcmp(token, "nofsync") == 0) {
+                /* Skip final fsync for faster but less durable writes */
+                g_ctx.io_flags |= CEXPORT_IO_FLAG_NOFSYNC;
+            } else if (strcmp(token, "direct") == 0) {
+                /* Direct I/O bypasses OS cache (for very large files) */
+                g_ctx.io_flags |= CEXPORT_IO_FLAG_DIRECT;
+            } else if (strcmp(token, "prefault") == 0) {
+                /* Pre-fault mmap pages to avoid page fault latency */
+                g_ctx.io_flags |= CEXPORT_IO_FLAG_PREFAULT;
             }
         }
 
@@ -816,6 +1076,233 @@ static void cleanup_context(void)
     stata_data_free(&g_ctx.data);
 }
 
+/* ========================================================================
+   Dynamic Buffer Sizing
+
+   Sample first N rows to compute actual average row size,
+   avoiding the conservative 2x memory allocation.
+   ======================================================================== */
+
+#define CEXPORT_SAMPLE_ROWS 100  /* Number of rows to sample for sizing */
+
+/*
+    Sample rows to compute actual average row size.
+    Returns average bytes per row, or 0 on error.
+*/
+static size_t sample_row_sizes(size_t nobs)
+{
+    char sample_buf[4096];
+    size_t sample_count = (nobs < CEXPORT_SAMPLE_ROWS) ? nobs : CEXPORT_SAMPLE_ROWS;
+    size_t total_size = 0;
+    size_t rows_sampled = 0;
+    bool all_numeric = g_ctx.all_numeric;
+
+    /* Sample evenly distributed rows */
+    size_t step = (nobs > sample_count) ? (nobs / sample_count) : 1;
+
+    for (size_t i = 0; i < nobs && rows_sampled < sample_count; i += step) {
+        /* Check if this observation satisfies the if condition */
+        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+        if (!SF_ifobs(stata_obs)) {
+            continue;
+        }
+
+        int row_len;
+        if (all_numeric) {
+            row_len = format_row_numeric(i, sample_buf, sizeof(sample_buf));
+        } else {
+            row_len = format_row(i, sample_buf, sizeof(sample_buf));
+        }
+
+        if (row_len > 0) {
+            total_size += row_len;
+            rows_sampled++;
+        }
+    }
+
+    if (rows_sampled == 0) {
+        return 0;
+    }
+
+    /* Return average with 20% safety margin (much better than 100% margin) */
+    return (total_size / rows_sampled) * 12 / 10 + 64;
+}
+
+/*
+    Compute adaptive chunk size based on data characteristics.
+    All-numeric datasets can use larger chunks (less memory per row).
+*/
+static size_t compute_adaptive_chunk_size(size_t nobs, bool all_numeric)
+{
+    size_t base_chunk_size = CTOOLS_EXPORT_CHUNK_SIZE;
+
+    if (all_numeric) {
+        /* All-numeric: use 5x larger chunks (50K rows instead of 10K) */
+        base_chunk_size = base_chunk_size * 5;
+    }
+
+    /* Cap at 10% of total rows or 100K rows, whichever is smaller */
+    size_t max_chunk = nobs / 10;
+    if (max_chunk < CTOOLS_EXPORT_CHUNK_SIZE) {
+        max_chunk = CTOOLS_EXPORT_CHUNK_SIZE;
+    }
+    if (max_chunk > 100000) {
+        max_chunk = 100000;
+    }
+
+    return (base_chunk_size < max_chunk) ? base_chunk_size : max_chunk;
+}
+
+/* ========================================================================
+   Zero-Copy mmap Formatting
+
+   Thread arguments and functions for formatting directly into mapped memory.
+   ======================================================================== */
+
+/*
+    Thread arguments for zero-copy mmap formatting.
+    Each thread formats directly into mapped_data + offset.
+*/
+typedef struct {
+    char *dest;              /* Destination pointer in mapped memory */
+    size_t dest_size;        /* Available space at destination */
+    size_t start_row;        /* First row to format (0-based) */
+    size_t end_row;          /* Last row to format (exclusive) */
+    size_t bytes_written;    /* Actual bytes written */
+    int success;             /* 1 on success, 0 on failure */
+} format_mmap_args_t;
+
+/*
+    Thread function: Format rows directly into mapped memory (zero-copy).
+    Eliminates the memcpy step in the mmap write path.
+*/
+static void *format_mmap_thread(void *arg)
+{
+    format_mmap_args_t *args = (format_mmap_args_t *)arg;
+    size_t pos = 0;
+    bool all_numeric = g_ctx.all_numeric;
+
+    for (size_t i = args->start_row; i < args->end_row; i++) {
+        /* Check if this observation satisfies the if condition */
+        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+        if (!SF_ifobs(stata_obs)) {
+            continue;
+        }
+
+        int row_len;
+        if (all_numeric) {
+            row_len = format_row_numeric(i, args->dest + pos, args->dest_size - pos);
+        } else {
+            row_len = format_row(i, args->dest + pos, args->dest_size - pos);
+        }
+
+        if (row_len < 0) {
+            args->success = 0;
+            args->bytes_written = pos;
+            return NULL;
+        }
+        pos += row_len;
+    }
+
+    args->success = 1;
+    args->bytes_written = pos;
+    return NULL;
+}
+
+/* ========================================================================
+   Single-Threaded Buffered Writer
+
+   Buffers multiple rows before calling fwrite to reduce syscall overhead.
+   ======================================================================== */
+
+#define CEXPORT_ROW_BUFFER_ROWS 1000  /* Buffer this many rows before fwrite */
+
+/*
+    Write rows with buffering for the single-threaded path.
+    Buffers multiple rows and writes in batches to reduce syscalls.
+*/
+static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_t *rows_written_out)
+{
+    bool all_numeric = g_ctx.all_numeric;
+    size_t rows_written = 0;
+
+    /* Allocate buffer for multiple rows */
+    size_t buffer_size = avg_row_size * CEXPORT_ROW_BUFFER_ROWS;
+    if (buffer_size < 65536) buffer_size = 65536;
+    if (buffer_size > 4 * 1024 * 1024) buffer_size = 4 * 1024 * 1024;
+
+    char *buffer = (char *)malloc(buffer_size);
+    if (buffer == NULL) {
+        return -1;
+    }
+
+    size_t buf_pos = 0;
+
+    for (size_t i = 0; i < nobs; i++) {
+        /* Check if this observation satisfies the if condition */
+        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+        if (!SF_ifobs(stata_obs)) {
+            continue;
+        }
+
+        /* Check if we need to flush buffer */
+        if (buf_pos > buffer_size - avg_row_size * 2) {
+            if (fwrite(buffer, 1, buf_pos, fp) != buf_pos) {
+                free(buffer);
+                return -1;
+            }
+            buf_pos = 0;
+        }
+
+        /* Format row into buffer */
+        int row_len;
+        if (all_numeric) {
+            row_len = format_row_numeric(i, buffer + buf_pos, buffer_size - buf_pos);
+        } else {
+            row_len = format_row(i, buffer + buf_pos, buffer_size - buf_pos);
+        }
+
+        if (row_len < 0) {
+            /* Buffer full - flush and retry */
+            if (buf_pos > 0) {
+                if (fwrite(buffer, 1, buf_pos, fp) != buf_pos) {
+                    free(buffer);
+                    return -1;
+                }
+                buf_pos = 0;
+            }
+
+            /* Retry formatting */
+            if (all_numeric) {
+                row_len = format_row_numeric(i, buffer + buf_pos, buffer_size - buf_pos);
+            } else {
+                row_len = format_row(i, buffer + buf_pos, buffer_size - buf_pos);
+            }
+
+            if (row_len < 0) {
+                /* Row too large for buffer - shouldn't happen */
+                free(buffer);
+                return -1;
+            }
+        }
+
+        buf_pos += row_len;
+        rows_written++;
+    }
+
+    /* Flush remaining data */
+    if (buf_pos > 0) {
+        if (fwrite(buffer, 1, buf_pos, fp) != buf_pos) {
+            free(buffer);
+            return -1;
+        }
+    }
+
+    free(buffer);
+    *rows_written_out = rows_written;
+    return 0;
+}
+
 /*
     Main entry point for cexport command.
 */
@@ -856,11 +1343,7 @@ ST_retcode cexport_main(const char *args)
         return 2000;
     }
 
-    if (g_ctx.verbose) {
-        snprintf(msg, sizeof(msg), "cexport: Exporting %zu obs x %zu vars to %s\n",
-                nobs, nvars, g_ctx.filename);
-        SF_display(msg);
-    }
+    (void)msg;  /* Used only for error messages now */
 
     /* ================================================================
        PHASE 1: Load data from Stata
@@ -901,253 +1384,547 @@ ST_retcode cexport_main(const char *args)
         }
     }
 
-    if (g_ctx.verbose) {
-        snprintf(msg, sizeof(msg), "  Load time:   %.3f sec%s\n",
-                g_ctx.time_load, g_ctx.all_numeric ? " (all numeric - fast path)" : "");
-        SF_display(msg);
-    }
 
     /* ================================================================
-       PHASE 2: Open output file and write header
-       ================================================================ */
-    g_ctx.fp = fopen(g_ctx.filename, "w");
-    if (g_ctx.fp == NULL) {
-        snprintf(msg, sizeof(msg), "cexport: cannot open file '%s' for writing: %s\n",
-                g_ctx.filename, strerror(errno));
-        SF_error(msg);
-        cleanup_context();
-        return 603;
-    }
-
-    /* Set large buffer for better I/O performance */
-    setvbuf(g_ctx.fp, NULL, _IOFBF, CTOOLS_IO_BUFFER_SIZE);
-
-    if (g_ctx.write_header) {
-        if (write_header(g_ctx.fp) != 0) {
-            SF_error("cexport: failed to write header\n");
-            cleanup_context();
-            return 693;
-        }
-    }
-
-    /* ================================================================
-       PHASE 3: Format and write data (parallel chunked)
+       PHASE 2: Format data into chunks (parallel)
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
+    /* Compute adaptive chunk size based on data characteristics */
+    g_ctx.adaptive_chunk_size = compute_adaptive_chunk_size(nobs, g_ctx.all_numeric);
+    size_t chunk_size = g_ctx.adaptive_chunk_size;
+
     /* Determine number of chunks and threads */
-    size_t num_chunks = (nobs + CTOOLS_EXPORT_CHUNK_SIZE - 1) / CTOOLS_EXPORT_CHUNK_SIZE;
+    size_t num_chunks = (nobs + chunk_size - 1) / chunk_size;
     size_t num_threads = num_chunks;
     if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
     if (num_threads < 1) num_threads = 1;
 
-    /* Estimate buffer size per chunk (generous estimate) with overflow checks */
-    size_t avg_row_size;
-    if (nvars > SIZE_MAX / 21) {
-        SF_error("cexport: variable count too large\n");
-        cleanup_context();
-        return 920;
+    /* Dynamic buffer sizing: sample actual row sizes instead of conservative estimate */
+    size_t avg_row_size = sample_row_sizes(nobs);
+    if (avg_row_size == 0) {
+        /* Fallback to conservative estimate if sampling fails */
+        if (nvars > SIZE_MAX / 22) {
+            SF_error("cexport: variable count too large\n");
+            cleanup_context();
+            return 920;
+        }
+        avg_row_size = nvars * 22;
     }
-    avg_row_size = nvars * 21; /* ~20 chars per field + 1 delimiter */
+    g_ctx.actual_avg_row_size = avg_row_size;
 
+    /* Compute chunk buffer size with tighter margin (sampling provides real data) */
     size_t chunk_buffer_size;
-    if (avg_row_size > SIZE_MAX / CTOOLS_EXPORT_CHUNK_SIZE / 2) {
+    if (avg_row_size > SIZE_MAX / chunk_size) {
         SF_error("cexport: buffer size overflow\n");
         cleanup_context();
         return 920;
     }
-    chunk_buffer_size = CTOOLS_EXPORT_CHUNK_SIZE * avg_row_size * 2; /* 2x safety margin */
+    /* Only 1.2x margin needed since we sampled actual sizes */
+    chunk_buffer_size = chunk_size * avg_row_size * 12 / 10 + 4096;
 
-    /* For small datasets, use single-threaded approach */
-    if (nobs < CTOOLS_EXPORT_CHUNK_SIZE || num_threads == 1) {
-        /* Single-threaded: format and write directly */
-        if (avg_row_size > SIZE_MAX / 4) {
-            SF_error("cexport: row buffer size overflow\n");
+    /* Format header into a buffer */
+    char *header_buf = NULL;
+    size_t header_len = 0;
+    if (g_ctx.write_header) {
+        header_buf = (char *)malloc(65536);
+        if (header_buf == NULL) {
+            SF_error("cexport: memory allocation failed for header\n");
             cleanup_context();
             return 920;
         }
-        char *row_buf = (char *)malloc(avg_row_size * 4);
-        if (row_buf == NULL) {
-            SF_error("cexport: memory allocation failed\n");
+        int hlen = format_header(header_buf, 65536);
+        if (hlen < 0) {
+            SF_error("cexport: failed to format header\n");
+            free(header_buf);
             cleanup_context();
             return 920;
         }
+        header_len = (size_t)hlen;
+    }
 
-        bool all_numeric = g_ctx.all_numeric;
-        size_t rows_written = 0;
-        for (size_t i = 0; i < nobs; i++) {
-            /* Check if this observation satisfies the if condition */
-            ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-            if (!SF_ifobs(stata_obs)) {
-                continue;  /* Skip observations that don't match if condition */
-            }
+    /* For small datasets or single-threaded mode, use legacy fwrite path */
+    if (!g_ctx.use_parallel_io || nobs < CTOOLS_EXPORT_CHUNK_SIZE || num_threads == 1) {
+        /* Single-threaded: format and write directly using legacy FILE* */
+        g_ctx.fp = fopen(g_ctx.filename, "wb");  /* Binary mode for explicit line endings */
+        if (g_ctx.fp == NULL) {
+            snprintf(msg, sizeof(msg), "cexport: cannot open file '%s' for writing: %s\n",
+                    g_ctx.filename, strerror(errno));
+            SF_error(msg);
+            free(header_buf);
+            cleanup_context();
+            return 603;
+        }
+        setvbuf(g_ctx.fp, NULL, _IOFBF, CTOOLS_IO_BUFFER_SIZE);
 
-            /* Use fast path for all-numeric datasets */
-            int row_len;
-            if (all_numeric) {
-                row_len = format_row_numeric(i, row_buf, avg_row_size * 4);
-            } else {
-                row_len = format_row(i, row_buf, avg_row_size * 4);
-            }
-            if (row_len < 0) {
-                SF_error("cexport: row formatting failed\n");
-                free(row_buf);
-                cleanup_context();
-                return 920;
-            }
-            if (fwrite(row_buf, 1, row_len, g_ctx.fp) != (size_t)row_len) {
-                SF_error("cexport: write error\n");
-                free(row_buf);
+        /* Write header */
+        if (header_buf != NULL && header_len > 0) {
+            if (fwrite(header_buf, 1, header_len, g_ctx.fp) != header_len) {
+                SF_error("cexport: failed to write header\n");
+                free(header_buf);
+                fclose(g_ctx.fp);
+                g_ctx.fp = NULL;
                 cleanup_context();
                 return 693;
             }
-            rows_written++;
         }
-        free(row_buf);
+        free(header_buf);
+        header_buf = NULL;
+
+        /* Single-threaded with buffering: format multiple rows before fwrite */
+        size_t rows_written = 0;
+        if (write_rows_buffered(g_ctx.fp, nobs, avg_row_size, &rows_written) != 0) {
+            SF_error("cexport: write error during buffered write\n");
+            fclose(g_ctx.fp);
+            g_ctx.fp = NULL;
+            cleanup_context();
+            return 693;
+        }
         nobs = rows_written;  /* Update count for reporting */
+
+        g_ctx.time_format = ctools_timer_seconds() - t_phase;
+        g_ctx.time_write = g_ctx.time_format;
+
+        fclose(g_ctx.fp);
+        g_ctx.fp = NULL;
     } else {
-        /* Multi-threaded chunked processing using persistent thread pool
-           This avoids thread creation/destruction overhead on Windows */
+        /*
+         * Multi-threaded parallel offset write pipeline:
+         * 1. Format all chunks in parallel (existing approach)
+         * 2. Compute prefix-sum of bytes_written to get file offsets
+         * 3. Pre-size the file using cexport_io
+         * 4. Write header at offset 0
+         * 5. Parallel writes of each chunk at computed offsets
+         */
         ctools_persistent_pool *pool = ctools_get_global_pool();
         if (pool == NULL) {
             /* Fall back to single-threaded if pool unavailable */
-            SF_error("cexport: thread pool unavailable, falling back to single-threaded\n");
-            char *row_buf = (char *)malloc(avg_row_size * 4);
-            if (row_buf == NULL) {
-                SF_error("cexport: memory allocation failed\n");
+            if (g_ctx.verbose) {
+                SF_display("  Thread pool unavailable, using single-threaded fallback\n");
+            }
+
+            g_ctx.fp = fopen(g_ctx.filename, "wb");
+            if (g_ctx.fp == NULL) {
+                snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
+                        g_ctx.filename, strerror(errno));
+                SF_error(msg);
+                free(header_buf);
+                cleanup_context();
+                return 603;
+            }
+            setvbuf(g_ctx.fp, NULL, _IOFBF, CTOOLS_IO_BUFFER_SIZE);
+
+            if (header_buf != NULL && header_len > 0) {
+                fwrite(header_buf, 1, header_len, g_ctx.fp);
+            }
+            free(header_buf);
+            header_buf = NULL;
+
+            /* Use buffered writer for fallback path too */
+            size_t rows_written = 0;
+            if (write_rows_buffered(g_ctx.fp, nobs, avg_row_size, &rows_written) != 0) {
+                fclose(g_ctx.fp);
+                g_ctx.fp = NULL;
                 cleanup_context();
                 return 920;
             }
-            bool all_numeric = g_ctx.all_numeric;
-            for (size_t i = 0; i < nobs; i++) {
-                ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-                if (!SF_ifobs(stata_obs)) continue;
-                int row_len = all_numeric ?
-                    format_row_numeric(i, row_buf, avg_row_size * 4) :
-                    format_row(i, row_buf, avg_row_size * 4);
-                if (row_len < 0 || fwrite(row_buf, 1, row_len, g_ctx.fp) != (size_t)row_len) {
-                    free(row_buf);
-                    cleanup_context();
-                    return 920;
-                }
+
+            g_ctx.time_format = ctools_timer_seconds() - t_phase;
+            g_ctx.time_write = g_ctx.time_format;
+
+            fclose(g_ctx.fp);
+            g_ctx.fp = NULL;
+        } else if (g_ctx.io_backend == CEXPORT_IO_MMAP) {
+            /* ============================================================
+               ZERO-COPY MMAP PATH: Format directly into mapped memory
+               Eliminates the buffer allocation and memcpy steps.
+               ============================================================ */
+
+            /* Estimate total file size (conservative to ensure we have space) */
+            size_t estimated_total = header_len + (nobs * avg_row_size * 15 / 10);
+
+            /* Open and pre-size file with mmap */
+            cexport_io_file outfile;
+            cexport_io_init(&outfile);
+
+            if (cexport_io_open(&outfile, g_ctx.filename, CEXPORT_IO_MMAP, g_ctx.io_flags) != 0) {
+                snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
+                        g_ctx.filename, outfile.error_message);
+                SF_error(msg);
+                free(header_buf);
+                cleanup_context();
+                return 603;
             }
-            free(row_buf);
+
+            if (cexport_io_presize(&outfile, estimated_total) != 0) {
+                snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
+                        outfile.error_message);
+                SF_error(msg);
+                cexport_io_close(&outfile, 0);
+                free(header_buf);
+                cleanup_context();
+                return 693;
+            }
+
+            /* Get pointer to mapped memory */
+            char *mapped_base = cexport_io_get_mapped_ptr(&outfile, 0);
+            if (mapped_base == NULL) {
+                SF_error("cexport: failed to get mapped memory pointer\n");
+                cexport_io_close(&outfile, 0);
+                free(header_buf);
+                cleanup_context();
+                return 693;
+            }
+
+            /* Write header directly to mapped memory */
+            if (header_buf != NULL && header_len > 0) {
+                memcpy(mapped_base, header_buf, header_len);
+            }
+            free(header_buf);
+            header_buf = NULL;
+
+            /* Compute estimated chunk offsets for parallel formatting */
+            size_t *chunk_offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
+            if (chunk_offsets == NULL) {
+                SF_error("cexport: memory allocation failed\n");
+                cexport_io_close(&outfile, 0);
+                cleanup_context();
+                return 920;
+            }
+
+            /* Estimate offsets based on sampled average */
+            chunk_offsets[0] = header_len;
+            for (size_t c = 0; c < num_chunks; c++) {
+                size_t rows_in_chunk = chunk_size;
+                if ((c + 1) * chunk_size > nobs) {
+                    rows_in_chunk = nobs - c * chunk_size;
+                }
+                /* Use 1.5x estimate to ensure enough space per chunk */
+                chunk_offsets[c + 1] = chunk_offsets[c] + (rows_in_chunk * avg_row_size * 15 / 10);
+            }
+
+            /* Allocate mmap format args */
+            format_mmap_args_t *mmap_args = (format_mmap_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_mmap_args_t));
+            if (mmap_args == NULL) {
+                SF_error("cexport: memory allocation failed\n");
+                free(chunk_offsets);
+                cexport_io_close(&outfile, 0);
+                cleanup_context();
+                return 920;
+            }
+
+            /* Setup mmap format arguments */
+            for (size_t c = 0; c < num_chunks; c++) {
+                mmap_args[c].dest = mapped_base + chunk_offsets[c];
+                mmap_args[c].dest_size = chunk_offsets[c + 1] - chunk_offsets[c];
+                mmap_args[c].start_row = c * chunk_size;
+                mmap_args[c].end_row = (c + 1) * chunk_size;
+                if (mmap_args[c].end_row > nobs) mmap_args[c].end_row = nobs;
+                mmap_args[c].bytes_written = 0;
+                mmap_args[c].success = 0;
+            }
+
+            /* Submit all formatting tasks to write directly into mapped memory */
+            for (size_t c = 0; c < num_chunks; c++) {
+                ctools_persistent_pool_submit(pool, format_mmap_thread, &mmap_args[c]);
+            }
+
+            /* Wait for all formatting to complete */
+            ctools_persistent_pool_wait(pool);
+
+            g_ctx.time_format = ctools_timer_seconds() - t_phase;
+
+            /* Check results and compute actual total size */
+            size_t actual_total = header_len;
+            int format_failed = 0;
+            for (size_t c = 0; c < num_chunks; c++) {
+                if (!mmap_args[c].success) {
+                    format_failed = 1;
+                    break;
+                }
+                actual_total = chunk_offsets[c] + mmap_args[c].bytes_written;
+            }
+            /* The last chunk's end position is the actual total */
+            if (!format_failed && num_chunks > 0) {
+                actual_total = chunk_offsets[num_chunks - 1] + mmap_args[num_chunks - 1].bytes_written;
+            }
+
+            if (format_failed) {
+                SF_error("cexport: formatting to mmap failed\n");
+                free(mmap_args);
+                free(chunk_offsets);
+                cexport_io_close(&outfile, 0);
+                cleanup_context();
+                return 920;
+            }
+
+            /* Since we formatted with gaps between chunks (overestimated offsets),
+               we need to compact the data by shifting chunks together */
+            size_t write_pos = header_len;
+            for (size_t c = 0; c < num_chunks; c++) {
+                if (mmap_args[c].bytes_written > 0 && chunk_offsets[c] != write_pos) {
+                    /* Move this chunk's data to the correct position */
+                    memmove(mapped_base + write_pos,
+                            mapped_base + chunk_offsets[c],
+                            mmap_args[c].bytes_written);
+                }
+                write_pos += mmap_args[c].bytes_written;
+            }
+            actual_total = write_pos;
+
+            g_ctx.time_write = ctools_timer_seconds() - t_phase - g_ctx.time_format;
+
+            /* Close and truncate to actual size */
+            if (cexport_io_close(&outfile, actual_total) != 0) {
+                SF_error("cexport: failed to close file\n");
+                free(mmap_args);
+                free(chunk_offsets);
+                cleanup_context();
+                return 693;
+            }
+
+            free(mmap_args);
+            free(chunk_offsets);
+
         } else {
-            /* Allocate chunk arguments and buffers */
+            /* ============================================================
+               STEP 1: Allocate chunk buffers and format in parallel
+               (PWRITE backend - format to buffers, then parallel write)
+               ============================================================ */
             format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_chunk_args_t));
             char **chunk_buffers = (char **)ctools_safe_malloc2(num_chunks, sizeof(char *));
 
             if (chunk_args == NULL || chunk_buffers == NULL) {
                 free(chunk_args);
                 free(chunk_buffers);
+                free(header_buf);
                 SF_error("cexport: memory allocation failed\n");
                 cleanup_context();
                 return 920;
+            }
+
+            /* Initialize chunk_buffers to NULL for safe cleanup */
+            for (size_t c = 0; c < num_chunks; c++) {
+                chunk_buffers[c] = NULL;
             }
 
             /* Allocate buffers for all chunks */
             for (size_t c = 0; c < num_chunks; c++) {
                 chunk_buffers[c] = (char *)malloc(chunk_buffer_size);
                 if (chunk_buffers[c] == NULL) {
-                    for (size_t u = 0; u < c; u++) free(chunk_buffers[u]);
+                    for (size_t u = 0; u < num_chunks; u++) {
+                        if (chunk_buffers[u]) free(chunk_buffers[u]);
+                    }
                     free(chunk_args);
                     free(chunk_buffers);
-                    SF_error("cexport: memory allocation failed\n");
+                    free(header_buf);
+                    SF_error("cexport: memory allocation failed for chunk buffers\n");
                     cleanup_context();
                     return 920;
                 }
             }
 
-            /* Process chunks in batches of num_threads */
-            size_t chunk_idx = 0;
-            while (chunk_idx < num_chunks) {
-                size_t batch_size = num_chunks - chunk_idx;
-                if (batch_size > num_threads) batch_size = num_threads;
-
-                /* Setup chunk arguments for this batch */
-                for (size_t t = 0; t < batch_size; t++) {
-                    size_t c = chunk_idx + t;
-                    chunk_args[c].start_row = c * CTOOLS_EXPORT_CHUNK_SIZE;
-                    chunk_args[c].end_row = (c + 1) * CTOOLS_EXPORT_CHUNK_SIZE;
-                    if (chunk_args[c].end_row > nobs) chunk_args[c].end_row = nobs;
-                    chunk_args[c].output_buffer = chunk_buffers[c];
-                    chunk_args[c].buffer_size = chunk_buffer_size;
-                    chunk_args[c].bytes_written = 0;
-                    chunk_args[c].success = 0;
-                }
-
-                /* Submit batch to persistent pool */
-                for (size_t t = 0; t < batch_size; t++) {
-                    size_t c = chunk_idx + t;
-                    ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[c]);
-                }
-
-                /* Wait for batch to complete */
-                ctools_persistent_pool_wait(pool);
-
-                /* Check results and write output in order */
-                for (size_t t = 0; t < batch_size; t++) {
-                    size_t c = chunk_idx + t;
-                    if (!chunk_args[c].success) {
-                        for (size_t u = 0; u < num_chunks; u++) free(chunk_buffers[u]);
-                        free(chunk_args);
-                        free(chunk_buffers);
-                        SF_error("cexport: formatting failed\n");
-                        cleanup_context();
-                        return 920;
-                    }
-
-                    /* Write this chunk to file (in order) */
-                    if (fwrite(chunk_buffers[c], 1, chunk_args[c].bytes_written, g_ctx.fp)
-                        != chunk_args[c].bytes_written) {
-                        for (size_t u = 0; u < num_chunks; u++) free(chunk_buffers[u]);
-                        free(chunk_args);
-                        free(chunk_buffers);
-                        SF_error("cexport: write error\n");
-                        cleanup_context();
-                        return 693;
-                    }
-                }
-
-                chunk_idx += batch_size;
+            /* Setup all chunk arguments using adaptive chunk size */
+            for (size_t c = 0; c < num_chunks; c++) {
+                chunk_args[c].start_row = c * chunk_size;
+                chunk_args[c].end_row = (c + 1) * chunk_size;
+                if (chunk_args[c].end_row > nobs) chunk_args[c].end_row = nobs;
+                chunk_args[c].output_buffer = chunk_buffers[c];
+                chunk_args[c].buffer_size = chunk_buffer_size;
+                chunk_args[c].bytes_written = 0;
+                chunk_args[c].success = 0;
             }
 
-            /* Cleanup */
+            /* Submit all formatting tasks */
             for (size_t c = 0; c < num_chunks; c++) {
-                free(chunk_buffers[c]);
+                ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[c]);
+            }
+
+            /* Wait for all formatting to complete */
+            ctools_persistent_pool_wait(pool);
+
+            /* Check formatting results */
+            for (size_t c = 0; c < num_chunks; c++) {
+                if (!chunk_args[c].success) {
+                    for (size_t u = 0; u < num_chunks; u++) {
+                        if (chunk_buffers[u]) free(chunk_buffers[u]);
+                    }
+                    free(chunk_args);
+                    free(chunk_buffers);
+                    free(header_buf);
+                    SF_error("cexport: formatting failed\n");
+                    cleanup_context();
+                    return 920;
+                }
+            }
+
+            g_ctx.time_format = ctools_timer_seconds() - t_phase;
+
+            /* ============================================================
+               STEP 2: Compute prefix-sum for file offsets
+               ============================================================ */
+            double t_write = ctools_timer_seconds();
+
+            size_t *offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
+            if (offsets == NULL) {
+                for (size_t u = 0; u < num_chunks; u++) {
+                    if (chunk_buffers[u]) free(chunk_buffers[u]);
+                }
+                free(chunk_args);
+                free(chunk_buffers);
+                free(header_buf);
+                SF_error("cexport: memory allocation failed for offsets\n");
+                cleanup_context();
+                return 920;
+            }
+
+            /* First chunk starts after header */
+            offsets[0] = header_len;
+            for (size_t c = 0; c < num_chunks; c++) {
+                offsets[c + 1] = offsets[c] + chunk_args[c].bytes_written;
+            }
+            size_t total_file_size = offsets[num_chunks];
+
+            /* ============================================================
+               STEP 3: Open and pre-size file using cexport_io
+               ============================================================ */
+            cexport_io_file outfile;
+            cexport_io_init(&outfile);
+
+            if (cexport_io_open(&outfile, g_ctx.filename, g_ctx.io_backend, g_ctx.io_flags) != 0) {
+                snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
+                        g_ctx.filename, outfile.error_message);
+                SF_error(msg);
+                free(offsets);
+                for (size_t u = 0; u < num_chunks; u++) {
+                    if (chunk_buffers[u]) free(chunk_buffers[u]);
+                }
+                free(chunk_args);
+                free(chunk_buffers);
+                free(header_buf);
+                cleanup_context();
+                return 603;
+            }
+
+            if (cexport_io_presize(&outfile, total_file_size) != 0) {
+                snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
+                        outfile.error_message);
+                SF_error(msg);
+                cexport_io_close(&outfile, 0);
+                free(offsets);
+                for (size_t u = 0; u < num_chunks; u++) {
+                    if (chunk_buffers[u]) free(chunk_buffers[u]);
+                }
+                free(chunk_args);
+                free(chunk_buffers);
+                free(header_buf);
+                cleanup_context();
+                return 693;
+            }
+
+            /* ============================================================
+               STEP 4: Write header at offset 0
+               ============================================================ */
+            if (header_buf != NULL && header_len > 0) {
+                ssize_t written = cexport_io_write_at(&outfile, header_buf, header_len, 0);
+                if (written != (ssize_t)header_len) {
+                    snprintf(msg, sizeof(msg), "cexport: failed to write header: %s\n",
+                            outfile.error_message);
+                    SF_error(msg);
+                    cexport_io_close(&outfile, 0);
+                    free(offsets);
+                    for (size_t u = 0; u < num_chunks; u++) {
+                        if (chunk_buffers[u]) free(chunk_buffers[u]);
+                    }
+                    free(chunk_args);
+                    free(chunk_buffers);
+                    free(header_buf);
+                    cleanup_context();
+                    return 693;
+                }
+            }
+            free(header_buf);
+            header_buf = NULL;
+
+            /* ============================================================
+               STEP 5: Parallel offset writes for all chunks
+               ============================================================ */
+            write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(write_chunk_args_t));
+            if (write_args == NULL) {
+                SF_error("cexport: memory allocation failed for write args\n");
+                cexport_io_close(&outfile, 0);
+                free(offsets);
+                for (size_t u = 0; u < num_chunks; u++) {
+                    if (chunk_buffers[u]) free(chunk_buffers[u]);
+                }
+                free(chunk_args);
+                free(chunk_buffers);
+                cleanup_context();
+                return 920;
+            }
+
+            /* Setup write arguments for all chunks */
+            for (size_t c = 0; c < num_chunks; c++) {
+                write_args[c].file = &outfile;
+                write_args[c].buffer = chunk_buffers[c];
+                write_args[c].len = chunk_args[c].bytes_written;
+                write_args[c].offset = offsets[c];
+                write_args[c].success = 0;
+            }
+
+            /* Submit all write tasks in parallel */
+            for (size_t c = 0; c < num_chunks; c++) {
+                ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[c]);
+            }
+
+            /* Wait for all writes to complete */
+            ctools_persistent_pool_wait(pool);
+
+            /* Check write results */
+            int write_failed = 0;
+            for (size_t c = 0; c < num_chunks; c++) {
+                if (!write_args[c].success) {
+                    write_failed = 1;
+                    break;
+                }
+            }
+
+            /* Close file (truncate to actual size) */
+            if (cexport_io_close(&outfile, total_file_size) != 0 || write_failed) {
+                SF_error("cexport: write error during parallel I/O\n");
+                free(write_args);
+                free(offsets);
+                for (size_t u = 0; u < num_chunks; u++) {
+                    if (chunk_buffers[u]) free(chunk_buffers[u]);
+                }
+                free(chunk_args);
+                free(chunk_buffers);
+                cleanup_context();
+                return 693;
+            }
+
+            g_ctx.time_write = ctools_timer_seconds() - t_write;
+
+            /* Cleanup */
+            free(write_args);
+            free(offsets);
+            for (size_t c = 0; c < num_chunks; c++) {
+                if (chunk_buffers[c]) free(chunk_buffers[c]);
             }
             free(chunk_args);
             free(chunk_buffers);
         }
     }
 
-    g_ctx.time_format = ctools_timer_seconds() - t_phase;
-    g_ctx.time_write = g_ctx.time_format; /* Combined for now */
-
-    /* Close file */
-    fclose(g_ctx.fp);
-    g_ctx.fp = NULL;
-
     /* Calculate total time */
     g_ctx.time_total = ctools_timer_seconds() - t_start;
 
     /* Store timing in Stata scalars */
     SF_scal_save("_cexport_time_load", g_ctx.time_load);
-    SF_scal_save("_cexport_time_write", g_ctx.time_format);
+    SF_scal_save("_cexport_time_format", g_ctx.time_format);
+    SF_scal_save("_cexport_time_write", g_ctx.time_write);
     SF_scal_save("_cexport_time_total", g_ctx.time_total);
     CTOOLS_SAVE_THREAD_INFO("_cexport");
-
-    if (g_ctx.verbose) {
-        snprintf(msg, sizeof(msg), "  Write time:  %.3f sec\n", g_ctx.time_format);
-        SF_display(msg);
-        snprintf(msg, sizeof(msg), "  Total time:  %.3f sec\n", g_ctx.time_total);
-        SF_display(msg);
-
-        /* Calculate throughput */
-        double rows_per_sec = nobs / g_ctx.time_total;
-        snprintf(msg, sizeof(msg), "  Throughput:  %.0f rows/sec\n", rows_per_sec);
-        SF_display(msg);
-    }
 
     /* Cleanup and return success */
     cleanup_context();

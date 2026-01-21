@@ -88,7 +88,8 @@ CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
                $(SRC_DIR)/cimport/cimport_parse.c
 
 # cexport module
-CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c
+CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c \
+               $(SRC_DIR)/cexport/cexport_io.c
 
 # cmerge module
 CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
@@ -160,7 +161,8 @@ CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
                   $(SRC_DIR)/cimport/cimport_mmap.h \
                   $(SRC_DIR)/cimport/cimport_parse.h
 
-CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h
+CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h \
+                  $(SRC_DIR)/cexport/cexport_io.h
 
 CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h \
                  $(SRC_DIR)/cmerge/cmerge_memory.h \
