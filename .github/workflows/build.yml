@@ -30,14 +30,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc make libgomp1
-
-          # Check if static libgomp.a is available
-          LIBGOMP_A=$(gcc -print-file-name=libgomp.a)
-          if [ -f "$LIBGOMP_A" ]; then
-            echo "✓ Static libgomp.a found: $LIBGOMP_A"
-          else
-            echo "⚠ Static libgomp.a not found, will use dynamic linking"
-          fi
+          # Note: Linux uses dynamic libgomp (static linking not possible for shared libs)
 
       - name: Build Linux plugin
         run: make linux
@@ -48,24 +41,17 @@ jobs:
           file build/ctools_linux.plugin
 
           echo ""
-          echo "=== Checking OpenMP linking ==="
-          # Check if libgomp is dynamically linked
-          if ldd build/ctools_linux.plugin | grep -q "libgomp"; then
-            echo "⚠ libgomp is dynamically linked"
-          else
-            echo "✓ libgomp is NOT in dynamic dependencies (static or not used)"
-          fi
-
-          # Check for GOMP symbols
-          if nm build/ctools_linux.plugin 2>/dev/null | grep -q "GOMP_parallel"; then
-            echo "✓ OpenMP symbols found (GOMP_parallel present)"
-          else
-            echo "Note: OpenMP symbols not visible (may be stripped or static)"
-          fi
-
-          echo ""
           echo "=== Dynamic dependencies ==="
           ldd build/ctools_linux.plugin
+
+          echo ""
+          echo "=== OpenMP status ==="
+          if ldd build/ctools_linux.plugin | grep -q "libgomp"; then
+            echo "✓ OpenMP enabled (libgomp dynamically linked)"
+            echo "  Note: Linux requires libgomp.so at runtime (installed via libgomp1 package)"
+          else
+            echo "OpenMP not linked"
+          fi
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4

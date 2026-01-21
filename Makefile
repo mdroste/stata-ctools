@@ -343,9 +343,9 @@ LINUX_HAS_OMP := $(shell which gcc >/dev/null 2>&1 && \
                          gcc -fopenmp -E - < /dev/null >/dev/null 2>&1 && \
                          echo yes || echo no)
 
-# Check for static libgomp.a on Linux (for bundling OpenMP into plugin)
-LINUX_LIBGOMP_STATIC := $(shell gcc -print-file-name=libgomp.a 2>/dev/null)
-LINUX_HAS_STATIC_GOMP := $(shell test -f "$(LINUX_LIBGOMP_STATIC)" && echo yes || echo no)
+# Note: Static linking of libgomp.a doesn't work on Linux for shared libraries
+# because libgomp uses TLS relocations incompatible with PIC code.
+# Linux plugins require libgomp.so at runtime.
 
 # Check for OpenBLAS on Linux
 LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
@@ -355,20 +355,10 @@ LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo y
 ifeq ($(LINUX_HAS_OMP),yes)
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp -DHAVE_OPENBLAS
-        ifeq ($(LINUX_HAS_STATIC_GOMP),yes)
-            # Static linking - bundle libgomp into the plugin
-            LDFLAGS_LINUX = -flto $(LINUX_LIBGOMP_STATIC) -lpthread -lopenblas
-        else
-            LDFLAGS_LINUX = -flto -fopenmp -lopenblas
-        endif
+        LDFLAGS_LINUX = -flto -fopenmp -lopenblas
     else
         CFLAGS_LINUX = $(LINUX_BASE_FLAGS) -fopenmp
-        ifeq ($(LINUX_HAS_STATIC_GOMP),yes)
-            # Static linking - bundle libgomp into the plugin
-            LDFLAGS_LINUX = -flto $(LINUX_LIBGOMP_STATIC) -lpthread
-        else
-            LDFLAGS_LINUX = -flto -fopenmp
-        endif
+        LDFLAGS_LINUX = -flto -fopenmp
     endif
 else
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
