@@ -12,14 +12,14 @@ Fast drop-in replacements for a variety of Stata commands.
 
 | Stata command | ctools command | Purpose | Typical speedup |
 | --- | --- | --- | ---: |
-| `import delimited` | `cimport delimited` | Import text-delimited files | **40x** |
-| `export delimited` | `cexport delimited` | Export text-delimited files | **40x** |
-| `sort` | `csort` | Sort dataset | **1-6x** |
-| `merge` | `cmerge` | Merge (join) datasets | **1-8x** |
-| `binscatter` | `cbinscatter` | Binned scatter plots | **2-30x+** |
+| `import delimited` | `cimport delimited` | Import text-delimited files | **30x** |
+| `export delimited` | `cexport delimited` | Export text-delimited files | **25x** |
+| `sort` | `csort` | Sort dataset | **1-5x** |
+| `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
+| `binscatter` | `cbinscatter` | Binned scatter plots | **5-30x+** |
 | `reghdfe` | `creghdfe` | OLS with high-dimensional fixed effects | **10-20x** |
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with high-dimensional fixed effects | **10-20x** |
-| `qreg` | `cqreg` | Quantile regression | **4x** |
+| `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
 
 ## Compatibility and Requirements
