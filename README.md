@@ -2,7 +2,7 @@
 
 [![PluginsSome ](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
 
-High-performance C-accelerated drop-in replacements for Stata commands.
+Fast drop-in replacements for a variety of Stata commands.
 
 **This is an initial release. This software has not been widely tested. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -73,12 +73,16 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 
 ## Authorship
 
-99.9% of thie code in this repository was written by Claude Opus 4.5 (via Claude Code), with some debugging and refactoring assistance from OpenAI's GPT 5.2 (via Codex).
+99.9% of the code in this repository was written by Claude Opus 4.5 (via Claude Code), with some debugging and refactoring assistance from OpenAI's GPT 5.2 (via Codex).
 
 
 ## Thanks
 
-Thanks to [Sergio Correia](https://github.com/sergiocorreia) for creating [ftools](https://github.com/sergiocorreia/ftools) and [reghdfe](https://github.com/sergiocorreia/reghdfe), and thanks to [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating [gtools](https://github.com/mcaceresb/gtools). Thanks also to Christopher (Kit) Baum for creating ivreg2, from which both ivreghdfe and civreghdfe are based. Lastly, thanks to Sascha Witt for the "In Place Parallel Scalar Supersort (ips4o) sorting algorithm that works really well. 
+- [Sergio Correia](https://github.com/sergiocorreia) for creating [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with [Lars Vilhuber](https://www.ilr.cornell.edu/people/lars-vilhuber))
+- [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for creating [gtools](https://github.com/mcaceresb/gtools)
+- [Christopher (Kit) Baum](https://www.bc.edu/bc-web/schools/morrissey/departments/economics/people/faculty-directory/christopher-baum.html), [Mark E Schaffer](https://www.hw.ac.uk/profiles/uk/school/ebs/faculty/mark-schaffer), and [Steven Stillman](https://www.unibz.it/en/faculties/economics-management/academic-staff/person/36390-steven-stillman) for creating [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
+- [Sascha Witt](https://github.com/SaschaWitt) for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
+- Claude Code
 
 
 ## License
