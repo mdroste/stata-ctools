@@ -29,6 +29,11 @@
 #include <limits.h>
 #include <pthread.h>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -63,6 +68,46 @@
  * ============================================================================ */
 
 cmerge_using_cache_t g_using_cache = {0};
+
+/* Spinlock for protecting cache access during concurrent operations.
+ * Prevents race conditions if Stata interrupts/restarts during execution. */
+static volatile int g_cache_lock = 0;
+static volatile int g_cache_in_use = 0;  /* Set while execute is running */
+
+/* Platform-specific spinlock acquire/release */
+static void cache_lock_acquire(void)
+{
+#if defined(_WIN32)
+    while (InterlockedCompareExchange((volatile long *)&g_cache_lock, 1, 0) != 0) {
+        /* Spin - brief contention only */
+    }
+#elif defined(__GNUC__) || defined(__clang__)
+    while (__sync_lock_test_and_set(&g_cache_lock, 1)) {
+        /* Spin */
+    }
+#else
+    /* Fallback: no locking */
+#endif
+}
+
+static void cache_lock_release(void)
+{
+#if defined(_WIN32)
+    InterlockedExchange((volatile long *)&g_cache_lock, 0);
+#elif defined(__GNUC__) || defined(__clang__)
+    __sync_lock_release(&g_cache_lock);
+#else
+    g_cache_lock = 0;
+#endif
+}
+
+/* Helper to safely clear the cache in-use flag on error paths */
+static void cache_clear_in_use(void)
+{
+    cache_lock_acquire();
+    g_cache_in_use = 0;
+    cache_lock_release();
+}
 
 /* ============================================================================
  * Phase 1: Load using dataset (keys + keepusing only)
@@ -125,6 +170,15 @@ static ST_retcode cmerge_load_using(const char *args)
 
     (void)verbose;  /* Timing output moved to ado file */
 
+    /* Acquire lock before modifying global cache */
+    cache_lock_acquire();
+
+    /* Check if cache is currently in use by execute */
+    if (g_cache_in_use) {
+        cache_lock_release();
+        SF_error("cmerge: Cannot load using data while merge is in progress\n");
+        return 459;
+    }
 
     /* Free any previous cache */
     if (g_using_cache.loaded) {
@@ -132,6 +186,8 @@ static ST_retcode cmerge_load_using(const char *args)
         stata_data_free(&g_using_cache.keepusing);
         g_using_cache.loaded = 0;
     }
+
+    cache_lock_release();
 
     double t_phase1_start = cmerge_get_time_ms();
 
@@ -339,7 +395,11 @@ static ST_retcode cmerge_execute(const char *args)
 
     t_total_start = cmerge_get_time_ms();
 
+    /* Acquire lock and mark cache as in-use to prevent concurrent clear */
+    cache_lock_acquire();
+
     if (!g_using_cache.loaded) {
+        cache_lock_release();
         SF_error("cmerge: Using data not loaded. Call load_using first.\n");
         return 459;
     }
@@ -347,9 +407,14 @@ static ST_retcode cmerge_execute(const char *args)
     /* Critical null check - prevents crash if cache was corrupted
        Note: For merge_by_n mode, keys.vars is intentionally NULL */
     if (g_using_cache.keys.vars == NULL && !g_using_cache.merge_by_n) {
+        cache_lock_release();
         SF_error("cmerge: FATAL - g_using_cache.keys.vars is NULL!\n");
         return 459;
     }
+
+    /* Mark cache as in-use before releasing lock */
+    g_cache_in_use = 1;
+    cache_lock_release();
 
     /* Parse arguments - use static buffers to avoid stack overflow.
      * Thread safety: Stata plugins are single-threaded, so these statics
@@ -461,6 +526,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* Build array of all variable indices to load */
     int *all_var_indices = malloc(master_nvars * sizeof(int));
     if (!all_var_indices) {
+        cache_clear_in_use();
         SF_error("cmerge: Failed to allocate var indices\n");
         return 920;
     }
@@ -473,6 +539,7 @@ static ST_retcode cmerge_execute(const char *args)
     rc = ctools_data_load_selective(&master_data, all_var_indices, master_nvars, 1, master_nobs);
     if (rc != STATA_OK) {
         free(all_var_indices);
+        cache_clear_in_use();
         SF_error("cmerge: Failed to load master data\n");
         return rc;
     }
@@ -480,6 +547,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* Critical null check - prevents crash if load failed silently */
     if (master_data.vars == NULL) {
         free(all_var_indices);
+        cache_clear_in_use();
         SF_error("cmerge: FATAL - master_data.vars is NULL after load!\n");
         return 920;
     }
@@ -500,6 +568,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (!sort_vars) {
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             SF_error("cmerge: Failed to allocate sort_vars\n");
             return 920;
         }
@@ -514,6 +583,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(sort_vars);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return 920;
         }
 
@@ -524,6 +594,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return rc;
         }
 
@@ -552,6 +623,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return 920;
         }
 
@@ -586,6 +658,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return 920;
         }
 
@@ -600,6 +673,7 @@ static ST_retcode cmerge_execute(const char *args)
                 if (sort_perm) free(sort_perm);
                 stata_data_free(&master_data);
                 free(all_var_indices);
+                cache_clear_in_use();
                 return 459;
             }
 
@@ -617,6 +691,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             SF_error("cmerge: Merge join failed\n");
             return 920;
         }
@@ -626,6 +701,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             SF_error("cmerge: Merge result exceeds Stata observation limit\n");
             return 920;
         }
@@ -645,6 +721,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
 
@@ -656,6 +733,7 @@ static ST_retcode cmerge_execute(const char *args)
         stata_data_free(&master_data);
         free(all_var_indices);
         free(master_orig_rows);
+        cache_clear_in_use();
         SF_error("cmerge: orig_row_idx out of bounds\n");
         return 459;
     }
@@ -686,6 +764,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return 920;
         }
 
@@ -712,6 +791,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
+            cache_clear_in_use();
             return 920;
         }
 
@@ -762,6 +842,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
 
@@ -812,6 +893,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
     output_data.vars = (stata_variable *)cmerge_aligned_alloc(vars_alloc_size);
@@ -825,6 +907,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
     memset(output_data.vars, 0, n_output_vars * sizeof(stata_variable));
@@ -863,16 +946,21 @@ static ST_retcode cmerge_execute(const char *args)
         /* If arena creation fails, we fall back to strdup (no error) */
     }
 
-    /* Track allocation failures in parallel loop */
-    volatile int alloc_failed = 0;
+    /* Track allocation failures in parallel loop (must be int for OpenMP atomic) */
+    int alloc_failed = 0;
 
     /* Apply permutation to each variable (can be parallelized with OpenMP) */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
     #endif
     for (size_t vi = 0; vi < n_output_vars; vi++) {
-        /* Skip remaining work if allocation already failed */
-        if (alloc_failed) continue;
+        /* Skip remaining work if allocation already failed - use atomic read */
+        int local_alloc_failed;
+        #ifdef _OPENMP
+        #pragma omp atomic read
+        #endif
+        local_alloc_failed = alloc_failed;
+        if (local_alloc_failed) continue;
 
         int src_var_idx = output_var_indices[vi];
         stata_variable *src_var = &master_data.vars[src_var_idx];
@@ -885,11 +973,17 @@ static ST_retcode cmerge_execute(const char *args)
         if (src_var->type == STATA_TYPE_DOUBLE) {
             size_t dbl_alloc_size;
             if (ctools_safe_mul_size(output_nobs, sizeof(double), &dbl_alloc_size) != 0) {
+                #ifdef _OPENMP
+                #pragma omp atomic write
+                #endif
                 alloc_failed = 1;
                 continue;
             }
             dst_var->data.dbl = (double *)cmerge_aligned_alloc(dbl_alloc_size);
             if (!dst_var->data.dbl) {
+                #ifdef _OPENMP
+                #pragma omp atomic write
+                #endif
                 alloc_failed = 1;
                 continue;
             }
@@ -915,6 +1009,9 @@ static ST_retcode cmerge_execute(const char *args)
             /* String variable - use arena allocator to reduce malloc overhead */
             dst_var->data.str = (char **)ctools_safe_calloc2(output_nobs, sizeof(char *));
             if (!dst_var->data.str) {
+                #ifdef _OPENMP
+                #pragma omp atomic write
+                #endif
                 alloc_failed = 1;
                 continue;
             }
@@ -975,6 +1072,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
 
@@ -1009,6 +1107,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         return 920;
     }
 
@@ -1048,6 +1147,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
+        cache_clear_in_use();
         SF_error("cmerge: Failed to store output data\n");
         return rc;
     }
@@ -1122,10 +1222,13 @@ static ST_retcode cmerge_execute(const char *args)
     stata_data_free(&master_data);
     free(all_var_indices);
 
-    /* Free using cache */
+    /* Free using cache (protected by lock) */
+    cache_lock_acquire();
     stata_data_free(&g_using_cache.keys);
     stata_data_free(&g_using_cache.keepusing);
     g_using_cache.loaded = 0;
+    g_cache_in_use = 0;
+    cache_lock_release();
 
     double t_cleanup = cmerge_get_time_ms() - t_cleanup_start;
 
@@ -1160,11 +1263,22 @@ static ST_retcode cmerge_execute(const char *args)
 
 static ST_retcode cmerge_clear(void)
 {
+    cache_lock_acquire();
+
+    /* Check if cache is currently in use by execute */
+    if (g_cache_in_use) {
+        cache_lock_release();
+        SF_error("cmerge: Cannot clear cache while merge is in progress\n");
+        return 459;
+    }
+
     if (g_using_cache.loaded) {
         stata_data_free(&g_using_cache.keys);
         stata_data_free(&g_using_cache.keepusing);
         g_using_cache.loaded = 0;
     }
+
+    cache_lock_release();
     return 0;
 }
 
