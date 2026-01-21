@@ -73,7 +73,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 
 ## Authorship
 
-99.9% of the code for ctools repository was written using Claude Opus 4.5 and Claude Code.
+99.9% of thie code in this repository was written by Claude Opus 4.5 (via Claude Code), with some debugging and refactoring assistance from OpenAI's GPT 5.2 (via Codex).
 
 
 ## Thanks
