@@ -33,6 +33,8 @@
 #include <pthread.h>
 #include <errno.h>
 
+#include "ctools_threads.h"
+
 #ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
@@ -1004,102 +1006,119 @@ ST_retcode cexport_main(const char *args)
         free(row_buf);
         nobs = rows_written;  /* Update count for reporting */
     } else {
-        /* Multi-threaded chunked processing (overflow-safe allocations) */
-        pthread_t *threads = (pthread_t *)ctools_safe_malloc2(num_threads, sizeof(pthread_t));
-        format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_threads, sizeof(format_chunk_args_t));
-        char **chunk_buffers = (char **)ctools_safe_malloc2(num_threads, sizeof(char *));
+        /* Multi-threaded chunked processing using persistent thread pool
+           This avoids thread creation/destruction overhead on Windows */
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+        if (pool == NULL) {
+            /* Fall back to single-threaded if pool unavailable */
+            SF_error("cexport: thread pool unavailable, falling back to single-threaded\n");
+            char *row_buf = (char *)malloc(avg_row_size * 4);
+            if (row_buf == NULL) {
+                SF_error("cexport: memory allocation failed\n");
+                cleanup_context();
+                return 920;
+            }
+            bool all_numeric = g_ctx.all_numeric;
+            for (size_t i = 0; i < nobs; i++) {
+                ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
+                if (!SF_ifobs(stata_obs)) continue;
+                int row_len = all_numeric ?
+                    format_row_numeric(i, row_buf, avg_row_size * 4) :
+                    format_row(i, row_buf, avg_row_size * 4);
+                if (row_len < 0 || fwrite(row_buf, 1, row_len, g_ctx.fp) != (size_t)row_len) {
+                    free(row_buf);
+                    cleanup_context();
+                    return 920;
+                }
+            }
+            free(row_buf);
+        } else {
+            /* Allocate chunk arguments and buffers */
+            format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_chunk_args_t));
+            char **chunk_buffers = (char **)ctools_safe_malloc2(num_chunks, sizeof(char *));
 
-        if (threads == NULL || chunk_args == NULL || chunk_buffers == NULL) {
-            free(threads);
-            free(chunk_args);
-            free(chunk_buffers);
-            SF_error("cexport: memory allocation failed\n");
-            cleanup_context();
-            return 920;
-        }
-
-        /* Allocate buffers for each thread */
-        for (size_t t = 0; t < num_threads; t++) {
-            chunk_buffers[t] = (char *)malloc(chunk_buffer_size);
-            if (chunk_buffers[t] == NULL) {
-                for (size_t u = 0; u < t; u++) free(chunk_buffers[u]);
-                free(threads);
+            if (chunk_args == NULL || chunk_buffers == NULL) {
                 free(chunk_args);
                 free(chunk_buffers);
                 SF_error("cexport: memory allocation failed\n");
                 cleanup_context();
                 return 920;
             }
-        }
 
-        /* Process chunks in batches of num_threads */
-        size_t chunk_idx = 0;
-        while (chunk_idx < num_chunks) {
-            size_t batch_size = num_chunks - chunk_idx;
-            if (batch_size > num_threads) batch_size = num_threads;
-
-            /* Launch threads for this batch - track which were created */
-            int thread_launched[CTOOLS_IO_MAX_THREADS] = {0};
-            for (size_t t = 0; t < batch_size; t++) {
-                size_t c = chunk_idx + t;
-                chunk_args[t].start_row = c * CTOOLS_EXPORT_CHUNK_SIZE;
-                chunk_args[t].end_row = (c + 1) * CTOOLS_EXPORT_CHUNK_SIZE;
-                if (chunk_args[t].end_row > nobs) chunk_args[t].end_row = nobs;
-                chunk_args[t].output_buffer = chunk_buffers[t];
-                chunk_args[t].buffer_size = chunk_buffer_size;
-                chunk_args[t].bytes_written = 0;
-                chunk_args[t].success = 0;
-
-                if (pthread_create(&threads[t], NULL, format_chunk_thread, &chunk_args[t]) == 0) {
-                    thread_launched[t] = 1;
-                } else {
-                    /* Run in current thread as fallback */
-                    format_chunk_thread(&chunk_args[t]);
-                }
-            }
-
-            /* Wait for launched threads */
-            for (size_t t = 0; t < batch_size; t++) {
-                if (thread_launched[t]) {
-                    pthread_join(threads[t], NULL);
-                }
-            }
-
-            /* Check results and write output in order */
-            for (size_t t = 0; t < batch_size; t++) {
-                if (!chunk_args[t].success) {
-                    for (size_t u = 0; u < num_threads; u++) free(chunk_buffers[u]);
-                    free(threads);
+            /* Allocate buffers for all chunks */
+            for (size_t c = 0; c < num_chunks; c++) {
+                chunk_buffers[c] = (char *)malloc(chunk_buffer_size);
+                if (chunk_buffers[c] == NULL) {
+                    for (size_t u = 0; u < c; u++) free(chunk_buffers[u]);
                     free(chunk_args);
                     free(chunk_buffers);
-                    SF_error("cexport: formatting failed\n");
+                    SF_error("cexport: memory allocation failed\n");
                     cleanup_context();
                     return 920;
                 }
-
-                /* Write this chunk to file (in order) */
-                if (fwrite(chunk_buffers[t], 1, chunk_args[t].bytes_written, g_ctx.fp)
-                    != chunk_args[t].bytes_written) {
-                    for (size_t u = 0; u < num_threads; u++) free(chunk_buffers[u]);
-                    free(threads);
-                    free(chunk_args);
-                    free(chunk_buffers);
-                    SF_error("cexport: write error\n");
-                    cleanup_context();
-                    return 693;
-                }
             }
 
-            chunk_idx += batch_size;
-        }
+            /* Process chunks in batches of num_threads */
+            size_t chunk_idx = 0;
+            while (chunk_idx < num_chunks) {
+                size_t batch_size = num_chunks - chunk_idx;
+                if (batch_size > num_threads) batch_size = num_threads;
 
-        /* Cleanup */
-        for (size_t t = 0; t < num_threads; t++) {
-            free(chunk_buffers[t]);
+                /* Setup chunk arguments for this batch */
+                for (size_t t = 0; t < batch_size; t++) {
+                    size_t c = chunk_idx + t;
+                    chunk_args[c].start_row = c * CTOOLS_EXPORT_CHUNK_SIZE;
+                    chunk_args[c].end_row = (c + 1) * CTOOLS_EXPORT_CHUNK_SIZE;
+                    if (chunk_args[c].end_row > nobs) chunk_args[c].end_row = nobs;
+                    chunk_args[c].output_buffer = chunk_buffers[c];
+                    chunk_args[c].buffer_size = chunk_buffer_size;
+                    chunk_args[c].bytes_written = 0;
+                    chunk_args[c].success = 0;
+                }
+
+                /* Submit batch to persistent pool */
+                for (size_t t = 0; t < batch_size; t++) {
+                    size_t c = chunk_idx + t;
+                    ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[c]);
+                }
+
+                /* Wait for batch to complete */
+                ctools_persistent_pool_wait(pool);
+
+                /* Check results and write output in order */
+                for (size_t t = 0; t < batch_size; t++) {
+                    size_t c = chunk_idx + t;
+                    if (!chunk_args[c].success) {
+                        for (size_t u = 0; u < num_chunks; u++) free(chunk_buffers[u]);
+                        free(chunk_args);
+                        free(chunk_buffers);
+                        SF_error("cexport: formatting failed\n");
+                        cleanup_context();
+                        return 920;
+                    }
+
+                    /* Write this chunk to file (in order) */
+                    if (fwrite(chunk_buffers[c], 1, chunk_args[c].bytes_written, g_ctx.fp)
+                        != chunk_args[c].bytes_written) {
+                        for (size_t u = 0; u < num_chunks; u++) free(chunk_buffers[u]);
+                        free(chunk_args);
+                        free(chunk_buffers);
+                        SF_error("cexport: write error\n");
+                        cleanup_context();
+                        return 693;
+                    }
+                }
+
+                chunk_idx += batch_size;
+            }
+
+            /* Cleanup */
+            for (size_t c = 0; c < num_chunks; c++) {
+                free(chunk_buffers[c]);
+            }
+            free(chunk_args);
+            free(chunk_buffers);
         }
-        free(threads);
-        free(chunk_args);
-        free(chunk_buffers);
     }
 
     g_ctx.time_format = ctools_timer_seconds() - t_phase;

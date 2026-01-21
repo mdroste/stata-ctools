@@ -7,7 +7,7 @@
 *!   with parallel data loading and chunked formatting.
 *!
 *! Syntax:
-*!   cexport delimited [varlist] using filename [if] [in], [options]
+*!   cexport delimited [varlist] [using] filename [if] [in], [options]
 *!
 *! Options:
 *!   delimiter(string)   - Field delimiter (default: ",")
@@ -27,13 +27,27 @@ program define cexport, rclass
 
     if "`subcmd'" != "delimited" {
         di as error "cexport: unknown subcommand `subcmd'"
-        di as error "Syntax: cexport delimited [varlist] using filename [, options]"
+        di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
         exit 198
     }
 
     * Parse the rest with export delimited-style syntax
-    syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+    * Try with 'using' first, then without (allows both syntaxes)
+    capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
         NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit]
+    if _rc {
+        * 'using' not found - try parsing filename directly
+        * Get first token that looks like a filename (has extension or no special chars)
+        gettoken filename 0 : 0, parse(" ,")
+        if `"`filename'"' == "" | `"`filename'"' == "," {
+            di as error "cexport: filename required"
+            di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
+            exit 198
+        }
+        local using `"`filename'"'
+        syntax [varlist] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+            NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit]
+    }
 
     * Mark sample
     marksample touse, novarlist
@@ -172,28 +186,10 @@ program define cexport, rclass
         }
     }
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "cexport delimited: High-Performance CSV Export"
-        di as text "{hline 60}"
-        di as text "File:       " as result `"`using'"'
-        di as text "Variables:  " as result `nvars'
-        di as text "Obs:        " as result `nobs'
-        di as text "Delimiter:  " as result "`delim_display'"
-        di as text "Header:     " as result cond("`novarnames'" == "", "yes", "no")
-        di as text "Quoting:    " as result cond("`quote'" != "", "all strings", cond("`noquoteif'" != "", "none", "as needed"))
-        di as text "Labels:     " as result cond("`nolabel'" == "", "export value labels", "export numeric values")
-        di as text "{hline 60}"
-        di ""
-    }
-
     * Build plugin arguments
     local opt_noheader = cond("`novarnames'" != "", "noheader", "")
     local opt_quote = cond("`quote'" != "", "quote", "")
     local opt_noquoteif = cond("`noquoteif'" != "", "noquoteif", "")
-    local opt_verbose = cond("`verbose'" != "", "verbose", "")
 
     * Pass variable names to the plugin via global macro
     global CEXPORT_VARNAMES `varlist'
@@ -233,7 +229,7 @@ program define cexport, rclass
     * Plugin expects: filename delimiter [options]
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose'"
+        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif'"
 
     local export_rc = _rc
 
