@@ -610,6 +610,271 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 17: asfloat and asdouble options
+ ******************************************************************************/
+noi print_section "asfloat/asdouble Options"
+
+* Create file with numeric values
+file open fh using "temp/numeric_types.csv", write replace
+file write fh "id,small_int,large_num,decimal_val" _n
+file write fh "1,10,1000000000,3.14159265358979" _n
+file write fh "2,20,2000000000,2.71828182845904" _n
+file write fh "3,30,3000000000,1.41421356237309" _n
+file close fh
+
+* Test asfloat option
+capture cimport delimited using "temp/numeric_types.csv", clear asfloat
+if _rc == 0 {
+    * Check that all numeric variables are float type
+    local all_float = 1
+    foreach var of varlist _all {
+        local vtype : type `var'
+        if substr("`vtype'", 1, 3) != "str" & "`vtype'" != "float" {
+            local all_float = 0
+        }
+    }
+    if `all_float' {
+        noi test_pass "asfloat: all numeric variables are float"
+    }
+    else {
+        noi test_fail "asfloat" "not all numeric variables are float"
+    }
+}
+else {
+    noi test_fail "asfloat option" "returned error `=_rc'"
+}
+
+* Test asdouble option
+capture cimport delimited using "temp/numeric_types.csv", clear asdouble
+if _rc == 0 {
+    * Check that all numeric variables are double type
+    local all_double = 1
+    foreach var of varlist _all {
+        local vtype : type `var'
+        if substr("`vtype'", 1, 3) != "str" & "`vtype'" != "double" {
+            local all_double = 0
+        }
+    }
+    if `all_double' {
+        noi test_pass "asdouble: all numeric variables are double"
+    }
+    else {
+        noi test_fail "asdouble" "not all numeric variables are double"
+    }
+}
+else {
+    noi test_fail "asdouble option" "returned error `=_rc'"
+}
+
+* Test mutual exclusivity
+capture cimport delimited using "temp/numeric_types.csv", clear asfloat asdouble
+if _rc != 0 {
+    noi test_pass "asfloat + asdouble: correctly rejects mutually exclusive options"
+}
+else {
+    noi test_fail "asfloat + asdouble" "should reject mutually exclusive options"
+}
+
+/*******************************************************************************
+ * SECTION 18: stringcols and numericcols options
+ ******************************************************************************/
+noi print_section "stringcols/numericcols Options"
+
+* Create file with mixed data that could be interpreted either way
+file open fh using "temp/col_override.csv", write replace
+file write fh "zipcode,amount,code,value" _n
+file write fh "01234,100,ABC,500" _n
+file write fh "02345,200,DEF,600" _n
+file write fh "03456,300,GHI,700" _n
+file close fh
+
+* Test stringcols - force zipcode (column 1) to be string to preserve leading zeros
+capture cimport delimited using "temp/col_override.csv", clear stringcols(1)
+if _rc == 0 {
+    local vtype : type zipcode
+    if substr("`vtype'", 1, 3) == "str" {
+        * Check that leading zero is preserved
+        if zipcode[1] == "01234" {
+            noi test_pass "stringcols: column forced to string, leading zeros preserved"
+        }
+        else {
+            noi test_fail "stringcols" "leading zeros not preserved: `=zipcode[1]'"
+        }
+    }
+    else {
+        noi test_fail "stringcols" "column not string type: `vtype'"
+    }
+}
+else {
+    noi test_fail "stringcols option" "returned error `=_rc'"
+}
+
+* Test numericcols - force code (column 3) to be numeric (will become missing)
+capture cimport delimited using "temp/col_override.csv", clear numericcols(3)
+if _rc == 0 {
+    local vtype : type code
+    if substr("`vtype'", 1, 3) != "str" {
+        * Should be numeric (values will be missing since ABC/DEF/GHI aren't numbers)
+        if missing(code[1]) {
+            noi test_pass "numericcols: non-numeric values become missing"
+        }
+        else {
+            noi test_fail "numericcols" "expected missing, got `=code[1]'"
+        }
+    }
+    else {
+        noi test_fail "numericcols" "column should be numeric, got `vtype'"
+    }
+}
+else {
+    noi test_fail "numericcols option" "returned error `=_rc'"
+}
+
+* Test multiple columns
+capture cimport delimited using "temp/col_override.csv", clear stringcols(1 4)
+if _rc == 0 {
+    local vtype1 : type zipcode
+    local vtype4 : type value
+    if substr("`vtype1'", 1, 3) == "str" & substr("`vtype4'", 1, 3) == "str" {
+        noi test_pass "stringcols: multiple columns forced to string"
+    }
+    else {
+        noi test_fail "stringcols multiple" "types: zipcode=`vtype1', value=`vtype4'"
+    }
+}
+else {
+    noi test_fail "stringcols multiple" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 19: decimalseparator and groupseparator options
+ ******************************************************************************/
+noi print_section "decimalseparator/groupseparator Options"
+
+* Create European-format file (comma decimal, period grouping)
+file open fh using "temp/european.csv", write replace
+file write fh "id;amount;price" _n
+file write fh "1;1.234,56;99,99" _n
+file write fh "2;2.345,67;199,50" _n
+file write fh "3;3.456,78;299,00" _n
+file close fh
+
+* Test European format parsing
+capture cimport delimited using "temp/european.csv", clear delimiters(";") decimalseparator(,) groupseparator(.)
+if _rc == 0 {
+    * Check that values were parsed correctly
+    * 1.234,56 with European format = 1234.56 in standard format
+    if abs(amount[1] - 1234.56) < 0.01 {
+        noi test_pass "European format: comma decimal, period grouping parsed correctly"
+    }
+    else {
+        noi test_fail "European format" "expected 1234.56, got `=amount[1]'"
+    }
+}
+else {
+    noi test_fail "decimalseparator/groupseparator" "returned error `=_rc'"
+}
+
+* Test just decimal separator (no grouping)
+file open fh using "temp/comma_decimal.csv", write replace
+file write fh "id,value" _n
+file write fh "1,123,45" _n
+file write fh "2,234,56" _n
+file write fh "3,345,67" _n
+file close fh
+
+capture cimport delimited using "temp/comma_decimal.csv", clear decimalseparator(,)
+if _rc == 0 {
+    if abs(value[1] - 123.45) < 0.01 {
+        noi test_pass "decimalseparator only: comma decimal parsed correctly"
+    }
+    else {
+        noi test_fail "decimalseparator only" "expected 123.45, got `=value[1]'"
+    }
+}
+else {
+    noi test_fail "decimalseparator only" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 20: emptylines option
+ ******************************************************************************/
+noi print_section "emptylines Option"
+
+* Create file with empty lines
+file open fh using "temp/emptylines.csv", write replace
+file write fh "id,value" _n
+file write fh "1,100" _n
+file write fh "" _n
+file write fh "3,300" _n
+file write fh "" _n
+file write fh "5,500" _n
+file close fh
+
+* Test emptylines(skip) - default behavior
+capture cimport delimited using "temp/emptylines.csv", clear emptylines(skip)
+if _rc == 0 {
+    local n_skip = _N
+    noi test_pass "emptylines(skip): imported `n_skip' observations"
+}
+else {
+    noi test_fail "emptylines(skip)" "returned error `=_rc'"
+}
+
+* Test emptylines(fill) - include empty lines
+capture cimport delimited using "temp/emptylines.csv", clear emptylines(fill)
+if _rc == 0 {
+    local n_fill = _N
+    * With fill, should have more rows (empty lines become missing observations)
+    if `n_fill' > `n_skip' {
+        noi test_pass "emptylines(fill): imported `n_fill' observations (more than skip)"
+    }
+    else {
+        noi test_fail "emptylines(fill)" "expected more rows than skip, got `n_fill' vs `n_skip'"
+    }
+}
+else {
+    noi test_fail "emptylines(fill)" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 21: maxquotedrows option
+ ******************************************************************************/
+noi print_section "maxquotedrows Option"
+
+* Test that maxquotedrows option is accepted
+capture cimport delimited using "temp/basic.csv", clear maxquotedrows(50)
+if _rc == 0 {
+    noi test_pass "maxquotedrows option accepted"
+}
+else {
+    noi test_fail "maxquotedrows option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 22: threads option
+ ******************************************************************************/
+noi print_section "threads Option"
+
+* Test explicit thread count
+capture cimport delimited using "temp/large.csv", clear threads(2)
+if _rc == 0 {
+    noi test_pass "threads(2) option accepted"
+}
+else {
+    noi test_fail "threads option" "returned error `=_rc'"
+}
+
+* Test single-threaded
+capture cimport delimited using "temp/large.csv", clear threads(1)
+if _rc == 0 {
+    noi test_pass "threads(1) single-threaded import works"
+}
+else {
+    noi test_fail "threads(1)" "returned error `=_rc'"
+}
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

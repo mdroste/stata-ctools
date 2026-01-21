@@ -299,7 +299,9 @@ static void cimport_infer_column_types(CImportContext *ctx) {
                         double val;
                         bool is_int;
 
-                        if (cimport_analyze_numeric_fast(ctx->file_data, field, ctx->quote_char, &val, &is_int)) {
+                        if (cimport_analyze_numeric_with_sep(ctx->file_data, field, ctx->quote_char,
+                                                             ctx->decimal_separator, ctx->group_separator,
+                                                             &val, &is_int)) {
                             if (!is_int) {
                                 col->is_integer = false;
                             }
@@ -473,7 +475,9 @@ static void *cimport_parse_chunk_parallel(void *arg) {
         int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
                                                  field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
-        if (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0)) {
+        /* Handle empty lines based on emptylines mode */
+        bool is_empty_row = (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0));
+        if (is_empty_row && ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP) {
             ptr = row_end;
             continue;
         }
@@ -503,7 +507,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
                 if (!stats->seen_string && field->length > 0) {
                     stats->seen_non_empty = true;
                     const char *src = ctx->file_data + field->offset;
-                    if (!cimport_field_looks_numeric(src, field->length)) {
+                    if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator)) {
                         stats->seen_string = true;
                     }
                 }
@@ -657,7 +661,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
                                                      field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
-            if (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0)) {
+            /* Handle empty lines based on emptylines mode */
+            bool is_empty_row = (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0));
+            if (is_empty_row && ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP) {
                 ptr = row_end;
                 continue;
             }
@@ -682,7 +688,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                     if (!stats->seen_string && field->length > 0) {
                         stats->seen_non_empty = true;
                         const char *src = ctx->file_data + field->offset;
-                        if (!cimport_field_looks_numeric(src, field->length)) {
+                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator)) {
                             stats->seen_string = true;
                         }
                     }
@@ -894,7 +900,8 @@ static void *cimport_build_cache_worker(void *arg) {
                         CImportFieldRef *field = &row->fields[col_idx];
                         const char *src = ctx->file_data + field->offset;
 
-                        if (!ctools_parse_double_fast(src, field->length, &val, missing)) {
+                        if (!ctools_parse_double_with_separators(src, field->length, &val, missing,
+                                                                  ctx->decimal_separator, ctx->group_separator)) {
                             val = missing;
                         }
                     } else {

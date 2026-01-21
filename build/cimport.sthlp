@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.0}{...}
+{* *! version 1.1.0}{...}
 {viewerjumpto "Syntax" "cimport##syntax"}{...}
 {viewerjumpto "Description" "cimport##description"}{...}
 {viewerjumpto "Options" "cimport##options"}{...}
@@ -22,7 +22,7 @@
 {it:filename}
 [{cmd:,} {it:options}]
 
-{synoptset 28 tabbed}{...}
+{synoptset 32 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Main}
@@ -33,14 +33,27 @@
 {synopt:{opt varn:ames(rule)}}rule for reading variable names; {opt 1} or {opt nonames}{p_end}
 {synopt:{opt case(option)}}variable name case; {opt preserve}, {opt lower}, or {opt upper}{p_end}
 
+{syntab:Variable types}
+{synopt:{opt asfloat}}import all numeric variables as float{p_end}
+{synopt:{opt asdouble}}import all numeric variables as double{p_end}
+{synopt:{opt numeric:cols(numlist)}}force specified columns to be numeric{p_end}
+{synopt:{opt string:cols(numlist)}}force specified columns to be string{p_end}
+
 {syntab:Parsing}
 {synopt:{opt bindq:uotes(option)}}quote binding rule; {opt strict} or {opt loose}{p_end}
 {synopt:{opt stripq:uotes}}remove surrounding quotes from string values{p_end}
 {synopt:{opt enc:oding(encoding)}}file encoding; currently only UTF-8 supported{p_end}
 {synopt:{opt rowr:ange([start][:end])}}range of rows to import{p_end}
+{synopt:{opt empty:lines(option)}}empty line handling; {opt skip} or {opt fill}{p_end}
+
+{syntab:Number formats}
+{synopt:{opt decimals:eparator(char)}}decimal point character; default is period{p_end}
+{synopt:{opt groups:eparator(char)}}thousands grouping character; default is none{p_end}
+{synopt:{opt maxquoted:rows(#)}}max rows to scan for quote inference; default 20{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
+{synopt:{opt thr:eads(#)}}number of threads to use; default is auto-detect{p_end}
 {synoptline}
 
 
@@ -84,12 +97,34 @@ variable names (v1, v2, ...).
 (the default) keeps the original case. {opt lower} converts to lowercase.
 {opt upper} converts to uppercase.
 
+{dlgtab:Variable types}
+
+{phang}
+{opt asfloat} imports all numeric variables as Stata {help data types:float}
+type, regardless of the detected optimal type. This uses less memory than
+double but has less precision. Cannot be combined with {opt asdouble}.
+
+{phang}
+{opt asdouble} imports all numeric variables as Stata {help data types:double}
+type, regardless of whether a smaller type would suffice. This ensures maximum
+precision. Cannot be combined with {opt asfloat}.
+
+{phang}
+{opt numericcols(numlist)} forces the specified columns to be imported as
+numeric. Column numbers are 1-based. Values that cannot be parsed as numbers
+become missing. This overrides automatic type detection for these columns.
+
+{phang}
+{opt stringcols(numlist)} forces the specified columns to be imported as
+string, even if they contain only numeric values. Column numbers are 1-based.
+This overrides automatic type detection for these columns.
+
 {dlgtab:Parsing}
 
 {phang}
 {opt bindquotes(option)} specifies how quoted fields are handled.
-{opt strict} (the default) requires fields to be properly quoted.
-{opt loose} is more permissive with quote handling.
+{opt loose} (the default) treats each line as a row, ignoring quotes.
+{opt strict} respects quotes so that quoted fields can span multiple lines.
 
 {phang}
 {opt stripquotes} removes surrounding quotation marks from string values
@@ -104,11 +139,38 @@ is supported.
 Use {opt rowrange(100:200)} to import rows 100-200, or {opt rowrange(100:)}
 to import from row 100 to the end.
 
+{phang}
+{opt emptylines(option)} specifies how empty lines in the file are handled.
+{opt skip} (the default) ignores empty lines. {opt fill} includes empty
+lines as observations with all missing values.
+
+{dlgtab:Number formats}
+
+{phang}
+{opt decimalseparator(char)} specifies the character used as the decimal
+point in numeric values. The default is period ({cmd:.}). For European-format
+files that use comma as the decimal separator, specify {opt decimalseparator(,)}.
+
+{phang}
+{opt groupseparator(char)} specifies the character used as a thousands
+grouping separator in numeric values. The default is no grouping separator.
+For files with numbers like "1,234,567" use {opt groupseparator(,)}, or for
+European formats like "1.234.567" use {opt groupseparator(.)}.
+
+{phang}
+{opt maxquotedrows(#)} specifies the maximum number of rows to scan when
+inferring whether fields contain quoted strings. The default is 20. Increase
+this value if your file has quoted fields that don't appear until later rows.
+
 {dlgtab:Reporting}
 
 {phang}
 {opt verbose} displays detailed progress information including timing
 breakdown and throughput in MB/s.
+
+{phang}
+{opt threads(#)} specifies the number of threads to use for parallel
+parsing. The default (0) auto-detects based on available CPU cores.
 
 
 {marker remarks}{...}
@@ -120,6 +182,11 @@ breakdown and throughput in MB/s.
 {p 8 12 2}1. {bf:Scan:} Parse the file to determine column types and widths{p_end}
 {p 8 12 2}2. {bf:Create:} Create variables with appropriate Stata types{p_end}
 {p 8 12 2}3. {bf:Load:} Load data into variables using parallel processing{p_end}
+
+{pstd}
+{bf:European number formats:} When importing files that use European number
+conventions (comma as decimal separator, period as thousands separator),
+use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
 
 
 {marker examples}{...}
@@ -136,6 +203,21 @@ breakdown and throughput in MB/s.
 
 {pstd}Import only rows 1000-2000:{p_end}
 {phang2}{cmd:. cimport delimited using bigdata.csv, clear rowrange(1000:2000)}{p_end}
+
+{pstd}Import European-format file (comma decimal, period grouping):{p_end}
+{phang2}{cmd:. cimport delimited using european.csv, clear decimalseparator(,) groupseparator(.)}{p_end}
+
+{pstd}Force all numerics to double precision:{p_end}
+{phang2}{cmd:. cimport delimited using data.csv, clear asdouble}{p_end}
+
+{pstd}Force column 3 to be string (e.g., ZIP codes with leading zeros):{p_end}
+{phang2}{cmd:. cimport delimited using data.csv, clear stringcols(3)}{p_end}
+
+{pstd}Force columns 2 and 4 to be numeric:{p_end}
+{phang2}{cmd:. cimport delimited using data.csv, clear numericcols(2 4)}{p_end}
+
+{pstd}Include empty lines as missing observations:{p_end}
+{phang2}{cmd:. cimport delimited using data.csv, clear emptylines(fill)}{p_end}
 
 
 {marker results}{...}

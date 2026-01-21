@@ -284,16 +284,35 @@ stata_retcode csort_stream_apply_permutation(
             double batch[16];
 
             for (i = 0; i < nobs_batch16; i += 16) {
-                /* Prefetch future permutation indices and scatter destinations */
+                /* Prefetch future permutation indices for next iteration */
                 if (i + STREAM_PREFETCH_DIST < nobs) {
                     CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
-                    /* Prefetch 4 scatter destinations (spread across cache lines) */
-                    CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST]]);
-                    CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 4]]);
-                    CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 8]]);
-                    CTOOLS_PREFETCH(&num_buf[inv_perm[i + STREAM_PREFETCH_DIST + 12]]);
                 }
+
+                /* Read data from Stata */
                 SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+
+                /* Prefetch ALL 16 scatter destinations with WRITE intent before scattering.
+                   This tells the CPU we intend to write to these cache lines, enabling
+                   better write combining and avoiding read-for-ownership stalls. */
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 3]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 4]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 5]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 6]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 7]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 8]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 9]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 10]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 11]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 12]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 13]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
+
+                /* Scatter writes to buffer */
                 num_buf[inv_perm[i + 0]]  = batch[0];
                 num_buf[inv_perm[i + 1]]  = batch[1];
                 num_buf[inv_perm[i + 2]]  = batch[2];
@@ -348,7 +367,28 @@ stata_retcode csort_stream_apply_permutation(
 
             /* Phase 1: Sequential read, scatter via inverse perm */
             for (i = 0; i < nobs_batch16; i += 16) {
+                /* Read data from Stata */
                 SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+
+                /* Prefetch ALL 16 scatter destinations with WRITE intent */
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 3]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 4]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 5]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 6]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 7]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 8]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 9]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 10]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 11]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 12]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 13]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
+                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
+
+                /* Scatter writes to buffer */
                 num_buf[inv_perm[i + 0]]  = batch[0];
                 num_buf[inv_perm[i + 1]]  = batch[1];
                 num_buf[inv_perm[i + 2]]  = batch[2];

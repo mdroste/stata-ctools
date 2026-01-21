@@ -344,6 +344,21 @@ int ctools_uint64_to_str_fast(uint64_t val, char *buf);
 bool ctools_parse_double_fast(const char *str, int len, double *result, double missval);
 
 /*
+    Fast double parser with custom decimal and group separators.
+    Handles European formats like "1.234,56" (decimal=',', group='.').
+
+    @param str       Input string (need not be null-terminated)
+    @param len       Length of input
+    @param result    [out] Parsed double value
+    @param missval   The value to use for missing
+    @param dec_sep   Decimal separator character (default '.')
+    @param grp_sep   Group/thousands separator character ('\0' = none)
+    @return          true if successfully parsed, false if invalid format
+*/
+bool ctools_parse_double_with_separators(const char *str, int len, double *result, double missval,
+                                          char dec_sep, char grp_sep);
+
+/*
     Power of 10 lookup table for fast float parsing/formatting.
     Covers 10^0 through 10^22 (full double precision range without overflow).
 */

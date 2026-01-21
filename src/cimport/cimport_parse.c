@@ -343,6 +343,11 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
 
 bool cimport_field_looks_numeric(const char *src, int len)
 {
+    return cimport_field_looks_numeric_sep(src, len, '.');
+}
+
+bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep)
+{
     while (len > 0 && (*src == ' ' || *src == '\t')) { src++; len--; }
     if (len == 0) return true;
     if (*src == '"' && len >= 2) { src++; len -= 2; }
@@ -350,7 +355,7 @@ bool cimport_field_looks_numeric(const char *src, int len)
 
     char c = *src;
     if (c >= '0' && c <= '9') return true;
-    if (c == '-' || c == '+' || c == '.') return true;
+    if (c == '-' || c == '+' || c == dec_sep) return true;
 
     if (len >= 2 && (c == 'N' || c == 'n')) {
         char c2 = src[1];
@@ -367,6 +372,13 @@ bool cimport_field_looks_numeric(const char *src, int len)
 bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,
                                    double *out_value, bool *out_is_integer)
 {
+    return cimport_analyze_numeric_with_sep(file_base, field, quote, '.', '\0', out_value, out_is_integer);
+}
+
+bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *field, char quote,
+                                       char dec_sep, char grp_sep,
+                                       double *out_value, bool *out_is_integer)
+{
     const char *src = file_base + field->offset;
     int len = field->length;
 
@@ -376,19 +388,21 @@ bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field,
 
     if (len == 0) return false;
 
-    if (len == 1 && *src == '.') return false;
+    /* Single decimal separator = missing */
+    if (len == 1 && *src == dec_sep) return false;
     if (len == 2 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'A' || src[1] == 'a')) return false;
     if (len == 3 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'a' || src[1] == 'A') &&
         (src[2] == 'N' || src[2] == 'n')) return false;
 
     double val;
-    if (!ctools_parse_double_fast(src, len, &val, SV_missval)) return false;
+    if (!ctools_parse_double_with_separators(src, len, &val, SV_missval, dec_sep, grp_sep)) return false;
 
     *out_value = val;
 
+    /* Check if integer by looking for decimal separator */
     *out_is_integer = true;
     for (int i = 0; i < len; i++) {
-        if (src[i] == '.') {
+        if (src[i] == dec_sep) {
             *out_is_integer = false;
             break;
         }

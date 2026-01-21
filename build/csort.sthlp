@@ -28,6 +28,8 @@
 {syntab:Options}
 {synopt:{opt alg:orithm(name)}}sorting algorithm (see below){p_end}
 {synopt:{opt str:eam}}streaming mode for reduced memory usage{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+{synopt:{opt nosort:edby}}do not set Stata's sortedby attribute{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
 {synoptline}
 
@@ -66,6 +68,20 @@ sorting, the permutation is applied to non-key variables one at a time using
 sequential Stata I/O. This is useful when sorting datasets with many columns
 that would otherwise exceed available memory. Performance is comparable to
 standard mode for most datasets.
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+operations. By default, {cmd:csort} uses all available CPU cores as reported by
+OpenMP. Use this option to limit parallelism, for example when running multiple
+jobs simultaneously or to reduce resource usage.
+
+{phang}
+{opt nosortedby} prevents {cmd:csort} from setting Stata's internal {it:sortedby}
+attribute after sorting. Normally, {cmd:csort} calls Stata's {cmd:sort} command
+at the end to register the sort order. With {opt nosortedby}, this step is
+skipped, which can be faster when Stata does not need to recognize the data as
+sorted (e.g., for intermediate operations). Note: commands that rely on Stata's
+{it:sortedby} attribute (like {cmd:by:}) will not recognize the sort order.
 
 {phang}
 {opt verbose} displays a timing breakdown showing time spent in each phase of
@@ -236,6 +252,12 @@ lexicographic (ASCII) order.
 
 {pstd}Use streaming mode for wide datasets with limited memory:{p_end}
 {phang2}{cmd:. csort id, stream}{p_end}
+
+{pstd}Limit parallelism to 4 threads:{p_end}
+{phang2}{cmd:. csort price, threads(4)}{p_end}
+
+{pstd}Sort without setting Stata's sortedby attribute (faster for intermediate ops):{p_end}
+{phang2}{cmd:. csort id, nosortedby}{p_end}
 
 
 {marker results}{...}

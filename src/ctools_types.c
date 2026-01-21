@@ -10,6 +10,18 @@
 #include "ctools_config.h"
 #include "ctools_threads.h"
 
+/* SIMD intrinsics for gather operations */
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+    #define CTOOLS_TYPES_X86 1
+    #include <immintrin.h>
+    #ifdef __AVX2__
+        #define CTOOLS_TYPES_AVX2 1
+    #endif
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    #define CTOOLS_TYPES_ARM64 1
+    #include <arm_neon.h>
+#endif
+
 /*
     NOTE: Use ctools_aligned_free() from ctools_config.h for freeing aligned memory.
     This ensures consistent behavior across all platforms including Windows.
@@ -243,11 +255,58 @@ int ctools_uint64_to_str_fast(uint64_t val, char *buf)
 
     NOTE: These functions do NOT use internal parallelism since they're called
     from an outer parallel region that parallelizes across variables.
+
+    SIMD Optimization (AVX2):
+    Uses _mm256_i32gather_pd to gather 4 doubles per instruction when available.
+    Falls back to scalar loop for ARM64 and non-AVX2 x86.
 */
-static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
-                                             const double * CTOOLS_RESTRICT old_data,
-                                             const perm_idx_t * CTOOLS_RESTRICT perm,
-                                             size_t nobs)
+
+#ifdef CTOOLS_TYPES_AVX2
+/*
+    AVX2 SIMD gather: processes 4 doubles per iteration using hardware gather.
+    The _mm256_i32gather_pd intrinsic gathers 4 doubles using 32-bit indices.
+*/
+static inline void apply_perm_gather_double_simd(double * CTOOLS_RESTRICT new_data,
+                                                  const double * CTOOLS_RESTRICT old_data,
+                                                  const perm_idx_t * CTOOLS_RESTRICT perm,
+                                                  size_t nobs)
+{
+    size_t i;
+    size_t nobs_vec4 = nobs & ~(size_t)3;  /* Round down to multiple of 4 */
+
+    /* Main SIMD loop: gather 4 doubles at a time */
+    for (i = 0; i < nobs_vec4; i += 4) {
+        /* Prefetch ahead for next iterations */
+        if (i + PERM_PREFETCH_FAR < nobs) {
+            CTOOLS_PREFETCH(&perm[i + PERM_PREFETCH_FAR]);
+        }
+
+        /* Load 4 indices into 128-bit register */
+        __m128i indices = _mm_loadu_si128((const __m128i *)&perm[i]);
+
+        /* Gather 4 doubles using hardware gather instruction
+           Scale = 8 because we're gathering doubles (8 bytes each) */
+        __m256d gathered = _mm256_i32gather_pd(old_data, indices, 8);
+
+        /* Store 4 doubles sequentially */
+        _mm256_storeu_pd(&new_data[i], gathered);
+    }
+
+    /* Scalar tail: handle remaining elements */
+    for (; i < nobs; i++) {
+        new_data[i] = old_data[perm[i]];
+    }
+}
+#endif /* CTOOLS_TYPES_AVX2 */
+
+/*
+    Scalar gather with multi-level prefetching.
+    Used on ARM64 and non-AVX2 x86 platforms.
+*/
+static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_data,
+                                                    const double * CTOOLS_RESTRICT old_data,
+                                                    const perm_idx_t * CTOOLS_RESTRICT perm,
+                                                    size_t nobs)
 {
     size_t i;
     /* Process with multi-level prefetching */
@@ -262,6 +321,21 @@ static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
         }
         new_data[i] = old_data[perm[i]];
     }
+}
+
+/*
+    Main dispatch function: selects SIMD or scalar path based on platform.
+*/
+static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
+                                             const double * CTOOLS_RESTRICT old_data,
+                                             const perm_idx_t * CTOOLS_RESTRICT perm,
+                                             size_t nobs)
+{
+#ifdef CTOOLS_TYPES_AVX2
+    apply_perm_gather_double_simd(new_data, old_data, perm, nobs);
+#else
+    apply_perm_gather_double_scalar(new_data, old_data, perm, nobs);
+#endif
 }
 
 static inline void apply_perm_gather_ptr(char ** CTOOLS_RESTRICT new_data,
@@ -437,6 +511,171 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
             p++;
         } else if (c == '.' && decimal_pos < 0) {
             decimal_pos = total_digits;
+            p++;
+        } else if (c == 'e' || c == 'E') {
+            /* Scientific notation */
+            p++;
+            if (p >= end) return false;
+
+            bool exp_negative = false;
+            if (*p == '-') {
+                exp_negative = true;
+                p++;
+            } else if (*p == '+') {
+                p++;
+            }
+
+            int exponent = 0;
+            while (p < end && *p >= '0' && *p <= '9') {
+                exponent = exponent * 10 + (*p - '0');
+                p++;
+            }
+
+            if (exp_negative) exponent = -exponent;
+
+            double value = (double)mantissa;
+            int decimal_shift = (decimal_pos >= 0) ? (total_digits - decimal_pos) : 0;
+            int extra_digits = (total_digits > 18) ? (total_digits - 18) : 0;
+            if (decimal_pos >= 0 && decimal_pos < total_digits) {
+                extra_digits -= (total_digits - decimal_pos);
+                if (extra_digits < 0) extra_digits = 0;
+            }
+
+            int final_exp = exponent - decimal_shift + extra_digits;
+
+            if (final_exp > 0 && final_exp <= 22) {
+                value *= ctools_pow10_table[final_exp];
+            } else if (final_exp < 0 && final_exp >= -22) {
+                value /= ctools_pow10_table[-final_exp];
+            } else if (final_exp != 0) {
+                value *= pow(10.0, final_exp);
+            }
+
+            *result = negative ? -value : value;
+            return (p == end);
+        } else {
+            break;
+        }
+    }
+
+    if (!has_digits) return false;
+    if (p != end) return false;
+
+    double value = (double)mantissa;
+
+    /* Apply decimal shift */
+    if (decimal_pos >= 0) {
+        int decimal_digits = total_digits - decimal_pos;
+        if (total_digits > 18 && decimal_pos < 18) {
+            decimal_digits -= (total_digits - 18);
+            if (decimal_digits < 0) decimal_digits = 0;
+        }
+        if (decimal_digits > 0 && decimal_digits <= 22) {
+            value /= ctools_pow10_table[decimal_digits];
+        } else if (decimal_digits > 22) {
+            value /= pow(10.0, decimal_digits);
+        }
+    } else if (total_digits > 18) {
+        int extra = total_digits - 18;
+        if (extra <= 22) {
+            value *= ctools_pow10_table[extra];
+        } else {
+            value *= pow(10.0, extra);
+        }
+    }
+
+    *result = negative ? -value : value;
+    return true;
+}
+
+/*
+    Parse double with custom decimal and group separators.
+    Handles European formats like "1.234,56" (decimal=',', group='.').
+
+    @param str       Input string
+    @param len       Length of input
+    @param result    Output value
+    @param missval   Value to use for missing
+    @param dec_sep   Decimal separator character (default '.')
+    @param grp_sep   Group separator character (default '\0' = none)
+    @return true on success, false on parse error
+*/
+bool ctools_parse_double_with_separators(const char *str, int len, double *result, double missval,
+                                          char dec_sep, char grp_sep)
+{
+    /* If using default separators, use the fast path */
+    if (dec_sep == '.' && grp_sep == '\0') {
+        return ctools_parse_double_fast(str, len, result, missval);
+    }
+
+    const char *p = str;
+    const char *end = str + len;
+
+    /* Skip leading whitespace */
+    while (p < end && (*p == ' ' || *p == '\t')) p++;
+    /* Skip trailing whitespace */
+    while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) end--;
+
+    len = (int)(end - p);
+
+    /* Empty string -> missing */
+    if (len == 0) {
+        *result = missval;
+        return true;
+    }
+
+    /* Single decimal separator -> Stata missing (like single ".") */
+    if (len == 1 && *p == dec_sep) {
+        *result = missval;
+        return true;
+    }
+
+    /* "NA" -> missing */
+    if (len == 2 && (p[0] == 'N' || p[0] == 'n') && (p[1] == 'A' || p[1] == 'a')) {
+        *result = missval;
+        return true;
+    }
+
+    /* "NaN" -> missing */
+    if (len == 3 && (p[0] == 'N' || p[0] == 'n') && (p[1] == 'a' || p[1] == 'A') && (p[2] == 'N' || p[2] == 'n')) {
+        *result = missval;
+        return true;
+    }
+
+    /* Parse sign */
+    bool negative = false;
+    if (*p == '-') {
+        negative = true;
+        p++;
+    } else if (*p == '+') {
+        p++;
+    }
+
+    if (p >= end) return false;
+
+    /* Parse mantissa, handling group separators */
+    uint64_t mantissa = 0;
+    int decimal_pos = -1;
+    int digit_count = 0;
+    int total_digits = 0;
+    bool has_digits = false;
+
+    while (p < end) {
+        char c = *p;
+        if (c >= '0' && c <= '9') {
+            has_digits = true;
+            total_digits++;
+            if (digit_count < 18) {
+                mantissa = mantissa * 10 + (c - '0');
+                digit_count++;
+            }
+            p++;
+        } else if (c == dec_sep && decimal_pos < 0) {
+            /* Decimal separator */
+            decimal_pos = total_digits;
+            p++;
+        } else if (grp_sep != '\0' && c == grp_sep) {
+            /* Group separator - just skip it */
             p++;
         } else if (c == 'e' || c == 'E') {
             /* Scientific notation */

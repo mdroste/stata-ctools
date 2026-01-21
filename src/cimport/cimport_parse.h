@@ -110,6 +110,9 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
 /* Quick check if field looks like a number (for type inference) */
 bool cimport_field_looks_numeric(const char *src, int len);
 
+/* Quick check with custom decimal separator */
+bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep);
+
 /*
  * Analyze numeric field and extract value.
  *
@@ -122,6 +125,22 @@ bool cimport_field_looks_numeric(const char *src, int len);
  */
 bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,
                                    double *out_value, bool *out_is_integer);
+
+/*
+ * Analyze numeric field with custom separators.
+ *
+ * @param file_base    Base pointer of memory-mapped file
+ * @param field        Field reference
+ * @param quote        Quote character
+ * @param dec_sep      Decimal separator ('.' or ',')
+ * @param grp_sep      Group/thousands separator ('\0' = none)
+ * @param out_value    Output: parsed numeric value
+ * @param out_is_integer Output: true if value is integer
+ * @return             true if successfully parsed as number
+ */
+bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *field, char quote,
+                                       char dec_sep, char grp_sep,
+                                       double *out_value, bool *out_is_integer);
 
 /* ============================================================================
  * Utility Functions
