@@ -30,7 +30,37 @@
 #include <string.h>
 #include <stdio.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "stplugin.h"
+
+/*
+    Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes
+    that may already be loaded (e.g., by Stata's Java VM).
+
+    The KMP_DUPLICATE_LIB_OK environment variable tells the LLVM/Intel OpenMP
+    runtime to tolerate multiple copies of the runtime library being loaded.
+    Without this, the runtime aborts when it detects another copy.
+*/
+static int ctools_omp_initialized = 0;
+
+static void ctools_init_openmp(void)
+{
+    if (ctools_omp_initialized) return;
+    ctools_omp_initialized = 1;
+
+#ifdef _OPENMP
+    /* Set KMP_DUPLICATE_LIB_OK to prevent abort when another OpenMP runtime
+       is already loaded (common with Stata's Java VM) */
+    #if defined(__APPLE__) || defined(__linux__)
+    setenv("KMP_DUPLICATE_LIB_OK", "TRUE", 0);  /* 0 = don't overwrite if set */
+    #elif defined(_WIN32)
+    _putenv_s("KMP_DUPLICATE_LIB_OK", "TRUE");
+    #endif
+#endif
+}
 #include "csort_impl.h"
 #include "creghdfe_impl.h"
 #include "civreghdfe_impl.h"
@@ -57,6 +87,9 @@ STDLL stata_call(int argc, char *argv[])
     char *cmd_args;
     char *space_pos;
     ST_retcode rc;
+
+    /* Initialize OpenMP safely before any parallel code runs */
+    ctools_init_openmp();
 
     /* Check for arguments */
     if (argc < 1 || argv[0] == NULL || strlen(argv[0]) == 0) {
