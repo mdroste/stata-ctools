@@ -38,6 +38,7 @@
 #include "ctools_types.h"
 #include "ctools_threads.h"
 #include "ctools_config.h"
+#include "ctools_arena.h"
 #include "ctools_spi.h"
 
 /* SIMD and prefetch intrinsics - platform-specific */
@@ -66,124 +67,6 @@
 
 /* Threshold for non-temporal stores (bypass cache for very large writes) */
 #define NONTEMPORAL_THRESHOLD 1000000
-
-/* ===========================================================================
-   Memory Allocation Utilities
-   =========================================================================== */
-
-/*
-    Allocate memory aligned to cache line boundary.
-    Returns NULL on failure.
-*/
-static inline void *aligned_alloc_cacheline(size_t size)
-{
-    void *ptr = NULL;
-#if defined(_WIN32)
-    ptr = _aligned_malloc(size, CACHE_LINE_SIZE);
-#else
-    if (posix_memalign(&ptr, CACHE_LINE_SIZE, size) != 0) {
-        return NULL;
-    }
-#endif
-    return ptr;
-}
-
-/*
-    Overflow-safe version of aligned_alloc_cacheline for (count * element_size).
-    Returns NULL on overflow or allocation failure.
-*/
-static inline void *aligned_alloc_cacheline_safe2(size_t count, size_t element_size)
-{
-    size_t size;
-    if (ctools_safe_mul_size(count, element_size, &size) != 0) {
-        return NULL;
-    }
-    return aligned_alloc_cacheline(size);
-}
-
-/*
-    Free cache-line aligned memory.
-*/
-static inline void aligned_free(void *ptr)
-{
-#if defined(_WIN32)
-    _aligned_free(ptr);
-#else
-    free(ptr);
-#endif
-}
-
-/* ===========================================================================
-   String Arena Allocator
-   =========================================================================== */
-
-/*
-    Arena allocator for string variables.
-    Reduces malloc overhead by allocating strings from a contiguous block.
-*/
-typedef struct {
-    char *base;         /* Base pointer to arena memory */
-    size_t capacity;    /* Total arena capacity in bytes */
-    size_t used;        /* Currently used bytes */
-    int has_fallback;   /* Non-zero if any strings were allocated via strdup fallback */
-} string_arena;
-
-/*
-    Create a string arena with given capacity.
-    Returns NULL on allocation failure.
-*/
-static string_arena *arena_create(size_t capacity)
-{
-    string_arena *arena = (string_arena *)malloc(sizeof(string_arena));
-    if (arena == NULL) return NULL;
-
-    arena->base = (char *)malloc(capacity);
-    if (arena->base == NULL) {
-        free(arena);
-        return NULL;
-    }
-
-    arena->capacity = capacity;
-    arena->used = 0;
-    arena->has_fallback = 0;
-    return arena;
-}
-
-/*
-    Allocate a string copy from the arena.
-    Falls back to strdup if arena is full (and sets has_fallback flag).
-    Returns NULL on complete failure.
-*/
-static char *arena_strdup(string_arena *arena, const char *s)
-{
-    size_t len = strlen(s) + 1;
-
-    /* Check if arena has space - with overflow protection */
-    if (arena != NULL && arena->used <= arena->capacity - len && len <= arena->capacity) {
-        char *ptr = arena->base + arena->used;
-        memcpy(ptr, s, len);
-        arena->used += len;
-        return ptr;
-    }
-
-    /* Fallback to regular strdup - mark that we have fallback allocations */
-    if (arena != NULL) {
-        arena->has_fallback = 1;
-    }
-    return strdup(s);
-}
-
-/*
-    Free arena memory.
-    Note: Individual strings allocated via fallback strdup must be freed separately.
-*/
-static void arena_free(string_arena *arena)
-{
-    if (arena != NULL) {
-        free(arena->base);
-        free(arena);
-    }
-}
 
 /* ===========================================================================
    SIMD-Accelerated Utilities
@@ -300,7 +183,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         if (ctools_safe_mul_size(nobs, sizeof(char *), &str_array_size) != 0) {
             return -1;  /* Overflow */
         }
-        var->data.str = (char **)aligned_alloc_cacheline(str_array_size);
+        var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
         if (var->data.str == NULL) {
             return -1;
         }
@@ -310,10 +193,10 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
         /* Create arena for all strings - estimate avg 64 bytes per string */
         /* Overflow check: nobs * 64 - skip arena if overflow, rely on strdup fallback */
-        string_arena *arena = NULL;
+        ctools_string_arena *arena = NULL;
         if (nobs <= SIZE_MAX / 64) {
             size_t arena_capacity = nobs * 64;
-            arena = arena_create(arena_capacity);
+            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
         }
         if (arena != NULL) {
             var->_arena = arena;
@@ -326,7 +209,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
             }
 
             SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
-            str_ptr[i] = arena_strdup(arena, strbuf);
+            str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
                 return -1;
             }
@@ -339,7 +222,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         if (ctools_safe_mul_size(nobs, sizeof(double), &dbl_array_size) != 0) {
             return -1;  /* Overflow */
         }
-        var->data.dbl = (double *)aligned_alloc_cacheline(dbl_array_size);
+        var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
 
         if (var->data.dbl == NULL) {
             return -1;
@@ -424,6 +307,173 @@ static void *load_variable_thread(void *arg)
     return NULL;
 }
 
+/* ===========================================================================
+   Internal Helper Functions
+   Reduce code duplication across load/store functions
+   =========================================================================== */
+
+/*
+    Observation range resolution helper.
+    Returns the starting observation and count for the range.
+*/
+typedef struct {
+    size_t obs1;    /* First observation (1-based) */
+    size_t nobs;    /* Number of observations */
+    int valid;      /* Non-zero if range is valid */
+} obs_range_t;
+
+static obs_range_t resolve_obs_range(size_t obs_start, size_t obs_end)
+{
+    obs_range_t range;
+
+    if (obs_start == 0 || obs_end == 0) {
+        /* Use Stata's in-range bounds */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
+        if (in1 < 1 || in2 < in1) {
+            /* Invalid range - treat as zero rows */
+            range.obs1 = 1;
+            range.nobs = 0;
+            range.valid = 1;  /* Empty but valid */
+        } else {
+            range.obs1 = (size_t)in1;
+            range.nobs = (size_t)(in2 - in1 + 1);
+            range.valid = 1;
+        }
+    } else {
+        /* Use specified bounds */
+        range.obs1 = obs_start;
+        range.nobs = obs_end - obs_start + 1;
+        range.valid = 1;
+    }
+
+    return range;
+}
+
+/*
+    Data structure initialization helper.
+    Allocates vars array and sort_order with proper alignment.
+    Returns STATA_OK on success, error code on failure.
+*/
+static stata_retcode init_data_structure(stata_data *data, size_t nvars, size_t nobs)
+{
+    /* Initialize the data structure */
+    stata_data_init(data);
+    data->nobs = nobs;
+    data->nvars = nvars;
+
+    /* Allocate array of variables (cache-line aligned, overflow-safe) */
+    data->vars = (stata_variable *)ctools_safe_cacheline_alloc2(nvars, sizeof(stata_variable));
+    if (data->vars == NULL) {
+        return STATA_ERR_MEMORY;
+    }
+    memset(data->vars, 0, nvars * sizeof(stata_variable));
+
+    /* Allocate sort order array (cache-line aligned, overflow-safe) */
+    data->sort_order = (perm_idx_t *)ctools_safe_cacheline_alloc2(nobs, sizeof(perm_idx_t));
+    if (data->sort_order == NULL) {
+        stata_data_free(data);
+        return STATA_ERR_MEMORY;
+    }
+
+    /* Initialize sort order to identity permutation */
+    for (size_t i = 0; i < nobs; i++) {
+        data->sort_order[i] = (perm_idx_t)i;
+    }
+
+    return STATA_OK;
+}
+
+/*
+    I/O mode enum for thread args initialization.
+*/
+typedef enum { IO_MODE_LOAD, IO_MODE_STORE } io_mode_t;
+
+/*
+    Thread args batch initialization helper.
+    Initializes an array of ctools_var_io_args for load or store operations.
+
+    @param args         [out] Pre-allocated array of nvars args
+    @param data         [in]  stata_data structure
+    @param var_indices  [in]  Array of 1-based variable indices, or NULL for sequential
+    @param nvars        [in]  Number of variables
+    @param obs1         [in]  First observation (1-based)
+    @param nobs         [in]  Number of observations
+    @param mode         [in]  IO_MODE_LOAD or IO_MODE_STORE
+*/
+static void init_io_thread_args(ctools_var_io_args *args, stata_data *data,
+                                int *var_indices, size_t nvars,
+                                size_t obs1, size_t nobs, io_mode_t mode)
+{
+    for (size_t j = 0; j < nvars; j++) {
+        args[j].var = &data->vars[j];
+        args[j].var_idx = var_indices ? var_indices[j] : (int)(j + 1);
+        args[j].obs1 = obs1;
+        args[j].nobs = nobs;
+        args[j].is_string = (mode == IO_MODE_LOAD)
+            ? SF_var_is_string((ST_int)args[j].var_idx)
+            : 0;  /* Not used by store */
+        args[j].success = 0;
+    }
+}
+
+/*
+    Thread function type for I/O operations.
+*/
+typedef void *(*io_thread_func)(void *);
+
+/*
+    Thread pool orchestration helper.
+    Executes I/O operations either in parallel (using thread pool) or sequentially.
+
+    @param args         [in]  Array of thread arguments
+    @param nvars        [in]  Number of variables (and args)
+    @param func         [in]  Thread function to execute
+    @param check_error  [in]  Non-zero to check for errors in load mode
+
+    @return 0 on success, non-zero on failure
+*/
+static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
+                               io_thread_func func, int check_error)
+{
+    int use_parallel = (nvars >= 2);
+
+    if (use_parallel) {
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+
+        if (pool != NULL) {
+            /* Submit batch to thread pool */
+            if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
+                                                     sizeof(ctools_var_io_args)) != 0) {
+                return -1;
+            }
+
+            int pool_result = ctools_persistent_pool_wait(pool);
+            if (check_error && pool_result != 0) {
+                return -1;
+            }
+        } else {
+            /* Fallback to sequential */
+            for (size_t j = 0; j < nvars; j++) {
+                void *result = func(&args[j]);
+                if (check_error && result != NULL) {
+                    return -1;
+                }
+            }
+        }
+    } else {
+        /* Sequential execution */
+        for (size_t j = 0; j < nvars; j++) {
+            void *result = func(&args[j]);
+            if (check_error && result != NULL) {
+                return -1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 /*
     Load all variables from Stata's data space into C memory.
 
@@ -445,55 +495,23 @@ static void *load_variable_thread(void *arg)
 */
 stata_retcode ctools_data_load(stata_data *data, size_t nvars)
 {
-    size_t nobs;
-    size_t obs1;
     ctools_var_io_args *thread_args = NULL;
-    size_t j;
-    int use_parallel;
+    stata_retcode rc;
 
     if (data == NULL || nvars == 0) {
         return STATA_ERR_INVALID_INPUT;
     }
 
-    /* Cache observation bounds with validation */
-    {
-        ST_int in1 = SF_in1();
-        ST_int in2 = SF_in2();
-        if (in1 < 1 || in2 < in1) {
-            /* Invalid range - treat as zero rows */
-            obs1 = 1;
-            nobs = 0;
-        } else {
-            obs1 = (size_t)in1;
-            nobs = (size_t)(in2 - in1 + 1);
-        }
+    /* Resolve observation range */
+    obs_range_t range = resolve_obs_range(0, 0);
+
+    /* Initialize data structure */
+    rc = init_data_structure(data, nvars, range.nobs);
+    if (rc != STATA_OK) {
+        return rc;
     }
 
-    /* Initialize the data structure */
-    stata_data_init(data);
-    data->nobs = (size_t)nobs;
-    data->nvars = nvars;
-
-    /* Allocate array of variables (cache-line aligned, overflow-safe) */
-    data->vars = (stata_variable *)aligned_alloc_cacheline_safe2(nvars, sizeof(stata_variable));
-    if (data->vars == NULL) {
-        return STATA_ERR_MEMORY;
-    }
-    memset(data->vars, 0, nvars * sizeof(stata_variable));
-
-    /* Allocate sort order array (cache-line aligned, overflow-safe) */
-    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline_safe2(nobs, sizeof(perm_idx_t));
-    if (data->sort_order == NULL) {
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
-
-    /* Initialize sort order to identity permutation */
-    for (size_t i = 0; i < nobs; i++) {
-        data->sort_order[i] = (perm_idx_t)i;
-    }
-
-    /* Allocate thread arguments (overflow-safe) */
+    /* Allocate thread arguments */
     thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         stata_data_free(data);
@@ -501,64 +519,18 @@ stata_retcode ctools_data_load(stata_data *data, size_t nvars)
     }
 
     /* Initialize thread arguments */
-    for (j = 0; j < nvars; j++) {
-        thread_args[j].var = &data->vars[j];
-        thread_args[j].var_idx = (int)(j + 1);
-        thread_args[j].obs1 = obs1;
-        thread_args[j].nobs = nobs;
-        thread_args[j].is_string = SF_var_is_string((ST_int)(j + 1));
-        thread_args[j].success = 0;
-    }
+    init_io_thread_args(thread_args, data, NULL, nvars, range.obs1, range.nobs, IO_MODE_LOAD);
 
-    /* Parallel loading using persistent thread pool.
-     * The pool manages a fixed number of workers that process work items from a queue,
-     * eliminating thread creation overhead for repeated operations. */
-    use_parallel = (nvars >= 2);
-
-    if (use_parallel) {
-        ctools_persistent_pool *pool = ctools_get_global_pool();
-
-        if (pool != NULL) {
-            /* Submit one work item per variable to the persistent pool */
-            if (ctools_persistent_pool_submit_batch(pool, load_variable_thread,
-                                                     thread_args, nvars,
-                                                     sizeof(ctools_var_io_args)) != 0) {
-                free(thread_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-
-            int pool_result = ctools_persistent_pool_wait(pool);
-            free(thread_args);
-
-            if (pool_result != 0) {
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-        } else {
-            /* Fallback to sequential if pool initialization failed */
-            for (j = 0; j < nvars; j++) {
-                if (load_variable_thread(&thread_args[j]) != NULL) {
-                    free(thread_args);
-                    stata_data_free(data);
-                    return STATA_ERR_MEMORY;
-                }
-            }
-            free(thread_args);
-        }
-    } else {
-        /* Sequential loading for single variable */
-        for (j = 0; j < nvars; j++) {
-            if (load_variable_thread(&thread_args[j]) != NULL) {
-                free(thread_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-        }
+    /* Execute parallel/sequential load */
+    if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
         free(thread_args);
+        stata_data_free(data);
+        return STATA_ERR_MEMORY;
     }
 
-    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    free(thread_args);
+
+    /* Memory barrier to ensure all thread-side effects are visible */
     ctools_memory_barrier();
 
     return STATA_OK;
@@ -691,68 +663,30 @@ static void *store_variable_thread(void *arg)
 */
 stata_retcode ctools_data_store(stata_data *data, size_t obs1)
 {
-    size_t j;
-    size_t nobs, nvars;
     ctools_var_io_args *thread_args = NULL;
-    int use_parallel;
 
     if (data == NULL) {
         return STATA_ERR_INVALID_INPUT;
     }
 
-    /* Cache frequently accessed values */
-    nobs = data->nobs;
-    nvars = data->nvars;
+    size_t nobs = data->nobs;
+    size_t nvars = data->nvars;
 
-    /* Allocate thread arguments (overflow-safe) */
+    /* Allocate thread arguments */
     thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         return STATA_ERR_MEMORY;
     }
 
     /* Initialize thread arguments */
-    for (j = 0; j < nvars; j++) {
-        thread_args[j].var = &data->vars[j];
-        thread_args[j].var_idx = (int)(j + 1);
-        thread_args[j].obs1 = obs1;
-        thread_args[j].nobs = nobs;
-        thread_args[j].is_string = 0;  /* Not used by store */
-        thread_args[j].success = 0;
-    }
+    init_io_thread_args(thread_args, data, NULL, nvars, obs1, nobs, IO_MODE_STORE);
 
-    /* Parallel storing using persistent thread pool. */
-    use_parallel = (nvars >= 2);
+    /* Execute parallel/sequential store (no error checking for store) */
+    execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
 
-    if (use_parallel) {
-        ctools_persistent_pool *pool = ctools_get_global_pool();
+    free(thread_args);
 
-        if (pool != NULL) {
-            /* Submit one work item per variable to the persistent pool */
-            if (ctools_persistent_pool_submit_batch(pool, store_variable_thread,
-                                                     thread_args, nvars,
-                                                     sizeof(ctools_var_io_args)) != 0) {
-                free(thread_args);
-                return STATA_ERR_MEMORY;
-            }
-
-            ctools_persistent_pool_wait(pool);
-            free(thread_args);
-        } else {
-            /* Fallback to sequential if pool initialization failed */
-            for (j = 0; j < nvars; j++) {
-                store_variable_thread(&thread_args[j]);
-            }
-            free(thread_args);
-        }
-    } else {
-        /* Sequential storing for single variable */
-        for (j = 0; j < nvars; j++) {
-            store_variable_thread(&thread_args[j]);
-        }
-        free(thread_args);
-    }
-
-    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    /* Memory barrier to ensure all thread-side effects are visible */
     ctools_memory_barrier();
 
     return STATA_OK;
@@ -780,121 +714,42 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
 stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
                                           size_t nvars, size_t obs_start, size_t obs_end)
 {
-    size_t nobs;
-    size_t obs1;
     ctools_var_io_args *thread_args = NULL;
-    size_t j;
-    int use_parallel;
+    stata_retcode rc;
 
     if (data == NULL || var_indices == NULL || nvars == 0) {
         return STATA_ERR_INVALID_INPUT;
     }
 
-    /* Determine observation range */
-    if (obs_start == 0 || obs_end == 0) {
-        obs1 = (size_t)SF_in1();
-        nobs = (size_t)(SF_in2() - SF_in1() + 1);
-    } else {
-        obs1 = obs_start;
-        nobs = obs_end - obs_start + 1;
+    /* Resolve observation range */
+    obs_range_t range = resolve_obs_range(obs_start, obs_end);
+
+    /* Initialize data structure */
+    rc = init_data_structure(data, nvars, range.nobs);
+    if (rc != STATA_OK) {
+        return rc;
     }
 
-    /* Initialize the data structure */
-    stata_data_init(data);
-    data->nobs = nobs;
-    data->nvars = nvars;
-
-    /* Allocate array of variables (cache-line aligned) */
-    size_t vars_size;
-    if (ctools_safe_mul_size(nvars, sizeof(stata_variable), &vars_size) != 0) {
-        return STATA_ERR_MEMORY;  /* Overflow */
-    }
-    data->vars = (stata_variable *)aligned_alloc_cacheline(vars_size);
-    if (data->vars == NULL) {
-        return STATA_ERR_MEMORY;
-    }
-    memset(data->vars, 0, vars_size);
-
-    /* Allocate sort order array (cache-line aligned, uses perm_idx_t for 50% memory savings) */
-    size_t sort_order_size;
-    if (ctools_safe_mul_size(nobs, sizeof(perm_idx_t), &sort_order_size) != 0) {
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;  /* Overflow */
-    }
-    data->sort_order = (perm_idx_t *)aligned_alloc_cacheline(sort_order_size);
-    if (data->sort_order == NULL) {
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
-
-    /* Initialize sort order to identity permutation */
-    for (size_t i = 0; i < nobs; i++) {
-        data->sort_order[i] = (perm_idx_t)i;
-    }
-
-    /* Allocate thread arguments (overflow-safe) */
+    /* Allocate thread arguments */
     thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         stata_data_free(data);
         return STATA_ERR_MEMORY;
     }
 
-    /* Initialize thread arguments with SPECIFIED variable indices */
-    for (j = 0; j < nvars; j++) {
-        thread_args[j].var = &data->vars[j];
-        thread_args[j].var_idx = var_indices[j];  /* Use specified index (1-based) */
-        thread_args[j].obs1 = obs1;
-        thread_args[j].nobs = nobs;
-        thread_args[j].is_string = SF_var_is_string((ST_int)var_indices[j]);
-        thread_args[j].success = 0;
-    }
+    /* Initialize thread arguments with specified variable indices */
+    init_io_thread_args(thread_args, data, var_indices, nvars, range.obs1, range.nobs, IO_MODE_LOAD);
 
-    /* Parallel loading using persistent thread pool. */
-    use_parallel = (nvars >= 2);
-
-    if (use_parallel) {
-        ctools_persistent_pool *pool = ctools_get_global_pool();
-
-        if (pool != NULL) {
-            if (ctools_persistent_pool_submit_batch(pool, load_variable_thread,
-                                                     thread_args, nvars,
-                                                     sizeof(ctools_var_io_args)) != 0) {
-                free(thread_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-
-            int pool_result = ctools_persistent_pool_wait(pool);
-            free(thread_args);
-
-            if (pool_result != 0) {
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-        } else {
-            /* Fallback to sequential if pool initialization failed */
-            for (j = 0; j < nvars; j++) {
-                if (load_variable_thread(&thread_args[j]) != NULL) {
-                    free(thread_args);
-                    stata_data_free(data);
-                    return STATA_ERR_MEMORY;
-                }
-            }
-            free(thread_args);
-        }
-    } else {
-        /* Sequential loading for single variable */
-        for (j = 0; j < nvars; j++) {
-            if (load_variable_thread(&thread_args[j]) != NULL) {
-                free(thread_args);
-                stata_data_free(data);
-                return STATA_ERR_MEMORY;
-            }
-        }
+    /* Execute parallel/sequential load */
+    if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
         free(thread_args);
+        stata_data_free(data);
+        return STATA_ERR_MEMORY;
     }
 
-    /* Memory barrier to ensure all thread-side effects are visible before returning */
+    free(thread_args);
+
+    /* Memory barrier to ensure all thread-side effects are visible */
     ctools_memory_barrier();
 
     return STATA_OK;
@@ -922,60 +777,25 @@ stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
 stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
                                            size_t nvars, size_t obs1)
 {
-    size_t j;
-    size_t nobs;
     ctools_var_io_args *thread_args = NULL;
-    int use_parallel;
 
     if (data == NULL || var_indices == NULL || nvars == 0) {
         return STATA_ERR_INVALID_INPUT;
     }
 
-    nobs = data->nobs;
+    size_t nobs = data->nobs;
 
-    /* Allocate thread arguments (overflow-safe) */
+    /* Allocate thread arguments */
     thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
     if (thread_args == NULL) {
         return STATA_ERR_MEMORY;
     }
 
-    /* Initialize thread arguments with SPECIFIED variable indices */
-    for (j = 0; j < nvars; j++) {
-        thread_args[j].var = &data->vars[j];
-        thread_args[j].var_idx = var_indices[j];  /* Use specified index (1-based) */
-        thread_args[j].obs1 = obs1;
-        thread_args[j].nobs = nobs;
-        thread_args[j].is_string = 0;  /* Not used by store */
-        thread_args[j].success = 0;
-    }
+    /* Initialize thread arguments with specified variable indices */
+    init_io_thread_args(thread_args, data, var_indices, nvars, obs1, nobs, IO_MODE_STORE);
 
-    /* Parallel storing using persistent thread pool. */
-    use_parallel = (nvars >= 2);
-
-    if (use_parallel) {
-        ctools_persistent_pool *pool = ctools_get_global_pool();
-
-        if (pool != NULL) {
-            if (ctools_persistent_pool_submit_batch(pool, store_variable_thread,
-                                                     thread_args, nvars,
-                                                     sizeof(ctools_var_io_args)) != 0) {
-                free(thread_args);
-                return STATA_ERR_MEMORY;
-            }
-
-            ctools_persistent_pool_wait(pool);
-        } else {
-            /* Fallback to sequential if pool initialization failed */
-            for (j = 0; j < nvars; j++) {
-                store_variable_thread(&thread_args[j]);
-            }
-        }
-    } else {
-        /* Sequential storing for single variable */
-        for (j = 0; j < nvars; j++) {
-            store_variable_thread(&thread_args[j]);
-        }
-    }
+    /* Execute parallel/sequential store (no error checking for store) */
+    execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
 
     free(thread_args);
 
@@ -1020,7 +840,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
 
     if (is_string) {
         /* String variable: allocate buffer, gather, scatter (overflow-safe) */
-        char **buf = (char **)aligned_alloc_cacheline_safe2(output_nobs, sizeof(char *));
+        char **buf = (char **)ctools_safe_cacheline_alloc2(output_nobs, sizeof(char *));
         if (!buf) return STATA_ERR_MEMORY;
         memset(buf, 0, output_nobs * sizeof(char *));  /* Zero-init for safe cleanup */
 
@@ -1028,10 +848,10 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
 
         /* Create arena for string storage (estimate 64 bytes avg per string) */
         /* Overflow check: output_nobs * 64 - skip arena if overflow, rely on strdup fallback */
-        string_arena *arena = NULL;
+        ctools_string_arena *arena = NULL;
         if (output_nobs <= SIZE_MAX / 64) {
             size_t arena_capacity = output_nobs * 64;
-            arena = arena_create(arena_capacity);
+            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
         }
         /* Arena failure is ok - we fall back to strdup */
 
@@ -1044,27 +864,19 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
 
             if (source_rows[i] >= 0) {
                 SF_sdata(stata_var, (ST_int)(source_rows[i] + obs1), strbuf);
-                buf[i] = arena_strdup(arena, strbuf);
+                buf[i] = ctools_string_arena_strdup(arena, strbuf);
             } else {
-                buf[i] = arena_strdup(arena, "");  /* Missing -> empty string */
+                buf[i] = ctools_string_arena_strdup(arena, "");  /* Missing -> empty string */
             }
             if (!buf[i]) {
                 /* Cleanup on allocation failure - free any fallback strings first */
-                if (arena != NULL && arena->has_fallback) {
-                    for (size_t j = 0; j < i; j++) {
-                        if (buf[j] != NULL &&
-                            (buf[j] < arena->base || buf[j] >= arena->base + arena->capacity)) {
-                            free(buf[j]);
-                        }
-                    }
-                } else if (arena == NULL) {
-                    /* No arena - free all strdup'd strings */
-                    for (size_t j = 0; j < i; j++) {
+                for (size_t j = 0; j < i; j++) {
+                    if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
                         free(buf[j]);
                     }
                 }
-                arena_free(arena);
-                aligned_free(buf);
+                ctools_string_arena_free(arena);
+                ctools_aligned_free(buf);
                 return STATA_ERR_MEMORY;
             }
         }
@@ -1081,28 +893,18 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             SF_sstore(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
-        /* Free fallback strings (those outside arena range), then free arena */
-        if (arena != NULL && arena->has_fallback) {
-            for (i = 0; i < output_nobs; i++) {
-                if (buf[i] != NULL &&
-                    (buf[i] < arena->base || buf[i] >= arena->base + arena->capacity)) {
-                    free(buf[i]);
-                }
-            }
-        } else if (arena == NULL) {
-            /* No arena - free all strdup'd strings */
-            for (i = 0; i < output_nobs; i++) {
-                if (buf[i] != NULL) {
-                    free(buf[i]);
-                }
+        /* Free fallback strings (those not owned by arena), then free arena */
+        for (i = 0; i < output_nobs; i++) {
+            if (buf[i] != NULL && !ctools_string_arena_owns(arena, buf[i])) {
+                free(buf[i]);
             }
         }
-        arena_free(arena);
-        aligned_free(buf);
+        ctools_string_arena_free(arena);
+        ctools_aligned_free(buf);
 
     } else {
         /* Numeric variable: allocate aligned buffer, gather, scatter (overflow-safe) */
-        double *buf = (double *)aligned_alloc_cacheline_safe2(output_nobs, sizeof(double));
+        double *buf = (double *)ctools_safe_cacheline_alloc2(output_nobs, sizeof(double));
         if (!buf) return STATA_ERR_MEMORY;
 
         /* GATHER: Read from source positions with prefetching */
@@ -1163,7 +965,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             SF_vstore(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
-        aligned_free(buf);
+        ctools_aligned_free(buf);
     }
 
     return STATA_OK;

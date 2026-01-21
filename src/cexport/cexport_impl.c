@@ -337,6 +337,14 @@ static int double_to_str(double val, char *buf, int buf_size, bool missing_as_do
         }
     }
 
+    /* For float storage type, truncate to single precision before formatting.
+     * This ensures we match Stata's native export delimited output exactly.
+     * Without this, the float-to-double conversion introduces spurious precision
+     * (e.g., 0.1f becomes 0.10000000149011612 as double). */
+    if (vtype == VARTYPE_FLOAT) {
+        val = (double)(float)val;
+    }
+
     /* Handle special floating point values */
     if (isnan(val)) {
         buf[0] = '.';

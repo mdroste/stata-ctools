@@ -896,7 +896,7 @@ static ST_retcode cmerge_execute(const char *args)
         cache_clear_in_use();
         return 920;
     }
-    output_data.vars = (stata_variable *)cmerge_aligned_alloc(vars_alloc_size);
+    output_data.vars = (stata_variable *)ctools_cacheline_alloc(vars_alloc_size);
     if (!output_data.vars) {
         free(output_var_indices);
         free(output_var_stata_idx);
@@ -979,7 +979,7 @@ static ST_retcode cmerge_execute(const char *args)
                 alloc_failed = 1;
                 continue;
             }
-            dst_var->data.dbl = (double *)cmerge_aligned_alloc(dbl_alloc_size);
+            dst_var->data.dbl = (double *)ctools_cacheline_alloc(dbl_alloc_size);
             if (!dst_var->data.dbl) {
                 #ifdef _OPENMP
                 #pragma omp atomic write
@@ -1058,11 +1058,11 @@ static ST_retcode cmerge_execute(const char *args)
                 }
                 free(output_data.vars[vi].data.str);
             } else if (output_data.vars[vi].data.dbl) {
-                cmerge_aligned_free(output_data.vars[vi].data.dbl);
+                ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
         cmerge_arena_free(str_arena);
-        cmerge_aligned_free(output_data.vars);
+        ctools_aligned_free(output_data.vars);
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
@@ -1077,7 +1077,7 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* Check for allocation failures during string copying */
-    if (str_arena != NULL && str_arena->alloc_failed) {
+    if (str_arena != NULL && str_arena->has_fallback) {
         SF_error("cmerge: memory allocation failed during string copy\n");
         /* Cleanup - free all allocated resources */
         for (size_t vi = 0; vi < n_output_vars; vi++) {
@@ -1093,11 +1093,11 @@ static ST_retcode cmerge_execute(const char *args)
                 free(output_data.vars[vi].data.str);
             } else if (output_data.vars[vi].data.dbl) {
                 /* Free numeric buffer */
-                cmerge_aligned_free(output_data.vars[vi].data.dbl);
+                ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
         cmerge_arena_free(str_arena);
-        cmerge_aligned_free(output_data.vars);
+        ctools_aligned_free(output_data.vars);
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
@@ -1133,10 +1133,10 @@ static ST_retcode cmerge_execute(const char *args)
                 }
                 free(output_data.vars[vi].data.str);
             } else if (output_data.vars[vi].data.dbl) {
-                cmerge_aligned_free(output_data.vars[vi].data.dbl);
+                ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
-        cmerge_aligned_free(output_data.vars);
+        ctools_aligned_free(output_data.vars);
         cmerge_arena_free(str_arena);  /* Free arena in one operation */
         free(output_var_indices);
         free(output_var_stata_idx);
@@ -1206,10 +1206,10 @@ static ST_retcode cmerge_execute(const char *args)
             }
             free(output_data.vars[vi].data.str);
         } else if (output_data.vars[vi].data.dbl) {
-            cmerge_aligned_free(output_data.vars[vi].data.dbl);
+            ctools_aligned_free(output_data.vars[vi].data.dbl);
         }
     }
-    cmerge_aligned_free(output_data.vars);
+    ctools_aligned_free(output_data.vars);
     cmerge_arena_free(str_arena);  /* O(1) cleanup of all arena strings */
 
     free(output_var_indices);

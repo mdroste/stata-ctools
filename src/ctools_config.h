@@ -323,4 +323,27 @@ static inline void *ctools_safe_aligned_alloc2(size_t alignment, size_t count, s
     return ctools_aligned_alloc(alignment, size);
 }
 
+/* ============================================================================
+   Convenience macros for cache-line aligned allocation
+
+   These macros provide a concise way to allocate memory aligned to the
+   cache line boundary, which is the most common alignment requirement.
+   ============================================================================ */
+
+/*
+    Allocate memory aligned to cache line boundary.
+    Returns NULL on failure.
+    MUST be freed with ctools_aligned_free().
+*/
+#define ctools_cacheline_alloc(size) \
+    ctools_aligned_alloc(CACHE_LINE_SIZE, (size))
+
+/*
+    Overflow-safe cache-line aligned allocation for (count * element_size).
+    Returns NULL on overflow or allocation failure.
+    MUST be freed with ctools_aligned_free().
+*/
+#define ctools_safe_cacheline_alloc2(count, elem_size) \
+    ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, (count), (elem_size))
+
 #endif /* CTOOLS_CONFIG_H */

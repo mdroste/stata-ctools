@@ -31,6 +31,7 @@
 #include "ctools_config.h"
 #include "ctools_timer.h"
 #include "ctools_spi.h"
+#include "ctools_arena.h"
 #include "csort_stream.h"
 
 /* ============================================================================
@@ -42,49 +43,6 @@
 
 /* String arena size per variable (1MB should handle most string columns) */
 #define STRING_ARENA_SIZE (1024 * 1024)
-
-/* ============================================================================
-   String Arena Allocator (avoids per-row malloc/free)
-   ============================================================================ */
-
-typedef struct {
-    char *base;
-    size_t capacity;
-    size_t used;
-} stream_arena;
-
-static stream_arena *stream_arena_create(size_t capacity)
-{
-    stream_arena *arena = (stream_arena *)malloc(sizeof(stream_arena));
-    if (!arena) return NULL;
-
-    arena->base = (char *)malloc(capacity);
-    if (!arena->base) {
-        free(arena);
-        return NULL;
-    }
-    arena->capacity = capacity;
-    arena->used = 0;
-    return arena;
-}
-
-static char *stream_arena_alloc(stream_arena *arena, size_t len)
-{
-    if (!arena || arena->used + len > arena->capacity) {
-        return NULL;  /* Arena full */
-    }
-    char *ptr = arena->base + arena->used;
-    arena->used += len;
-    return ptr;
-}
-
-static void stream_arena_free(stream_arena *arena)
-{
-    if (arena) {
-        free(arena->base);
-        free(arena);
-    }
-}
 
 /* ============================================================================
    Inverse Permutation Builder + Identity Detection
@@ -164,6 +122,7 @@ static int build_inverse_permutation(
 
 /*
     Process a string variable with arena allocation.
+    Uses ctools_string_arena with NO_FALLBACK mode - returns error if arena exhausted.
 */
 static int stream_permute_string_var(
     ST_int stata_var,
@@ -177,44 +136,34 @@ static int stream_permute_string_var(
     size_t arena_size = nobs * 256;  /* Estimate avg 256 bytes per string */
     if (arena_size < STRING_ARENA_SIZE) arena_size = STRING_ARENA_SIZE;
 
-    stream_arena *arena = stream_arena_create(arena_size);
+    /* Use NO_FALLBACK mode - if arena is exhausted, we fall back to strdup manually */
+    ctools_string_arena *arena = ctools_string_arena_create(arena_size,
+                                    CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
     char **str_ptrs = (char **)calloc(nobs, sizeof(char *));
 
     if (!arena || !str_ptrs) {
-        stream_arena_free(arena);
+        ctools_string_arena_free(arena);
         free(str_ptrs);
         return -1;
     }
 
     char strbuf[2048];
-    int use_fallback = 0;
 
     /* Sequential read from Stata, scatter to buffer via inverse perm */
     for (i = 0; i < nobs; i++) {
         SF_sdata(stata_var, (ST_int)(i + obs1), strbuf);
-        size_t len = strlen(strbuf) + 1;
+        str_ptrs[inv_perm[i]] = ctools_string_arena_strdup(arena, strbuf);
 
-        char *ptr = stream_arena_alloc(arena, len);
-        if (ptr) {
-            memcpy(ptr, strbuf, len);
-            str_ptrs[inv_perm[i]] = ptr;
-        } else {
-            str_ptrs[inv_perm[i]] = strdup(strbuf);
-            use_fallback = 1;
-            if (!str_ptrs[inv_perm[i]]) {
-                /* Cleanup on failure */
-                if (use_fallback) {
-                    for (size_t k = 0; k < nobs; k++) {
-                        if (str_ptrs[k] && (str_ptrs[k] < arena->base ||
-                            str_ptrs[k] >= arena->base + arena->capacity)) {
-                            free(str_ptrs[k]);
-                        }
-                    }
+        if (!str_ptrs[inv_perm[i]]) {
+            /* Cleanup on allocation failure */
+            for (size_t k = 0; k < nobs; k++) {
+                if (str_ptrs[k] && !ctools_string_arena_owns(arena, str_ptrs[k])) {
+                    free(str_ptrs[k]);
                 }
-                stream_arena_free(arena);
-                free(str_ptrs);
-                return -1;
             }
+            ctools_string_arena_free(arena);
+            free(str_ptrs);
+            return -1;
         }
     }
 
@@ -223,16 +172,15 @@ static int stream_permute_string_var(
         SF_sstore(stata_var, (ST_int)(i + obs1), str_ptrs[i] ? str_ptrs[i] : "");
     }
 
-    /* Free fallback allocations */
-    if (use_fallback) {
+    /* Free fallback allocations (those not owned by arena) */
+    if (arena->has_fallback) {
         for (i = 0; i < nobs; i++) {
-            if (str_ptrs[i] && (str_ptrs[i] < arena->base ||
-                str_ptrs[i] >= arena->base + arena->capacity)) {
+            if (str_ptrs[i] && !ctools_string_arena_owns(arena, str_ptrs[i])) {
                 free(str_ptrs[i]);
             }
         }
     }
-    stream_arena_free(arena);
+    ctools_string_arena_free(arena);
     free(str_ptrs);
 
     return 0;
