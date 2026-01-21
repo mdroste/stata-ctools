@@ -55,7 +55,7 @@
 /* Shared constants (from ctools_config.h):
    - CTOOLS_IO_BUFFER_SIZE: I/O buffer size (64KB)
    - CTOOLS_EXPORT_CHUNK_SIZE: rows per parallel chunk (10K)
-   - CTOOLS_IO_MAX_THREADS: max threads for I/O (16)
+   - ctools_get_max_threads(): max threads (runtime-detected or user-set)
 */
 
 /* Local constants specific to cexport */
@@ -1405,7 +1405,8 @@ ST_retcode cexport_main(const char *args)
     /* Determine number of chunks and threads */
     size_t num_chunks = (nobs + chunk_size - 1) / chunk_size;
     size_t num_threads = num_chunks;
-    if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
+    size_t max_threads = (size_t)ctools_get_max_threads();
+    if (num_threads > max_threads) num_threads = max_threads;
     if (num_threads < 1) num_threads = 1;
 
     /* Dynamic buffer sizing: sample actual row sizes instead of conservative estimate */

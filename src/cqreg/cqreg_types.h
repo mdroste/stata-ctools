@@ -23,8 +23,9 @@
 #define CQREG_DEFAULT_TOL         1e-8
 #define CQREG_DEFAULT_MU_INIT     0.1
 #define CQREG_DEFAULT_SIGMA       0.1
-#define CQREG_NUM_THREADS         8
 #define CQREG_CACHE_LINE          64
+
+/* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
 
 /* Compiler hints */
 #if defined(__GNUC__) || defined(__clang__)

@@ -12,6 +12,7 @@
 #include "../creghdfe/creghdfe_solver.h"
 #include "../creghdfe/creghdfe_hdfe.h"
 #include "../ctools_error.h"
+#include "../ctools_config.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -284,15 +285,8 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
         f->weighted_counts = NULL;
     }
 
-    /* Determine thread count */
-#ifdef _OPENMP
-    hdfe->num_threads = omp_get_max_threads();
-    if (hdfe->num_threads > OMP_NUM_THREADS) {
-        hdfe->num_threads = OMP_NUM_THREADS;
-    }
-#else
-    hdfe->num_threads = 1;
-#endif
+    /* Determine thread count using unified policy */
+    hdfe->num_threads = ctools_get_max_threads();
 
     /* Allocate per-thread CG buffers */
     hdfe->thread_cg_r = (ST_double **)calloc(hdfe->num_threads, sizeof(ST_double *));

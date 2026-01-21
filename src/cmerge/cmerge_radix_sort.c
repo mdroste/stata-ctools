@@ -84,8 +84,7 @@ void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n)
     }
 
     /* Determine thread count */
-    int num_threads = NUM_THREADS;
-    if (num_threads > CTOOLS_IO_MAX_THREADS) num_threads = CTOOLS_IO_MAX_THREADS;
+    int num_threads = ctools_get_max_threads();
     if ((size_t)num_threads > n / 1000) num_threads = (int)(n / 1000);
     if (num_threads < 1) num_threads = 1;
 

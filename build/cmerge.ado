@@ -74,6 +74,7 @@ program define cmerge, rclass
             UPDATE ///
             REPLACE ///
             PRESERVE_order(integer 0) ///
+            THReads(integer 0) ///
             ]
 
         * No key variables for _n merge
@@ -98,6 +99,7 @@ program define cmerge, rclass
             UPDATE ///
             REPLACE ///
             PRESERVE_order(integer 0) ///
+            THReads(integer 0) ///
             ]
 
         * Validate key variables exist in master
@@ -487,6 +489,12 @@ program define cmerge, rclass
         local plugin_args "`plugin_args' merge_by_n"
     }
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * End pre-plugin1 timer, start plugin1 timer
     if `__do_timing' {
         timer off 91
@@ -494,7 +502,7 @@ program define cmerge, rclass
     }
 
     * Call plugin Phase 1 with reduced varlist (using_varlist already computed)
-    capture noisily plugin call ctools_plugin `using_varlist', "cmerge `plugin_args'"
+    capture noisily plugin call ctools_plugin `using_varlist', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
 
     * End plugin1 timer
@@ -693,7 +701,7 @@ program define cmerge, rclass
     }
 
     * Call plugin Phase 2 (current_varlist already computed)
-    capture noisily plugin call ctools_plugin `current_varlist', "cmerge `plugin_args'"
+    capture noisily plugin call ctools_plugin `current_varlist', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
 
     * End plugin2 timer, start post-plugin timer

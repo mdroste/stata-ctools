@@ -15,11 +15,15 @@
 *!   Only loads sort key variables into C memory, then streams the permutation
 *!   to non-key variables. Reduces memory usage for wide datasets.
 *!   Best when: many non-key columns, limited memory, or dataset too large for RAM.
+*!
+*! nosortedby option:
+*!   Skips setting Stata's internal sort order metadata after sorting.
+*!   Use when you don't need Stata to recognize the data as sorted (faster).
 
 program define csort
     version 14.0
 
-    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam]
+    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam THReads(integer 0) NOSORTedby]
 
     * =========================================================================
     * UPFRONT VALIDATION - check all options before any data manipulation
@@ -163,6 +167,11 @@ program define csort
         local stream_code "stream"
     }
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
 
     * End pre-plugin timer, start plugin timer
     if `__do_timing' {
@@ -171,7 +180,7 @@ program define csort
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `var_indices' `alg_code' `stream_code'"
+    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code'"
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {
@@ -180,7 +189,10 @@ program define csort
     }
 
     * Set sort order in Stata (use stable to match csort's stable radix sort)
-    sort `varlist', stable
+    * Skip if nosortedby option is specified
+    if "`nosortedby'" == "" {
+        sort `varlist', stable
+    }
 
     * End all timers
     if `__do_timing' {

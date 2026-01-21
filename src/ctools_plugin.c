@@ -35,6 +35,7 @@
 #endif
 
 #include "stplugin.h"
+#include "ctools_config.h"
 
 /*
     Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes
@@ -60,6 +61,66 @@ static void ctools_init_openmp(void)
     _putenv_s("KMP_DUPLICATE_LIB_OK", "TRUE");
     #endif
 #endif
+}
+
+/*
+    Parse threads(N) argument from command string.
+    If found, sets the global thread limit and removes the argument from the string.
+
+    Format: threads(N) where N is a positive integer
+
+    @param cmd_args   [in/out] Command arguments string (modified in place)
+    @return           Thread count if found (>0), 0 if not found, -1 on error
+*/
+static int parse_threads_arg(char *cmd_args)
+{
+    char *threads_start;
+    char *paren_open;
+    char *paren_close;
+    int num_threads;
+    char *rest;
+
+    if (cmd_args == NULL || *cmd_args == '\0') {
+        return 0;  /* No args */
+    }
+
+    /* Find "threads(" in the argument string */
+    threads_start = strstr(cmd_args, "threads(");
+    if (threads_start == NULL) {
+        return 0;  /* Not found */
+    }
+
+    paren_open = threads_start + 7;  /* Point to '(' */
+    if (*paren_open != '(') {
+        return 0;  /* Malformed */
+    }
+
+    paren_close = strchr(paren_open, ')');
+    if (paren_close == NULL) {
+        return -1;  /* Missing closing paren */
+    }
+
+    /* Parse the number */
+    num_threads = atoi(paren_open + 1);
+    if (num_threads <= 0) {
+        return -1;  /* Invalid number */
+    }
+
+    /* Remove the threads() argument from the string:
+       Copy everything after "threads(N)" over the threads(...) portion */
+    rest = paren_close + 1;
+    while (*rest == ' ' || *rest == '\t') rest++;  /* Skip whitespace after ) */
+
+    /* Move the rest of the string over threads(...) */
+    memmove(threads_start, rest, strlen(rest) + 1);
+
+    /* Trim trailing whitespace if threads() was at the end */
+    size_t len = strlen(cmd_args);
+    while (len > 0 && (cmd_args[len-1] == ' ' || cmd_args[len-1] == '\t')) {
+        cmd_args[--len] = '\0';
+    }
+
+    return num_threads;
 }
 #include "csort_impl.h"
 #include "creghdfe_impl.h"
@@ -87,9 +148,13 @@ STDLL stata_call(int argc, char *argv[])
     char *cmd_args;
     char *space_pos;
     ST_retcode rc;
+    int thread_count;
 
     /* Initialize OpenMP safely before any parallel code runs */
     ctools_init_openmp();
+
+    /* Reset thread limit to default at start of each call */
+    ctools_reset_max_threads();
 
     /* Check for arguments */
     if (argc < 1 || argv[0] == NULL || strlen(argv[0]) == 0) {
@@ -97,15 +162,12 @@ STDLL stata_call(int argc, char *argv[])
         return 198;
     }
 
-
-
     /* Make a copy of the command string to parse */
     cmd_str = strdup(argv[0]);
     if (cmd_str == NULL) {
         SF_error("ctools: memory allocation failed\n");
         return 920;
     }
-
 
     /* Find the first space to separate command from args */
     space_pos = strchr(cmd_str, ' ');
@@ -118,6 +180,17 @@ STDLL stata_call(int argc, char *argv[])
     } else {
         cmd_name = cmd_str;
         cmd_args = "";
+    }
+
+    /* Parse threads(N) argument and set thread limit if specified */
+    thread_count = parse_threads_arg(cmd_args);
+    if (thread_count < 0) {
+        SF_error("ctools: invalid threads() argument\n");
+        free(cmd_str);
+        return 198;
+    }
+    if (thread_count > 0) {
+        ctools_set_max_threads(thread_count);
     }
 
 

@@ -29,7 +29,7 @@ program define cqreg, eclass
     local cmdline "cqreg `0'"
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0)]
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
@@ -223,6 +223,12 @@ program define cqreg, eclass
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_nopreprocess = `nopreprocess'
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * Record start time
     timer clear 99
     timer on 99
@@ -241,7 +247,7 @@ program define cqreg, eclass
 
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
-        "cqreg full_regression"
+        "cqreg `threads_code' full_regression"
 
     local reg_rc = _rc
     if `reg_rc' {

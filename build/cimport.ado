@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 1.1.0 21Jan2026
 *! cimport: C-accelerated CSV import for Stata
 *! Part of the ctools suite
 *!
@@ -18,6 +18,14 @@
 *!   bindquotes(strict|loose) - Quote handling mode
 *!   stripquotes         - Remove surrounding quotes from string values
 *!   rowrange([start][:end]) - Row range to import
+*!   asfloat             - Import all numeric variables as float
+*!   asdouble            - Import all numeric variables as double
+*!   numericcols(numlist)  - Force specific columns to be numeric
+*!   stringcols(numlist)   - Force specific columns to be string
+*!   decimalseparator(char) - Decimal separator character (default: ".")
+*!   groupseparator(char)  - Thousands grouping separator (default: none)
+*!   maxquotedrows(#)    - Max rows to scan for quotes (default: 20)
+*!   emptylines(skip|fill) - How to handle empty lines (default: skip)
 
 program define cimport, rclass
     version 14.0
@@ -35,7 +43,10 @@ program define cimport, rclass
     * Support both "using filename" and just "filename" (like import delimited does)
     syntax [anything] [using/] [, Delimiters(string) VARNames(string) CLEAR ///
         CASE(string) ENCoding(string) BINDQuotes(string) ///
-        STRIPQuotes ROWRange(string) Verbose]
+        STRIPQuotes ROWRange(string) Verbose THReads(integer 0) ///
+        ASFloat ASDOUBle NUMERICcols(numlist) STRINGcols(numlist) ///
+        DECIMALSEParator(string) GROUPSEParator(string) ///
+        MAXQUOTEDrows(integer 20) EMPTYlines(string)]
 
     * Handle filename - can come from using/ or as first positional argument
     if `"`using'"' == "" & `"`anything'"' != "" {
@@ -145,6 +156,59 @@ program define cimport, rclass
         }
     }
 
+    * Validate asfloat/asdouble - mutually exclusive
+    if "`asfloat'" != "" & "`asdouble'" != "" {
+        di as error "cimport: asfloat and asdouble are mutually exclusive"
+        exit 198
+    }
+
+    * Parse decimalseparator - must be single character
+    local decimalsep "."
+    if `"`decimalseparator'"' != "" {
+        if length(`"`decimalseparator'"') != 1 {
+            di as error "cimport: decimalseparator() must be a single character"
+            exit 198
+        }
+        local decimalsep `"`decimalseparator'"'
+    }
+
+    * Parse groupseparator - must be single character or empty
+    local groupsep ""
+    if `"`groupseparator'"' != "" {
+        if length(`"`groupseparator'"') != 1 {
+            di as error "cimport: groupseparator() must be a single character"
+            exit 198
+        }
+        local groupsep `"`groupseparator'"'
+    }
+
+    * Parse emptylines option - default is skip
+    if "`emptylines'" != "" {
+        if !inlist("`emptylines'", "skip", "fill") {
+            di as error "cimport: emptylines() must be skip or fill"
+            exit 198
+        }
+    }
+    else {
+        local emptylines "skip"
+    }
+
+    * Validate maxquotedrows
+    if `maxquotedrows' < 0 {
+        di as error "cimport: maxquotedrows() must be non-negative"
+        exit 198
+    }
+
+    * Convert numericcols/stringcols numlists to space-separated strings
+    local numcols_str ""
+    if "`numericcols'" != "" {
+        local numcols_str "`numericcols'"
+    }
+    local strcols_str ""
+    if "`stringcols'" != "" {
+        local strcols_str "`stringcols'"
+    }
+
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
     if _rc != 0 {
@@ -222,6 +286,28 @@ program define cimport, rclass
     local opt_case = "case=`case'"
     local opt_bindquotes = "bindquotes=`bindquotes'"
 
+    * New options
+    local opt_asfloat = cond("`asfloat'" != "", "asfloat", "")
+    local opt_asdouble = cond("`asdouble'" != "", "asdouble", "")
+    local opt_decimalsep = cond("`decimalsep'" != ".", "decimalsep=`decimalsep'", "")
+    local opt_groupsep = cond("`groupsep'" != "", "groupsep=`groupsep'", "")
+    local opt_emptylines = cond("`emptylines'" != "skip", "emptylines=`emptylines'", "")
+    local opt_maxquotedrows = cond(`maxquotedrows' != 20, "maxquotedrows=`maxquotedrows'", "")
+
+    * Pass numericcols/stringcols via global macros (space-separated column numbers)
+    if "`numcols_str'" != "" {
+        global _CIMPORT_NUMCOLS `numcols_str'
+    }
+    if "`strcols_str'" != "" {
+        global _CIMPORT_STRCOLS `strcols_str'
+    }
+
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * Record start time
     timer clear 99
     timer on 99
@@ -238,7 +324,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes'"
+        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -257,6 +343,7 @@ program define cimport, rclass
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
+    capture macro drop _CIMPORT_NUMCOLS _CIMPORT_STRCOLS
 
     if "`verbose'" != "" {
         di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
@@ -320,8 +407,14 @@ program define cimport, rclass
             quietly gen str`vlen' `vname' = ""
         }
         else {
-            * Numeric variable - use optimal storage type
-            if `ntype' == 4 {
+            * Numeric variable - use optimal storage type unless asfloat/asdouble specified
+            if "`asfloat'" != "" {
+                quietly gen float `vname' = .
+            }
+            else if "`asdouble'" != "" {
+                quietly gen double `vname' = .
+            }
+            else if `ntype' == 4 {
                 quietly gen byte `vname' = .
             }
             else if `ntype' == 3 {
@@ -360,7 +453,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes'"
+        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows'"
 
     local load_rc = _rc
     if `load_rc' {

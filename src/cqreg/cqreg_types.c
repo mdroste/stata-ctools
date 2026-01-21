@@ -81,15 +81,8 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
         cqreg_ipm_config_init(&ipm->config);
     }
 
-    /* Determine thread count */
-#ifdef _OPENMP
-    ipm->num_threads = omp_get_max_threads();
-    if (ipm->num_threads > CQREG_NUM_THREADS) {
-        ipm->num_threads = CQREG_NUM_THREADS;
-    }
-#else
-    ipm->num_threads = 1;
-#endif
+    /* Determine thread count using unified policy */
+    ipm->num_threads = ctools_get_max_threads();
 
     /* Allocate coefficient vector */
     ipm->beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
@@ -329,15 +322,8 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->G = 0;
     state->quantile = 0.5;
 
-    /* Determine thread count */
-#ifdef _OPENMP
-    state->num_threads = omp_get_max_threads();
-    if (state->num_threads > CQREG_NUM_THREADS) {
-        state->num_threads = CQREG_NUM_THREADS;
-    }
-#else
-    state->num_threads = 1;
-#endif
+    /* Determine thread count using unified policy */
+    state->num_threads = ctools_get_max_threads();
 
     /*
      * Data arrays (y, X) are NOT allocated here.

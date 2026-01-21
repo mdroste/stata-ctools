@@ -43,7 +43,7 @@ program define cexport, rclass
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
         NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit ///
-        MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
+        MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
     if _rc {
         * 'using' not found - parse filename from positional arguments
         * Strategy: find the token that looks like a filename (has a dot/extension)
@@ -286,6 +286,12 @@ program define cexport, rclass
     local opt_crlf = cond("`crlf'" != "", "crlf", "")
     local opt_noparallel = cond("`noparallel'" != "", "noparallel", "")
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * Pass variable names to the plugin via global macro
     global CEXPORT_VARNAMES `varlist'
 
@@ -324,7 +330,7 @@ program define cexport, rclass
     * Plugin expects: filename delimiter [options]
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
+        "cexport `threads_code' `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
 
     local export_rc = _rc
 

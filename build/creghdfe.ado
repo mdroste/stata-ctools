@@ -23,7 +23,7 @@ program define creghdfe, eclass
     timer on 98
 
     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
-        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name)]
+        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name) THReads(integer 0)]
 
     local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
 
@@ -233,6 +233,11 @@ program define creghdfe, eclass
     scalar __creghdfe_has_weights = (`weight_type' > 0)
     scalar __creghdfe_weight_type = `weight_type'
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
 
     * Record setup time
     timer off 98
@@ -267,7 +272,7 @@ program define creghdfe, eclass
 
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
-        "creghdfe full_regression"
+        "creghdfe `threads_code' full_regression"
 
     local reg_rc = _rc
     if `reg_rc' {

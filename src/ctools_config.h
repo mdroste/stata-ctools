@@ -18,12 +18,6 @@
 */
 #define MIN_OBS_PER_THREAD 100000
 
-/*
-    Maximum number of threads for parallel operations.
-    Usually matches CPU core count; can be tuned for hyperthreading.
-*/
-#define NUM_THREADS 12
-
 /* ============================================================================
    Memory alignment
    ============================================================================ */
@@ -128,7 +122,7 @@
 #endif
 
 #define CTOOLS_SAVE_THREAD_INFO(prefix) do { \
-    SF_scal_save(prefix "_threads_max", (double)omp_get_max_threads()); \
+    SF_scal_save(prefix "_threads_max", (double)ctools_get_max_threads()); \
     SF_scal_save(prefix "_openmp_enabled", (double)CTOOLS_OPENMP_ENABLED); \
 } while(0)
 
@@ -197,11 +191,34 @@ static inline void ctools_aligned_free(void *ptr)
 #define CTOOLS_IMPORT_CHUNK_SIZE (8 * 1024 * 1024)
 #define CTOOLS_EXPORT_CHUNK_SIZE 10000
 
-/*
-    Maximum threads for I/O operations.
-    May differ from NUM_THREADS for I/O-bound vs CPU-bound work.
-*/
-#define CTOOLS_IO_MAX_THREADS    12
+/* ============================================================================
+   Unified Thread Management
+
+   All ctools modules use these functions for thread configuration.
+   The thread limit is determined at runtime using omp_get_max_threads(),
+   and can be overridden via the threads() option in Stata commands.
+
+   Thread limit hierarchy:
+   1. User-specified via threads() option -> ctools_set_max_threads()
+   2. omp_get_max_threads() (respects OMP_NUM_THREADS env var)
+   3. Falls back to 1 if OpenMP unavailable
+
+   Usage:
+   - Call ctools_get_max_threads() to get current limit
+   - Call ctools_set_max_threads(n) to override (0 = reset to default)
+   ============================================================================ */
+
+/* Get the current maximum thread count for ctools operations.
+ * Returns the user-set limit if specified, otherwise omp_get_max_threads(). */
+int ctools_get_max_threads(void);
+
+/* Set the maximum thread count for ctools operations.
+ * Pass 0 to reset to default (omp_get_max_threads()).
+ * Pass n > 0 to set a specific limit. */
+void ctools_set_max_threads(int n);
+
+/* Reset thread limit to default (runtime-detected) */
+void ctools_reset_max_threads(void);
 
 /*
     Arena allocator block size for string pooling.

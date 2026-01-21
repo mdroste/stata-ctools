@@ -84,6 +84,19 @@ typedef struct {
     size_t count;
 } CImportColumnCache;
 
+/* Numeric type forcing mode */
+typedef enum {
+    CIMPORT_NUMTYPE_AUTO = 0,   /* Auto-detect optimal type */
+    CIMPORT_NUMTYPE_FLOAT,      /* Force all numerics to float */
+    CIMPORT_NUMTYPE_DOUBLE      /* Force all numerics to double */
+} CImportNumericTypeMode;
+
+/* Empty line handling mode */
+typedef enum {
+    CIMPORT_EMPTYLINES_SKIP = 0,  /* Skip empty lines (default) */
+    CIMPORT_EMPTYLINES_FILL       /* Include empty lines as missing */
+} CImportEmptyLinesMode;
+
 /* Main context structure */
 typedef struct CImportContext {
     char *file_data;
@@ -114,6 +127,20 @@ typedef struct CImportContext {
     double time_parse;
     double time_type_infer;
     double time_cache;
+
+    /* New options */
+    CImportNumericTypeMode numeric_type_mode;  /* asfloat/asdouble */
+    char decimal_separator;      /* decimalseparator (default '.') */
+    char group_separator;        /* groupseparator (default '\0' = none) */
+    CImportEmptyLinesMode emptylines_mode;  /* emptylines handling */
+    int max_quoted_rows;         /* maxquotedrows for type inference */
+
+    /* Column type overrides (NULL = no override) */
+    int *force_numeric_cols;     /* Array of 1-based column indices to force numeric */
+    int num_force_numeric;
+    int *force_string_cols;      /* Array of 1-based column indices to force string */
+    int num_force_string;
+
     /* Warning tracking for unmatched quotes */
     size_t unmatched_quote_rows[CIMPORT_MAX_WARNINGS];
     int num_unmatched_quote_warnings;

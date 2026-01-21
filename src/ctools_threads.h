@@ -112,7 +112,7 @@ void ctools_persistent_pool_destroy(ctools_persistent_pool *pool);
 
 /*
  * Get a global persistent pool (singleton).
- * Lazily initialized with CTOOLS_IO_MAX_THREADS workers.
+ * Lazily initialized with ctools_get_max_threads() workers.
  * Returns NULL on initialization failure.
  */
 ctools_persistent_pool *ctools_get_global_pool(void);

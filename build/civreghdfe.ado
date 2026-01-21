@@ -42,7 +42,8 @@ program define civreghdfe, eclass
         SAVEFirst ///
         SAVEFPrefix(string) ///
         SAVERF ///
-        SAVERFPrefix(string)]
+        SAVERFPrefix(string) ///
+        THReads(integer 0)]
 
     * Clean up any leftover scalars from previous runs to prevent state contamination
     capture scalar drop __civreghdfe_n_orthog
@@ -581,10 +582,16 @@ program define civreghdfe, eclass
         local plugin_vars `plugin_vars' `weight_var'
     }
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * Call the C plugin
     timer clear 99
     timer on 99
-    plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe iv_regression"
+    plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe `threads_code' iv_regression"
     timer off 99
     qui timer list 99
     local t_plugin = r(t99)

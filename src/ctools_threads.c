@@ -16,6 +16,55 @@
 #include "ctools_config.h"
 
 /* ===========================================================================
+   Unified Thread Management Implementation
+
+   Global thread limit that can be set via threads() option in Stata commands.
+   When not set (0), defaults to omp_get_max_threads().
+   =========================================================================== */
+
+/* User-specified thread limit (0 = use default) */
+static int g_ctools_max_threads = 0;
+
+/*
+ * Get the current maximum thread count for ctools operations.
+ * Returns the user-set limit if specified, otherwise omp_get_max_threads().
+ */
+int ctools_get_max_threads(void)
+{
+    if (g_ctools_max_threads > 0) {
+        return g_ctools_max_threads;
+    }
+    /* Default to runtime detection via OpenMP */
+    return omp_get_max_threads();
+}
+
+/*
+ * Set the maximum thread count for ctools operations.
+ * Pass 0 to reset to default (omp_get_max_threads()).
+ * Pass n > 0 to set a specific limit.
+ */
+void ctools_set_max_threads(int n)
+{
+    if (n < 0) n = 0;
+    g_ctools_max_threads = n;
+
+    /* Also set OpenMP thread limit if OpenMP is enabled and n > 0 */
+#ifdef _OPENMP
+    if (n > 0) {
+        omp_set_num_threads(n);
+    }
+#endif
+}
+
+/*
+ * Reset thread limit to default (runtime-detected).
+ */
+void ctools_reset_max_threads(void)
+{
+    g_ctools_max_threads = 0;
+}
+
+/* ===========================================================================
    Persistent Thread Pool Implementation
    =========================================================================== */
 
@@ -320,7 +369,9 @@ ctools_persistent_pool *ctools_get_global_pool(void)
     global_pool_lock_acquire();
 
     if (!g_global_pool_initialized) {
-        if (ctools_persistent_pool_init(&g_global_pool, CTOOLS_IO_MAX_THREADS) == 0) {
+        int num_threads = ctools_get_max_threads();
+        if (num_threads < 1) num_threads = 1;
+        if (ctools_persistent_pool_init(&g_global_pool, (size_t)num_threads) == 0) {
             g_global_pool_initialized = 1;
         }
     }

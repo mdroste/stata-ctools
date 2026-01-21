@@ -16,8 +16,9 @@
 #include <time.h>
 #ifdef _OPENMP
 #include <omp.h>
-#define OMP_NUM_THREADS 8
 #endif
+
+/* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
 
 /* Compiler hints for optimization */
 #if defined(__GNUC__) || defined(__clang__)

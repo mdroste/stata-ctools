@@ -645,7 +645,7 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
 
     /* Decide on parallel sort */
     use_parallel = (data->nobs >= MSD_PARALLEL_HIST_THRESHOLD);
-    num_threads = NUM_THREADS;
+    num_threads = ctools_get_max_threads();
     if (data->nobs < (size_t)MIN_OBS_PER_THREAD * (size_t)num_threads) {
         num_threads = (int)(data->nobs / MIN_OBS_PER_THREAD);
         if (num_threads < 2) {

@@ -40,6 +40,7 @@ program define cbinscatter, eclass sortpreserve
         [Verbose] ///
         [TIMEit] ///
         [METHod(string)] ///
+        [THReads(integer 0)] ///
         /* Graph options */ ///
         [TITLE(string)] ///
         [YTItle(string)] ///
@@ -331,13 +332,19 @@ program define cbinscatter, eclass sortpreserve
         local plugin_varlist `plugin_varlist' `weight_var'
     }
 
+    * Build threads option string
+    local threads_code ""
+    if `threads' > 0 {
+        local threads_code "threads(`threads')"
+    }
+
     * Record start time
     timer clear 99
     timer on 99
 
     * Call the C plugin
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
-        "cbinscatter compute_bins"
+        "cbinscatter `threads_code' compute_bins"
 
     local plugin_rc = _rc
     if `plugin_rc' {
