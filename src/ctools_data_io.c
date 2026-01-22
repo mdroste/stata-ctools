@@ -147,12 +147,65 @@ static inline void stream_doubles_8(double * restrict dst, const double * restri
     _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
     _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
 #elif defined(CTOOLS_ARM64)
-    vst1q_f64(&dst[0], vld1q_f64(&src[0]));
-    vst1q_f64(&dst[2], vld1q_f64(&src[2]));
-    vst1q_f64(&dst[4], vld1q_f64(&src[4]));
-    vst1q_f64(&dst[6], vld1q_f64(&src[6]));
+    /* ARM64: Use STNP (Store Pair Non-temporal) for cache bypass */
+    __asm__ __volatile__(
+        "stnp %d[v0], %d[v1], [%[dst]]\n\t"
+        "stnp %d[v2], %d[v3], [%[dst], #16]\n\t"
+        "stnp %d[v4], %d[v5], [%[dst], #32]\n\t"
+        "stnp %d[v6], %d[v7], [%[dst], #48]"
+        :
+        : [v0] "w" (src[0]), [v1] "w" (src[1]),
+          [v2] "w" (src[2]), [v3] "w" (src[3]),
+          [v4] "w" (src[4]), [v5] "w" (src[5]),
+          [v6] "w" (src[6]), [v7] "w" (src[7]),
+          [dst] "r" (dst)
+        : "memory"
+    );
 #else
     copy_doubles_8(dst, src);
+#endif
+}
+
+/*
+    Non-temporal store for 16 doubles (bypasses cache).
+    Use for large writes that won't be read again soon.
+*/
+static inline void stream_doubles_16(double * restrict dst, const double * restrict src)
+{
+#if defined(CTOOLS_X86) && defined(__SSE2__)
+    _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
+    _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
+    _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
+    _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
+    _mm_stream_pd(&dst[8], _mm_loadu_pd(&src[8]));
+    _mm_stream_pd(&dst[10], _mm_loadu_pd(&src[10]));
+    _mm_stream_pd(&dst[12], _mm_loadu_pd(&src[12]));
+    _mm_stream_pd(&dst[14], _mm_loadu_pd(&src[14]));
+#elif defined(CTOOLS_ARM64)
+    /* ARM64: Use STNP (Store Pair Non-temporal) for cache bypass */
+    __asm__ __volatile__(
+        "stnp %d[v0], %d[v1], [%[dst]]\n\t"
+        "stnp %d[v2], %d[v3], [%[dst], #16]\n\t"
+        "stnp %d[v4], %d[v5], [%[dst], #32]\n\t"
+        "stnp %d[v6], %d[v7], [%[dst], #48]\n\t"
+        "stnp %d[v8], %d[v9], [%[dst], #64]\n\t"
+        "stnp %d[v10], %d[v11], [%[dst], #80]\n\t"
+        "stnp %d[v12], %d[v13], [%[dst], #96]\n\t"
+        "stnp %d[v14], %d[v15], [%[dst], #112]"
+        :
+        : [v0] "w" (src[0]), [v1] "w" (src[1]),
+          [v2] "w" (src[2]), [v3] "w" (src[3]),
+          [v4] "w" (src[4]), [v5] "w" (src[5]),
+          [v6] "w" (src[6]), [v7] "w" (src[7]),
+          [v8] "w" (src[8]), [v9] "w" (src[9]),
+          [v10] "w" (src[10]), [v11] "w" (src[11]),
+          [v12] "w" (src[12]), [v13] "w" (src[13]),
+          [v14] "w" (src[14]), [v15] "w" (src[15]),
+          [dst] "r" (dst)
+        : "memory"
+    );
+#else
+    copy_doubles_16(dst, src);
 #endif
 }
 
@@ -236,6 +289,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
         /* Calculate loop bounds */
         size_t i_end_16 = nobs - (nobs % 16);
+
         size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
 
         /* Phase 1: Main loop with prefetching (bulk of iterations) */

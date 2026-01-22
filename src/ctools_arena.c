@@ -94,6 +94,70 @@ void *ctools_arena_alloc(ctools_arena *arena, size_t size)
     return ptr;
 }
 
+void *ctools_arena_alloc_aligned(ctools_arena *arena, size_t size, size_t alignment)
+{
+    if (arena == NULL || size == 0) {
+        return NULL;
+    }
+
+    /* Alignment must be power of 2 and at least 8 */
+    if (alignment < 8) alignment = 8;
+    if ((alignment & (alignment - 1)) != 0) {
+        return NULL;  /* Not a power of 2 */
+    }
+
+    /* Round size up to alignment */
+    size = (size + alignment - 1) & ~(alignment - 1);
+
+    /* Try current block first */
+    if (arena->current != NULL) {
+        /* Calculate aligned position within current block */
+        char *base = arena->current->data + arena->current->used;
+        size_t offset = ((size_t)base) & (alignment - 1);
+        size_t padding = (offset == 0) ? 0 : (alignment - offset);
+        size_t total_needed = padding + size;
+
+        if (arena->current->used + total_needed <= arena->current->capacity) {
+            void *ptr = base + padding;
+            arena->current->used += total_needed;
+            arena->total_allocated += total_needed;
+            return ptr;
+        }
+    }
+
+    /* Need a new block - ensure block is large enough and data[] starts aligned
+     * Since we malloc the block, data[] may not be aligned. Add padding. */
+    size_t max_padding = alignment - 1;  /* Worst case alignment padding */
+    size_t min_capacity = size + max_padding;
+    size_t new_capacity = arena->block_size;
+    if (min_capacity > new_capacity) {
+        new_capacity = min_capacity;
+    }
+
+    CToolsArenaBlock *new_block = ctools_arena_new_block(new_capacity);
+    if (new_block == NULL) {
+        return NULL;
+    }
+
+    /* Link to chain */
+    if (arena->first == NULL) {
+        arena->first = new_block;
+    } else if (arena->current != NULL) {
+        arena->current->next = new_block;
+    }
+    arena->current = new_block;
+
+    /* Calculate aligned position in new block */
+    char *base = new_block->data;
+    size_t offset = ((size_t)base) & (alignment - 1);
+    size_t padding = (offset == 0) ? 0 : (alignment - offset);
+
+    void *ptr = base + padding;
+    new_block->used = padding + size;
+    arena->total_allocated += padding + size;
+    return ptr;
+}
+
 char *ctools_arena_strdup(ctools_arena *arena, const char *s)
 {
     if (s == NULL) return NULL;

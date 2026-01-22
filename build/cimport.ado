@@ -296,10 +296,10 @@ program define cimport, rclass
 
     * Pass numericcols/stringcols via global macros (space-separated column numbers)
     if "`numcols_str'" != "" {
-        global _CIMPORT_NUMCOLS `numcols_str'
+        global CIMPORT_NUMCOLS "`numcols_str'"
     }
     if "`strcols_str'" != "" {
-        global _CIMPORT_STRCOLS `strcols_str'
+        global CIMPORT_STRCOLS "`strcols_str'"
     }
 
     * Build threads option string
@@ -343,7 +343,7 @@ program define cimport, rclass
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
-    capture macro drop _CIMPORT_NUMCOLS _CIMPORT_STRCOLS
+    capture macro drop CIMPORT_NUMCOLS CIMPORT_STRCOLS
 
     if "`verbose'" != "" {
         di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
@@ -462,6 +462,24 @@ program define cimport, rclass
     }
 
     timer off 13
+
+    * Apply rowrange filtering (post-import)
+    if `startrow' > 0 | `endrow' > 0 {
+        local first_keep = max(1, `startrow')
+        if `endrow' > 0 {
+            local last_keep = min(`endrow', _N)
+        }
+        else {
+            local last_keep = _N
+        }
+        * Drop rows outside range (drop end first to preserve indices)
+        if `last_keep' < _N {
+            quietly drop in `=`last_keep'+1'/l
+        }
+        if `first_keep' > 1 {
+            quietly drop in 1/`=`first_keep'-1'
+        }
+    }
 
     timer off 99
     quietly timer list 99

@@ -22,6 +22,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
+#include "ctools_arena.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -518,12 +519,22 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
                                             uint64_t * IPS4O_RESTRICT keys,
                                             size_t nobs)
 {
+    ctools_arena arena;
+    stata_retcode rc = STATA_OK;
+    int t;
+
     int num_threads = omp_get_max_threads();
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
-    /* Allocate global temp buffer */
-    perm_idx_t *temp = (perm_idx_t *)ctools_safe_aligned_alloc2(64, nobs, sizeof(perm_idx_t));
-    if (!temp) return STATA_ERR_MEMORY;
+    /* Initialize arena - estimate total memory needed:
+     * temp (nobs * 4) + tree (512 * 8) + counts/offsets (~16KB) + bucket_temps
+     * Use 2MB blocks to minimize block allocations */
+    ctools_arena_init(&arena, 2 * 1024 * 1024);
+
+    /* Allocate global temp buffer (64-byte aligned for SIMD) */
+    perm_idx_t *temp = (perm_idx_t *)ctools_arena_alloc_aligned(&arena,
+                                        nobs * sizeof(perm_idx_t), 64);
+    if (!temp) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     /* Use thread count as bucket count for top-level partition */
     int log_buckets = 0;
@@ -535,8 +546,9 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     size_t num_samples = IPS4O_OVERSAMPLE_FACTOR * num_buckets;
     if (num_samples > nobs) num_samples = nobs;
 
-    uint64_t *samples = (uint64_t *)malloc(num_samples * sizeof(uint64_t));
-    if (!samples) { ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    uint64_t *samples = (uint64_t *)ctools_arena_alloc(&arena,
+                                        num_samples * sizeof(uint64_t));
+    if (!samples) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     size_t step = nobs / num_samples;
     if (step == 0) step = 1;
@@ -550,33 +562,34 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     qsort(samples, num_samples, sizeof(uint64_t), compare_uint64);
 
     /* Select splitters */
-    uint64_t *splitters = (uint64_t *)malloc((num_buckets - 1) * sizeof(uint64_t));
-    if (!splitters) { free(samples); ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    uint64_t *splitters = (uint64_t *)ctools_arena_alloc(&arena,
+                                        (num_buckets - 1) * sizeof(uint64_t));
+    if (!splitters) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     size_t splitter_step = num_samples / num_buckets;
     for (int i = 0; i < num_buckets - 1; i++) {
         splitters[i] = samples[(i + 1) * splitter_step];
     }
-    free(samples);
+    /* samples no longer needed but stays in arena until cleanup */
 
-    /* Build tree */
-    uint64_t *tree = (uint64_t *)ctools_aligned_alloc(64, 2 * num_buckets * sizeof(uint64_t));
-    if (!tree) { free(splitters); ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    /* Build tree (64-byte aligned for cache efficiency) */
+    uint64_t *tree = (uint64_t *)ctools_arena_alloc_aligned(&arena,
+                                        2 * num_buckets * sizeof(uint64_t), 64);
+    if (!tree) { rc = STATA_ERR_MEMORY; goto cleanup; }
     memset(tree, 0, 2 * num_buckets * sizeof(uint64_t));
     build_tree(tree, splitters, 1, 0, num_buckets - 2);
-    free(splitters);
+    /* splitters no longer needed but stays in arena until cleanup */
 
     /* Allocate per-thread count arrays */
-    size_t **thread_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
-    if (!thread_counts) { ctools_aligned_free(tree); ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    size_t **thread_counts = (size_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(size_t *));
+    if (!thread_counts) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
-    for (int t = 0; t < num_threads; t++) {
-        thread_counts[t] = (size_t *)calloc(num_buckets, sizeof(size_t));
-        if (!thread_counts[t]) {
-            for (int j = 0; j < t; j++) free(thread_counts[j]);
-            free(thread_counts); ctools_aligned_free(tree); ctools_aligned_free(temp);
-            return STATA_ERR_MEMORY;
-        }
+    for (t = 0; t < num_threads; t++) {
+        thread_counts[t] = (size_t *)ctools_arena_alloc(&arena,
+                                        num_buckets * sizeof(size_t));
+        if (!thread_counts[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
+        memset(thread_counts[t], 0, num_buckets * sizeof(size_t));
     }
 
     /* Parallel counting */
@@ -599,27 +612,21 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     }
 
     /* Merge counts */
-    size_t *bucket_sizes = (size_t *)calloc(num_buckets, sizeof(size_t));
-    if (!bucket_sizes) {
-        for (int t = 0; t < num_threads; t++) free(thread_counts[t]);
-        free(thread_counts); ctools_aligned_free(tree); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    size_t *bucket_sizes = (size_t *)ctools_arena_alloc(&arena,
+                                        num_buckets * sizeof(size_t));
+    if (!bucket_sizes) { rc = STATA_ERR_MEMORY; goto cleanup; }
+    memset(bucket_sizes, 0, num_buckets * sizeof(size_t));
 
     for (int b = 0; b < num_buckets; b++) {
-        for (int t = 0; t < num_threads; t++) {
+        for (t = 0; t < num_threads; t++) {
             bucket_sizes[b] += thread_counts[t][b];
         }
     }
 
     /* Compute offsets */
-    size_t *bucket_offsets = (size_t *)malloc((num_buckets + 1) * sizeof(size_t));
-    if (!bucket_offsets) {
-        free(bucket_sizes);
-        for (int t = 0; t < num_threads; t++) free(thread_counts[t]);
-        free(thread_counts); ctools_aligned_free(tree); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    size_t *bucket_offsets = (size_t *)ctools_arena_alloc(&arena,
+                                        (num_buckets + 1) * sizeof(size_t));
+    if (!bucket_offsets) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     bucket_offsets[0] = 0;
     for (int b = 1; b <= num_buckets; b++) {
@@ -627,28 +634,19 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     }
 
     /* Compute per-thread write positions */
-    size_t **thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
-    if (!thread_offsets) {
-        free(bucket_offsets); free(bucket_sizes);
-        for (int t = 0; t < num_threads; t++) free(thread_counts[t]);
-        free(thread_counts); ctools_aligned_free(tree); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    size_t **thread_offsets = (size_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(size_t *));
+    if (!thread_offsets) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
-    for (int t = 0; t < num_threads; t++) {
-        thread_offsets[t] = (size_t *)malloc(num_buckets * sizeof(size_t));
-        if (!thread_offsets[t]) {
-            for (int j = 0; j < t; j++) free(thread_offsets[j]);
-            free(thread_offsets); free(bucket_offsets); free(bucket_sizes);
-            for (int j = 0; j < num_threads; j++) free(thread_counts[j]);
-            free(thread_counts); ctools_aligned_free(tree); ctools_aligned_free(temp);
-            return STATA_ERR_MEMORY;
-        }
+    for (t = 0; t < num_threads; t++) {
+        thread_offsets[t] = (size_t *)ctools_arena_alloc(&arena,
+                                        num_buckets * sizeof(size_t));
+        if (!thread_offsets[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
     }
 
     for (int b = 0; b < num_buckets; b++) {
         size_t offset = bucket_offsets[b];
-        for (int t = 0; t < num_threads; t++) {
+        for (t = 0; t < num_threads; t++) {
             thread_offsets[t][b] = offset;
             offset += thread_counts[t][b];
         }
@@ -679,34 +677,20 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     /* Copy back */
     memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
-    /* Cleanup partition resources */
-    ctools_aligned_free(tree);
-    for (int t = 0; t < num_threads; t++) {
-        free(thread_counts[t]);
-        free(thread_offsets[t]);
-    }
-    free(thread_counts);
-    free(thread_offsets);
-
     /* Pre-allocate per-thread temp buffers for bucket sorting */
     size_t max_bucket = 0;
     for (int b = 0; b < num_buckets; b++) {
         if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
     }
 
-    perm_idx_t **bucket_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
-    if (!bucket_temps) {
-        free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    perm_idx_t **bucket_temps = (perm_idx_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(perm_idx_t *));
+    if (!bucket_temps) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
-    for (int t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (perm_idx_t *)malloc(max_bucket * sizeof(perm_idx_t));
-        if (!bucket_temps[t]) {
-            for (int j = 0; j < t; j++) free(bucket_temps[j]);
-            free(bucket_temps); free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-            return STATA_ERR_MEMORY;
-        }
+    for (t = 0; t < num_threads; t++) {
+        bucket_temps[t] = (perm_idx_t *)ctools_arena_alloc(&arena,
+                                        max_bucket * sizeof(perm_idx_t));
+        if (!bucket_temps[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
     }
 
     /* Parallel bucket sorting using dynamic scheduling */
@@ -719,27 +703,28 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
         }
     }
 
-    /* Cleanup */
-    for (int t = 0; t < num_threads; t++) {
-        free(bucket_temps[t]);
-    }
-    free(bucket_temps);
-    free(bucket_sizes);
-    free(bucket_offsets);
-    ctools_aligned_free(temp);
-
-    return STATA_OK;
+cleanup:
+    ctools_arena_free(&arena);
+    return rc;
 }
 
 static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
                                            char ** IPS4O_RESTRICT strings,
                                            size_t nobs, size_t max_len)
 {
+    ctools_arena arena;
+    stata_retcode rc = STATA_OK;
+    int t;
+
     int num_threads = omp_get_max_threads();
     if (num_threads > 16) num_threads = 16;
 
-    perm_idx_t *temp = (perm_idx_t *)ctools_safe_aligned_alloc2(64, nobs, sizeof(perm_idx_t));
-    if (!temp) return STATA_ERR_MEMORY;
+    /* Initialize arena with 2MB blocks */
+    ctools_arena_init(&arena, 2 * 1024 * 1024);
+
+    perm_idx_t *temp = (perm_idx_t *)ctools_arena_alloc_aligned(&arena,
+                                        nobs * sizeof(perm_idx_t), 64);
+    if (!temp) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     int log_buckets = 0;
     while ((1 << log_buckets) < num_threads) log_buckets++;
@@ -749,8 +734,9 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     size_t num_samples = IPS4O_OVERSAMPLE_FACTOR * num_buckets;
     if (num_samples > nobs) num_samples = nobs;
 
-    char **samples = (char **)malloc(num_samples * sizeof(char *));
-    if (!samples) { ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    char **samples = (char **)ctools_arena_alloc(&arena,
+                                        num_samples * sizeof(char *));
+    if (!samples) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     size_t step = nobs / num_samples;
     if (step == 0) step = 1;
@@ -759,27 +745,30 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     }
     qsort(samples, num_samples, sizeof(char *), compare_string_ptr);
 
-    char **splitters = (char **)malloc((num_buckets - 1) * sizeof(char *));
-    if (!splitters) { free(samples); ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    char **splitters = (char **)ctools_arena_alloc(&arena,
+                                        (num_buckets - 1) * sizeof(char *));
+    if (!splitters) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
     size_t splitter_step = num_samples / num_buckets;
     for (int i = 0; i < num_buckets - 1; i++) {
         splitters[i] = samples[(i + 1) * splitter_step];
     }
-    free(samples);
+    /* samples no longer needed but stays in arena */
 
-    char **tree = (char **)calloc(2 * num_buckets, sizeof(char *));
-    if (!tree) { free(splitters); ctools_aligned_free(temp); return STATA_ERR_MEMORY; }
+    char **tree = (char **)ctools_arena_alloc(&arena,
+                                        2 * num_buckets * sizeof(char *));
+    if (!tree) { rc = STATA_ERR_MEMORY; goto cleanup; }
+    memset(tree, 0, 2 * num_buckets * sizeof(char *));
     build_tree_string(tree, splitters, 1, 0, num_buckets - 2);
-    free(splitters);
+    /* splitters no longer needed but stays in arena */
 
     /* Serial partition for strings (strcmp is expensive, parallelism less beneficial) */
-    size_t *bucket_sizes = (size_t *)calloc(num_buckets, sizeof(size_t));
-    size_t *bucket_offsets = (size_t *)malloc((num_buckets + 1) * sizeof(size_t));
-    if (!bucket_sizes || !bucket_offsets) {
-        free(tree); free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    size_t *bucket_sizes = (size_t *)ctools_arena_alloc(&arena,
+                                        num_buckets * sizeof(size_t));
+    size_t *bucket_offsets = (size_t *)ctools_arena_alloc(&arena,
+                                        (num_buckets + 1) * sizeof(size_t));
+    if (!bucket_sizes || !bucket_offsets) { rc = STATA_ERR_MEMORY; goto cleanup; }
+    memset(bucket_sizes, 0, num_buckets * sizeof(size_t));
 
     for (size_t i = 0; i < nobs; i++) {
         bucket_sizes[ips4o_classify_string(strings[order[i]], tree, log_buckets, num_buckets)]++;
@@ -790,11 +779,9 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
         bucket_offsets[b] = bucket_offsets[b - 1] + bucket_sizes[b - 1];
     }
 
-    size_t *write_pos = (size_t *)malloc(num_buckets * sizeof(size_t));
-    if (!write_pos) {
-        free(tree); free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    size_t *write_pos = (size_t *)ctools_arena_alloc(&arena,
+                                        num_buckets * sizeof(size_t));
+    if (!write_pos) { rc = STATA_ERR_MEMORY; goto cleanup; }
     memcpy(write_pos, bucket_offsets, num_buckets * sizeof(size_t));
 
     for (size_t i = 0; i < nobs; i++) {
@@ -803,28 +790,20 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     }
     memcpy(order, temp, nobs * sizeof(perm_idx_t));
 
-    free(tree);
-    free(write_pos);
-
     /* Pre-allocate per-thread temp buffers */
     size_t max_bucket = 0;
     for (int b = 0; b < num_buckets; b++) {
         if (bucket_sizes[b] > max_bucket) max_bucket = bucket_sizes[b];
     }
 
-    perm_idx_t **bucket_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
-    if (!bucket_temps) {
-        free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-        return STATA_ERR_MEMORY;
-    }
+    perm_idx_t **bucket_temps = (perm_idx_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(perm_idx_t *));
+    if (!bucket_temps) { rc = STATA_ERR_MEMORY; goto cleanup; }
 
-    for (int t = 0; t < num_threads; t++) {
-        bucket_temps[t] = (perm_idx_t *)malloc(max_bucket * sizeof(perm_idx_t));
-        if (!bucket_temps[t]) {
-            for (int j = 0; j < t; j++) free(bucket_temps[j]);
-            free(bucket_temps); free(bucket_sizes); free(bucket_offsets); ctools_aligned_free(temp);
-            return STATA_ERR_MEMORY;
-        }
+    for (t = 0; t < num_threads; t++) {
+        bucket_temps[t] = (perm_idx_t *)ctools_arena_alloc(&arena,
+                                        max_bucket * sizeof(perm_idx_t));
+        if (!bucket_temps[t]) { rc = STATA_ERR_MEMORY; goto cleanup; }
     }
 
     /* Parallel bucket sorting */
@@ -837,15 +816,9 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
         }
     }
 
-    for (int t = 0; t < num_threads; t++) {
-        free(bucket_temps[t]);
-    }
-    free(bucket_temps);
-    free(bucket_sizes);
-    free(bucket_offsets);
-    ctools_aligned_free(temp);
-
-    return STATA_OK;
+cleanup:
+    ctools_arena_free(&arena);
+    return rc;
 }
 
 #endif /* _OPENMP */

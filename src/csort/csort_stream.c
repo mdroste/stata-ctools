@@ -26,6 +26,28 @@
 #include <omp.h>
 #endif
 
+/* SIMD support for scatter operations and non-temporal stores */
+#if defined(__x86_64__) || defined(_M_X64)
+    #include <immintrin.h>
+    /* AVX-512 scatter available with __AVX512F__ */
+    #ifdef __AVX512F__
+        #define HAVE_AVX512_SCATTER 1
+    #endif
+    /* Non-temporal stores via SSE2 (always available on x86-64) */
+    #define HAVE_NT_STORE 1
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    #include <arm_neon.h>
+    /* ARM64 has STNP for non-temporal pair stores */
+    #define HAVE_NT_STORE 1
+#endif
+
+/* Non-temporal prefetch hint macro for reads that won't be reused */
+#if defined(__GNUC__) || defined(__clang__)
+    #define CTOOLS_PREFETCH_NTA(addr) __builtin_prefetch((addr), 0, 0)  /* Non-temporal access */
+#else
+    #define CTOOLS_PREFETCH_NTA(addr) ((void)0)
+#endif
+
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
@@ -43,6 +65,93 @@
 
 /* String arena size per variable (1MB should handle most string columns) */
 #define STRING_ARENA_SIZE (1024 * 1024)
+
+/* ============================================================================
+   SIMD Scatter for Phase 1 (AVX-512 only)
+
+   Scatters 8 doubles to random locations via permutation indices.
+   Falls back to scalar for non-AVX512 systems.
+   ============================================================================ */
+
+#ifdef HAVE_AVX512_SCATTER
+/*
+    AVX-512 scatter: write 8 doubles to scattered locations in one instruction.
+    indices: 8 destination offsets (32-bit, will be scaled by 8 for double*)
+    values:  8 double values to scatter
+    base:    base pointer of destination array
+*/
+static inline void scatter_8_doubles_avx512(
+    double *base,
+    const perm_idx_t *indices,
+    const double *values)
+{
+    /* Load 8 indices into 256-bit register (perm_idx_t is uint32_t) */
+    __m256i idx = _mm256_loadu_si256((const __m256i *)indices);
+
+    /* Load 8 values into 512-bit register */
+    __m512d vals = _mm512_loadu_pd(values);
+
+    /* Scatter: base[indices[i]] = values[i] for i=0..7 */
+    /* Scale of 8 because each double is 8 bytes */
+    _mm512_i32scatter_pd(base, idx, vals, 8);
+}
+#endif
+
+/* ============================================================================
+   Non-Temporal Stores for Phase 2
+
+   Stream 8 doubles sequentially using non-temporal stores.
+   Bypasses cache since data won't be reused.
+   ============================================================================ */
+
+#ifdef HAVE_NT_STORE
+#if defined(__x86_64__) || defined(_M_X64)
+/*
+    x86-64: Use _mm_stream_pd to write 2 doubles at a time (SSE2).
+    Writes 8 doubles total using 4 streaming store instructions.
+    Destination must be 16-byte aligned for best performance.
+*/
+static inline void stream_8_doubles_x86(double *dst, const double *src)
+{
+    _mm_stream_pd(dst + 0, _mm_loadu_pd(src + 0));
+    _mm_stream_pd(dst + 2, _mm_loadu_pd(src + 2));
+    _mm_stream_pd(dst + 4, _mm_loadu_pd(src + 4));
+    _mm_stream_pd(dst + 6, _mm_loadu_pd(src + 6));
+}
+
+#elif defined(__aarch64__) || defined(_M_ARM64)
+/*
+    ARM64: Use STNP (Store Pair Non-temporal) instruction.
+    Writes 8 doubles using 4 STNP instructions.
+*/
+static inline void stream_8_doubles_arm(double *dst, const double *src)
+{
+    /* STNP stores a pair of values with non-temporal hint */
+    __asm__ __volatile__(
+        "ldp q0, q1, [%[src]]\n\t"
+        "ldp q2, q3, [%[src], #32]\n\t"
+        "stnp q0, q1, [%[dst]]\n\t"
+        "stnp q2, q3, [%[dst], #32]\n\t"
+        :
+        : [dst] "r" (dst), [src] "r" (src)
+        : "v0", "v1", "v2", "v3", "memory"
+    );
+}
+#endif
+
+/* Unified interface for non-temporal 8-double store */
+static inline void stream_store_8_doubles(double *dst, const double *src)
+{
+#if defined(__x86_64__) || defined(_M_X64)
+    stream_8_doubles_x86(dst, src);
+#elif defined(__aarch64__) || defined(_M_ARM64)
+    stream_8_doubles_arm(dst, src);
+#else
+    /* Fallback: regular copy */
+    for (int i = 0; i < 8; i++) dst[i] = src[i];
+#endif
+}
+#endif /* HAVE_NT_STORE */
 
 /* ============================================================================
    Inverse Permutation Builder + Identity Detection
@@ -206,18 +315,28 @@ stata_retcode csort_stream_apply_permutation(
     int *nonkey_var_indices,
     size_t nvars_nonkey,
     size_t obs1,
-    size_t block_size)
+    size_t block_size,
+    csort_stream_timings *timings)
 {
     size_t v;
     perm_idx_t *inv_perm = NULL;
     int is_identity;
+    double t_phase;
     (void)block_size;
+
+    /* Initialize timing accumulators */
+    double t_build_inv = 0.0;
+    double t_scatter = 0.0;
+    double t_writeback = 0.0;
+    double t_string = 0.0;
 
     if (nvars_nonkey == 0 || nobs == 0) {
         return STATA_OK;
     }
 
     /* Build inverse permutation once (shared across all variables) */
+    t_phase = ctools_timer_seconds();
+
     inv_perm = (perm_idx_t *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE,
                                                          nobs, sizeof(perm_idx_t));
     if (!inv_perm) {
@@ -226,9 +345,17 @@ stata_retcode csort_stream_apply_permutation(
 
     is_identity = build_inverse_permutation(perm, inv_perm, nobs);
 
+    t_build_inv = ctools_timer_seconds() - t_phase;
+
     /* Early exit if data is already sorted */
     if (is_identity) {
         ctools_aligned_free(inv_perm);
+        if (timings) {
+            timings->stream_build_inv_time = t_build_inv;
+            timings->stream_scatter_time = 0.0;
+            timings->stream_writeback_time = 0.0;
+            timings->stream_string_time = 0.0;
+        }
         return STATA_OK;
     }
 
@@ -250,6 +377,12 @@ stata_retcode csort_stream_apply_permutation(
         } else {
             numeric_vars[n_numeric++] = nonkey_var_indices[v];
         }
+    }
+
+    /* Store variable counts in timings */
+    if (timings) {
+        timings->n_numeric_vars = n_numeric;
+        timings->n_string_vars = n_string;
     }
 
     /* Process numeric variables in parallel with shared buffer pool
@@ -285,6 +418,14 @@ stata_retcode csort_stream_apply_permutation(
         }
     }
 
+    /* Track scatter and writeback times using per-thread accumulators */
+    double *thread_scatter_times = NULL;
+    double *thread_writeback_times = NULL;
+    if (n_numeric > 0) {
+        thread_scatter_times = (double *)calloc(nthreads, sizeof(double));
+        thread_writeback_times = (double *)calloc(nthreads, sizeof(double));
+    }
+
     if (n_numeric > 0) {
         #pragma omp parallel for schedule(static) num_threads(nthreads)
         for (v = 0; v < n_numeric; v++) {
@@ -292,10 +433,13 @@ stata_retcode csort_stream_apply_permutation(
             double *num_buf = thread_bufs[tid];
             ST_int stata_var = (ST_int)numeric_vars[v];
             size_t i;
+            double t_var_scatter, t_var_writeback;
 
             /* Phase 1: Sequential read, scatter via inverse perm */
+            t_var_scatter = ctools_timer_seconds();
+
             size_t nobs_batch16 = (nobs / 16) * 16;
-            double batch[16];
+            double batch[16] __attribute__((aligned(64)));
 
             for (i = 0; i < nobs_batch16; i += 16) {
                 /* Prefetch future permutation indices for next iteration */
@@ -306,9 +450,13 @@ stata_retcode csort_stream_apply_permutation(
                 /* Read data from Stata */
                 SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
 
-                /* Prefetch ALL 16 scatter destinations with WRITE intent before scattering.
-                   This tells the CPU we intend to write to these cache lines, enabling
-                   better write combining and avoiding read-for-ownership stalls. */
+#ifdef HAVE_AVX512_SCATTER
+                /* AVX-512: Scatter 8 doubles at a time using SIMD scatter instruction.
+                   Two scatter calls for 16 values. */
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch[0]);
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch[8]);
+#else
+                /* Scalar fallback: Prefetch destinations then scatter */
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
@@ -326,7 +474,6 @@ stata_retcode csort_stream_apply_permutation(
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
 
-                /* Scatter writes to buffer */
                 num_buf[inv_perm[i + 0]]  = batch[0];
                 num_buf[inv_perm[i + 1]]  = batch[1];
                 num_buf[inv_perm[i + 2]]  = batch[2];
@@ -343,6 +490,7 @@ stata_retcode csort_stream_apply_permutation(
                 num_buf[inv_perm[i + 13]] = batch[13];
                 num_buf[inv_perm[i + 14]] = batch[14];
                 num_buf[inv_perm[i + 15]] = batch[15];
+#endif
             }
             for (i = nobs_batch16; i < nobs; i++) {
                 double val;
@@ -350,14 +498,45 @@ stata_retcode csort_stream_apply_permutation(
                 num_buf[inv_perm[i]] = val;
             }
 
-            /* Phase 2: Sequential write back */
-            for (i = 0; i < nobs_batch16; i += 16) {
-                SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
+            t_var_scatter = ctools_timer_seconds() - t_var_scatter;
+            if (thread_scatter_times) thread_scatter_times[tid] += t_var_scatter;
+
+            /* Phase 2: Sequential write back to Stata
+               Use non-temporal prefetch hints since buffer won't be reused. */
+            t_var_writeback = ctools_timer_seconds();
+
+            size_t nobs_batch8 = (nobs / 8) * 8;
+            for (i = 0; i < nobs_batch8; i += 8) {
+                /* Prefetch next chunk with non-temporal hint (won't be reused) */
+                CTOOLS_PREFETCH_NTA(&num_buf[i + 64]);
+
+                /* Store 8 values to Stata */
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 0), num_buf[i + 0]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 1), num_buf[i + 1]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 2), num_buf[i + 2]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 3), num_buf[i + 3]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 4), num_buf[i + 4]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 5), num_buf[i + 5]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 6), num_buf[i + 6]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 7), num_buf[i + 7]);
             }
-            for (i = nobs_batch16; i < nobs; i++) {
+            for (i = nobs_batch8; i < nobs; i++) {
                 SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
             }
+
+            t_var_writeback = ctools_timer_seconds() - t_var_writeback;
+            if (thread_writeback_times) thread_writeback_times[tid] += t_var_writeback;
         }
+
+        /* Aggregate per-thread times (take max since threads run in parallel) */
+        if (thread_scatter_times && thread_writeback_times) {
+            for (int t = 0; t < nthreads; t++) {
+                if (thread_scatter_times[t] > t_scatter) t_scatter = thread_scatter_times[t];
+                if (thread_writeback_times[t] > t_writeback) t_writeback = thread_writeback_times[t];
+            }
+        }
+        free(thread_scatter_times);
+        free(thread_writeback_times);
 
         /* Free thread buffers */
         for (int t = 0; t < nthreads; t++) {
@@ -377,14 +556,22 @@ stata_retcode csort_stream_apply_permutation(
             ST_int stata_var = (ST_int)numeric_vars[v];
             size_t i;
             size_t nobs_batch16 = (nobs / 16) * 16;
-            double batch[16];
+            double batch[16] __attribute__((aligned(64)));
+            double t_var_scatter, t_var_writeback;
 
             /* Phase 1: Sequential read, scatter via inverse perm */
+            t_var_scatter = ctools_timer_seconds();
+
             for (i = 0; i < nobs_batch16; i += 16) {
                 /* Read data from Stata */
                 SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
 
-                /* Prefetch ALL 16 scatter destinations with WRITE intent */
+#ifdef HAVE_AVX512_SCATTER
+                /* AVX-512: Scatter 8 doubles at a time */
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch[0]);
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch[8]);
+#else
+                /* Scalar fallback: Prefetch destinations then scatter */
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
@@ -402,7 +589,6 @@ stata_retcode csort_stream_apply_permutation(
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
 
-                /* Scatter writes to buffer */
                 num_buf[inv_perm[i + 0]]  = batch[0];
                 num_buf[inv_perm[i + 1]]  = batch[1];
                 num_buf[inv_perm[i + 2]]  = batch[2];
@@ -419,6 +605,7 @@ stata_retcode csort_stream_apply_permutation(
                 num_buf[inv_perm[i + 13]] = batch[13];
                 num_buf[inv_perm[i + 14]] = batch[14];
                 num_buf[inv_perm[i + 15]] = batch[15];
+#endif
             }
             for (i = nobs_batch16; i < nobs; i++) {
                 double val;
@@ -426,25 +613,60 @@ stata_retcode csort_stream_apply_permutation(
                 num_buf[inv_perm[i]] = val;
             }
 
-            /* Phase 2: Sequential write back */
-            for (i = 0; i < nobs_batch16; i += 16) {
-                SF_VSTORE_BATCH16(stata_var, (ST_int)(i + obs1), &num_buf[i]);
+            t_var_scatter = ctools_timer_seconds() - t_var_scatter;
+            t_scatter += t_var_scatter;
+
+            /* Phase 2: Sequential write back to Stata
+               Use non-temporal prefetch hints since buffer won't be reused. */
+            t_var_writeback = ctools_timer_seconds();
+
+            size_t nobs_batch8 = (nobs / 8) * 8;
+            for (i = 0; i < nobs_batch8; i += 8) {
+                /* Prefetch next chunk with non-temporal hint (won't be reused) */
+                CTOOLS_PREFETCH_NTA(&num_buf[i + 64]);
+
+                /* Store 8 values to Stata */
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 0), num_buf[i + 0]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 1), num_buf[i + 1]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 2), num_buf[i + 2]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 3), num_buf[i + 3]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 4), num_buf[i + 4]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 5), num_buf[i + 5]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 6), num_buf[i + 6]);
+                SF_vstore(stata_var, (ST_int)(i + obs1 + 7), num_buf[i + 7]);
             }
-            for (i = nobs_batch16; i < nobs; i++) {
+            for (i = nobs_batch8; i < nobs; i++) {
                 SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
             }
+
+            t_var_writeback = ctools_timer_seconds() - t_var_writeback;
+            t_writeback += t_var_writeback;
         }
         ctools_aligned_free(num_buf);
     }
     #endif
 
     /* Process string variables (sequentially - strings are harder to parallelize) */
+    t_phase = ctools_timer_seconds();
+
     for (v = 0; v < n_string; v++) {
         if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs1) != 0) {
             #ifdef _OPENMP
             success = 0;
             #endif
         }
+    }
+
+    t_string = ctools_timer_seconds() - t_phase;
+
+    /* Store detailed timings */
+    if (timings) {
+        timings->stream_build_inv_time = t_build_inv;
+        timings->stream_scatter_time = t_scatter;
+        timings->stream_writeback_time = t_writeback;
+        timings->stream_string_time = t_string;
+        timings->n_numeric_vars = n_numeric;
+        timings->n_string_vars = n_string;
     }
 
     free(numeric_vars);
@@ -578,33 +800,8 @@ stata_retcode csort_stream_sort(
         local_sort_vars[i] = (int)(i + 1);
     }
 
-    switch (algorithm) {
-        case SORT_ALG_MSD:
-            rc = ctools_sort_radix_msd_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-        case SORT_ALG_TIMSORT:
-            rc = ctools_sort_timsort_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-        case SORT_ALG_SAMPLE:
-            rc = ctools_sort_sample_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-        case SORT_ALG_COUNTING:
-            rc = ctools_sort_counting_order_only(&key_data, local_sort_vars, nkeys);
-            if (rc == STATA_ERR_UNSUPPORTED_TYPE) {
-                rc = ctools_sort_radix_lsd_order_only(&key_data, local_sort_vars, nkeys);
-            }
-            break;
-        case SORT_ALG_MERGE:
-            rc = ctools_sort_merge_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-        case SORT_ALG_LSD:
-            rc = ctools_sort_radix_lsd_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-        case SORT_ALG_IPS4O:
-        default:
-            rc = ctools_sort_ips4o_order_only(&key_data, local_sort_vars, nkeys);
-            break;
-    }
+    /* Call unified sort dispatcher (computes sort_order only) */
+    rc = ctools_sort_dispatch(&key_data, local_sort_vars, nkeys, algorithm);
 
     local_timings.sort_time = ctools_timer_seconds() - t_phase;
 
@@ -711,7 +908,8 @@ stata_retcode csort_stream_sort(
         }
 
         rc = csort_stream_apply_permutation(saved_perm, nobs, nonkey_var_indices,
-                                             nvars_nonkey, obs1, block_size);
+                                             nvars_nonkey, obs1, block_size,
+                                             &local_timings);
     }
 
     local_timings.stream_nonkeys_time = ctools_timer_seconds() - t_phase;
@@ -730,11 +928,19 @@ cleanup:
         *timings = local_timings;
     }
 
+    /* Save timing scalars for Stata */
     SF_scal_save("_csort_stream_time_load_keys", local_timings.load_keys_time);
     SF_scal_save("_csort_stream_time_sort", local_timings.sort_time);
     SF_scal_save("_csort_stream_time_permute_keys", local_timings.permute_keys_time);
     SF_scal_save("_csort_stream_time_store_keys", local_timings.store_keys_time);
     SF_scal_save("_csort_stream_time_stream_nonkeys", local_timings.stream_nonkeys_time);
+    /* Detailed breakdown of stream_nonkeys phase */
+    SF_scal_save("_csort_stream_time_build_inv", local_timings.stream_build_inv_time);
+    SF_scal_save("_csort_stream_time_scatter", local_timings.stream_scatter_time);
+    SF_scal_save("_csort_stream_time_writeback", local_timings.stream_writeback_time);
+    SF_scal_save("_csort_stream_time_strings", local_timings.stream_string_time);
+    SF_scal_save("_csort_stream_n_numeric", (double)local_timings.n_numeric_vars);
+    SF_scal_save("_csort_stream_n_string", (double)local_timings.n_string_vars);
     SF_scal_save("_csort_stream_time_total", local_timings.total_time);
 
     return rc;

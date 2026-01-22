@@ -14,6 +14,10 @@
     - cmerge: C-accelerated merge (replaces merge)
     - cqreg: C-accelerated quantile regression (replaces qreg)
     - cbinscatter: C-accelerated binned scatter plots
+    - cencode: C-accelerated string encoding (replaces encode)
+    - cwinsor: C-accelerated winsorization (replaces winsor2)
+    - cdestring: C-accelerated string to numeric conversion (replaces destring)
+    - cdecode: C-accelerated numeric to string decoding (replaces decode)
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
@@ -24,6 +28,8 @@
         plugin call ctools_plugin ..., "cmerge <args>"
         plugin call ctools_plugin ..., "cqreg <args>"
         plugin call ctools_plugin ..., "cbinscatter <args>"
+        plugin call ctools_plugin ..., "cencode <args>"
+        plugin call ctools_plugin ..., "cwinsor <args>"
 */
 
 #include <stdlib.h>
@@ -130,6 +136,10 @@ static int parse_threads_arg(char *cmd_args)
 #include "cmerge_impl.h"
 #include "cqreg_impl.h"
 #include "cbinscatter_impl.h"
+#include "cencode_impl.h"
+#include "cwinsor_impl.h"
+#include "cdestring_impl.h"
+#include "cdecode_impl.h"
 
 /*
     Main plugin entry point.
@@ -218,6 +228,18 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "civreghdfe") == 0) {
         rc = civreghdfe_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cencode") == 0) {
+        rc = cencode_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cwinsor") == 0) {
+        rc = cwinsor_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cdestring") == 0) {
+        rc = cdestring_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cdecode") == 0) {
+        rc = cdecode_main(cmd_args);
     }
     else {
         char msg[256];

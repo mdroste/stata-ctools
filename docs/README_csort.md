@@ -21,8 +21,7 @@ csort varlist [if] [in] [, options]
 | Option | Description |
 |--------|-------------|
 | `algorithm(string)` | Sort algorithm: `lsd` (default), `msd`, or `timsort` |
-| `verbose` | Display progress information including variable names and sort key indices |
-| `timeit` | Display timing breakdown (load, sort, store, total) |
+| `verbose` | Display timing breakdown (load, sort, store, total) |
 
 ## Examples
 
@@ -34,7 +33,7 @@ csort id
 csort state year firm_id
 
 * Sort with timing output
-csort myvar, verbose timeit
+csort myvar, verbose
 
 * Sort with if/in conditions
 csort price if foreign == 1
@@ -135,7 +134,7 @@ All three algorithms are optimized for performance:
 
 ### Timing Breakdown
 
-When using the `timeit` option, you'll see:
+When using the `verbose` option, you'll see:
 - **Load**: Time to load data from Stata into C memory
 - **Sort**: Time for the actual radix sort operation
 - **Store**: Time to write sorted data back to Stata
@@ -149,7 +148,7 @@ When using the `timeit` option, you'll see:
 
 ## Stored Results
 
-`csort` stores timing information in the following scalars (when `timeit` is specified):
+`csort` stores timing information in the following scalars (when `verbose` is specified):
 
 | Scalar | Description |
 |--------|-------------|

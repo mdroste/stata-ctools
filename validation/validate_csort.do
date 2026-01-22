@@ -371,7 +371,7 @@ sysuse census, clear
 noi benchmark_sort region pop, testname("region pop")
 
 /*******************************************************************************
- * SECTION 14: verbose and timeit options
+ * SECTION 14: verbose option
  ******************************************************************************/
 noi print_section "Option Tests"
 
@@ -383,16 +383,6 @@ if _rc == 0 {
 }
 else {
     noi test_fail "verbose option" "returned error `=_rc'"
-}
-
-* Test timeit option
-sysuse auto, clear
-capture csort price, timeit
-if _rc == 0 {
-    noi test_pass "timeit option accepted"
-}
-else {
-    noi test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************

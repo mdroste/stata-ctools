@@ -247,10 +247,24 @@ typedef enum {
     SORT_ALG_IPS4O = 6     // IPS4o (default) - in-place parallel super scalar samplesort
 } sort_algorithm_t;
 
-// Sort data using specified algorithm
-// Wrapper function that dispatches to the appropriate sort implementation
-stata_retcode ctools_sort(stata_data *data, int *sort_vars, size_t nsort,
-                          sort_algorithm_t algorithm);
+/*
+    Unified sort dispatcher for order-only sort operations.
+
+    Dispatches to the appropriate *_order_only sort function based on the
+    algorithm enum. Computes sort_order but does NOT apply the permutation.
+    Call ctools_apply_permutation() separately to reorder the data.
+
+    For SORT_ALG_COUNTING, if the data is unsuitable (non-integer or range too
+    large), automatically falls back to SORT_ALG_LSD.
+
+    @param data       [in/out] stata_data with allocated sort_order
+    @param sort_vars  [in] Array of 1-based variable indices specifying sort keys
+    @param nsort      [in] Number of sort key variables
+    @param algorithm  [in] Sort algorithm to use
+    @return           STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_dispatch(stata_data *data, int *sort_vars, size_t nsort,
+                                    sort_algorithm_t algorithm);
 
 /* ---------------------------------------------------------------------------
    Type Conversion Utilities
@@ -363,5 +377,12 @@ bool ctools_parse_double_with_separators(const char *str, int len, double *resul
     Covers 10^0 through 10^22 (full double precision range without overflow).
 */
 extern const double ctools_pow10_table[23];
+
+/*
+    Two-digit lookup table for fast digit pair output.
+    "00", "01", "02", ... "99" stored as pairs of characters.
+    Usage: buf[0] = CTOOLS_DIGIT_PAIRS[val*2]; buf[1] = CTOOLS_DIGIT_PAIRS[val*2+1];
+*/
+extern const char CTOOLS_DIGIT_PAIRS[200];
 
 #endif /* CTOOLS_TYPES_H */

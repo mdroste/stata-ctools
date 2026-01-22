@@ -16,7 +16,10 @@ Fast drop-in replacements for a variety of Stata commands.
 | `export delimited` | `cexport delimited` | Export text-delimited files | **25x** |
 | `sort` | `csort` | Sort dataset | **1-5x** |
 | `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
-| `binscatter` | `cbinscatter` | Binned scatter plots | **5-40x** |
+| `encode`/`decode` | `cencode`/`cdecode` | Recast encoded string as labeled numeric type | **10-20x** |
+| `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
+| `gstats winsor` | `gstats winsor` | Winsorization | **2-10xx** |
+| `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
 | `reghdfe` | `creghdfe` | OLS with high-dimensional fixed effects | **10-20x** |
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with high-dimensional fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |

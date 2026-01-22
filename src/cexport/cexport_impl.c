@@ -160,21 +160,8 @@ static inline bool is_stata_missing(double val)
 
 /*
     Two-digit lookup table for fast digit pair output in format_decimal_fast.
-    "00", "01", "02", ... "99"
-    Kept local for specialized fractional digit formatting.
+    Uses shared CTOOLS_DIGIT_PAIRS from ctools_types.h to avoid duplication.
 */
-static const char DIGIT_PAIRS[200] = {
-    '0','0', '0','1', '0','2', '0','3', '0','4', '0','5', '0','6', '0','7', '0','8', '0','9',
-    '1','0', '1','1', '1','2', '1','3', '1','4', '1','5', '1','6', '1','7', '1','8', '1','9',
-    '2','0', '2','1', '2','2', '2','3', '2','4', '2','5', '2','6', '2','7', '2','8', '2','9',
-    '3','0', '3','1', '3','2', '3','3', '3','4', '3','5', '3','6', '3','7', '3','8', '3','9',
-    '4','0', '4','1', '4','2', '4','3', '4','4', '4','5', '4','6', '4','7', '4','8', '4','9',
-    '5','0', '5','1', '5','2', '5','3', '5','4', '5','5', '5','6', '5','7', '5','8', '5','9',
-    '6','0', '6','1', '6','2', '6','3', '6','4', '6','5', '6','6', '6','7', '6','8', '6','9',
-    '7','0', '7','1', '7','2', '7','3', '7','4', '7','5', '7','6', '7','7', '7','8', '7','9',
-    '8','0', '8','1', '8','2', '8','3', '8','4', '8','5', '8','6', '8','7', '8','8', '8','9',
-    '9','0', '9','1', '9','2', '9','3', '9','4', '9','5', '9','6', '9','7', '9','8', '9','9'
-};
 
 /*
     Fast decimal formatting with full double precision (15 significant digits).
@@ -226,19 +213,19 @@ static int format_decimal_fast(double val, char *buf)
         /* Format pairs from least significant */
         int idx;
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[14] = DIGIT_PAIRS[idx + 1]; frac_buf[13] = DIGIT_PAIRS[idx];
+        frac_buf[14] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[13] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[12] = DIGIT_PAIRS[idx + 1]; frac_buf[11] = DIGIT_PAIRS[idx];
+        frac_buf[12] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[11] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[10] = DIGIT_PAIRS[idx + 1]; frac_buf[9] = DIGIT_PAIRS[idx];
+        frac_buf[10] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[9] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[8] = DIGIT_PAIRS[idx + 1]; frac_buf[7] = DIGIT_PAIRS[idx];
+        frac_buf[8] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[7] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[6] = DIGIT_PAIRS[idx + 1]; frac_buf[5] = DIGIT_PAIRS[idx];
+        frac_buf[6] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[5] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[4] = DIGIT_PAIRS[idx + 1]; frac_buf[3] = DIGIT_PAIRS[idx];
+        frac_buf[4] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[3] = CTOOLS_DIGIT_PAIRS[idx];
         idx = (frac_scaled % 100) * 2; frac_scaled /= 100;
-        frac_buf[2] = DIGIT_PAIRS[idx + 1]; frac_buf[1] = DIGIT_PAIRS[idx];
+        frac_buf[2] = CTOOLS_DIGIT_PAIRS[idx + 1]; frac_buf[1] = CTOOLS_DIGIT_PAIRS[idx];
         /* Last digit (15th) */
         frac_buf[0] = '0' + (frac_scaled % 10);
 
@@ -411,7 +398,7 @@ static int double_to_str(double val, char *buf, int buf_size, bool missing_as_do
                 double reconstructed = int_part_d + (double)frac_int / scale;
                 double rel_error = fabs(reconstructed - abs_val) / abs_val;
 
-                if (rel_error < 1e-15 || (vtype == VARTYPE_FLOAT && rel_error < 1e-7)) {
+                if (rel_error < 1e-15 || (vtype == VARTYPE_FLOAT && rel_error < 1e-8)) {
                     /* Found exact representation! Format directly. */
                     uint64_t int_part = (uint64_t)int_part_d;
 

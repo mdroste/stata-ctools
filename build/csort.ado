@@ -1,4 +1,4 @@
-*! version 1.1.0 19Jan2026
+*! version 1.2.0 21Jan2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!
@@ -245,6 +245,24 @@ program define csort
             di as text "    Permute keys in C:      " as result %8.4f `__time_permute' " sec"
             di as text "    Store sorted keys:      " as result %8.4f _csort_time_store " sec"
             di as text "    Stream non-key vars:    " as result %8.4f `__time_stream' " sec"
+
+            * Detailed breakdown of stream non-key vars phase
+            capture local __stream_build_inv = _csort_stream_time_build_inv
+            if _rc == 0 {
+                capture local __stream_scatter = _csort_stream_time_scatter
+                capture local __stream_writeback = _csort_stream_time_writeback
+                capture local __stream_strings = _csort_stream_time_strings
+                capture local __n_numeric = _csort_stream_n_numeric
+                capture local __n_string = _csort_stream_n_string
+                if _rc == 0 {
+                    di as text "      ├─ Build inv perm:    " as result %8.4f `__stream_build_inv' " sec"
+                    di as text "      ├─ Scatter (read+buf):" as result %8.4f `__stream_scatter' " sec" as text " (" as result `__n_numeric' as text " numeric vars)"
+                    di as text "      ├─ Writeback to Stata:" as result %8.4f `__stream_writeback' " sec"
+                    if `__n_string' > 0 {
+                        di as text "      └─ String vars:       " as result %8.4f `__stream_strings' " sec" as text " (" as result `__n_string' as text " string vars)"
+                    }
+                }
+            }
         }
         else {
             * Standard mode timing display

@@ -32,6 +32,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
+#include "ctools_arena.h"
 
 /* Maximum range for counting sort (larger ranges use radix) */
 #define COUNTING_SORT_MAX_RANGE 1000000
@@ -188,22 +189,14 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
                                                     const double * COUNTING_RESTRICT data,
                                                     size_t nobs, int num_threads)
 {
+    ctools_arena arena;
     stata_retcode rc = STATA_OK;
+    int t;
 
     if (num_threads > COUNTING_MAX_THREADS) num_threads = COUNTING_MAX_THREADS;
 
-    /* Thread-local min/max results */
-    double *thread_min = NULL;
-    double *thread_max = NULL;
-    int *thread_has_non_integer = NULL;
-    int *thread_found_valid = NULL;
-
-    /* Histogram data */
-    size_t **local_counts = NULL;
-    size_t *global_counts = NULL;
-    size_t *global_offsets = NULL;
-    size_t **thread_offsets = NULL;
-    perm_idx_t *temp_order = NULL;
+    /* Initialize arena with 2MB blocks */
+    ctools_arena_init(&arena, 2 * 1024 * 1024);
 
     double global_min, global_max;
     int64_t min_val;
@@ -211,20 +204,25 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     size_t chunk_size;
     int has_non_integer = 0;
     int found_any_valid = 0;
-    int t;
 
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
     /* Allocate thread-local min/max arrays (cache-line aligned) */
-    thread_min = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
-    thread_max = (double *)ctools_aligned_alloc(64, num_threads * sizeof(double));
-    thread_has_non_integer = (int *)calloc(num_threads, sizeof(int));
-    thread_found_valid = (int *)calloc(num_threads, sizeof(int));
+    double *thread_min = (double *)ctools_arena_alloc_aligned(&arena,
+                                        num_threads * sizeof(double), 64);
+    double *thread_max = (double *)ctools_arena_alloc_aligned(&arena,
+                                        num_threads * sizeof(double), 64);
+    int *thread_has_non_integer = (int *)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(int));
+    int *thread_found_valid = (int *)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(int));
 
     if (!thread_min || !thread_max || !thread_has_non_integer || !thread_found_valid) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
+    memset(thread_has_non_integer, 0, num_threads * sizeof(int));
+    memset(thread_found_valid, 0, num_threads * sizeof(int));
 
     /* Phase 1: Parallel min/max finding */
     #pragma omp parallel num_threads(num_threads)
@@ -311,22 +309,30 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     /* Use cache-line padded range to avoid false sharing */
     size_t padded_range = ((range + 1 + 7) / 8) * 8;
 
-    local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
-    global_counts = (size_t *)calloc(range + 1, sizeof(size_t));
-    global_offsets = (size_t *)malloc((range + 1) * sizeof(size_t));
-    thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
-    temp_order = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
+    size_t **local_counts = (size_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(size_t *));
+    size_t *global_counts = (size_t *)ctools_arena_alloc(&arena,
+                                        (range + 1) * sizeof(size_t));
+    size_t *global_offsets = (size_t *)ctools_arena_alloc(&arena,
+                                        (range + 1) * sizeof(size_t));
+    size_t **thread_offsets = (size_t **)ctools_arena_alloc(&arena,
+                                        num_threads * sizeof(size_t *));
+    perm_idx_t *temp_order = (perm_idx_t *)ctools_arena_alloc_aligned(&arena,
+                                        nobs * sizeof(perm_idx_t), 64);
 
     if (!local_counts || !global_counts || !global_offsets ||
         !thread_offsets || !temp_order) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
+    memset(global_counts, 0, (range + 1) * sizeof(size_t));
 
     /* Pre-allocate all per-thread count arrays */
     for (t = 0; t < num_threads; t++) {
-        local_counts[t] = (size_t *)ctools_aligned_alloc(64, padded_range * sizeof(size_t));
-        thread_offsets[t] = (size_t *)malloc((range + 1) * sizeof(size_t));
+        local_counts[t] = (size_t *)ctools_arena_alloc_aligned(&arena,
+                                        padded_range * sizeof(size_t), 64);
+        thread_offsets[t] = (size_t *)ctools_arena_alloc(&arena,
+                                        (range + 1) * sizeof(size_t));
         if (!local_counts[t] || !thread_offsets[t]) {
             rc = STATA_ERR_MEMORY;
             goto cleanup;
@@ -449,28 +455,7 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
 cleanup:
-    ctools_aligned_free(thread_min);
-    ctools_aligned_free(thread_max);
-    free(thread_has_non_integer);
-    free(thread_found_valid);
-    free(global_counts);
-    free(global_offsets);
-    ctools_aligned_free(temp_order);
-
-    if (local_counts) {
-        for (t = 0; t < num_threads; t++) {
-            ctools_aligned_free(local_counts[t]);
-        }
-        free(local_counts);
-    }
-
-    if (thread_offsets) {
-        for (t = 0; t < num_threads; t++) {
-            free(thread_offsets[t]);
-        }
-        free(thread_offsets);
-    }
-
+    ctools_arena_free(&arena);
     return rc;
 }
 
@@ -561,42 +546,6 @@ static stata_retcode counting_apply_permutation(stata_data *data)
    Public API
    ============================================================================ */
 
-/*
-    Check if counting sort is appropriate for this variable.
-    Returns 1 if suitable, 0 otherwise.
-*/
-int ctools_counting_sort_suitable(stata_data *data, int var_idx)
-{
-    double *dbl_data;
-    double min_val, max_val;
-    size_t i;
-    size_t range;
-
-    if (data->vars[var_idx].type != STATA_TYPE_DOUBLE) {
-        return 0;  /* Strings not supported */
-    }
-
-    /* Check for empty dataset */
-    if (data->nobs == 0) {
-        return 0;  /* No data to sort */
-    }
-
-    dbl_data = data->vars[var_idx].data.dbl;
-
-    /* Sample to check suitability (check every 1000th element) */
-    min_val = max_val = dbl_data[0];
-    for (i = 0; i < data->nobs; i += 1000) {
-        double v = dbl_data[i];
-        if (SF_is_missing(v)) continue;
-        if (v != floor(v)) return 0;  /* Non-integer */
-        if (v < min_val) min_val = v;
-        if (v > max_val) max_val = v;
-    }
-
-    range = (size_t)((int64_t)max_val - (int64_t)min_val + 1);
-
-    return (range <= COUNTING_SORT_MAX_RANGE);
-}
 
 /*
     Sort data using parallel counting sort.

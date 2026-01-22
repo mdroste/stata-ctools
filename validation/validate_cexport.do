@@ -27,45 +27,50 @@ di as text "====================================================================
 capture mkdir "temp"
 
 /*******************************************************************************
- * Helper: compare_exports - Export with both methods, import back, compare with cf _all
- * Returns pass/fail result
+ * Helper: benchmark_export - Export with both methods, import back, compare
+ * Required: testname() - the test criterion/name
+ * Optional: exportopts() - options for export commands
+ *           importopts() - options for re-importing CSVs
+ *           ifcond() - if condition
+ *           incond() - in condition
  ******************************************************************************/
-capture program drop compare_exports
-program define compare_exports, rclass
-    syntax [varlist], stata_file(string) cexport_file(string) ///
-           [EXPORTopts(string) IMPORTopts(string) IFcond(string) INcond(string)]
+capture program drop benchmark_export
+program define benchmark_export
+    syntax [varlist], testname(string) [EXPORTopts(string) IMPORTopts(string) IFcond(string) INcond(string)]
 
     * Build if/in conditions
     local ifin ""
     if "`ifcond'" != "" local ifin "`ifin' if `ifcond'"
     if "`incond'" != "" local ifin "`ifin' in `incond'"
 
+    tempfile stata_csv cexport_csv
+
     * Export with Stata's export delimited
     if "`varlist'" != "" {
-        export delimited `varlist' using "`stata_file'" `ifin', `exportopts' replace
+        export delimited `varlist' using "`stata_csv'" `ifin', `exportopts' replace
     }
     else {
-        export delimited using "`stata_file'" `ifin', `exportopts' replace
+        export delimited using "`stata_csv'" `ifin', `exportopts' replace
     }
 
     * Export with cexport delimited
     if "`varlist'" != "" {
-        cexport delimited `varlist' using "`cexport_file'" `ifin', `exportopts' replace
+        cexport delimited `varlist' using "`cexport_csv'" `ifin', `exportopts' replace
     }
     else {
-        cexport delimited using "`cexport_file'" `ifin', `exportopts' replace
+        cexport delimited using "`cexport_csv'" `ifin', `exportopts' replace
     }
 
     * Import both CSVs back
     preserve
 
-    import delimited using "`stata_file'", `importopts' clear
+    import delimited using "`stata_csv'", `importopts' clear
     tempfile stata_data
     quietly save `stata_data', replace
     local stata_n = _N
     local stata_k = c(k)
 
-    import delimited using "`cexport_file'", `importopts' clear
+    import delimited using "`cexport_csv'", `importopts' clear
     tempfile cexport_data
     quietly save `cexport_data', replace
     local cexport_n = _N
@@ -74,8 +79,7 @@ program define compare_exports, rclass
     * Check dimensions first
     if `stata_n' != `cexport_n' | `stata_k' != `cexport_k' {
         restore
-        return local result "fail"
-        return local reason "dimensions differ: Stata N=`stata_n' K=`stata_k', cexport N=`cexport_n' K=`cexport_k'"
+        noi test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cexport N=`cexport_n' K=`cexport_k'"
         exit
     }
 
@@ -86,19 +90,17 @@ program define compare_exports, rclass
 
     if `cfrc' == 0 {
         restore
-        return local result "pass"
-        return local reason ""
+        noi test_pass "`testname'"
         exit
     }
 
     * cf _all failed - try tolerance-based comparison for numeric variables
-    * This handles floating point precision differences in CSV export
     use `stata_data', clear
     ds
-    local varlist `r(varlist)'
+    local allvars `r(varlist)'
 
     * Rename variables from stata data with _stata suffix
-    foreach v of local varlist {
+    foreach v of local allvars {
         rename `v' `v'_stata
     }
     gen long _row = _n
@@ -107,12 +109,11 @@ program define compare_exports, rclass
 
     * Load cexport data and rename with _cexport suffix
     use `cexport_data', clear
-    foreach v of local varlist {
+    foreach v of local allvars {
         capture confirm variable `v'
         if _rc != 0 {
             restore
-            return local result "fail"
-            return local reason "variable `v' missing from cexport data"
+            noi test_fail "`testname'" "variable `v' missing from cexport data"
             exit
         }
         rename `v' `v'_cexport
@@ -124,7 +125,7 @@ program define compare_exports, rclass
     local fail_reason ""
     local tol = 1e-6
 
-    foreach v of local varlist {
+    foreach v of local allvars {
         * Check if string or numeric
         capture confirm string variable `v'_stata
         if _rc == 0 {
@@ -157,12 +158,10 @@ program define compare_exports, rclass
     restore
 
     if `all_match' == 1 {
-        return local result "pass"
-        return local reason ""
+        noi test_pass "`testname'"
     }
     else {
-        return local result "fail"
-        return local reason "`fail_reason'"
+        noi test_fail "`testname'" "`fail_reason'"
     }
 end
 
@@ -181,204 +180,104 @@ if _rc != 0 {
 noi test_pass "cexport plugin loads and runs"
 
 /*******************************************************************************
- * SECTION 2: Basic comma-delimited export (cf _all verification)
+ * SECTION 2: Basic comma-delimited export
  ******************************************************************************/
 noi print_section "Basic Comma-Delimited Export"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata.csv") cexport_file("temp/cexport.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "basic export data identical (cf _all)"
-}
-else {
-    noi test_fail "basic export" "`r(reason)'"
-}
+benchmark_export, testname("basic export")
 
 /*******************************************************************************
- * SECTION 3: Tab delimiter (cf _all verification)
+ * SECTION 3: Tab delimiter
  ******************************************************************************/
 noi print_section "Tab Delimiter"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_tab.tsv") cexport_file("temp/cexport_tab.tsv") ///
-    exportopts(delimiter(tab)) importopts(delimiters(tab))
-if "`r(result)'" == "pass" {
-    noi test_pass "tab delimiter data identical (cf _all)"
-}
-else {
-    noi test_fail "tab delimiter" "`r(reason)'"
-}
+benchmark_export, testname("tab delimiter") exportopts(delimiter(tab)) importopts(delimiters(tab))
 
 /*******************************************************************************
- * SECTION 4: Semicolon delimiter (cf _all verification)
+ * SECTION 4: Semicolon delimiter
  ******************************************************************************/
 noi print_section "Semicolon Delimiter"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_semi.csv") cexport_file("temp/cexport_semi.csv") ///
-    exportopts(delimiter(";")) importopts(delimiters(";"))
-if "`r(result)'" == "pass" {
-    noi test_pass "semicolon delimiter data identical (cf _all)"
-}
-else {
-    noi test_fail "semicolon delimiter" "`r(reason)'"
-}
+benchmark_export, testname("semicolon delimiter") exportopts(delimiter(";")) importopts(delimiters(";"))
 
 /*******************************************************************************
- * SECTION 5: novarnames option (cf _all verification)
+ * SECTION 5: novarnames option
  ******************************************************************************/
 noi print_section "novarnames Option"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_novar.csv") cexport_file("temp/cexport_novar.csv") ///
-    exportopts(novarnames) importopts(varnames(nonames))
-if "`r(result)'" == "pass" {
-    noi test_pass "novarnames data identical (cf _all)"
-}
-else {
-    noi test_fail "novarnames" "`r(reason)'"
-}
+benchmark_export, testname("novarnames") exportopts(novarnames) importopts(varnames(nonames))
 
 /*******************************************************************************
- * SECTION 6: quote option (cf _all verification)
+ * SECTION 6: quote option
  ******************************************************************************/
 noi print_section "quote Option"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_quote.csv") cexport_file("temp/cexport_quote.csv") ///
-    exportopts(quote) importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "quote option data identical (cf _all)"
-}
-else {
-    noi test_fail "quote option" "`r(reason)'"
-}
+benchmark_export, testname("quote option")  exportopts(quote)
 
 /*******************************************************************************
- * SECTION 7: nolabel option (cf _all verification)
+ * SECTION 7: nolabel option
  ******************************************************************************/
 noi print_section "nolabel Option"
 
-* With labels (default)
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_label.csv") cexport_file("temp/cexport_label.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "with labels data identical (cf _all)"
-}
-else {
-    noi test_fail "with labels" "`r(reason)'"
-}
+benchmark_export, testname("with labels")
 
-* Without labels
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_nolabel.csv") cexport_file("temp/cexport_nolabel.csv") ///
-    exportopts(nolabel) importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "nolabel data identical (cf _all)"
-}
-else {
-    noi test_fail "nolabel" "`r(reason)'"
-}
+benchmark_export, testname("nolabel") exportopts(nolabel)
 
 /*******************************************************************************
- * SECTION 8: Variable selection (cf _all verification)
+ * SECTION 8: Variable selection
  ******************************************************************************/
 noi print_section "Variable Selection"
 
 sysuse auto, clear
-compare_exports make price mpg, stata_file("temp/stata_vars.csv") cexport_file("temp/cexport_vars.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "variable selection (3 vars) data identical (cf _all)"
-}
-else {
-    noi test_fail "variable selection" "`r(reason)'"
-}
+benchmark_export make price mpg, testname("variable selection (3 vars)")
 
 /*******************************************************************************
- * SECTION 9: if condition (cf _all verification)
+ * SECTION 9: if condition
  ******************************************************************************/
 noi print_section "if Condition"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_if.csv") cexport_file("temp/cexport_if.csv") ///
-    exportopts() importopts() ifcond(foreign == 1)
-if "`r(result)'" == "pass" {
-    noi test_pass "if foreign==1 data identical (cf _all)"
-}
-else {
-    noi test_fail "if foreign==1" "`r(reason)'"
-}
+benchmark_export, testname("if foreign==1") ifcond(foreign == 1)
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_if2.csv") cexport_file("temp/cexport_if2.csv") ///
-    exportopts() importopts() ifcond(price > 10000)
-if "`r(result)'" == "pass" {
-    noi test_pass "if price>10000 data identical (cf _all)"
-}
-else {
-    noi test_fail "if price>10000" "`r(reason)'"
-}
+benchmark_export, testname("if price>10000") ifcond(price > 10000)
 
 /*******************************************************************************
- * SECTION 10: in condition (cf _all verification)
+ * SECTION 10: in condition
  ******************************************************************************/
 noi print_section "in Condition"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_in.csv") cexport_file("temp/cexport_in.csv") ///
-    exportopts() importopts() incond(1/20)
-if "`r(result)'" == "pass" {
-    noi test_pass "in 1/20 data identical (cf _all)"
-}
-else {
-    noi test_fail "in 1/20" "`r(reason)'"
-}
+benchmark_export, testname("in 1/20") incond(1/20)
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_in2.csv") cexport_file("temp/cexport_in2.csv") ///
-    exportopts() importopts() incond(30/50)
-if "`r(result)'" == "pass" {
-    noi test_pass "in 30/50 data identical (cf _all)"
-}
-else {
-    noi test_fail "in 30/50" "`r(reason)'"
-}
+benchmark_export, testname("in 30/50") incond(30/50)
 
 /*******************************************************************************
- * SECTION 11: Combined if and in (cf _all verification)
+ * SECTION 11: Combined if and in
  ******************************************************************************/
 noi print_section "Combined if and in"
 
 sysuse auto, clear
-compare_exports, stata_file("temp/stata_ifin.csv") cexport_file("temp/cexport_ifin.csv") ///
-    exportopts() importopts() ifcond(price > 5000) incond(1/50)
-if "`r(result)'" == "pass" {
-    noi test_pass "if and in combined data identical (cf _all)"
-}
-else {
-    noi test_fail "if and in combined" "`r(reason)'"
-}
+benchmark_export, testname("if and in combined") ifcond(price > 5000) incond(1/50)
 
 /*******************************************************************************
- * SECTION 12: Census dataset (cf _all verification)
+ * SECTION 12: Census dataset
  ******************************************************************************/
 noi print_section "Census Dataset"
 
 sysuse census, clear
-compare_exports, stata_file("temp/stata_census.csv") cexport_file("temp/cexport_census.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "census data identical (cf _all)"
-}
-else {
-    noi test_fail "census" "`r(reason)'"
-}
+benchmark_export, testname("census")
 
 /*******************************************************************************
- * SECTION 13: Large dataset export (cf _all verification)
+ * SECTION 13: Large dataset export
  ******************************************************************************/
 noi print_section "Large Dataset Export"
 
@@ -391,31 +290,17 @@ gen x = runiform()
 gen y = rnormal()
 gen str20 label = "item" + string(runiformint(1, 1000))
 
-compare_exports, stata_file("temp/stata_large.csv") cexport_file("temp/cexport_large.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "large dataset (50K) data identical (cf _all)"
-}
-else {
-    noi test_fail "large dataset" "`r(reason)'"
-}
+benchmark_export, testname("large dataset (50K)")
 
 /*******************************************************************************
- * SECTION 14: Panel data (nlswork) (cf _all verification)
+ * SECTION 14: Panel data (nlswork)
  ******************************************************************************/
 noi print_section "Panel Data (nlswork)"
 
 webuse nlswork, clear
 keep in 1/10000
 
-compare_exports, stata_file("temp/stata_panel.csv") cexport_file("temp/cexport_panel.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "panel data identical (cf _all)"
-}
-else {
-    noi test_fail "panel data" "`r(reason)'"
-}
+benchmark_export, testname("panel data")
 
 /*******************************************************************************
  * SECTION 15: verbose/timeit options
@@ -465,7 +350,7 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 17: Edge cases (cf _all verification)
+ * SECTION 17: Edge cases
  ******************************************************************************/
 noi print_section "Edge Cases"
 
@@ -474,29 +359,13 @@ clear
 set obs 1
 gen x = 42
 gen str5 s = "test"
-
-compare_exports, stata_file("temp/stata_single.csv") cexport_file("temp/cexport_single.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "single observation data identical (cf _all)"
-}
-else {
-    noi test_fail "single observation" "`r(reason)'"
-}
+benchmark_export, testname("single observation")
 
 * Single variable
 clear
 set obs 100
 gen x = runiform()
-
-compare_exports x, stata_file("temp/stata_singlevar.csv") cexport_file("temp/cexport_singlevar.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "single variable data identical (cf _all)"
-}
-else {
-    noi test_fail "single variable" "`r(reason)'"
-}
+benchmark_export x, testname("single variable")
 
 * String with commas
 clear
@@ -505,18 +374,10 @@ input id str40 name
 2 "Doe, Jane"
 3 "Regular Name"
 end
-
-compare_exports, stata_file("temp/stata_comma.csv") cexport_file("temp/cexport_comma.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "strings with commas data identical (cf _all)"
-}
-else {
-    noi test_fail "strings with commas" "`r(reason)'"
-}
+benchmark_export, testname("strings with commas")
 
 /*******************************************************************************
- * SECTION 18: Missing values (cf _all verification)
+ * SECTION 18: Missing values
  ******************************************************************************/
 noi print_section "Missing Values"
 
@@ -527,17 +388,10 @@ replace x = . if mod(_n, 3) == 0
 gen str10 s = "val" + string(_n)
 replace s = "" if mod(_n, 4) == 0
 
-compare_exports, stata_file("temp/stata_missing.csv") cexport_file("temp/cexport_missing.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "missing values data identical (cf _all)"
-}
-else {
-    noi test_fail "missing values" "`r(reason)'"
-}
+benchmark_export, testname("missing values")
 
 /*******************************************************************************
- * SECTION 19: Numeric precision (cf _all verification)
+ * SECTION 19: Numeric precision
  ******************************************************************************/
 noi print_section "Numeric Precision"
 
@@ -548,17 +402,10 @@ gen float approx = runiform()
 gen long bigint = runiformint(1, 2147483647)
 gen byte tinyint = runiformint(-127, 127)
 
-compare_exports, stata_file("temp/stata_precision.csv") cexport_file("temp/cexport_precision.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "numeric precision data identical (cf _all)"
-}
-else {
-    noi test_fail "numeric precision" "`r(reason)'"
-}
+benchmark_export, testname("numeric precision")
 
 /*******************************************************************************
- * SECTION 20: Special characters in strings (cf _all verification)
+ * SECTION 20: Special characters in strings
  ******************************************************************************/
 noi print_section "Special Characters"
 
@@ -570,14 +417,7 @@ input id str50 text
 4 "Text with ""quotes"""
 end
 
-compare_exports, stata_file("temp/stata_special.csv") cexport_file("temp/cexport_special.csv") ///
-    exportopts() importopts()
-if "`r(result)'" == "pass" {
-    noi test_pass "special characters data identical (cf _all)"
-}
-else {
-    noi test_fail "special characters" "`r(reason)'"
-}
+benchmark_export, testname("special characters")
 
 /*******************************************************************************
  * Cleanup and summary

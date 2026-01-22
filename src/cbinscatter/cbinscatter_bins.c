@@ -30,9 +30,6 @@
  * Quickselect for finding k-th element
  * ======================================================================== */
 
-static inline __attribute__((unused)) void swap_double(ST_double *a, ST_double *b) {
-    ST_double t = *a; *a = *b; *b = t;
-}
 
 static inline void swap_int(ST_int *a, ST_int *b) {
     ST_int t = *a; *a = *b; *b = t;
@@ -67,40 +64,6 @@ static ST_int partition_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int 
 
     swap_int(&idx[i], &idx[hi - 1]);
     return i;
-}
-
-/*
- * Quickselect: find k-th smallest element
- * After this call, idx[k] contains the index of the k-th smallest value
- * and all elements before k are <= vals[idx[k]]
- */
-static __attribute__((unused)) void quickselect_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int hi, ST_int k) {
-    while (hi > lo) {
-        if (hi - lo < 10) {
-            /* Insertion sort for small arrays */
-            for (ST_int i = lo + 1; i <= hi; i++) {
-                ST_int temp = idx[i];
-                ST_double val = vals[temp];
-                ST_int j = i;
-                while (j > lo && vals[idx[j - 1]] > val) {
-                    idx[j] = idx[j - 1];
-                    j--;
-                }
-                idx[j] = temp;
-            }
-            return;
-        }
-
-        ST_int pivot_pos = partition_indexed(vals, idx, lo, hi);
-
-        if (k == pivot_pos) {
-            return;
-        } else if (k < pivot_pos) {
-            hi = pivot_pos - 1;
-        } else {
-            lo = pivot_pos + 1;
-        }
-    }
 }
 
 /* ========================================================================

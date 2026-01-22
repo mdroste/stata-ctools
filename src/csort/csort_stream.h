@@ -76,10 +76,17 @@ typedef struct {
     double sort_time;           /* Time for sort algorithm */
     double permute_keys_time;   /* Time to permute key variables in C */
     double store_keys_time;     /* Time to write sorted keys to Stata */
-    double stream_nonkeys_time; /* Time to stream-permute non-key variables */
+    double stream_nonkeys_time; /* Time to stream-permute non-key variables (total) */
+    /* Detailed breakdown of stream_nonkeys_time: */
+    double stream_build_inv_time;   /* Time to build inverse permutation */
+    double stream_scatter_time;     /* Time for Phase 1: read Stata + scatter to buffer */
+    double stream_writeback_time;   /* Time for Phase 2: write buffer back to Stata */
+    double stream_string_time;      /* Time for string variable processing */
     double total_time;          /* Total wall-clock time */
     size_t num_blocks;          /* Number of blocks processed */
     size_t block_size;          /* Actual block size used */
+    size_t n_numeric_vars;      /* Number of numeric non-key variables */
+    size_t n_string_vars;       /* Number of string non-key variables */
 } csort_stream_timings;
 
 /* ============================================================================
@@ -162,6 +169,7 @@ int csort_stream_recommended(size_t nobs, size_t nvars, size_t nkeys);
     @param nvars_nonkey      [in] Number of non-key variables
     @param obs1              [in] First observation in Stata (1-based)
     @param block_size        [in] Unused (kept for API compatibility)
+    @param timings           [out] Optional timing breakdown (can be NULL)
 
     @return STATA_OK on success, error code otherwise
 */
@@ -171,7 +179,8 @@ stata_retcode csort_stream_apply_permutation(
     int *nonkey_var_indices,
     size_t nvars_nonkey,
     size_t obs1,
-    size_t block_size
+    size_t block_size,
+    csort_stream_timings *timings
 );
 
 #endif /* CSORT_STREAM_H */

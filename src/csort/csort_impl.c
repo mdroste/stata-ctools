@@ -337,36 +337,8 @@ ST_retcode csort_main(const char *args)
     timer.sort_time = ctools_timer_seconds();
     double t_permute = 0.0;  /* Permutation time */
 
-    /* Call the selected sort algorithm using _order_only variants
-       to track sort vs permutation timing separately for all algorithms. */
-    switch (algorithm) {
-        case SORT_ALG_MSD:
-            rc = ctools_sort_radix_msd_order_only(&data, sort_vars, nsort);
-            break;
-        case SORT_ALG_TIMSORT:
-            rc = ctools_sort_timsort_order_only(&data, sort_vars, nsort);
-            break;
-        case SORT_ALG_SAMPLE:
-            rc = ctools_sort_sample_order_only(&data, sort_vars, nsort);
-            break;
-        case SORT_ALG_COUNTING:
-            rc = ctools_sort_counting_order_only(&data, sort_vars, nsort);
-            /* If counting sort not suitable, fall back to LSD radix */
-            if (rc == STATA_ERR_UNSUPPORTED_TYPE) {
-                rc = ctools_sort_radix_lsd_order_only(&data, sort_vars, nsort);
-            }
-            break;
-        case SORT_ALG_MERGE:
-            rc = ctools_sort_merge_order_only(&data, sort_vars, nsort);
-            break;
-        case SORT_ALG_LSD:
-            rc = ctools_sort_radix_lsd_order_only(&data, sort_vars, nsort);
-            break;
-        case SORT_ALG_IPS4O:
-        default:
-            rc = ctools_sort_ips4o_order_only(&data, sort_vars, nsort);
-            break;
-    }
+    /* Call unified sort dispatcher (computes sort_order only) */
+    rc = ctools_sort_dispatch(&data, sort_vars, nsort, algorithm);
 
     /* Record sort computation time */
     timer.sort_time = ctools_timer_seconds() - timer.sort_time;

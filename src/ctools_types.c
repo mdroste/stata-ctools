@@ -9,6 +9,7 @@
 #include "ctools_types.h"
 #include "ctools_config.h"
 #include "ctools_threads.h"
+#include "ctools_arena.h"
 
 /* SIMD intrinsics for gather operations */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -38,35 +39,6 @@ void stata_data_init(stata_data *data)
     data->sort_order = NULL;
 }
 
-/*
-    Internal: Free a string arena (matches arena_create in ctools_data_io.c).
-    This is duplicated here to avoid circular dependencies.
-*/
-typedef struct {
-    char *base;
-    size_t capacity;
-    size_t used;
-    int has_fallback;  /* Non-zero if any strings were allocated via strdup fallback */
-} string_arena_internal;
-
-/*
-    Check if a pointer is within the arena's memory range.
-*/
-static int arena_contains(string_arena_internal *arena, const char *ptr)
-{
-    if (arena == NULL || ptr == NULL) return 0;
-    return (ptr >= arena->base && ptr < arena->base + arena->capacity);
-}
-
-static void arena_free_internal(void *arena_ptr)
-{
-    if (arena_ptr != NULL) {
-        string_arena_internal *arena = (string_arena_internal *)arena_ptr;
-        free(arena->base);
-        free(arena);
-    }
-}
-
 void stata_data_free(stata_data *data)
 {
     size_t i;
@@ -91,22 +63,22 @@ void stata_data_free(stata_data *data)
                 aligned_free_internal(data->vars[i].data.dbl);
             } else if (data->vars[i].type == STATA_TYPE_STRING) {
                 if (data->vars[i].data.str != NULL) {
-                    string_arena_internal *arena = (string_arena_internal *)data->vars[i]._arena;
+                    ctools_string_arena *arena = (ctools_string_arena *)data->vars[i]._arena;
 
                     if (arena != NULL && !arena->has_fallback) {
                         /* Fast path: all strings are in the arena, O(1) bulk free */
-                        arena_free_internal(arena);
+                        ctools_string_arena_free(arena);
                         data->vars[i]._arena = NULL;
                     } else if (arena != NULL && arena->has_fallback) {
                         /* Mixed path: some strings in arena, some from strdup.
                            Free fallback strings individually (those outside arena range). */
                         for (size_t j = 0; j < data->vars[i].nobs; j++) {
                             char *str = data->vars[i].data.str[j];
-                            if (str != NULL && !arena_contains(arena, str)) {
+                            if (str != NULL && !ctools_string_arena_owns(arena, str)) {
                                 free(str);
                             }
                         }
-                        arena_free_internal(arena);
+                        ctools_string_arena_free(arena);
                         data->vars[i]._arena = NULL;
                     } else {
                         /* No arena: all strings are from strdup (or NULL).
@@ -149,8 +121,9 @@ const double ctools_pow10_table[23] = {
 /*
     Two-digit lookup table for fast digit pair output.
     "00", "01", "02", ... "99"
+    Exported for use by cexport and other modules.
 */
-static const char CTOOLS_DIGIT_PAIRS[200] = {
+const char CTOOLS_DIGIT_PAIRS[200] = {
     '0','0', '0','1', '0','2', '0','3', '0','4', '0','5', '0','6', '0','7', '0','8', '0','9',
     '1','0', '1','1', '1','2', '1','3', '1','4', '1','5', '1','6', '1','7', '1','8', '1','9',
     '2','0', '2','1', '2','2', '2','3', '2','4', '2','5', '2','6', '2','7', '2','8', '2','9',
@@ -436,23 +409,13 @@ static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data
 #endif /* CTOOLS_TYPES_ARM64 */
 
 /*
-    Main dispatch function: selects optimal path based on platform and data size.
-    - Very large datasets (>1M): use streaming stores to bypass cache
-    - Medium/small datasets: use SIMD gather (AVX2) or scalar with prefetch
+    Main dispatch function: selects SIMD or scalar path based on platform.
 */
 static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
                                              const double * CTOOLS_RESTRICT old_data,
                                              const perm_idx_t * CTOOLS_RESTRICT perm,
                                              size_t nobs)
 {
-#if defined(CTOOLS_TYPES_X86) || defined(CTOOLS_TYPES_ARM64)
-    /* For very large datasets, use non-temporal stores to avoid cache pollution */
-    if (nobs >= PERM_NONTEMPORAL_THRESHOLD) {
-        apply_perm_gather_double_streaming(new_data, old_data, perm, nobs);
-        return;
-    }
-#endif
-
 #ifdef CTOOLS_TYPES_AVX2
     apply_perm_gather_double_simd(new_data, old_data, perm, nobs);
 #else
@@ -486,6 +449,10 @@ static inline void apply_perm_gather_ptr(char ** CTOOLS_RESTRICT new_data,
     - Random reads benefit from prefetching
     - No memory overhead for inverse permutation
 
+    MEMORY OPTIMIZATION: Uses a shared buffer pool instead of allocating a new
+    buffer for each variable in parallel. This reduces peak memory from
+    2x data size to: data size + (num_threads × variable_size).
+
     @param data  [in/out] stata_data with computed sort_order
     @return      STATA_OK on success, STATA_ERR_MEMORY on allocation failure
 */
@@ -501,58 +468,117 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     /* Initialize adaptive prefetch distances (once per process) */
     init_perm_prefetch_distances();
 
-    /* Apply permutation to each variable in parallel across variables */
     #ifdef _OPENMP
-    int success = 1;
-    #pragma omp parallel for schedule(dynamic, 1)
-    #endif
-    for (j = 0; j < nvars; j++) {
-        #ifdef _OPENMP
-        if (!success) continue;
-        #endif
+    /*
+        BUFFER POOL APPROACH: Pre-allocate one buffer per thread.
+        Each thread reuses its buffer across multiple variables.
+        This limits peak memory to: original_data + (nthreads × buffer_size)
+        instead of: original_data × 2
+    */
+    int nthreads = omp_get_max_threads();
+    if (nthreads > (int)nvars) nthreads = (int)nvars;
+    if (nthreads < 1) nthreads = 1;
 
+    /* Allocate buffer pool - one buffer per thread */
+    double **dbl_buffers = (double **)malloc(nthreads * sizeof(double *));
+    char ***ptr_buffers = (char ***)malloc(nthreads * sizeof(char **));
+    if (!dbl_buffers || !ptr_buffers) {
+        free(dbl_buffers);
+        free(ptr_buffers);
+        return STATA_ERR_MEMORY;
+    }
+
+    int alloc_success = 1;
+    for (int t = 0; t < nthreads; t++) {
+        dbl_buffers[t] = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
+        ptr_buffers[t] = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
+        if (!dbl_buffers[t] || !ptr_buffers[t]) {
+            alloc_success = 0;
+            break;
+        }
+    }
+
+    if (!alloc_success) {
+        for (int t = 0; t < nthreads; t++) {
+            ctools_aligned_free(dbl_buffers[t]);
+            ctools_aligned_free(ptr_buffers[t]);
+        }
+        free(dbl_buffers);
+        free(ptr_buffers);
+        return STATA_ERR_MEMORY;
+    }
+
+    /* Apply permutation using thread-local buffers */
+    int success = 1;
+    #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+    for (j = 0; j < nvars; j++) {
+        if (!success) continue;
+
+        int tid = omp_get_thread_num();
         stata_variable *var = &data->vars[j];
 
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
-            if (!new_data) {
-                #ifdef _OPENMP
-                #pragma omp atomic write
-                success = 0;
-                continue;
-                #else
-                return STATA_ERR_MEMORY;
-                #endif
-            }
+            double *new_data = dbl_buffers[tid];
 
             apply_perm_gather_double(new_data, old_data, perm, nobs);
 
-            ctools_aligned_free(old_data);
+            /* Swap: old buffer goes to pool, new data becomes variable's data */
+            dbl_buffers[tid] = old_data;
             var->data.dbl = new_data;
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE,
-                                                                   nobs, sizeof(char *));
-            if (!new_data) {
-                #ifdef _OPENMP
-                #pragma omp atomic write
-                success = 0;
-                continue;
-                #else
-                return STATA_ERR_MEMORY;
-                #endif
-            }
+            char **new_data = ptr_buffers[tid];
 
             apply_perm_gather_ptr(new_data, old_data, perm, nobs);
 
-            ctools_aligned_free(old_data);
+            /* Swap: old buffer goes to pool, new data becomes variable's data */
+            ptr_buffers[tid] = old_data;
             var->data.str = new_data;
         }
     }
 
-    #ifdef _OPENMP
+    /* Free the buffer pool (now contains the old data arrays) */
+    for (int t = 0; t < nthreads; t++) {
+        ctools_aligned_free(dbl_buffers[t]);
+        ctools_aligned_free(ptr_buffers[t]);
+    }
+    free(dbl_buffers);
+    free(ptr_buffers);
+
     if (!success) return STATA_ERR_MEMORY;
+
+    #else
+    /* Non-OpenMP: process sequentially with single reused buffer */
+    double *dbl_buffer = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
+    char **ptr_buffer = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
+
+    if (!dbl_buffer || !ptr_buffer) {
+        ctools_aligned_free(dbl_buffer);
+        ctools_aligned_free(ptr_buffer);
+        return STATA_ERR_MEMORY;
+    }
+
+    for (j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+
+        if (var->type == STATA_TYPE_DOUBLE) {
+            double *old_data = var->data.dbl;
+            apply_perm_gather_double(dbl_buffer, old_data, perm, nobs);
+            /* Swap buffers */
+            var->data.dbl = dbl_buffer;
+            dbl_buffer = old_data;
+        } else {
+            char **old_data = var->data.str;
+            apply_perm_gather_ptr(ptr_buffer, old_data, perm, nobs);
+            /* Swap buffers */
+            var->data.str = ptr_buffer;
+            ptr_buffer = old_data;
+        }
+    }
+
+    ctools_aligned_free(dbl_buffer);
+    ctools_aligned_free(ptr_buffer);
     #endif
 
     /* Reset sort_order to identity */
@@ -564,6 +590,47 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     }
 
     return STATA_OK;
+}
+
+/* ===========================================================================
+   Unified Sort Dispatcher
+   =========================================================================== */
+
+stata_retcode ctools_sort_dispatch(stata_data *data, int *sort_vars, size_t nsort,
+                                    sort_algorithm_t algorithm)
+{
+    stata_retcode rc;
+
+    switch (algorithm) {
+        case SORT_ALG_MSD:
+            rc = ctools_sort_radix_msd_order_only(data, sort_vars, nsort);
+            break;
+        case SORT_ALG_TIMSORT:
+            rc = ctools_sort_timsort_order_only(data, sort_vars, nsort);
+            break;
+        case SORT_ALG_SAMPLE:
+            rc = ctools_sort_sample_order_only(data, sort_vars, nsort);
+            break;
+        case SORT_ALG_COUNTING:
+            rc = ctools_sort_counting_order_only(data, sort_vars, nsort);
+            /* If counting sort not suitable, fall back to LSD radix */
+            if (rc == STATA_ERR_UNSUPPORTED_TYPE) {
+                rc = ctools_sort_radix_lsd_order_only(data, sort_vars, nsort);
+            }
+            break;
+        case SORT_ALG_MERGE:
+            rc = ctools_sort_merge_order_only(data, sort_vars, nsort);
+            break;
+        case SORT_ALG_LSD:
+            rc = ctools_sort_radix_lsd_order_only(data, sort_vars, nsort);
+            break;
+        case SORT_ALG_IPS4O:
+        default:
+            rc = ctools_sort_ips4o_order_only(data, sort_vars, nsort);
+            break;
+    }
+
+    return rc;
 }
 
 /* ===========================================================================

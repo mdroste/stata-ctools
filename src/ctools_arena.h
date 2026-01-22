@@ -52,6 +52,11 @@ void ctools_arena_init(ctools_arena *arena, size_t block_size);
  * Returns NULL on allocation failure */
 void *ctools_arena_alloc(ctools_arena *arena, size_t size);
 
+/* Allocate memory from the arena with custom alignment (e.g., 64 for cache line)
+ * Alignment must be a power of 2 and >= 8
+ * Returns NULL on allocation failure */
+void *ctools_arena_alloc_aligned(ctools_arena *arena, size_t size, size_t alignment);
+
 /* Duplicate a string into the arena */
 char *ctools_arena_strdup(ctools_arena *arena, const char *s);
 

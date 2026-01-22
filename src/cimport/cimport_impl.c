@@ -1039,8 +1039,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
 
     /* Parse column type overrides from global macros */
     if (g_cimport_ctx) {
-        g_cimport_ctx->force_numeric_cols = cimport_parse_col_list("_CIMPORT_NUMCOLS", &g_cimport_ctx->num_force_numeric);
-        g_cimport_ctx->force_string_cols = cimport_parse_col_list("_CIMPORT_STRCOLS", &g_cimport_ctx->num_force_string);
+        g_cimport_ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &g_cimport_ctx->num_force_numeric);
+        g_cimport_ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &g_cimport_ctx->num_force_string);
     }
     if (!g_cimport_ctx) {
         return 601;
@@ -1135,8 +1135,8 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
             return 601;
         }
         /* Parse column type overrides */
-        ctx->force_numeric_cols = cimport_parse_col_list("_CIMPORT_NUMCOLS", &ctx->num_force_numeric);
-        ctx->force_string_cols = cimport_parse_col_list("_CIMPORT_STRCOLS", &ctx->num_force_string);
+        ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &ctx->num_force_numeric);
+        ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &ctx->num_force_string);
         cimport_display_warnings(ctx);
     }
 
