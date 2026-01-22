@@ -340,14 +340,119 @@ static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_
     }
 }
 
+/* ============================================================================
+   Non-Temporal Store Variants for Large Datasets
+
+   For very large datasets (> 1M elements), use non-temporal (streaming) stores
+   to bypass the cache. This avoids cache pollution when writing data that
+   won't be read again soon. The data goes directly to main memory.
+   ============================================================================ */
+
+/* Threshold for non-temporal stores: 1M doubles = 8MB */
+#define PERM_NONTEMPORAL_THRESHOLD 1000000
+
+#ifdef CTOOLS_TYPES_X86
 /*
-    Main dispatch function: selects SIMD or scalar path based on platform.
+    x86 streaming gather: uses non-temporal stores to bypass cache.
+    For very large datasets where new_data won't fit in cache.
+*/
+static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data,
+                                                const double * CTOOLS_RESTRICT old_data,
+                                                const perm_idx_t * CTOOLS_RESTRICT perm,
+                                                size_t nobs)
+{
+    size_t i;
+    size_t nobs_vec2 = nobs & ~(size_t)1;  /* Round down to multiple of 2 */
+
+    /* Main loop: gather and stream-store 2 doubles at a time */
+    for (i = 0; i < nobs_vec2; i += 2) {
+        /* Prefetch source data */
+        if (i + PERM_PREFETCH_FAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR + 1]]);
+        }
+
+        /* Gather two values */
+        double v0 = old_data[perm[i]];
+        double v1 = old_data[perm[i + 1]];
+
+        /* Non-temporal store (bypasses cache) */
+        _mm_stream_pd(&new_data[i], _mm_set_pd(v1, v0));
+    }
+
+    /* Handle odd element */
+    if (i < nobs) {
+        new_data[i] = old_data[perm[i]];
+    }
+
+    /* Memory fence to ensure all streaming stores complete before continuing */
+    _mm_sfence();
+}
+#endif /* CTOOLS_TYPES_X86 */
+
+#ifdef CTOOLS_TYPES_ARM64
+/*
+    ARM64 streaming gather: uses STNP (Store Pair Non-temporal) to bypass cache.
+    STNP is a hint that the data won't be accessed again soon, allowing the
+    memory system to optimize for write-through behavior.
+*/
+static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data,
+                                                const double * CTOOLS_RESTRICT old_data,
+                                                const perm_idx_t * CTOOLS_RESTRICT perm,
+                                                size_t nobs)
+{
+    size_t i;
+    size_t nobs_vec2 = nobs & ~(size_t)1;  /* Round down to multiple of 2 */
+
+    /* Main loop: gather and stream-store 2 doubles at a time using STNP */
+    for (i = 0; i < nobs_vec2; i += 2) {
+        /* Prefetch source data */
+        if (i + PERM_PREFETCH_FAR < nobs) {
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR]]);
+            CTOOLS_PREFETCH(&old_data[perm[i + PERM_PREFETCH_FAR + 1]]);
+        }
+
+        /* Gather two values */
+        double v0 = old_data[perm[i]];
+        double v1 = old_data[perm[i + 1]];
+
+        /* Non-temporal store pair using STNP instruction */
+        __asm__ __volatile__(
+            "stnp %d[val0], %d[val1], [%[dst]]"
+            :
+            : [val0] "w" (v0), [val1] "w" (v1), [dst] "r" (&new_data[i])
+            : "memory"
+        );
+    }
+
+    /* Handle odd element */
+    if (i < nobs) {
+        new_data[i] = old_data[perm[i]];
+    }
+
+    /* Data memory barrier to ensure stores are visible */
+    __asm__ __volatile__("dmb ishst" ::: "memory");
+}
+#endif /* CTOOLS_TYPES_ARM64 */
+
+/*
+    Main dispatch function: selects optimal path based on platform and data size.
+    - Very large datasets (>1M): use streaming stores to bypass cache
+    - Medium/small datasets: use SIMD gather (AVX2) or scalar with prefetch
 */
 static inline void apply_perm_gather_double(double * CTOOLS_RESTRICT new_data,
                                              const double * CTOOLS_RESTRICT old_data,
                                              const perm_idx_t * CTOOLS_RESTRICT perm,
                                              size_t nobs)
 {
+#if defined(CTOOLS_TYPES_X86) || defined(CTOOLS_TYPES_ARM64)
+    /* For very large datasets, use non-temporal stores to avoid cache pollution */
+    if (nobs >= PERM_NONTEMPORAL_THRESHOLD) {
+        apply_perm_gather_double_streaming(new_data, old_data, perm, nobs);
+        return;
+    }
+#endif
+
 #ifdef CTOOLS_TYPES_AVX2
     apply_perm_gather_double_simd(new_data, old_data, perm, nobs);
 #else
