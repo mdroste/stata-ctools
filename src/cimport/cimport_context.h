@@ -16,7 +16,7 @@
 #include <stdatomic.h>
 #include <pthread.h>
 
-#include "cimport_arena.h"
+#include "../ctools_arena.h"
 #include "cimport_parse.h"
 
 #ifdef _WIN32
@@ -71,7 +71,7 @@ typedef struct {
     CImportParsedRow **rows;
     size_t num_rows;
     size_t capacity;
-    CImportArena arena;
+    ctools_arena arena;
     CImportColumnParseStats *col_stats;
     int num_col_stats;
     int max_fields_in_chunk;
@@ -80,7 +80,7 @@ typedef struct {
 typedef struct {
     double *numeric_data;
     char **string_data;
-    CImportArena string_arena;
+    ctools_arena string_arena;
     size_t count;
 } CImportColumnCache;
 

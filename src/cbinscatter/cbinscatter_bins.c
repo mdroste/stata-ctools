@@ -17,54 +17,13 @@
 #include "stplugin.h"
 #include "cbinscatter_bins.h"
 #include "../ctools_config.h"
+#include "../ctools_select.h"
 
-/* Stata missing value check */
-#define STATA_MISSING 8.988465674311579e+307
-#define IS_MISSING(x) ((x) >= STATA_MISSING)
+/* Use SF_is_missing() from stplugin.h for missing value checks */
 
 /* Threshold for using histogram-based binning vs full sort */
 #define HISTOGRAM_THRESHOLD 50000
 #define HISTOGRAM_BUCKETS 4096
-
-/* ========================================================================
- * Quickselect for finding k-th element
- * ======================================================================== */
-
-
-static inline void swap_int(ST_int *a, ST_int *b) {
-    ST_int t = *a; *a = *b; *b = t;
-}
-
-/*
- * Partition array around pivot, return pivot position
- * Uses median-of-three pivot selection for better performance
- */
-static ST_int partition_indexed(ST_double *vals, ST_int *idx, ST_int lo, ST_int hi) {
-    /* Median-of-three pivot selection */
-    ST_int mid = lo + (hi - lo) / 2;
-
-    /* Sort lo, mid, hi */
-    if (vals[idx[mid]] < vals[idx[lo]]) { swap_int(&idx[lo], &idx[mid]); }
-    if (vals[idx[hi]] < vals[idx[lo]]) { swap_int(&idx[lo], &idx[hi]); }
-    if (vals[idx[hi]] < vals[idx[mid]]) { swap_int(&idx[mid], &idx[hi]); }
-
-    /* Use median as pivot, move to hi-1 */
-    swap_int(&idx[mid], &idx[hi - 1]);
-    ST_double pivot = vals[idx[hi - 1]];
-
-    ST_int i = lo;
-    ST_int j = hi - 1;
-
-    for (;;) {
-        while (vals[idx[++i]] < pivot) {}
-        while (vals[idx[--j]] > pivot) { if (j == lo) break; }
-        if (i >= j) break;
-        swap_int(&idx[i], &idx[j]);
-    }
-
-    swap_int(&idx[i], &idx[hi - 1]);
-    return i;
-}
 
 /* ========================================================================
  * Argsort comparison (for fallback full sort)
@@ -80,9 +39,9 @@ static int compare_indices(const void *a, const void *b) {
     ST_double vb = g_sort_values[ib];
 
     /* Handle missing values - sort to end */
-    if (IS_MISSING(va) && IS_MISSING(vb)) return 0;
-    if (IS_MISSING(va)) return 1;
-    if (IS_MISSING(vb)) return -1;
+    if (SF_is_missing(va) && SF_is_missing(vb)) return 0;
+    if (SF_is_missing(va)) return 1;
+    if (SF_is_missing(vb)) return -1;
 
     if (va < vb) return -1;
     if (va > vb) return 1;
@@ -348,7 +307,7 @@ ST_retcode compute_bins_single_group(
         ST_double x_min = 0, x_max = 0;
         int found_valid = 0;
         for (i = 0; i < N; i++) {
-            if (!IS_MISSING(x[i])) {
+            if (!SF_is_missing(x[i])) {
                 if (!found_valid) {
                     x_min = x[i];
                     x_max = x[i];
@@ -375,7 +334,7 @@ ST_retcode compute_bins_single_group(
         if (range <= 0.0) {
             /* All values identical - put everything in bin 1 */
             for (i = 0; i < N; i++) {
-                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+                bin_ids[i] = SF_is_missing(x[i]) ? 0 : 1;
             }
             free(histogram);
             free(cum_hist);
@@ -387,7 +346,7 @@ ST_retcode compute_bins_single_group(
 
         /* Pass 2: Build histogram */
         for (i = 0; i < N; i++) {
-            if (!IS_MISSING(x[i])) {
+            if (!SF_is_missing(x[i])) {
                 ST_int bucket = (ST_int)((x[i] - x_min) * scale);
                 if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
                 if (bucket < 0) bucket = 0;
@@ -417,7 +376,7 @@ ST_retcode compute_bins_single_group(
 
         /* Pass 3: Assign bins using bucket lookup */
         for (i = 0; i < N; i++) {
-            if (IS_MISSING(x[i])) {
+            if (SF_is_missing(x[i])) {
                 bin_ids[i] = 0;
             } else {
                 ST_int bucket = (ST_int)((x[i] - x_min) * scale);
@@ -441,7 +400,7 @@ ST_retcode compute_bins_single_group(
 
         for (i = 0; i < N; i++) {
             ST_int orig_idx = sort_idx[i];
-            if (IS_MISSING(x[orig_idx])) {
+            if (SF_is_missing(x[orig_idx])) {
                 bin_ids[orig_idx] = 0;
             } else {
                 ST_int bin = (ST_int)(((int64_t)i * nq) / N) + 1;
@@ -475,7 +434,7 @@ ST_retcode compute_bins_single_group(
         ST_double x_min = 0, x_max = 0;
         int found_valid = 0;
         for (i = 0; i < N; i++) {
-            if (!IS_MISSING(x[i])) {
+            if (!SF_is_missing(x[i])) {
                 if (!found_valid) {
                     x_min = x[i];
                     x_max = x[i];
@@ -501,7 +460,7 @@ ST_retcode compute_bins_single_group(
         ST_double range = x_max - x_min;
         if (range <= 0.0) {
             for (i = 0; i < N; i++) {
-                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+                bin_ids[i] = SF_is_missing(x[i]) ? 0 : 1;
             }
             free(bucket_weights);
             free(cum_weights);
@@ -513,7 +472,7 @@ ST_retcode compute_bins_single_group(
 
         /* Pass 2: Accumulate weights per bucket */
         for (i = 0; i < N; i++) {
-            if (!IS_MISSING(x[i])) {
+            if (!SF_is_missing(x[i])) {
                 ST_int bucket = (ST_int)((x[i] - x_min) * scale);
                 if (bucket >= HISTOGRAM_BUCKETS) bucket = HISTOGRAM_BUCKETS - 1;
                 if (bucket < 0) bucket = 0;
@@ -532,7 +491,7 @@ ST_retcode compute_bins_single_group(
         /* Handle zero total weight - assign all to bin 1 */
         if (total_weight <= 0.0) {
             for (i = 0; i < N; i++) {
-                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+                bin_ids[i] = SF_is_missing(x[i]) ? 0 : 1;
             }
             free(bucket_weights);
             free(cum_weights);
@@ -556,7 +515,7 @@ ST_retcode compute_bins_single_group(
 
         /* Pass 3: Assign bins */
         for (i = 0; i < N; i++) {
-            if (IS_MISSING(x[i])) {
+            if (SF_is_missing(x[i])) {
                 bin_ids[i] = 0;
             } else {
                 ST_int bucket = (ST_int)((x[i] - x_min) * scale);
@@ -586,7 +545,7 @@ ST_retcode compute_bins_single_group(
 
         for (i = 0; i < N; i++) {
             ST_int orig_idx = sort_idx[i];
-            if (!IS_MISSING(x[orig_idx])) {
+            if (!SF_is_missing(x[orig_idx])) {
                 total_weight += weights[orig_idx];
             }
             cum_weight[i] = total_weight;
@@ -595,7 +554,7 @@ ST_retcode compute_bins_single_group(
         /* Handle zero total weight - assign all to bin 1 */
         if (total_weight <= 0.0) {
             for (i = 0; i < N; i++) {
-                bin_ids[i] = IS_MISSING(x[i]) ? 0 : 1;
+                bin_ids[i] = SF_is_missing(x[i]) ? 0 : 1;
             }
             free(cum_weight);
             goto compute_stats;
@@ -604,7 +563,7 @@ ST_retcode compute_bins_single_group(
         ST_double weight_per_bin = total_weight / nq;
         for (i = 0; i < N; i++) {
             ST_int orig_idx = sort_idx[i];
-            if (IS_MISSING(x[orig_idx])) {
+            if (SF_is_missing(x[orig_idx])) {
                 bin_ids[orig_idx] = 0;
             } else {
                 ST_int bin = (ST_int)(cum_weight[i] / weight_per_bin) + 1;
@@ -659,11 +618,11 @@ ST_retcode compute_bins_discrete(
 
     /* Count unique non-missing values */
     unique_count = 0;
-    ST_double prev_val = STATA_MISSING;
+    ST_double prev_val = SV_missval;
     for (i = 0; i < N; i++) {
         ST_int idx = sort_idx[i];
         ST_double val = x[idx];
-        if (IS_MISSING(val)) continue;
+        if (SF_is_missing(val)) continue;
         if (unique_count == 0 || val != prev_val) {
             unique_count++;
             prev_val = val;
@@ -686,11 +645,11 @@ ST_retcode compute_bins_discrete(
     }
 
     j = 0;
-    prev_val = STATA_MISSING;
+    prev_val = SV_missval;
     for (i = 0; i < N; i++) {
         ST_int idx = sort_idx[i];
         ST_double val = x[idx];
-        if (IS_MISSING(val)) {
+        if (SF_is_missing(val)) {
             bin_ids[idx] = 0;
             continue;
         }
@@ -800,7 +759,7 @@ void assign_bins(
     ST_int i;
 
     for (i = 0; i < N; i++) {
-        if (IS_MISSING(x[i])) {
+        if (SF_is_missing(x[i])) {
             bin_ids[i] = 0;
         } else {
             /* Binary search for bin */

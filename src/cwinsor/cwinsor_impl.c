@@ -26,6 +26,7 @@
 #include "ctools_config.h"
 #include "ctools_timer.h"
 #include "ctools_error.h"
+#include "ctools_select.h"
 #include "cwinsor_impl.h"
 
 #define CWINSOR_MODULE "cwinsor"
@@ -99,68 +100,8 @@ static void apply_permutation(double *data, const size_t *perm, size_t n, double
 
 /* ===========================================================================
    Quickselect - O(n) percentile computation
+   Uses shared ctools_quickselect_double from ctools_select.h
    =========================================================================== */
-
-static inline void swap_double(double *a, double *b)
-{
-    double tmp = *a;
-    *a = *b;
-    *b = tmp;
-}
-
-/* Median-of-three pivot selection + partition */
-static size_t partition(double *arr, size_t left, size_t right)
-{
-    size_t mid = left + (right - left) / 2;
-
-    if (arr[mid] < arr[left]) swap_double(&arr[left], &arr[mid]);
-    if (arr[right] < arr[left]) swap_double(&arr[left], &arr[right]);
-    if (arr[right] < arr[mid]) swap_double(&arr[mid], &arr[right]);
-
-    swap_double(&arr[mid], &arr[right - 1]);
-    double pivot = arr[right - 1];
-
-    size_t i = left;
-    for (size_t j = left; j < right - 1; j++) {
-        if (arr[j] <= pivot) {
-            swap_double(&arr[i], &arr[j]);
-            i++;
-        }
-    }
-    swap_double(&arr[i], &arr[right - 1]);
-    return i;
-}
-
-static double quickselect(double *arr, size_t n, size_t k)
-{
-    if (n == 0) return SV_missval;
-    if (n == 1) return arr[0];
-    if (k >= n) k = n - 1;
-
-    size_t left = 0;
-    size_t right = n - 1;
-
-    while (left < right) {
-        if (right - left < 10) {
-            for (size_t i = left + 1; i <= right; i++) {
-                double key = arr[i];
-                size_t j = i;
-                while (j > left && arr[j - 1] > key) {
-                    arr[j] = arr[j - 1];
-                    j--;
-                }
-                arr[j] = key;
-            }
-            return arr[k];
-        }
-
-        size_t pivot_idx = partition(arr, left, right);
-        if (k == pivot_idx) return arr[k];
-        else if (k < pivot_idx) right = pivot_idx - 1;
-        else left = pivot_idx + 1;
-    }
-    return arr[left];
-}
 
 /* Compute two percentiles from a single extraction */
 static void compute_two_percentiles(double *work, size_t n,
@@ -184,7 +125,7 @@ static void compute_two_percentiles(double *work, size_t n,
     size_t k_lo = (size_t)floor(pos_lo);
     if (k_lo >= n) k_lo = n - 1;
 
-    double val_lo = quickselect(work, n, k_lo);
+    double val_lo = ctools_quickselect_double(work, n, k_lo);
 
     double frac_lo = pos_lo - (double)k_lo;
     if (frac_lo > 0.0 && k_lo + 1 < n) {
@@ -199,7 +140,7 @@ static void compute_two_percentiles(double *work, size_t n,
     size_t k_hi_floor = (size_t)floor(pos_hi);
     if (k_hi_floor >= n) k_hi_floor = n - 1;
 
-    double val_hi_floor = quickselect(work, n, k_hi_floor);
+    double val_hi_floor = ctools_quickselect_double(work, n, k_hi_floor);
 
     double frac_hi = pos_hi - (double)k_hi_floor;
     if (frac_hi > 0.0 && k_hi_floor + 1 < n) {

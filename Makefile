@@ -82,9 +82,8 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
 CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c \
              $(SRC_DIR)/csort/csort_stream.c
 
-# cimport module
+# cimport module (uses shared ctools_arena from ctools_arena.c)
 CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
-               $(SRC_DIR)/cimport/cimport_arena.c \
                $(SRC_DIR)/cimport/cimport_mmap.c \
                $(SRC_DIR)/cimport/cimport_parse.c
 
@@ -170,7 +169,6 @@ CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h \
 
 CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
                   $(SRC_DIR)/cimport/cimport_context.h \
-                  $(SRC_DIR)/cimport/cimport_arena.h \
                   $(SRC_DIR)/cimport/cimport_mmap.h \
                   $(SRC_DIR)/cimport/cimport_parse.h
 

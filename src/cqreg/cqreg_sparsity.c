@@ -6,6 +6,7 @@
  */
 
 #include "cqreg_sparsity.h"
+#include "ctools_select.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -253,65 +254,8 @@ static int compare_double(const void *a, const void *b)
 
 /* ============================================================================
  * Quickselect Algorithm - O(N) expected time for finding k-th element
- * Much faster than full sort O(N log N) when we only need a few order statistics
+ * Uses shared ctools_quickselect_st from ctools_select.h
  * ============================================================================ */
-
-/* Partition helper for quickselect */
-static ST_int partition(ST_double *arr, ST_int lo, ST_int hi)
-{
-    /* Use median-of-three pivot selection for better performance */
-    ST_int mid = lo + (hi - lo) / 2;
-
-    /* Sort lo, mid, hi to find median */
-    if (arr[mid] < arr[lo]) {
-        ST_double tmp = arr[lo]; arr[lo] = arr[mid]; arr[mid] = tmp;
-    }
-    if (arr[hi] < arr[lo]) {
-        ST_double tmp = arr[lo]; arr[lo] = arr[hi]; arr[hi] = tmp;
-    }
-    if (arr[mid] < arr[hi]) {
-        ST_double tmp = arr[mid]; arr[mid] = arr[hi]; arr[hi] = tmp;
-    }
-
-    /* Pivot is now at hi */
-    ST_double pivot = arr[hi];
-    ST_int i = lo - 1;
-
-    for (ST_int j = lo; j < hi; j++) {
-        if (arr[j] <= pivot) {
-            i++;
-            ST_double tmp = arr[i];
-            arr[i] = arr[j];
-            arr[j] = tmp;
-        }
-    }
-
-    ST_double tmp = arr[i + 1];
-    arr[i + 1] = arr[hi];
-    arr[hi] = tmp;
-
-    return i + 1;
-}
-
-/*
- * Quickselect: Find the k-th smallest element in O(N) expected time.
- * Modifies array in place (partial sorting).
- * After return, arr[k] contains the k-th smallest element.
- */
-static void quickselect(ST_double *arr, ST_int lo, ST_int hi, ST_int k)
-{
-    while (lo < hi) {
-        ST_int pivot_idx = partition(arr, lo, hi);
-
-        if (pivot_idx == k) {
-            return;
-        } else if (k < pivot_idx) {
-            hi = pivot_idx - 1;
-        } else {
-            lo = pivot_idx + 1;
-        }
-    }
-}
 
 /*
  * Find two order statistics efficiently.
@@ -335,7 +279,7 @@ static void find_two_order_statistics(ST_double *arr, ST_int N,
     if (idx_hi >= N) idx_hi = N - 1;
 
     /* Find the lower order statistic first */
-    quickselect(arr, 0, N - 1, idx_lo);
+    ctools_quickselect_st(arr, 0, N - 1, idx_lo);
     *val_lo = arr[idx_lo];
 
     /* Now find the higher order statistic.
@@ -344,7 +288,7 @@ static void find_two_order_statistics(ST_double *arr, ST_int N,
      * So we only need to search in arr[idx_lo+1..N-1] for idx_hi.
      */
     if (idx_hi > idx_lo) {
-        quickselect(arr, idx_lo + 1, N - 1, idx_hi);
+        ctools_quickselect_st(arr, idx_lo + 1, N - 1, idx_hi);
     }
     *val_hi = arr[idx_hi];
 }

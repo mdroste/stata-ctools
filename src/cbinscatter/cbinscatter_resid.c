@@ -12,9 +12,7 @@
 #include "stplugin.h"
 #include "cbinscatter_resid.h"
 
-/* Stata missing value check */
-#define STATA_MISSING 8.988465674311579e+307
-#define IS_MISSING(x) ((x) >= STATA_MISSING)
+/* Use SF_is_missing() from stplugin.h for missing value checks */
 
 /* ========================================================================
  * Cholesky Decomposition and Solve

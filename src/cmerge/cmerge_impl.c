@@ -61,7 +61,7 @@
 #define CMERGE_MAX_KEYVARS 32
 #define CMERGE_MAX_VARS 1024
 
-#define cmerge_get_time_ms() ctools_timer_ms()
+/* Timer: use ctools_timer_ms() directly from ctools_timer.h */
 
 /* ============================================================================
  * Global using data cache (used by cmerge_io.c)
@@ -189,7 +189,7 @@ static ST_retcode cmerge_load_using(const char *args)
 
     cache_lock_release();
 
-    double t_phase1_start = cmerge_get_time_ms();
+    double t_phase1_start = ctools_timer_ms();
 
     double t_load_keys = 0;
     double t_load_keepusing = 0;
@@ -202,7 +202,7 @@ static ST_retcode cmerge_load_using(const char *args)
 
         /* Load keepusing variables */
         if (n_keepusing > 0) {
-            double t_load_keepusing_start = cmerge_get_time_ms();
+            double t_load_keepusing_start = ctools_timer_ms();
             rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
             if (rc != STATA_OK) {
                 SF_error("cmerge: Failed to load keepusing variables\n");
@@ -212,14 +212,14 @@ static ST_retcode cmerge_load_using(const char *args)
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
-            t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
+            t_load_keepusing = ctools_timer_ms() - t_load_keepusing_start;
             g_using_cache.keys.nobs = g_using_cache.keepusing.nobs;
         } else {
             stata_data_init(&g_using_cache.keepusing);
         }
     } else {
         /* Standard merge: Load ONLY key variables */
-        double t_load_keys_start = cmerge_get_time_ms();
+        double t_load_keys_start = ctools_timer_ms();
         rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
         if (rc != STATA_OK) {
             SF_error("cmerge: Failed to load using keys\n");
@@ -230,11 +230,11 @@ static ST_retcode cmerge_load_using(const char *args)
             SF_error("cmerge: FATAL - keys.vars is NULL after load\n");
             return 920;
         }
-        t_load_keys = cmerge_get_time_ms() - t_load_keys_start;
+        t_load_keys = ctools_timer_ms() - t_load_keys_start;
 
         /* Load ONLY keepusing variables */
         if (n_keepusing > 0) {
-            double t_load_keepusing_start = cmerge_get_time_ms();
+            double t_load_keepusing_start = ctools_timer_ms();
             rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
             if (rc != STATA_OK) {
                 stata_data_free(&g_using_cache.keys);
@@ -247,7 +247,7 @@ static ST_retcode cmerge_load_using(const char *args)
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
-            t_load_keepusing = cmerge_get_time_ms() - t_load_keepusing_start;
+            t_load_keepusing = ctools_timer_ms() - t_load_keepusing_start;
         } else {
             stata_data_init(&g_using_cache.keepusing);
         }
@@ -263,7 +263,7 @@ static ST_retcode cmerge_load_using(const char *args)
 
     /* Sort using data on keys (skip if sorted option specified or merge_by_n) */
     if (!sorted && !merge_by_n) {
-        double t_sort_start = cmerge_get_time_ms();
+        double t_sort_start = ctools_timer_ms();
 
         int *sort_vars = malloc(nkeys * sizeof(int));
         if (!sort_vars) {
@@ -298,10 +298,10 @@ static ST_retcode cmerge_load_using(const char *args)
             return 459;
         }
 
-        t_sort = cmerge_get_time_ms() - t_sort_start;
+        t_sort = ctools_timer_ms() - t_sort_start;
 
         /* Apply same permutation to keepusing */
-        double t_apply_perm_start = cmerge_get_time_ms();
+        double t_apply_perm_start = ctools_timer_ms();
         if (n_keepusing > 0 && g_using_cache.keepusing.vars != NULL) {
             for (int v = 0; v < n_keepusing; v++) {
                 stata_variable *var = &g_using_cache.keepusing.vars[v];
@@ -358,7 +358,7 @@ static ST_retcode cmerge_load_using(const char *args)
                 }
             }
         }
-        t_apply_perm = cmerge_get_time_ms() - t_apply_perm_start;
+        t_apply_perm = ctools_timer_ms() - t_apply_perm_start;
 
         free(perm);
         free(sort_vars);
@@ -366,7 +366,7 @@ static ST_retcode cmerge_load_using(const char *args)
 
     g_using_cache.loaded = 1;
 
-    double t_phase1_total = cmerge_get_time_ms() - t_phase1_start;
+    double t_phase1_total = ctools_timer_ms() - t_phase1_start;
 
     /* Save Phase 1 timing to Stata scalars (in seconds) */
     SF_scal_save("_cmerge_using_nobs", (double)g_using_cache.nobs);
@@ -393,7 +393,7 @@ static ST_retcode cmerge_execute(const char *args)
     ST_retcode rc;
     double t_start, t_total_start;
 
-    t_total_start = cmerge_get_time_ms();
+    t_total_start = ctools_timer_ms();
 
     /* Acquire lock and mark cache as in-use to prevent concurrent clear */
     cache_lock_acquire();
@@ -521,7 +521,7 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 1: Load ALL master variables (parallel I/O)
      * =================================================================== */
 
-    t_start = cmerge_get_time_ms();
+    t_start = ctools_timer_ms();
 
     /* Build array of all variable indices to load */
     int *all_var_indices = malloc(master_nvars * sizeof(int));
@@ -551,7 +551,7 @@ static ST_retcode cmerge_execute(const char *args)
         SF_error("cmerge: FATAL - master_data.vars is NULL after load!\n");
         return 920;
     }
-    double t_load = cmerge_get_time_ms() - t_start;
+    double t_load = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Step 2: Sort master data on keys (skip if sorted option specified or merge_by_n)
@@ -561,7 +561,7 @@ static ST_retcode cmerge_execute(const char *args)
     size_t *sort_perm = NULL;
 
     if (!sorted && !merge_by_n) {
-        t_start = cmerge_get_time_ms();
+        t_start = ctools_timer_ms();
 
         /* Build sort variable indices (within master_data, 1-based) */
         int *sort_vars = malloc(nkeys * sizeof(int));
@@ -598,7 +598,7 @@ static ST_retcode cmerge_execute(const char *args)
             return rc;
         }
 
-        t_sort = cmerge_get_time_ms() - t_start;
+        t_sort = ctools_timer_ms() - t_start;
     }
 
     /* ===================================================================
@@ -607,7 +607,7 @@ static ST_retcode cmerge_execute(const char *args)
      * For standard merge: sorted join using keys
      * =================================================================== */
 
-    t_start = cmerge_get_time_ms();
+    t_start = ctools_timer_ms();
 
     cmerge_output_spec_t *output_specs = NULL;
     size_t output_nobs = 0;
@@ -709,7 +709,7 @@ static ST_retcode cmerge_execute(const char *args)
         output_nobs = (size_t)output_nobs_signed;
     }
 
-    double t_merge = cmerge_get_time_ms() - t_start;
+    double t_merge = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Step 4: Build master_orig_row mapping using _orig_row variable
@@ -755,7 +755,7 @@ static ST_retcode cmerge_execute(const char *args)
 
     double t_reorder = 0;
     if (preserve_order && output_nobs > 0) {
-        double t_reorder_start = cmerge_get_time_ms();
+        double t_reorder_start = ctools_timer_ms();
 
         cmerge_order_pair_t *pairs = ctools_safe_malloc2(output_nobs, sizeof(cmerge_order_pair_t));
         if (!pairs) {
@@ -807,7 +807,7 @@ static ST_retcode cmerge_execute(const char *args)
         master_orig_rows = new_orig_rows;
         free(pairs);
 
-        t_reorder = cmerge_get_time_ms() - t_reorder_start;
+        t_reorder = ctools_timer_ms() - t_reorder_start;
     }
 
     /* Count merge results */
@@ -823,7 +823,7 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 6: Create output data structure with permuted data
      * =================================================================== */
 
-    t_start = cmerge_get_time_ms();
+    t_start = ctools_timer_ms();
 
     /* Determine which variables to include in output (exclude _orig_row and shared keepusing) */
     size_t n_output_vars = 0;
@@ -1111,13 +1111,13 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    double t_permute = cmerge_get_time_ms() - t_start;
+    double t_permute = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Step 7: Store output data using parallel I/O
      * =================================================================== */
 
-    t_start = cmerge_get_time_ms();
+    t_start = ctools_timer_ms();
 
     rc = ctools_data_store_selective(&output_data, output_var_stata_idx, n_output_vars, 1);
     if (rc != STATA_OK) {
@@ -1152,13 +1152,13 @@ static ST_retcode cmerge_execute(const char *args)
         return rc;
     }
 
-    double t_store = cmerge_get_time_ms() - t_start;
+    double t_store = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Step 8: Write _merge variable
      * =================================================================== */
 
-    t_start = cmerge_get_time_ms();
+    t_start = ctools_timer_ms();
 
     if (merge_var_idx > 0) {
         ST_int mvar = (ST_int)merge_var_idx;
@@ -1186,13 +1186,13 @@ static ST_retcode cmerge_execute(const char *args)
         }
     }
 
-    double t_write_meta = cmerge_get_time_ms() - t_start;
+    double t_write_meta = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Cleanup
      * =================================================================== */
 
-    double t_cleanup_start = cmerge_get_time_ms();
+    double t_cleanup_start = ctools_timer_ms();
 
     /* Free output data - use arena for O(1) string cleanup */
     for (size_t vi = 0; vi < n_output_vars; vi++) {
@@ -1230,10 +1230,10 @@ static ST_retcode cmerge_execute(const char *args)
     g_cache_in_use = 0;
     cache_lock_release();
 
-    double t_cleanup = cmerge_get_time_ms() - t_cleanup_start;
+    double t_cleanup = ctools_timer_ms() - t_cleanup_start;
 
     /* Calculate total time */
-    double t_total = cmerge_get_time_ms() - t_total_start;
+    double t_total = ctools_timer_ms() - t_total_start;
 
     /* Save merge results to Stata scalars */
     SF_scal_save("_cmerge_N", (double)output_nobs);

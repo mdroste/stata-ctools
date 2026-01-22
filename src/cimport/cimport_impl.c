@@ -45,7 +45,7 @@
 #include "cimport_mmap.h"
 
 /* High-resolution timing */
-#define cimport_get_time_ms() ctools_timer_ms()
+/* Timer: use ctools_timer_ms() directly from ctools_timer.h */
 
 /* ============================================================================
  * Configuration Constants
@@ -358,7 +358,7 @@ static void cimport_free_context(CImportContext *ctx) {
             CImportParsedChunk *chunk = &ctx->chunks[c];
             free(chunk->rows);
             free(chunk->col_stats);
-            cimport_arena_free(&chunk->arena);
+            ctools_arena_free(&chunk->arena);
         }
         free(ctx->chunks);
     }
@@ -367,7 +367,7 @@ static void cimport_free_context(CImportContext *ctx) {
         for (int i = 0; i < ctx->num_columns; i++) {
             free(ctx->col_cache[i].numeric_data);
             free(ctx->col_cache[i].string_data);
-            cimport_arena_free(&ctx->col_cache[i].string_arena);
+            ctools_arena_free(&ctx->col_cache[i].string_arena);
         }
         free(ctx->col_cache);
     }
@@ -451,7 +451,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
     CImportContext *ctx = task->ctx;
     CImportParsedChunk *chunk = task->chunk;
 
-    cimport_arena_init(&chunk->arena);
+    ctools_arena_init(&chunk->arena, 0);
     chunk->capacity = 16384;
     chunk->rows = ctools_safe_malloc2(chunk->capacity, sizeof(CImportParsedRow *));
     chunk->num_rows = 0;
@@ -538,7 +538,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
             break;
         }
         size_t row_size = sizeof(CImportParsedRow) + sizeof(CImportFieldRef) * num_fields;
-        CImportParsedRow *row = cimport_arena_alloc(&chunk->arena, row_size);
+        CImportParsedRow *row = ctools_arena_alloc(&chunk->arena, row_size);
         if (!row) {
             atomic_store(&ctx->error_code, 1);
             break;
@@ -594,13 +594,13 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->num_unmatched_quote_warnings = 0;
     pthread_mutex_init(&ctx->warning_mutex, NULL);
 
-    t_start = cimport_get_time_ms();
+    t_start = ctools_timer_ms();
     if (cimport_mmap_file(ctx, filename) != 0) {
         cimport_display_error(ctx->error_message);
         cimport_free_context(ctx);
         return NULL;
     }
-    t_end = cimport_get_time_ms();
+    t_end = ctools_timer_ms();
     ctx->time_mmap = t_end - t_start;
 
     if (cimport_parse_header(ctx) != 0) {
@@ -620,7 +620,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     if (cpu_count > CIMPORT_MAX_THREADS) cpu_count = CIMPORT_MAX_THREADS;
     ctx->num_threads = cpu_count;
 
-    t_start = cimport_get_time_ms();
+    t_start = ctools_timer_ms();
 
     size_t min_chunk_size = 4 * 1024 * 1024;
     int num_chunks = ctx->num_threads;
@@ -638,7 +638,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
     if (num_chunks == 1) {
         CImportParsedChunk *chunk = &ctx->chunks[0];
-        cimport_arena_init(&chunk->arena);
+        ctools_arena_init(&chunk->arena, 0);
         chunk->capacity = 65536;
         chunk->rows = ctools_safe_malloc2(chunk->capacity, sizeof(CImportParsedRow *));
         chunk->num_rows = 0;
@@ -706,7 +706,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             }
 
             size_t row_size = sizeof(CImportParsedRow) + sizeof(CImportFieldRef) * num_fields;
-            CImportParsedRow *row = cimport_arena_alloc(&chunk->arena, row_size);
+            CImportParsedRow *row = ctools_arena_alloc(&chunk->arena, row_size);
             if (!row) {
                 cimport_free_context(ctx);
                 return NULL;
@@ -763,7 +763,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
     }
 
-    t_end = cimport_get_time_ms();
+    t_end = ctools_timer_ms();
     ctx->time_parse = t_end - t_start;
 
     ctx->total_rows = 0;
@@ -802,9 +802,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         ctx->num_columns = new_num;
     }
 
-    t_start = cimport_get_time_ms();
+    t_start = ctools_timer_ms();
     cimport_infer_column_types(ctx);
-    t_end = cimport_get_time_ms();
+    t_end = ctools_timer_ms();
     ctx->time_type_infer = t_end - t_start;
 
     ctx->is_loaded = true;
@@ -840,7 +840,7 @@ static void *cimport_build_cache_worker(void *arg) {
                 continue;
             }
 
-            cimport_arena_init(&cache->string_arena);
+            ctools_arena_init(&cache->string_arena, 0);
 
             for (int c = 0; c < ctx->num_chunks; c++) {
                 CImportParsedChunk *chunk = &ctx->chunks[c];
@@ -862,14 +862,14 @@ static void *cimport_build_cache_worker(void *arg) {
                         }
                         field_buf[len] = '\0';
 
-                        str = cimport_arena_alloc(&cache->string_arena, len + 1);
+                        str = ctools_arena_alloc(&cache->string_arena, len + 1);
                         if (str) {
                             memcpy(str, field_buf, len + 1);
                         } else {
                             str = "";
                         }
                     } else {
-                        str = cimport_arena_alloc(&cache->string_arena, 1);
+                        str = ctools_arena_alloc(&cache->string_arena, 1);
                         if (str) {
                             str[0] = '\0';
                         } else {
@@ -922,7 +922,7 @@ static void *cimport_build_cache_worker(void *arg) {
 static void cimport_build_column_cache(CImportContext *ctx) {
     if (ctx->cache_ready) return;
 
-    double t_start = cimport_get_time_ms();
+    double t_start = ctools_timer_ms();
 
     ctx->col_cache = ctools_safe_calloc2(ctx->num_columns, sizeof(CImportColumnCache));
     if (!ctx->col_cache) return;
@@ -976,7 +976,7 @@ static void cimport_build_column_cache(CImportContext *ctx) {
 
     ctx->cache_ready = true;
 
-    double t_end = cimport_get_time_ms();
+    double t_end = ctools_timer_ms();
     ctx->time_cache = t_end - t_start;
 }
 
@@ -1149,7 +1149,7 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         }
     }
 
-    double t_load_start = cimport_get_time_ms();
+    double t_load_start = ctools_timer_ms();
     long total_fields = 0;
 
     ST_int stata_nvars = SF_nvars();
@@ -1244,7 +1244,7 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         }
     }
 
-    double t_load_end = cimport_get_time_ms();
+    double t_load_end = ctools_timer_ms();
     double time_spi = t_load_end - t_load_start;
 
     snprintf(msg, sizeof(msg), "Loaded %zu observations\n", ctx->total_rows);

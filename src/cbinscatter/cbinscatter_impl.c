@@ -28,9 +28,7 @@
 #include "cbinscatter_resid.h"
 #include "cbinscatter_fit.h"
 
-/* Stata missing value check */
-#define STATA_MISSING 8.988465674311579e+307
-#define IS_MISSING(x) ((x) >= STATA_MISSING)
+/* Use SF_is_missing() from stplugin.h for missing value checks */
 
 /* ========================================================================
  * Type Initialization and Cleanup
@@ -355,14 +353,14 @@ static ST_retcode load_data(
         int valid = 1;
 
         /* Check y and x */
-        if (IS_MISSING(y[i]) || IS_MISSING(x[i])) {
+        if (SF_is_missing(y[i]) || SF_is_missing(x[i])) {
             valid = 0;
         }
 
         /* Check controls */
         if (valid && controls) {
             for (j = 0; j < config->num_controls; j++) {
-                if (IS_MISSING(controls[j * N + i])) {
+                if (SF_is_missing(controls[j * N + i])) {
                     valid = 0;
                     break;
                 }
@@ -388,7 +386,7 @@ static ST_retcode load_data(
 
         /* Check weights */
         if (valid && weights) {
-            if (IS_MISSING(weights[i]) || weights[i] <= 0) {
+            if (SF_is_missing(weights[i]) || weights[i] <= 0) {
                 valid = 0;
             }
         }
