@@ -195,7 +195,7 @@ CREGHDFE_HEADERS = $(SRC_DIR)/creghdfe/creghdfe_types.h \
                    $(SRC_DIR)/creghdfe/creghdfe_solver.h \
                    $(SRC_DIR)/creghdfe/creghdfe_ols.h \
                    $(SRC_DIR)/creghdfe/creghdfe_vce.h \
-                   $(SRC_DIR)/creghdfe/creghdfe_main.h \
+                   $(SRC_DIR)/creghdfe/creghdfe_regress.h \
                    $(SRC_DIR)/creghdfe/creghdfe_impl.h
 
 CQREG_HEADERS = $(SRC_DIR)/cqreg/cqreg_types.h \
@@ -205,7 +205,7 @@ CQREG_HEADERS = $(SRC_DIR)/cqreg/cqreg_types.h \
                 $(SRC_DIR)/cqreg/cqreg_sparsity.h \
                 $(SRC_DIR)/cqreg/cqreg_vce.h \
                 $(SRC_DIR)/cqreg/cqreg_hdfe.h \
-                $(SRC_DIR)/cqreg/cqreg_main.h \
+                $(SRC_DIR)/cqreg/cqreg_regress.h \
                 $(SRC_DIR)/cqreg/cqreg_impl.h
 
 CBINSCATTER_HEADERS = $(SRC_DIR)/cbinscatter/cbinscatter_types.h \
