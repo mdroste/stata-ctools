@@ -240,9 +240,26 @@ int ctools_uint64_to_str_fast(uint64_t val, char *buf)
 #include <omp.h>
 #endif
 
-/* Prefetch distances for permutation operations - multiple levels for better pipelining */
-#define PERM_PREFETCH_NEAR  8
-#define PERM_PREFETCH_FAR   32
+/*
+    Prefetch distances for permutation operations.
+    Uses adaptive distances based on detected cache hierarchy.
+    - NEAR: prefetch into L1 cache
+    - FAR: prefetch into L2/L3 cache
+*/
+static int _perm_prefetch_near = 0;
+static int _perm_prefetch_far = 0;
+
+static inline void init_perm_prefetch_distances(void)
+{
+    if (_perm_prefetch_near == 0) {
+        ctools_prefetch_distances dist = ctools_get_prefetch_distances();
+        _perm_prefetch_near = dist.near;
+        _perm_prefetch_far = dist.far;
+    }
+}
+
+#define PERM_PREFETCH_NEAR  (_perm_prefetch_near ? _perm_prefetch_near : 8)
+#define PERM_PREFETCH_FAR   (_perm_prefetch_far ? _perm_prefetch_far : 32)
 
 /*
     Apply permutation using GATHER pattern with multi-level prefetching.
@@ -375,6 +392,9 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     size_t j;
 
     if (nvars == 0 || nobs == 0) return STATA_OK;
+
+    /* Initialize adaptive prefetch distances (once per process) */
+    init_perm_prefetch_distances();
 
     /* Apply permutation to each variable in parallel across variables */
     #ifdef _OPENMP

@@ -117,8 +117,22 @@ static int build_inverse_permutation(
 /* Number of variables to process together in multi-var mode */
 #define STREAM_MULTI_VAR_BATCH 4
 
-/* Prefetch distance for permutation lookups - tuned for L1 cache latency */
-#define STREAM_PREFETCH_DIST 64
+/*
+    Adaptive prefetch distance for streaming operations.
+    Uses cache-aware distances based on detected hardware.
+*/
+static int _stream_prefetch_dist = 0;
+
+static inline int get_stream_prefetch_dist(void)
+{
+    if (_stream_prefetch_dist == 0) {
+        ctools_prefetch_distances dist = ctools_get_prefetch_distances();
+        _stream_prefetch_dist = dist.stream;
+    }
+    return _stream_prefetch_dist;
+}
+
+#define STREAM_PREFETCH_DIST (get_stream_prefetch_dist())
 
 /*
     Process a string variable with arena allocation.
