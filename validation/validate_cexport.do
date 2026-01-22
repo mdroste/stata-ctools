@@ -420,6 +420,288 @@ end
 benchmark_export, testname("special characters")
 
 /*******************************************************************************
+ * SECTION: Large Dataset Tests
+ ******************************************************************************/
+noi print_section "Large Datasets"
+
+* 10K rows export
+clear
+set obs 10000
+gen id = _n
+gen value = runiform()
+gen str20 name = "item_" + string(_n)
+
+capture cexport delimited using "temp/large_10k.csv", replace
+if _rc == 0 {
+    noi test_pass "10K rows export"
+}
+else {
+    noi test_fail "10K rows" "rc=`=_rc'"
+}
+
+* Compare with export delimited
+export delimited using "temp/large_10k_stata.csv", replace
+cexport delimited using "temp/large_10k_cexport.csv", replace
+
+file open f1 using "temp/large_10k_stata.csv", read
+file read f1 line1_stata
+file close f1
+
+file open f2 using "temp/large_10k_cexport.csv", read
+file read f2 line1_cexport
+file close f2
+
+if "`line1_stata'" == "`line1_cexport'" {
+    noi test_pass "large export matches Stata header"
+}
+else {
+    noi test_fail "large match" "headers differ"
+}
+
+* 50K rows
+clear
+set obs 50000
+gen id = _n
+gen x = runiform()
+gen y = runiform()
+
+capture cexport delimited using "temp/large_50k.csv", replace
+if _rc == 0 {
+    noi test_pass "50K rows export"
+}
+else {
+    noi test_fail "50K rows" "rc=`=_rc'"
+}
+
+* Many columns (20)
+clear
+set obs 1000
+forvalues i = 1/20 {
+    gen var`i' = runiform()
+}
+
+capture cexport delimited using "temp/many_cols.csv", replace
+if _rc == 0 {
+    noi test_pass "20 columns export"
+}
+else {
+    noi test_fail "20 columns" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Pathological Data
+ ******************************************************************************/
+noi print_section "Pathological Data"
+
+* All missing values
+clear
+set obs 100
+gen x = .
+gen y = .
+gen z = .
+
+capture cexport delimited using "temp/all_missing.csv", replace
+if _rc == 0 {
+    noi test_pass "all missing values"
+}
+else {
+    noi test_fail "all missing" "rc=`=_rc'"
+}
+
+* Empty strings
+clear
+set obs 50
+gen str20 name = ""
+gen value = _n
+
+capture cexport delimited using "temp/empty_strings.csv", replace
+if _rc == 0 {
+    noi test_pass "empty strings"
+}
+else {
+    noi test_fail "empty strings" "rc=`=_rc'"
+}
+
+* Single column
+clear
+set obs 100
+gen only_col = runiform()
+
+capture cexport delimited using "temp/single_col.csv", replace
+if _rc == 0 {
+    noi test_pass "single column"
+}
+else {
+    noi test_fail "single column" "rc=`=_rc'"
+}
+
+* Single row
+clear
+set obs 1
+gen a = 1
+gen b = 2
+gen c = 3
+
+capture cexport delimited using "temp/single_row.csv", replace
+if _rc == 0 {
+    noi test_pass "single row"
+}
+else {
+    noi test_fail "single row" "rc=`=_rc'"
+}
+
+* Very long strings
+clear
+set obs 10
+gen str244 long_text = "a" * 200
+
+capture cexport delimited using "temp/long_strings.csv", replace
+if _rc == 0 {
+    noi test_pass "long strings (200 chars)"
+}
+else {
+    noi test_fail "long strings" "rc=`=_rc'"
+}
+
+* Extreme numeric values
+clear
+set obs 5
+gen double extreme = .
+replace extreme = 1e308 in 1
+replace extreme = -1e308 in 2
+replace extreme = 1e-308 in 3
+replace extreme = 0 in 4
+replace extreme = . in 5
+
+capture cexport delimited using "temp/extreme_nums.csv", replace
+if _rc == 0 {
+    noi test_pass "extreme numeric values"
+}
+else {
+    noi test_fail "extreme nums" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Real-World Datasets
+ ******************************************************************************/
+noi print_section "Real-World Datasets"
+
+* auto dataset
+sysuse auto, clear
+benchmark_export, testname("auto dataset full")
+
+* census dataset
+sysuse census, clear
+benchmark_export, testname("census dataset")
+
+* nlswork dataset
+webuse nlswork, clear
+capture cexport delimited using "temp/nlswork.csv", replace
+if _rc == 0 {
+    noi test_pass "nlswork dataset export"
+}
+else {
+    noi test_fail "nlswork" "rc=`=_rc'"
+}
+
+* lifeexp dataset
+webuse lifeexp, clear
+benchmark_export, testname("lifeexp dataset")
+
+/*******************************************************************************
+ * SECTION: Comparison Tests
+ ******************************************************************************/
+noi print_section "Comparison with export delimited"
+
+* Basic comparison
+sysuse auto, clear
+export delimited using "temp/compare_stata.csv", replace
+cexport delimited using "temp/compare_cexport.csv", replace
+
+* Compare file sizes (should be similar)
+capture file open f1 using "temp/compare_stata.csv", read
+capture file open f2 using "temp/compare_cexport.csv", read
+* Just check both files exist and can be opened
+if _rc == 0 {
+    noi test_pass "comparison files created"
+}
+else {
+    noi test_fail "comparison" "file error"
+}
+capture file close f1
+capture file close f2
+
+* Round-trip test: export then import
+clear
+set obs 100
+gen id = _n
+gen value = runiform()
+gen str20 name = "test_" + string(_n)
+tempfile original
+save `original'
+
+cexport delimited using "temp/roundtrip.csv", replace
+import delimited using "temp/roundtrip.csv", clear
+local imported_N = _N
+
+if `imported_N' == 100 {
+    noi test_pass "round-trip export/import"
+}
+else {
+    noi test_fail "round-trip" "wrong N"
+}
+
+/*******************************************************************************
+ * SECTION: Edge Cases
+ ******************************************************************************/
+noi print_section "Edge Cases"
+
+* Variable names with underscores
+clear
+set obs 10
+gen my_var_name = _n
+gen another_var = runiform()
+
+capture cexport delimited using "temp/underscores.csv", replace
+if _rc == 0 {
+    noi test_pass "variable names with underscores"
+}
+else {
+    noi test_fail "underscores" "rc=`=_rc'"
+}
+
+* Numeric-looking strings
+clear
+set obs 5
+gen str10 numstr = string(_n * 100)
+
+capture cexport delimited using "temp/numstr.csv", replace
+if _rc == 0 {
+    noi test_pass "numeric-looking strings"
+}
+else {
+    noi test_fail "numstr" "rc=`=_rc'"
+}
+
+* Mixed types
+clear
+set obs 20
+gen byte b = mod(_n, 128)
+gen int i = _n * 100
+gen long l = _n * 10000
+gen float f = runiform()
+gen double d = runiform() * 1e10
+gen str20 s = "text_" + string(_n)
+
+capture cexport delimited using "temp/mixed_types.csv", replace
+if _rc == 0 {
+    noi test_pass "mixed variable types"
+}
+else {
+    noi test_fail "mixed types" "rc=`=_rc'"
+}
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

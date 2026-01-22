@@ -80,9 +80,6 @@ void cbinscatter_workdata_init(BinscatterWorkData *work) {
     work->N = 0;
     work->y = NULL;
     work->x = NULL;
-    work->weights = NULL;
-    work->by_groups = NULL;
-    work->sort_idx = NULL;
     work->y_owned = 0;
     work->x_owned = 0;
 }

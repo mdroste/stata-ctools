@@ -6,7 +6,7 @@
  */
 
 #include "cqreg_impl.h"
-#include "cqreg_main.h"
+#include "cqreg_regress.h"
 #include "cqreg_types.h"
 #include "../ctools_error.h"
 

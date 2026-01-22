@@ -1,12 +1,12 @@
 /*
- * creghdfe_main.c
+ * creghdfe_regress.c
  *
- * Main entry point and full_regression command
- * This is the largest module - orchestrates HDFE init, partial out, and OLS
+ * Full regression command for creghdfe
+ * Orchestrates HDFE init, partial out, and OLS
  * Part of the ctools Stata plugin suite
  */
 
-#include "creghdfe_main.h"
+#include "creghdfe_regress.h"
 #include "creghdfe_utils.h"
 #include "creghdfe_hdfe.h"
 #include "creghdfe_solver.h"

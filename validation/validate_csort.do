@@ -386,6 +386,163 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 15: Pathological data patterns
+ ******************************************************************************/
+noi print_section "Pathological Data Patterns"
+
+* All identical values
+clear
+set obs 10000
+gen x = 42
+noi benchmark_sort x, testname("all identical values")
+
+* Two distinct values
+clear
+set obs 10000
+gen x = mod(_n, 2)
+noi benchmark_sort x, testname("binary values")
+
+* Sorted in reverse
+clear
+set obs 5000
+gen x = 5000 - _n
+noi benchmark_sort x, testname("reverse sorted")
+
+* Nearly sorted (few out of place)
+clear
+set obs 5000
+gen x = _n
+replace x = 5000 - _n if mod(_n, 100) == 0
+noi benchmark_sort x, testname("nearly sorted")
+
+* Saw-tooth pattern
+clear
+set obs 5000
+gen x = mod(_n, 100)
+noi benchmark_sort x, testname("saw-tooth pattern")
+
+* All missing
+clear
+set obs 100
+gen x = .
+noi benchmark_sort x, testname("all missing")
+
+* Half missing
+clear
+set obs 1000
+gen x = cond(mod(_n, 2) == 0, _n, .)
+noi benchmark_sort x, testname("half missing")
+
+* Extreme values
+clear
+set obs 100
+gen double x = .
+replace x = -1e308 in 1
+replace x = 1e308 in 2
+replace x = 0 in 3/100
+noi benchmark_sort x, testname("extreme double values")
+
+/*******************************************************************************
+ * SECTION 16: More real-world datasets
+ ******************************************************************************/
+noi print_section "Additional Real-World Datasets"
+
+* lifeexp dataset
+webuse lifeexp, clear
+noi benchmark_sort country, testname("lifeexp: country")
+
+webuse lifeexp, clear
+noi benchmark_sort lexp, testname("lifeexp: life expectancy")
+
+* nlswork dataset
+webuse nlswork, clear
+noi benchmark_sort idcode, testname("nlswork: idcode")
+
+webuse nlswork, clear
+noi benchmark_sort year, testname("nlswork: year")
+
+webuse nlswork, clear
+noi benchmark_sort idcode year, testname("nlswork: idcode year")
+
+* educ99gdp dataset
+webuse educ99gdp, clear
+noi benchmark_sort country, testname("educ99gdp: country")
+
+webuse educ99gdp, clear
+noi benchmark_sort public, testname("educ99gdp: public spending")
+
+/*******************************************************************************
+ * SECTION 17: Multi-key sort edge cases
+ ******************************************************************************/
+noi print_section "Multi-Key Sort Edge Cases"
+
+* Three numeric keys
+sysuse auto, clear
+noi benchmark_sort foreign rep78 price, testname("three numeric keys")
+
+* Four keys mixed
+sysuse auto, clear
+noi benchmark_sort foreign rep78 mpg weight, testname("four keys")
+
+* String + multiple numeric
+sysuse auto, clear
+noi benchmark_sort make foreign price, testname("string + 2 numeric")
+
+* All same first key, different second
+clear
+set obs 1000
+gen x = 1
+gen y = 1000 - _n
+noi benchmark_sort x y, testname("same first key")
+
+/*******************************************************************************
+ * SECTION 18: Stability and consistency
+ ******************************************************************************/
+noi print_section "Stability and Consistency"
+
+* Sort same data twice - should be identical
+clear
+set obs 1000
+set seed 12345
+gen x = runiform()
+sort x
+tempfile sorted1
+save `sorted1', replace
+sort x
+tempfile sorted2
+save `sorted2', replace
+use `sorted1', clear
+capture cf _all using `sorted2'
+if _rc == 0 {
+    noi test_pass "double sort identical"
+}
+else {
+    noi test_fail "double sort" "results differ"
+}
+
+* csort then sort should match
+clear
+set obs 1000
+set seed 54321
+gen x = runiform()
+gen orig_order = _n
+csort x
+tempfile csorted
+save `csorted', replace
+use `csorted', clear
+gen csort_order = _n
+sort orig_order
+sort x
+gen sort_order = _n
+count if csort_order != sort_order
+if r(N) == 0 {
+    noi test_pass "csort matches sort order"
+}
+else {
+    noi test_fail "order match" "`=r(N)' positions differ"
+}
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 noi print_summary "csort"

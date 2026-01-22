@@ -89,9 +89,6 @@ typedef struct {
     ST_int N;                /* Number of valid observations */
     ST_double *y;            /* y values (residualized if controls/absorb) */
     ST_double *x;            /* x values (residualized if controls/absorb) */
-    ST_double *weights;      /* weights (NULL if unweighted) */
-    ST_int *by_groups;       /* by-group assignments (NULL if no by) */
-    ST_int *sort_idx;        /* Sort indices after sorting by x */
     ST_int y_owned;          /* Whether y is owned (should be freed) */
     ST_int x_owned;          /* Whether x is owned (should be freed) */
 } BinscatterWorkData;

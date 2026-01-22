@@ -59,11 +59,13 @@ size_t cmerge_find_group_end_hybrid(stata_data *data, size_t start,
         }
 
         if (cmp == 0) {
-            lo = mid + 1;  /* Key matches, search right half */
+            lo = mid;  /* Key matches, extend known-match range */
         } else {
-            hi = mid;      /* Key differs, search left half */
+            hi = mid;  /* Key differs, narrow search range */
         }
     }
 
-    return lo;  /* lo is now the first index where key differs, or nobs if all match */
+    /* lo is the last known matching index, hi is the first known differing index.
+     * Return the first index after the matching group. */
+    return lo + 1;
 }

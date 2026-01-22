@@ -604,6 +604,379 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Pathological Data Tests
+ ******************************************************************************/
+noi print_section "Pathological Data"
+
+* All empty strings
+file open myfile using "temp/all_empty.csv", write replace
+file write myfile "a,b,c" _n
+file write myfile ",," _n
+file write myfile ",," _n
+file write myfile ",," _n
+file close myfile
+
+capture cimport delimited using "temp/all_empty.csv", clear
+if _rc == 0 {
+    noi test_pass "all empty values"
+}
+else {
+    noi test_fail "all empty" "rc=`=_rc'"
+}
+
+* Very long lines
+file open myfile using "temp/long_lines.csv", write replace
+file write myfile "id,value" _n
+forvalues i = 1/10 {
+    local long_val = ""
+    forvalues j = 1/100 {
+        local long_val = "`long_val'x"
+    }
+    file write myfile "`i',`long_val'" _n
+}
+file close myfile
+
+capture cimport delimited using "temp/long_lines.csv", clear
+if _rc == 0 {
+    noi test_pass "long lines (100 chars)"
+}
+else {
+    noi test_fail "long lines" "rc=`=_rc'"
+}
+
+* Single column
+file open myfile using "temp/single_col.csv", write replace
+file write myfile "values" _n
+forvalues i = 1/100 {
+    file write myfile "`i'" _n
+}
+file close myfile
+
+capture cimport delimited using "temp/single_col.csv", clear
+if _rc == 0 {
+    if _N == 100 {
+        noi test_pass "single column CSV"
+    }
+    else {
+        noi test_fail "single column" "wrong N"
+    }
+}
+else {
+    noi test_fail "single column" "rc=`=_rc'"
+}
+
+* Many columns (20)
+file open myfile using "temp/many_cols.csv", write replace
+local header = "c1"
+forvalues i = 2/20 {
+    local header = "`header',c`i'"
+}
+file write myfile "`header'" _n
+forvalues row = 1/50 {
+    local line = "`row'"
+    forvalues col = 2/20 {
+        local line = "`line',`=`row'*`col''"
+    }
+    file write myfile "`line'" _n
+}
+file close myfile
+
+capture cimport delimited using "temp/many_cols.csv", clear
+if _rc == 0 {
+    if _N == 50 {
+        noi test_pass "20 columns CSV"
+    }
+    else {
+        noi test_fail "many columns" "wrong N"
+    }
+}
+else {
+    noi test_fail "many columns" "rc=`=_rc'"
+}
+
+* Single row
+file open myfile using "temp/single_row.csv", write replace
+file write myfile "a,b,c" _n
+file write myfile "1,2,3" _n
+file close myfile
+
+capture cimport delimited using "temp/single_row.csv", clear
+if _rc == 0 {
+    if _N == 1 {
+        noi test_pass "single row CSV"
+    }
+    else {
+        noi test_fail "single row" "wrong N"
+    }
+}
+else {
+    noi test_fail "single row" "rc=`=_rc'"
+}
+
+* Numeric edge values
+file open myfile using "temp/numeric_edge.csv", write replace
+file write myfile "value" _n
+file write myfile "0" _n
+file write myfile "-0" _n
+file write myfile "1e10" _n
+file write myfile "-1e10" _n
+file write myfile "0.000001" _n
+file write myfile "-0.000001" _n
+file write myfile "999999999" _n
+file close myfile
+
+capture cimport delimited using "temp/numeric_edge.csv", clear
+if _rc == 0 {
+    noi test_pass "numeric edge values"
+}
+else {
+    noi test_fail "numeric edge" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Large File Tests
+ ******************************************************************************/
+noi print_section "Large File Tests"
+
+* 10K rows
+file open myfile using "temp/10k_rows.csv", write replace
+file write myfile "id,value,category" _n
+forvalues i = 1/10000 {
+    local cat = mod(`i', 10) + 1
+    file write myfile "`i',`=runiform()',cat`cat'" _n
+}
+file close myfile
+
+capture cimport delimited using "temp/10k_rows.csv", clear
+if _rc == 0 {
+    if _N == 10000 {
+        noi test_pass "10K rows import"
+    }
+    else {
+        noi test_fail "10K rows" "wrong N: `=_N'"
+    }
+}
+else {
+    noi test_fail "10K rows" "rc=`=_rc'"
+}
+
+* 50K rows
+file open myfile using "temp/50k_rows.csv", write replace
+file write myfile "id,x,y" _n
+forvalues i = 1/50000 {
+    file write myfile "`i',`=runiform()',`=runiform()'" _n
+}
+file close myfile
+
+capture cimport delimited using "temp/50k_rows.csv", clear
+if _rc == 0 {
+    if _N == 50000 {
+        noi test_pass "50K rows import"
+    }
+    else {
+        noi test_fail "50K rows" "wrong N"
+    }
+}
+else {
+    noi test_fail "50K rows" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Comparison with import delimited
+ ******************************************************************************/
+noi print_section "Comparison with Stata's import delimited"
+
+* Create test file
+file open myfile using "temp/compare_test.csv", write replace
+file write myfile "id,name,value,flag" _n
+forvalues i = 1/100 {
+    local name = "item_`i'"
+    local val = `i' * 1.5
+    local flag = mod(`i', 2)
+    file write myfile "`i',`name',`val',`flag'" _n
+}
+file close myfile
+
+* Import with Stata
+import delimited using "temp/compare_test.csv", clear
+local stata_N = _N
+local stata_id_1 = id[1]
+local stata_value_50 = value[50]
+
+* Import with cimport
+cimport delimited using "temp/compare_test.csv", clear
+local cimport_N = _N
+local cimport_id_1 = id[1]
+local cimport_value_50 = value[50]
+
+if `stata_N' == `cimport_N' & `stata_id_1' == `cimport_id_1' {
+    noi test_pass "matches import delimited (basic)"
+}
+else {
+    noi test_fail "compare basic" "N or values differ"
+}
+
+* Compare with quoted strings
+file open myfile using "temp/compare_quoted.csv", write replace
+file write myfile `"id,name,description"' _n
+file write myfile `"1,"Simple","A simple item""' _n
+file write myfile `"2,"With Space","Has a space""' _n
+file write myfile `"3,"Quoted","Contains ""quotes""""' _n
+file close myfile
+
+import delimited using "temp/compare_quoted.csv", clear
+local stata_N = _N
+
+cimport delimited using "temp/compare_quoted.csv", clear
+local cimport_N = _N
+
+if `stata_N' == `cimport_N' {
+    noi test_pass "matches import delimited (quoted)"
+}
+else {
+    noi test_fail "compare quoted" "N differs"
+}
+
+/*******************************************************************************
+ * SECTION: varnames Option Tests
+ ******************************************************************************/
+noi print_section "varnames Option"
+
+file open myfile using "temp/varnames_test.csv", write replace
+file write myfile "100,200,300" _n
+file write myfile "1,2,3" _n
+file write myfile "4,5,6" _n
+file close myfile
+
+* varnames(nonames)
+capture cimport delimited using "temp/varnames_test.csv", clear varnames(nonames)
+if _rc == 0 {
+    if _N == 3 {
+        noi test_pass "varnames(nonames)"
+    }
+    else {
+        noi test_fail "varnames(nonames)" "wrong N"
+    }
+}
+else {
+    noi test_fail "varnames(nonames)" "rc=`=_rc'"
+}
+
+* varnames(1) - first row as names
+file open myfile using "temp/varnames_row1.csv", write replace
+file write myfile "alpha,beta,gamma" _n
+file write myfile "1,2,3" _n
+file write myfile "4,5,6" _n
+file close myfile
+
+capture cimport delimited using "temp/varnames_row1.csv", clear varnames(1)
+if _rc == 0 {
+    if _N == 2 {
+        capture confirm variable alpha
+        if _rc == 0 {
+            noi test_pass "varnames(1)"
+        }
+        else {
+            noi test_fail "varnames(1)" "variable alpha not found"
+        }
+    }
+    else {
+        noi test_fail "varnames(1)" "wrong N"
+    }
+}
+else {
+    noi test_fail "varnames(1)" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: rowrange Option Tests
+ ******************************************************************************/
+noi print_section "rowrange Option"
+
+file open myfile using "temp/rowrange_test.csv", write replace
+file write myfile "id,value" _n
+forvalues i = 1/100 {
+    file write myfile "`i',`=`i'*10'" _n
+}
+file close myfile
+
+* Import rows 10-20
+capture cimport delimited using "temp/rowrange_test.csv", clear rowrange(10:20)
+if _rc == 0 {
+    if _N == 11 {
+        noi test_pass "rowrange(10:20)"
+    }
+    else {
+        noi test_fail "rowrange" "wrong N: expected 11, got `=_N'"
+    }
+}
+else {
+    noi test_fail "rowrange" "rc=`=_rc'"
+}
+
+* Import from row 50 to end
+capture cimport delimited using "temp/rowrange_test.csv", clear rowrange(50:)
+if _rc == 0 {
+    if _N == 51 {
+        noi test_pass "rowrange(50:) to end"
+    }
+    else {
+        noi test_fail "rowrange to end" "wrong N"
+    }
+}
+else {
+    noi test_fail "rowrange to end" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: colrange Option Tests
+ ******************************************************************************/
+noi print_section "colrange Option"
+
+file open myfile using "temp/colrange_test.csv", write replace
+file write myfile "a,b,c,d,e" _n
+forvalues i = 1/50 {
+    file write myfile "`i',`=`i'*2',`=`i'*3',`=`i'*4',`=`i'*5'" _n
+}
+file close myfile
+
+* Import columns 2-4
+capture cimport delimited using "temp/colrange_test.csv", clear colrange(2:4)
+if _rc == 0 {
+    describe, short
+    local nvars = r(k)
+    if `nvars' == 3 {
+        noi test_pass "colrange(2:4)"
+    }
+    else {
+        noi test_fail "colrange" "wrong nvars: expected 3, got `nvars'"
+    }
+}
+else {
+    noi test_fail "colrange" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: encoding Option Tests
+ ******************************************************************************/
+noi print_section "encoding Option"
+
+* UTF-8 file (default)
+file open myfile using "temp/utf8_test.csv", write replace
+file write myfile "name,value" _n
+file write myfile "test1,100" _n
+file write myfile "test2,200" _n
+file close myfile
+
+capture cimport delimited using "temp/utf8_test.csv", clear encoding(utf-8)
+if _rc == 0 {
+    noi test_pass "encoding(utf-8)"
+}
+else {
+    noi test_fail "encoding utf-8" "rc=`=_rc'"
+}
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

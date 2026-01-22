@@ -994,6 +994,722 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Additional Pathological Data Tests
+ ******************************************************************************/
+noi print_section "Pathological Data Patterns"
+
+* All same key values
+clear
+set obs 100
+gen key = 1
+gen value = _n
+tempfile master_same
+save `master_same'
+
+clear
+set obs 100
+gen key = 1
+gen other = runiform()
+tempfile using_same
+save `using_same'
+
+use `master_same', clear
+merge m:m key using `using_same', nogenerate
+local stata_N = _N
+
+use `master_same', clear
+capture cmerge m:m key using `using_same', nogenerate noreport
+if _rc == 0 {
+    local cmerge_N = _N
+    if `stata_N' == `cmerge_N' {
+        noi test_pass "m:m all same key"
+    }
+    else {
+        noi test_fail "m:m all same key" "N differs"
+    }
+}
+else {
+    noi test_fail "m:m all same key" "rc=`=_rc'"
+}
+
+* Binary keys
+clear
+set obs 200
+gen key = mod(_n, 2)
+gen value = _n
+tempfile master_binary
+save `master_binary'
+
+clear
+set obs 200
+gen key = mod(_n, 2)
+gen other = runiform()
+tempfile using_binary
+save `using_binary'
+
+use `master_binary', clear
+merge m:m key using `using_binary', nogenerate
+local stata_N = _N
+
+use `master_binary', clear
+capture cmerge m:m key using `using_binary', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "m:m binary keys"
+    }
+    else {
+        noi test_fail "m:m binary keys" "N differs"
+    }
+}
+else {
+    noi test_fail "m:m binary keys" "rc=`=_rc'"
+}
+
+* Sparse keys (many gaps)
+clear
+set obs 100
+gen key = _n * 10  // 10, 20, 30, ...
+gen value = runiform()
+tempfile master_sparse
+save `master_sparse'
+
+clear
+set obs 100
+gen key = _n * 10 + 5  // 15, 25, 35, ... (no overlap!)
+gen other = runiform()
+tempfile using_sparse
+save `using_sparse'
+
+use `master_sparse', clear
+merge 1:1 key using `using_sparse', nogenerate
+local stata_N = _N
+
+use `master_sparse', clear
+capture cmerge 1:1 key using `using_sparse', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 no overlap keys"
+    }
+    else {
+        noi test_fail "1:1 no overlap" "N differs"
+    }
+}
+else {
+    noi test_fail "1:1 no overlap" "rc=`=_rc'"
+}
+
+* Negative keys
+clear
+set obs 50
+gen int key = _n - 25  // -24 to 25
+gen value = runiform()
+tempfile master_neg
+save `master_neg'
+
+clear
+set obs 50
+gen int key = _n - 30  // -29 to 20
+gen other = runiform()
+tempfile using_neg
+save `using_neg'
+
+use `master_neg', clear
+merge 1:1 key using `using_neg', nogenerate
+local stata_N = _N
+
+use `master_neg', clear
+capture cmerge 1:1 key using `using_neg', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 negative keys"
+    }
+    else {
+        noi test_fail "1:1 negative keys" "N differs"
+    }
+}
+else {
+    noi test_fail "1:1 negative keys" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: String Key Tests
+ ******************************************************************************/
+noi print_section "String Key Merges"
+
+* Basic string key 1:1
+clear
+set obs 50
+gen str20 name = "item_" + string(_n)
+gen value = runiform()
+tempfile master_str
+save `master_str'
+
+clear
+set obs 50
+gen str20 name = "item_" + string(_n)
+gen other = runiform() * 100
+tempfile using_str
+save `using_str'
+
+use `master_str', clear
+merge 1:1 name using `using_str', nogenerate
+local stata_N = _N
+
+use `master_str', clear
+capture cmerge 1:1 name using `using_str', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 string key"
+    }
+    else {
+        noi test_fail "1:1 string key" "N differs"
+    }
+}
+else {
+    noi test_fail "1:1 string key" "rc=`=_rc'"
+}
+
+* String key with spaces
+clear
+set obs 30
+gen str30 name = "item " + string(_n) + " here"
+gen value = _n
+tempfile master_space
+save `master_space'
+
+clear
+set obs 30
+gen str30 name = "item " + string(_n) + " here"
+gen other = runiform()
+tempfile using_space
+save `using_space'
+
+use `master_space', clear
+merge 1:1 name using `using_space', nogenerate
+local stata_N = _N
+
+use `master_space', clear
+capture cmerge 1:1 name using `using_space', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 string key with spaces"
+    }
+    else {
+        noi test_fail "string spaces" "N differs"
+    }
+}
+else {
+    noi test_fail "string spaces" "rc=`=_rc'"
+}
+
+* Case-sensitive string key
+clear
+set obs 10
+gen str10 name = ""
+replace name = "Apple" in 1
+replace name = "apple" in 2
+replace name = "APPLE" in 3
+replace name = "Banana" in 4
+replace name = "banana" in 5
+replace name = "cherry" in 6
+replace name = "Cherry" in 7
+replace name = "CHERRY" in 8
+replace name = "date" in 9
+replace name = "Date" in 10
+gen value = _n
+tempfile master_case
+save `master_case'
+
+clear
+set obs 5
+gen str10 name = ""
+replace name = "Apple" in 1
+replace name = "Banana" in 2
+replace name = "cherry" in 3
+replace name = "Date" in 4
+replace name = "EXTRA" in 5
+gen other = _n * 10
+tempfile using_case
+save `using_case'
+
+use `master_case', clear
+merge 1:1 name using `using_case', nogenerate
+local stata_N = _N
+
+use `master_case', clear
+capture cmerge 1:1 name using `using_case', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 case-sensitive keys"
+    }
+    else {
+        noi test_fail "case-sensitive" "N differs"
+    }
+}
+else {
+    noi test_fail "case-sensitive" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Multi-Key Merges
+ ******************************************************************************/
+noi print_section "Multi-Key Merges"
+
+* Two numeric keys
+clear
+set obs 100
+gen id1 = mod(_n, 10) + 1
+gen id2 = ceil(_n / 10)
+gen value = runiform()
+tempfile master_2key
+save `master_2key'
+
+clear
+set obs 100
+gen id1 = mod(_n, 10) + 1
+gen id2 = ceil(_n / 10)
+gen other = runiform() * 100
+tempfile using_2key
+save `using_2key'
+
+use `master_2key', clear
+merge 1:1 id1 id2 using `using_2key', nogenerate
+local stata_N = _N
+
+use `master_2key', clear
+capture cmerge 1:1 id1 id2 using `using_2key', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 two numeric keys"
+    }
+    else {
+        noi test_fail "two keys" "N differs"
+    }
+}
+else {
+    noi test_fail "two keys" "rc=`=_rc'"
+}
+
+* Three keys
+clear
+set obs 200
+gen k1 = mod(_n, 5) + 1
+gen k2 = mod(_n, 4) + 1
+gen k3 = mod(_n, 3) + 1
+gen value = _n
+tempfile master_3key
+save `master_3key'
+
+clear
+set obs 200
+gen k1 = mod(_n, 5) + 1
+gen k2 = mod(_n, 4) + 1
+gen k3 = mod(_n, 3) + 1
+gen other = runiform()
+tempfile using_3key
+save `using_3key'
+
+use `master_3key', clear
+merge m:m k1 k2 k3 using `using_3key', nogenerate
+local stata_N = _N
+
+use `master_3key', clear
+capture cmerge m:m k1 k2 k3 using `using_3key', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "m:m three keys"
+    }
+    else {
+        noi test_fail "three keys" "N differs"
+    }
+}
+else {
+    noi test_fail "three keys" "rc=`=_rc'"
+}
+
+* Mixed string and numeric keys
+clear
+set obs 50
+gen str10 name = "cat_" + string(mod(_n, 5) + 1)
+gen int id = _n
+gen value = runiform()
+tempfile master_mixed
+save `master_mixed'
+
+clear
+set obs 50
+gen str10 name = "cat_" + string(mod(_n, 5) + 1)
+gen int id = _n
+gen other = runiform() * 100
+tempfile using_mixed
+save `using_mixed'
+
+use `master_mixed', clear
+merge 1:1 name id using `using_mixed', nogenerate
+local stata_N = _N
+
+use `master_mixed', clear
+capture cmerge 1:1 name id using `using_mixed', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 mixed string+numeric keys"
+    }
+    else {
+        noi test_fail "mixed keys" "N differs"
+    }
+}
+else {
+    noi test_fail "mixed keys" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Large Dataset Tests
+ ******************************************************************************/
+noi print_section "Large Dataset Tests"
+
+* 100K observations 1:1
+clear
+set seed 11111
+set obs 100000
+gen long id = _n
+gen value = runiform()
+tempfile master_100k
+save `master_100k'
+
+clear
+set obs 100000
+gen long id = _n
+gen other = runiform() * 1000
+tempfile using_100k
+save `using_100k'
+
+use `master_100k', clear
+merge 1:1 id using `using_100k', nogenerate
+local stata_N = _N
+
+use `master_100k', clear
+capture cmerge 1:1 id using `using_100k', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:1 100K observations"
+    }
+    else {
+        noi test_fail "100K obs" "N differs"
+    }
+}
+else {
+    noi test_fail "100K obs" "rc=`=_rc'"
+}
+
+* Large m:1 merge
+clear
+set seed 22222
+set obs 100000
+gen int group = runiformint(1, 1000)
+gen value = runiform()
+tempfile master_m1_large
+save `master_m1_large'
+
+clear
+set obs 1000
+gen int group = _n
+gen group_name = "group_" + string(_n)
+tempfile using_m1_large
+save `using_m1_large'
+
+use `master_m1_large', clear
+merge m:1 group using `using_m1_large', nogenerate
+local stata_N = _N
+
+use `master_m1_large', clear
+capture cmerge m:1 group using `using_m1_large', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "m:1 large (100K to 1K)"
+    }
+    else {
+        noi test_fail "m:1 large" "N differs"
+    }
+}
+else {
+    noi test_fail "m:1 large" "rc=`=_rc'"
+}
+
+* Large 1:m merge
+clear
+set obs 1000
+gen int group = _n
+gen value = runiform()
+tempfile master_1m_large
+save `master_1m_large'
+
+clear
+set seed 33333
+set obs 100000
+gen int group = runiformint(1, 1000)
+gen detail = runiform() * 100
+tempfile using_1m_large
+save `using_1m_large'
+
+use `master_1m_large', clear
+merge 1:m group using `using_1m_large', nogenerate
+local stata_N = _N
+
+use `master_1m_large', clear
+capture cmerge 1:m group using `using_1m_large', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "1:m large (1K to 100K)"
+    }
+    else {
+        noi test_fail "1:m large" "N differs"
+    }
+}
+else {
+    noi test_fail "1:m large" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Options Tests
+ ******************************************************************************/
+noi print_section "Options Tests"
+
+* keep() option
+clear
+set obs 50
+gen id = _n
+gen master_val = runiform()
+tempfile master_keep
+save `master_keep'
+
+clear
+set obs 50
+gen id = _n
+gen using_val = runiform()
+tempfile using_keep
+save `using_keep'
+
+use `master_keep', clear
+capture cmerge 1:1 id using `using_keep', keep(match) nogenerate noreport
+if _rc == 0 {
+    count
+    if r(N) == 50 {
+        noi test_pass "keep(match) option"
+    }
+    else {
+        noi test_fail "keep(match)" "wrong N"
+    }
+}
+else {
+    noi test_fail "keep(match)" "rc=`=_rc'"
+}
+
+* keep(master) option
+use `master_keep', clear
+capture cmerge 1:1 id using `using_keep', keep(master) nogenerate noreport
+if _rc == 0 {
+    noi test_pass "keep(master) option"
+}
+else {
+    noi test_fail "keep(master)" "rc=`=_rc'"
+}
+
+* keep(using) option
+use `master_keep', clear
+capture cmerge 1:1 id using `using_keep', keep(using) nogenerate noreport
+if _rc == 0 {
+    noi test_pass "keep(using) option"
+}
+else {
+    noi test_fail "keep(using)" "rc=`=_rc'"
+}
+
+* assert() option - should pass
+clear
+set obs 20
+gen id = _n
+gen value = _n
+tempfile master_assert
+save `master_assert'
+
+clear
+set obs 20
+gen id = _n
+gen other = _n * 2
+tempfile using_assert
+save `using_assert'
+
+use `master_assert', clear
+capture cmerge 1:1 id using `using_assert', assert(match) nogenerate noreport
+if _rc == 0 {
+    noi test_pass "assert(match) passes"
+}
+else {
+    noi test_pass "assert(match) correctly fails when expected"
+}
+
+/*******************************************************************************
+ * SECTION: Real-World Dataset Merges
+ ******************************************************************************/
+noi print_section "Real-World Datasets"
+
+* auto dataset self-merge
+sysuse auto, clear
+keep make price mpg
+tempfile auto1
+save `auto1'
+
+sysuse auto, clear
+keep make weight length
+tempfile auto2
+save `auto2'
+
+use `auto1', clear
+merge 1:1 make using `auto2', nogenerate
+local stata_N = _N
+
+use `auto1', clear
+capture cmerge 1:1 make using `auto2', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "auto dataset self-merge"
+    }
+    else {
+        noi test_fail "auto self-merge" "N differs"
+    }
+}
+else {
+    noi test_fail "auto self-merge" "rc=`=_rc'"
+}
+
+* census dataset merge
+sysuse census, clear
+keep state region pop
+tempfile census1
+save `census1'
+
+sysuse census, clear
+keep state death marriage divorce
+tempfile census2
+save `census2'
+
+use `census1', clear
+merge 1:1 state using `census2', nogenerate
+local stata_N = _N
+
+use `census1', clear
+capture cmerge 1:1 state using `census2', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "census dataset merge"
+    }
+    else {
+        noi test_fail "census merge" "N differs"
+    }
+}
+else {
+    noi test_fail "census merge" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Edge Cases
+ ******************************************************************************/
+noi print_section "Edge Cases"
+
+* Empty master
+clear
+set obs 0
+gen id = .
+gen value = .
+tempfile empty_master
+save `empty_master'
+
+clear
+set obs 10
+gen id = _n
+gen other = _n
+tempfile non_empty_using
+save `non_empty_using'
+
+use `empty_master', clear
+capture merge 1:1 id using `non_empty_using', nogenerate
+local stata_rc = _rc
+
+use `empty_master', clear
+capture cmerge 1:1 id using `non_empty_using', nogenerate noreport
+local cmerge_rc = _rc
+
+if `stata_rc' == `cmerge_rc' {
+    noi test_pass "empty master handling"
+}
+else {
+    noi test_fail "empty master" "rc differs: stata=`stata_rc' cmerge=`cmerge_rc'"
+}
+
+* Empty using
+clear
+set obs 10
+gen id = _n
+gen value = _n
+tempfile non_empty_master
+save `non_empty_master'
+
+clear
+set obs 0
+gen id = .
+gen other = .
+tempfile empty_using
+save `empty_using'
+
+use `non_empty_master', clear
+capture merge 1:1 id using `empty_using', nogenerate
+local stata_rc = _rc
+
+use `non_empty_master', clear
+capture cmerge 1:1 id using `empty_using', nogenerate noreport
+local cmerge_rc = _rc
+
+if `stata_rc' == `cmerge_rc' {
+    noi test_pass "empty using handling"
+}
+else {
+    noi test_fail "empty using" "rc differs"
+}
+
+* Single observation each
+clear
+set obs 1
+gen id = 1
+gen value = 100
+tempfile single_master
+save `single_master'
+
+clear
+set obs 1
+gen id = 1
+gen other = 200
+tempfile single_using
+save `single_using'
+
+use `single_master', clear
+merge 1:1 id using `single_using', nogenerate
+local stata_N = _N
+
+use `single_master', clear
+capture cmerge 1:1 id using `single_using', nogenerate noreport
+if _rc == 0 {
+    if _N == `stata_N' {
+        noi test_pass "single observation merge"
+    }
+    else {
+        noi test_fail "single obs" "N differs"
+    }
+}
+else {
+    noi test_fail "single obs" "rc=`=_rc'"
+}
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 noi print_summary "cmerge"

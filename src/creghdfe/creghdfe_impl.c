@@ -11,7 +11,7 @@
 
 #include "creghdfe_impl.h"
 #include "creghdfe_hdfe.h"
-#include "creghdfe_main.h"
+#include "creghdfe_regress.h"
 
 #include <stdlib.h>
 #include <string.h>

@@ -1,11 +1,11 @@
 /*
- * cqreg_main.c
+ * cqreg_regress.c
  *
  * Full quantile regression command orchestrator.
  * Part of the ctools suite.
  */
 
-#include "cqreg_main.h"
+#include "cqreg_regress.h"
 #include "cqreg_types.h"
 #include "cqreg_ipm.h"
 #include "cqreg_fn.h"

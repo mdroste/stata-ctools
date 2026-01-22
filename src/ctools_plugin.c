@@ -42,6 +42,7 @@
 
 #include "stplugin.h"
 #include "ctools_config.h"
+#include "ctools_threads.h"
 
 /*
     Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes
@@ -250,5 +251,9 @@ STDLL stata_call(int argc, char *argv[])
     }
 
     free(cmd_str);
+
+    /* Clean up thread pool at end of each plugin call */
+    ctools_destroy_global_pool();
+
     return rc;
 }

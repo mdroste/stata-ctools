@@ -1,13 +1,13 @@
 /*
- * cqreg_main.h
+ * cqreg_regress.h
  *
  * Full quantile regression command orchestrator.
  * Coordinates data loading, HDFE, IPM solver, VCE, and result storage.
  * Part of the ctools suite.
  */
 
-#ifndef CQREG_MAIN_H
-#define CQREG_MAIN_H
+#ifndef CQREG_REGRESS_H
+#define CQREG_REGRESS_H
 
 #include "stplugin.h"
 
@@ -43,4 +43,4 @@
  */
 ST_retcode cqreg_full_regression(const char *args);
 
-#endif /* CQREG_MAIN_H */
+#endif /* CQREG_REGRESS_H */
