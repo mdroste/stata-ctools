@@ -110,7 +110,7 @@ CREGHDFE_SRCS = $(SRC_DIR)/creghdfe/creghdfe_types.c \
                 $(SRC_DIR)/creghdfe/creghdfe_solver.c \
                 $(SRC_DIR)/creghdfe/creghdfe_ols.c \
                 $(SRC_DIR)/creghdfe/creghdfe_vce.c \
-                $(SRC_DIR)/creghdfe/creghdfe_main.c \
+                $(SRC_DIR)/creghdfe/creghdfe_regress.c \
                 $(SRC_DIR)/creghdfe/creghdfe_impl.c
 
 # cqreg module
@@ -123,7 +123,7 @@ CQREG_SRCS = $(SRC_DIR)/cqreg/cqreg_types.c \
              $(SRC_DIR)/cqreg/cqreg_sparsity.c \
              $(SRC_DIR)/cqreg/cqreg_vce.c \
              $(SRC_DIR)/cqreg/cqreg_hdfe.c \
-             $(SRC_DIR)/cqreg/cqreg_main.c \
+             $(SRC_DIR)/cqreg/cqreg_regress.c \
              $(SRC_DIR)/cqreg/cqreg_impl.c
 
 # cbinscatter module
