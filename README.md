@@ -26,7 +26,7 @@ Fast drop-in replacements for a variety of Stata commands.
 | `ppmlhdfe` | `cppmlhdfe` | Poisson pseudo-likelihood regression with multi-way fixed effects | **20-40x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
-Some ctools programs include an extended set of options. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [https://www.aeaweb.org/articles?id=10.1257/aer.20221576](Cattaneo et al. 2024). Internal help files for each ctools program provides complete documentation.
+Some ctools programs include an extended set of options. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). Internal help files for each ctools program provides complete documentation.
 
 Speed benchmarks are going to vary a lot based on a number of factors, some of which are described in more detail here. Some commands, like cbinscatter, creghdfe, and civreghdfe, should be an order of magnitude faster for virtually all datasets and specifications. As a rule of thumb, these benchmarks are typical with tens of millions of observations and a few dozen variables in memory. More variables in memory (K) will degrade the performance of csort and cmerge owing to data transfer overhead.
 
