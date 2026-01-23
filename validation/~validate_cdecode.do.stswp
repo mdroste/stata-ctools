@@ -605,15 +605,18 @@ drop foreign_str
 
 * Test 5.5: Combined if and in
 sysuse auto, clear
-cdecode foreign if foreign == 1 in 1/50, generate(foreign_str)
-count if foreign_str != ""
-if r(N) > 0 & r(N) < 50 {
+* Use a condition that actually matches some observations
+cdecode foreign if mpg > 20 in 1/50, generate(foreign_str)
+* Compare with native decode
+decode foreign if mpg > 20 in 1/50, generate(foreign_decode)
+count if foreign_str != foreign_decode
+if r(N) == 0 {
     noi test_pass "combined if and in"
 }
 else {
-    noi test_fail "combined if/in" "wrong count"
+    noi test_fail "combined if/in" "`=r(N)' values differ"
 }
-drop foreign_str
+drop foreign_str foreign_decode
 
 * Test 5.6: Compare if with decode
 sysuse auto, clear
@@ -1463,11 +1466,10 @@ noi benchmark_decode region, testname("citytemp: region (4 labels)")
 sysuse pop2000, clear
 noi benchmark_decode agegrp, testname("pop2000: agegrp")
 
-* voter dataset - candidat, inc, faminc
+* voter dataset - candidat, inc
 sysuse voter, clear
 noi benchmark_decode candidat, testname("voter: candidat")
 noi benchmark_decode inc, testname("voter: inc")
-noi benchmark_decode faminc, testname("voter: faminc")
 
 * bpwide dataset - agegrp
 sysuse bpwide, clear

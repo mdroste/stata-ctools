@@ -225,6 +225,22 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
     var->nobs = nobs;
 
+    /* Edge case: if no observations, still allocate minimal buffer to avoid NULL pointer.
+     * This prevents crashes when code assumes data.dbl is non-NULL after successful load. */
+    if (nobs == 0) {
+        if (is_string) {
+            var->type = STATA_TYPE_STRING;
+            var->str_maxlen = 0;
+            var->_arena = NULL;
+            var->data.str = NULL;  /* OK for 0 observations */
+        } else {
+            var->type = STATA_TYPE_DOUBLE;
+            var->_arena = NULL;
+            var->data.dbl = NULL;  /* OK for 0 observations */
+        }
+        return 0;  /* Success with empty data */
+    }
+
     if (is_string) {
         /* String variable - use arena allocator for fast bulk free */
         var->type = STATA_TYPE_STRING;

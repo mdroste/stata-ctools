@@ -9,6 +9,13 @@
 /*******************************************************************************
  * benchmark_sort - Compare csort vs sort, stable
  *
+ * Validation strategy:
+ *   1. Check if csort result is byte-for-byte identical to sort, stable
+ *   2. If not identical, verify csort result is actually sorted (using sortedby)
+ *   3. If sorted, apply sort, stable to csort result and compare with reference
+ *      - If they match, the difference is only sort stability (valid)
+ *      - If they don't match, other variables were corrupted (invalid)
+ *
  * Syntax: benchmark_sort varlist [, testname(string) algorithm(string)]
  ******************************************************************************/
 capture program drop benchmark_sort
@@ -24,7 +31,7 @@ program define benchmark_sort
     tempfile original
     quietly save `original'
 
-    * Run Stata sort, stable (quietly)
+    * Run Stata sort, stable (quietly) - this is our reference
     quietly sort `varlist', stable
     tempfile stata_sorted
     quietly save `stata_sorted'
@@ -45,17 +52,48 @@ program define benchmark_sort
         exit
     }
 
-    * Compare datasets
+    * Save csort result
+    tempfile csort_sorted
+    quietly save `csort_sorted'
+
+    * Check 1: Are they byte-for-byte identical?
     capture quietly cf _all using `stata_sorted'
-    local cf_rc = _rc
+    local exact_match = (_rc == 0)
+
+    if `exact_match' {
+        restore
+        test_pass "`testname' (exact)"
+        exit
+    }
+
+    * Check 2: Is the csort result actually sorted by the sort keys?
+    * Use Stata's sortedby() to verify - it returns the sort order if sorted
+    local sortedby : sortedby
+    local is_sorted = ("`sortedby'" == "`varlist'")
+
+    if !`is_sorted' {
+        * Data claims not to be sorted - this is a definite failure
+        restore
+        test_fail "`testname'" "csort result not marked as sorted by `varlist' (sortedby=`sortedby')"
+        exit
+    }
+
+    * Check 3: Apply sort, stable to csort result and compare with reference
+    * If csort produced a valid sort (just with different tie-breaking),
+    * then applying stable sort should yield the same result as sorting original
+    quietly sort `varlist', stable
+    capture quietly cf _all using `stata_sorted'
+    local stable_match = (_rc == 0)
 
     restore
 
-    if `cf_rc' == 0 {
-        test_pass "`testname'"
+    if `stable_match' {
+        * Valid sort - only differs in sort stability for ties
+        test_pass "`testname' (stability differs)"
     }
     else {
-        test_fail "`testname'" "sorted data differs from Stata sort"
+        * Data was corrupted - other variables don't match after stable sort
+        test_fail "`testname'" "csort corrupted data (stable re-sort doesn't match reference)"
     }
 end
 

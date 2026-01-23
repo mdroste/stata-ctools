@@ -114,12 +114,24 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     if (G < 1 || G > 10) {
-        SF_error("creghdfe: invalid number of FE groups\n");
+        SF_error("creghdfe: invalid number of FE groups (must be 1-10)\n");
         return 198;
     }
     if (K < 2) {
-        SF_error("creghdfe: need at least depvar and one indepvar\n");
+        SF_error("creghdfe: need at least depvar and one indepvar (K < 2)\n");
         return 198;
+    }
+    if (K > 1000) {
+        SF_error("creghdfe: too many variables (K > 1000)\n");
+        return 198;
+    }
+
+    /* Debug output for verbose mode */
+    if (verbose) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "creghdfe: K=%d G=%d vcetype=%d has_weights=%d in1=%d in2=%d\n",
+                 K, G, vcetype, has_weights, in1, in2);
+        SF_display(msg);
     }
 
     /* Count valid observations AND build selection index array.
@@ -205,6 +217,42 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 920;
     }
 
+    /* Debug output after load */
+    if (verbose) {
+        char msg[256];
+        snprintf(msg, sizeof(msg), "creghdfe: loaded total_vars=%d, loaded_data.nvars=%zu, loaded_data.nobs=%zu\n",
+                 total_vars, loaded_data.nvars, loaded_data.nobs);
+        SF_display(msg);
+        snprintf(msg, sizeof(msg), "creghdfe: N_orig=%d, N_range=%d, sel_is_identity=%d\n",
+                 N_orig, N_range, sel_is_identity);
+        SF_display(msg);
+    }
+
+    /* Verify all variables were loaded successfully (defensive check).
+     * Each variable with nobs > 0 should have non-NULL data pointer. */
+    for (i = 0; i < total_vars; i++) {
+        if (loaded_data.vars[i].nobs > 0) {
+            if (loaded_data.vars[i].type == STATA_TYPE_DOUBLE && loaded_data.vars[i].data.dbl == NULL) {
+                char errmsg[128];
+                snprintf(errmsg, sizeof(errmsg), "creghdfe: variable %d failed to load (NULL data pointer, nobs=%zu)\n",
+                         i + 1, loaded_data.vars[i].nobs);
+                SF_error(errmsg);
+                stata_data_free(&loaded_data);
+                free(sel_idx);
+                return 920;
+            }
+            if (loaded_data.vars[i].type == STATA_TYPE_STRING && loaded_data.vars[i].data.str == NULL) {
+                char errmsg[128];
+                snprintf(errmsg, sizeof(errmsg), "creghdfe: string variable %d failed to load (NULL data pointer, nobs=%zu)\n",
+                         i + 1, loaded_data.vars[i].nobs);
+                SF_error(errmsg);
+                stata_data_free(&loaded_data);
+                free(sel_idx);
+                return 920;
+            }
+        }
+    }
+
     /* Verify we got the expected number of observations */
     if ((ST_int)loaded_data.nobs != N_orig) {
         /* N_orig was computed from SF_ifobs, loaded_data.nobs is the full range */
@@ -270,6 +318,23 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * Also compute means. Optimize for identity case (no if/in filtering). */
     if (sel_is_identity) {
         /* Fast path: direct copy without indirection */
+        /* Bounds check: ensure loaded_data has enough observations */
+        if ((size_t)N_orig > loaded_data.nobs) {
+            char errmsg[256];
+            snprintf(errmsg, sizeof(errmsg),
+                     "creghdfe: observation count mismatch (N_orig=%d > loaded_data.nobs=%zu)\n",
+                     N_orig, loaded_data.nobs);
+            SF_error(errmsg);
+            stata_data_free(&loaded_data);
+            free(sel_idx);
+            for (g = 0; g < G; g++) {
+                if (factors[g].levels) free(factors[g].levels);
+            }
+            free(factors); free(mask);
+            free(data); free(means); free(stdevs); free(tss);
+            if (weights) free(weights);
+            return 920;
+        }
         for (k = 0; k < K; k++) {
             double *src = loaded_data.vars[k].data.dbl;
             double *dst = &data[k * N_orig];
@@ -288,6 +353,23 @@ ST_retcode do_full_regression(int argc, char *argv[])
         /* Slow path: use sel_idx for filtered access */
         for (idx = 0; idx < N_orig; idx++) {
             ST_int src_idx = sel_idx[idx];
+            /* Bounds check: ensure src_idx is within loaded_data range */
+            if (src_idx < 0 || (size_t)src_idx >= loaded_data.nobs) {
+                char errmsg[256];
+                snprintf(errmsg, sizeof(errmsg),
+                         "creghdfe: sel_idx[%d]=%d out of bounds (loaded_data.nobs=%zu)\n",
+                         (int)idx, (int)src_idx, loaded_data.nobs);
+                SF_error(errmsg);
+                stata_data_free(&loaded_data);
+                free(sel_idx);
+                for (g = 0; g < G; g++) {
+                    if (factors[g].levels) free(factors[g].levels);
+                }
+                free(factors); free(mask);
+                free(data); free(means); free(stdevs); free(tss);
+                if (weights) free(weights);
+                return 920;
+            }
             for (k = 0; k < K; k++) {
                 val = loaded_data.vars[k].data.dbl[src_idx];
                 data[k * N_orig + idx] = val;
@@ -502,16 +584,22 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     t_singleton = get_time_sec();
 
+    /* Store original num_levels BEFORE recount (needed for remap array sizing) */
+    ST_int orig_num_levels[10];  /* Max 10 FE groups */
+    for (g = 0; g < G; g++) {
+        orig_num_levels[g] = factors[g].num_levels;
+    }
+
     /* Recount levels after singleton removal */
     ST_int *levels_remaining = NULL;
     for (g = 0; g < G; g++) {
-        levels_remaining = (ST_int *)calloc(factors[g].num_levels, sizeof(ST_int));
+        levels_remaining = (ST_int *)calloc(orig_num_levels[g], sizeof(ST_int));
         if (levels_remaining) {
             ST_int num_levels_after = 0;
             for (i = 0; i < N_orig; i++) {
                 if (mask[i]) {
                     ST_int level = factors[g].levels[i] - 1;
-                    if (level >= 0 && level < factors[g].num_levels && !levels_remaining[level]) {
+                    if (level >= 0 && level < orig_num_levels[g] && !levels_remaining[level]) {
                         levels_remaining[level] = 1;
                         num_levels_after++;
                     }
@@ -536,8 +624,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
         ST_int *fe2_compact = (ST_int *)malloc(N * sizeof(ST_int));
 
         if (fe1_compact && fe2_compact) {
-            ST_int *remap1 = (ST_int *)calloc(factors[0].num_levels + 1, sizeof(ST_int));
-            ST_int *remap2 = (ST_int *)calloc(factors[1].num_levels + 1, sizeof(ST_int));
+            /* Use orig_num_levels for remap array sizing since factors[g].levels
+             * still contains original IDs from 1 to orig_num_levels[g] */
+            ST_int *remap1 = (ST_int *)calloc(orig_num_levels[0] + 1, sizeof(ST_int));
+            ST_int *remap2 = (ST_int *)calloc(orig_num_levels[1] + 1, sizeof(ST_int));
 
             if (remap1 && remap2) {
                 ST_int next1 = 1, next2 = 1;
@@ -656,8 +746,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
             return 1;
         }
 
-        /* Remap to contiguous levels and copy */
-        ST_int *remap = (ST_int *)calloc(factors[g].num_levels + 1, sizeof(ST_int));
+        /* Remap to contiguous levels and copy.
+         * Use orig_num_levels since factors[g].levels still has original IDs. */
+        ST_int *remap = (ST_int *)calloc(orig_num_levels[g] + 1, sizeof(ST_int));
         if (!remap) {
             cleanup_state();
             for (i = 0; i < G; i++) {

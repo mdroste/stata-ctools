@@ -1756,7 +1756,7 @@ file write fh "2|Beta|200" _n
 file write fh "3|Gamma|300" _n
 file close fh
 
-benchmark_import using "temp/pipe_delim.csv", testname("pipe delimiter") importopts(delimiters("|"))
+benchmark_import using "temp/pipe_delim.csv", testname("pipe delimiter") importopts(`"delimiters("|")"')
 
 * Space delimiter
 file open fh using "temp/space_delim.csv", write replace
@@ -1766,7 +1766,7 @@ file write fh "2 Beta 200" _n
 file write fh "3 Gamma 300" _n
 file close fh
 
-benchmark_import using "temp/space_delim.csv", testname("space delimiter") importopts(delimiters(" "))
+benchmark_import using "temp/space_delim.csv", testname("space delimiter") importopts(`"delimiters(" ")"')
 
 * Colon delimiter
 file open fh using "temp/colon_delim.csv", write replace
@@ -1775,7 +1775,7 @@ file write fh "1:Alpha:100" _n
 file write fh "2:Beta:200" _n
 file close fh
 
-benchmark_import using "temp/colon_delim.csv", testname("colon delimiter") importopts(delimiters(":"))
+benchmark_import using "temp/colon_delim.csv", testname("colon delimiter") importopts(`"delimiters(":")"')
 
 * Multiple consecutive delimiters (empty fields)
 file open fh using "temp/consecutive_delims.csv", write replace

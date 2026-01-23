@@ -179,79 +179,85 @@ static const char *cdecode_hash_lookup(cdecode_hash_table *ht, int key)
  * ============================================================================ */
 
 /*
- * Parse value-label pairs from encoded string.
- * Format: "value|label||value|label||..."
- * Returns 0 on success, -1 on error.
+ * Unescape a label string.
+ * Converts \| to |, \\ to \, and \" to "
  */
-static int parse_labels(const char *labels_str, cdecode_hash_table *ht, int *max_len)
+static void unescape_label(const char *label, char *unescaped, size_t max_len)
 {
-    if (!labels_str || *labels_str == '\0') {
-        return 0;  /* No labels is OK */
-    }
-
-    char *labels_copy = strdup(labels_str);
-    if (!labels_copy) return -1;
-
-    *max_len = 0;
-    char *ptr = labels_copy;
-
-    while (*ptr) {
-        /* Find value */
-        char *pipe = strchr(ptr, '|');
-        if (!pipe) break;
-
-        *pipe = '\0';
-        int value = atoi(ptr);
-        ptr = pipe + 1;
-
-        /* Find end of label (either || or end of string) */
-        char *end = strstr(ptr, "||");
-        char *label;
-
-        if (end) {
-            *end = '\0';
-            label = ptr;
-            ptr = end + 2;
-        } else {
-            label = ptr;
-            ptr = ptr + strlen(ptr);
-        }
-
-        /* Unescape special characters */
-        char unescaped[CDECODE_MAX_LABEL_LEN + 1];
-        size_t j = 0;
-        for (size_t i = 0; label[i] && j < CDECODE_MAX_LABEL_LEN; i++) {
-            if (label[i] == '\\' && label[i+1]) {
-                i++;
-                if (label[i] == '|') {
-                    unescaped[j++] = '|';
-                } else if (label[i] == '\\') {
-                    unescaped[j++] = '\\';
-                } else if (label[i] == '"') {
-                    unescaped[j++] = '"';
-                } else {
-                    unescaped[j++] = label[i];
-                }
+    size_t j = 0;
+    for (size_t i = 0; label[i] && j < max_len; i++) {
+        if (label[i] == '\\' && label[i+1]) {
+            i++;
+            if (label[i] == '|') {
+                unescaped[j++] = '|';
+            } else if (label[i] == '\\') {
+                unescaped[j++] = '\\';
+            } else if (label[i] == '"') {
+                unescaped[j++] = '"';
             } else {
                 unescaped[j++] = label[i];
             }
+        } else {
+            unescaped[j++] = label[i];
         }
-        unescaped[j] = '\0';
+    }
+    unescaped[j] = '\0';
+}
+
+/*
+ * Parse value-label pairs from a file.
+ * File format: one "value|label" per line (labels are escaped)
+ * Returns 0 on success, -1 on error.
+ */
+static int parse_labels_from_file(const char *filepath, cdecode_hash_table *ht, int *max_len)
+{
+    if (!filepath || *filepath == '\0') {
+        return 0;  /* No file is OK */
+    }
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    *max_len = 0;
+    char line[CDECODE_MAX_LABEL_LEN + 32];
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Remove trailing newline */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len-1] == '\n' || line[len-1] == '\r')) {
+            line[--len] = '\0';
+        }
+
+        if (len == 0) continue;
+
+        /* Find the pipe separator between value and label */
+        char *pipe = strchr(line, '|');
+        if (!pipe) continue;
+
+        *pipe = '\0';
+        int value = atoi(line);
+        char *label = pipe + 1;
+
+        /* Unescape the label */
+        char unescaped[CDECODE_MAX_LABEL_LEN + 1];
+        unescape_label(label, unescaped, CDECODE_MAX_LABEL_LEN);
 
         /* Track max length */
-        int len = (int)strlen(unescaped);
-        if (len > *max_len) {
-            *max_len = len;
+        int lbl_len = (int)strlen(unescaped);
+        if (lbl_len > *max_len) {
+            *max_len = lbl_len;
         }
 
         /* Insert into hash table */
         if (cdecode_hash_insert(ht, value, unescaped) != 0) {
-            free(labels_copy);
+            fclose(fp);
             return -1;
         }
     }
 
-    free(labels_copy);
+    fclose(fp);
     return 0;
 }
 
@@ -262,11 +268,22 @@ static int parse_labels(const char *labels_str, cdecode_hash_table *ht, int *max
 ST_retcode cdecode_main(const char *args)
 {
     double t_start, t_parse, t_decode, t_total;
-    int src_idx = 0, dst_idx = 0;
     int maxlen = 0;
-    const char *labels_str = NULL;
+    char labelsfile[1024] = "";
     size_t nobs;
     ST_retcode rc = 0;
+
+    /*
+     * IMPORTANT: In Stata's Plugin Interface, SF_var_is_string() and other
+     * SF_* functions access variables by their 1-based index within the
+     * varlist passed to the plugin call, NOT by their position in the full
+     * dataset.
+     *
+     * cdecode is called as: plugin call ctools_plugin src_var dst_var, args
+     * So the source variable is always index 1, and destination is index 2.
+     */
+    const int src_idx = 1;  /* First variable passed to plugin = source */
+    const int dst_idx = 2;  /* Second variable passed to plugin = destination */
 
     t_start = ctools_timer_seconds();
 
@@ -285,44 +302,30 @@ ST_retcode cdecode_main(const char *args)
     }
     strcpy(args_copy, args);
 
-    /* Find labels= parameter first (it may contain spaces in quoted strings) */
-    char *labels_ptr = strstr(args_copy, "labels=");
-    if (labels_ptr) {
-        labels_str = labels_ptr + 7;
-        *labels_ptr = '\0'; /* Terminate args before labels= */
+    /* Find labelsfile= parameter */
+    char *labelsfile_ptr = strstr(args_copy, "labelsfile=");
+    if (labelsfile_ptr) {
+        char *filepath_start = labelsfile_ptr + 11;
+        /* Copy until end of string or whitespace */
+        size_t i = 0;
+        while (filepath_start[i] && filepath_start[i] != ' ' && filepath_start[i] != '\t' && i < sizeof(labelsfile) - 1) {
+            labelsfile[i] = filepath_start[i];
+            i++;
+        }
+        labelsfile[i] = '\0';
+        *labelsfile_ptr = '\0'; /* Terminate args before labelsfile= */
     }
 
     /* Parse other arguments */
     char *token = strtok(args_copy, " \t");
-    if (!token) {
-        free(args_copy);
-        SF_error("cdecode: missing source variable index\n");
-        return 198;
-    }
-    src_idx = atoi(token);
-
-    token = strtok(NULL, " \t");
-    if (!token) {
-        free(args_copy);
-        SF_error("cdecode: missing destination variable index\n");
-        return 198;
-    }
-    dst_idx = atoi(token);
-
-    /* Parse optional maxlen */
-    while ((token = strtok(NULL, " \t")) != NULL) {
+    while (token != NULL) {
         if (strncmp(token, "maxlen=", 7) == 0) {
             maxlen = atoi(token + 7);
         }
+        token = strtok(NULL, " \t");
     }
 
-    if (src_idx < 1 || dst_idx < 1) {
-        free(args_copy);
-        SF_error("cdecode: invalid variable indices\n");
-        return 198;
-    }
-
-    /* Source should be numeric */
+    /* Source should be numeric (check index 1 in plugin's varlist) */
     if (SF_var_is_string(src_idx)) {
         free(args_copy);
         SF_error("cdecode: source variable must be numeric\n");
@@ -344,7 +347,7 @@ ST_retcode cdecode_main(const char *args)
 
     t_parse = ctools_timer_seconds();
 
-    /* Build hash table from labels */
+    /* Build hash table from labels file */
     cdecode_hash_table ht;
     if (cdecode_hash_init(&ht, CDECODE_HASH_INIT_SIZE) != 0) {
         free(args_copy);
@@ -353,11 +356,11 @@ ST_retcode cdecode_main(const char *args)
     }
 
     int detected_maxlen = 0;
-    if (labels_str && *labels_str) {
-        if (parse_labels(labels_str, &ht, &detected_maxlen) != 0) {
+    if (labelsfile[0] != '\0') {
+        if (parse_labels_from_file(labelsfile, &ht, &detected_maxlen) != 0) {
             cdecode_hash_free(&ht);
             free(args_copy);
-            SF_error("cdecode: failed to parse labels\n");
+            SF_error("cdecode: failed to parse labels file\n");
             return 920;
         }
     }
@@ -396,8 +399,15 @@ ST_retcode cdecode_main(const char *args)
             continue;
         }
 
-        /* Convert to integer for label lookup */
-        int ival = (int)round(dval);
+        /* Check if value is close to an integer (like native decode) */
+        double rounded = round(dval);
+        if (fabs(dval - rounded) > 1e-9) {
+            /* Non-integer value - no label match (matches native decode behavior) */
+            SF_sstore(dst_idx, obs, "");
+            n_unlabeled++;
+            continue;
+        }
+        int ival = (int)rounded;
 
         /* Look up label */
         const char *label = cdecode_hash_lookup(&ht, ival);

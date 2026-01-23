@@ -11,30 +11,39 @@
 *! built-in decode command, producing identical results but with better
 *! performance on large datasets.
 
-* Mata function to parse label save file and extract labels with trailing spaces preserved
-capture mata: mata drop _cdecode_parse_labels()
+* Mata function to parse label save file and write labels to output file
+* This avoids Stata's command line length limits when there are many labels
+capture mata: mata drop _cdecode_parse_labels_to_file()
 mata:
-void _cdecode_parse_labels(string scalar filename, string scalar lblname)
+void _cdecode_parse_labels_to_file(string scalar filename, string scalar lblname, string scalar outfile)
 {
-    real scalar fh, val, lbl_len, max_label_len
-    string scalar line, prefix, rest, lbl, lbl_escaped, labels_encoded
+    real scalar fh_in, fh_out, val, lbl_len, max_label_len
+    string scalar line, prefix, rest, lbl, lbl_escaped, entry
     string scalar open_cq, close_cq
     real scalar prefix_len, open_pos, close_pos, space_pos
+    real scalar first_entry
 
     // Compound quote markers: `" and "'
     open_cq = char(96) + char(34)   // `"
     close_cq = char(34) + char(39)  // "'
 
-    labels_encoded = ""
     max_label_len = 0
+    first_entry = 1
 
-    fh = fopen(filename, "r")
-    if (fh < 0) {
+    fh_in = fopen(filename, "r")
+    if (fh_in < 0) {
         errprintf("cdecode: could not open label file\n")
         exit(error(601))
     }
 
-    while ((line = fget(fh)) != J(0,0,"")) {
+    fh_out = fopen(outfile, "w")
+    if (fh_out < 0) {
+        fclose(fh_in)
+        errprintf("cdecode: could not open output file\n")
+        exit(error(601))
+    }
+
+    while ((line = fget(fh_in)) != J(0,0,"")) {
         // Line format: label define lblname VALUE `"TEXT"', modify
         prefix = "label define " + lblname + " "
         prefix_len = strlen(prefix)
@@ -85,25 +94,21 @@ void _cdecode_parse_labels(string scalar filename, string scalar lblname)
             max_label_len = lbl_len
         }
 
-        // Append to encoded string
-        if (labels_encoded == "") {
-            labels_encoded = strofreal(val) + "|" + lbl_escaped
+        // Write entry to file (value|label on each line)
+        entry = strofreal(val) + "|" + lbl_escaped
+        if (first_entry) {
+            fput(fh_out, entry)
+            first_entry = 0
         }
         else {
-            labels_encoded = labels_encoded + "||" + strofreal(val) + "|" + lbl_escaped
+            fput(fh_out, entry)
         }
     }
 
-    fclose(fh)
+    fclose(fh_in)
+    fclose(fh_out)
 
-    // Add terminator to protect trailing spaces in last label
-    // The C parser will safely skip the empty segment after the final "||"
-    if (labels_encoded != "") {
-        labels_encoded = labels_encoded + "||"
-    }
-
-    // Return values to Stata locals
-    st_local("labels_encoded", labels_encoded)
+    // Return max label length to Stata
     st_local("max_label_len", strofreal(max_label_len))
 }
 end
@@ -252,9 +257,13 @@ program define cdecode
     local labels_encoded ""
     local max_label_len = 0
 
+    * Create temp file for labels (used when label string is too long)
+    tempfile __labelsfile
+
     * Parse the label save file using Mata for reliable string handling
     * Format: label define lblname value `"text"', modify
-    mata: _cdecode_parse_labels("`__lblfile'", "`lblname'")
+    * Mata writes labels to temp file to avoid command line length limits
+    mata: _cdecode_parse_labels_to_file("`__lblfile'", "`lblname'", "`__labelsfile'")
 
     * Determine string variable width
     if `maxlength' > 0 {
@@ -301,9 +310,9 @@ program define cdecode
         timer on 92
     }
 
-    * Call the C plugin
+    * Call the C plugin (pass labels file path to avoid command line length limits)
     plugin call ctools_plugin `varlist' `generate' `if' `in', ///
-        "cdecode `threads_code' `var_idx' `gen_idx' `maxlen_code' labels=`labels_encoded'"
+        `"cdecode `threads_code' `maxlen_code' labelsfile=`__labelsfile'"'
 
     local plugin_rc = _rc
 
