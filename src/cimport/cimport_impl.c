@@ -509,7 +509,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
                 if (!stats->seen_string && field->length > 0) {
                     stats->seen_non_empty = true;
                     const char *src = ctx->file_data + field->offset;
-                    if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator)) {
+                    if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
                         stats->seen_string = true;
                     }
                 }
@@ -754,7 +754,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                     if (!stats->seen_string && field->length > 0) {
                         stats->seen_non_empty = true;
                         const char *src = ctx->file_data + field->offset;
-                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator)) {
+                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
                             stats->seen_string = true;
                         }
                     }

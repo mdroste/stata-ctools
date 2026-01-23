@@ -343,30 +343,72 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
 
 bool cimport_field_looks_numeric(const char *src, int len)
 {
-    return cimport_field_looks_numeric_sep(src, len, '.');
+    return cimport_field_looks_numeric_sep(src, len, '.', '\0');
 }
 
-bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep)
+bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, char grp_sep)
 {
+    /* Skip leading whitespace */
     while (len > 0 && (*src == ' ' || *src == '\t')) { src++; len--; }
-    if (len == 0) return true;
+    if (len == 0) return true;  /* Empty -> treat as missing numeric */
+
+    /* Skip surrounding quotes */
     if (*src == '"' && len >= 2) { src++; len -= 2; }
     if (len == 0) return true;
 
-    char c = *src;
-    if (c >= '0' && c <= '9') return true;
-    if (c == '-' || c == '+' || c == dec_sep) return true;
+    /* Skip trailing whitespace */
+    while (len > 0 && (src[len-1] == ' ' || src[len-1] == '\t' ||
+                       src[len-1] == '\r' || src[len-1] == '\n')) { len--; }
+    if (len == 0) return true;
 
-    if (len >= 2 && (c == 'N' || c == 'n')) {
-        char c2 = src[1];
-        if (c2 == 'A' || c2 == 'a') return true;
-        if (len >= 3 && (c2 == 'a' || c2 == 'A')) {
-            char c3 = src[2];
-            if (c3 == 'N' || c3 == 'n') return true;
+    /* Check for NA/NaN */
+    if (len == 2 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'A' || src[1] == 'a')) return true;
+    if (len == 3 && (src[0] == 'N' || src[0] == 'n') && (src[1] == 'a' || src[1] == 'A') &&
+        (src[2] == 'N' || src[2] == 'n')) return true;
+
+    /* Check for single decimal separator (Stata missing) */
+    if (len == 1 && *src == dec_sep) return true;
+
+    /* Scan the ENTIRE field to validate numeric format */
+    const char *p = src;
+    const char *end = src + len;
+    bool has_decimal = false;
+    bool has_digits = false;
+
+    /* Optional leading sign */
+    if (p < end && (*p == '-' || *p == '+')) p++;
+
+    /* Must have at least one character left */
+    if (p >= end) return false;
+
+    /* Scan digits, optional decimal, and optional group separators */
+    while (p < end) {
+        char c = *p;
+        if (c >= '0' && c <= '9') {
+            has_digits = true;
+            p++;
+        } else if (c == dec_sep && !has_decimal) {
+            has_decimal = true;
+            p++;
+        } else if (grp_sep != '\0' && c == grp_sep) {
+            /* Group separator (e.g., thousand separator) - skip it */
+            p++;
+        } else if (c == 'e' || c == 'E') {
+            /* Scientific notation - validate exponent */
+            if (!has_digits) return false;  /* Need digits before E */
+            p++;
+            if (p < end && (*p == '-' || *p == '+')) p++;
+            if (p >= end || *p < '0' || *p > '9') return false;  /* Need exponent digits */
+            while (p < end && *p >= '0' && *p <= '9') p++;
+            break;  /* End of number */
+        } else {
+            /* Invalid character - not numeric */
+            return false;
         }
     }
 
-    return false;
+    /* Must have consumed all input and seen at least one digit */
+    return (p == end) && has_digits;
 }
 
 bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,

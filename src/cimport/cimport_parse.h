@@ -110,8 +110,8 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
 /* Quick check if field looks like a number (for type inference) */
 bool cimport_field_looks_numeric(const char *src, int len);
 
-/* Quick check with custom decimal separator */
-bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep);
+/* Quick check with custom decimal and group separators */
+bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, char grp_sep);
 
 /*
  * Analyze numeric field and extract value.

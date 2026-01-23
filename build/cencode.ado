@@ -142,7 +142,7 @@ program define cencode
     }
 
     * Call the C plugin
-    plugin call ctools_plugin `varlist' `generate' `if' `in', "cencode `threads_code' `label_code' `noextend_code'"
+    plugin call ctools_plugin `varlist' `generate' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code'"
 
     if `__do_timing' {
         timer off 92

@@ -27,12 +27,17 @@ int cmerge_compare_keys_numeric(stata_data *data_a, size_t row_a,
         double val_a = data_a->vars[k].data.dbl[row_a];
         double val_b = data_b->vars[k].data.dbl[row_b];
 
-        /* Branchless missing value handling for common case (no missing) */
+        /* Missing value handling - must distinguish extended missing (.a, .b, etc.) */
         int miss_a = SF_is_missing(val_a);
         int miss_b = SF_is_missing(val_b);
 
         if (miss_a | miss_b) {
-            if (miss_a && miss_b) continue;
+            if (miss_a && miss_b) {
+                /* Both missing - compare actual values to distinguish .a, .b, .z, etc. */
+                if (val_a < val_b) return -1;
+                if (val_a > val_b) return 1;
+                continue;  /* Same missing type */
+            }
             return miss_a ? 1 : -1;
         }
 
@@ -56,7 +61,12 @@ int cmerge_compare_keys_numeric_same(stata_data *data, size_t row_a,
         int miss_b = SF_is_missing(val_b);
 
         if (miss_a | miss_b) {
-            if (miss_a && miss_b) continue;
+            if (miss_a && miss_b) {
+                /* Both missing - compare actual values to distinguish .a, .b, .z, etc. */
+                if (val_a < val_b) return -1;
+                if (val_a > val_b) return 1;
+                continue;  /* Same missing type */
+            }
             return miss_a ? 1 : -1;
         }
 
@@ -82,7 +92,12 @@ int cmerge_compare_keys(stata_data *data_a, size_t row_a,
             int miss_a = SF_is_missing(val_a);
             int miss_b = SF_is_missing(val_b);
 
-            if (miss_a && miss_b) continue;
+            if (miss_a && miss_b) {
+                /* Both missing - compare actual values to distinguish .a, .b, .z, etc. */
+                if (val_a < val_b) return -1;
+                if (val_a > val_b) return 1;
+                continue;  /* Same missing type */
+            }
             if (miss_a) return 1;
             if (miss_b) return -1;
 

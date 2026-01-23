@@ -181,20 +181,16 @@ ST_retcode cencode_main(const char *args)
     ST_retcode rc = 0;
 
     /*
-     * IMPORTANT: In Stata's Plugin Interface, SF_var_is_string() and other
-     * SF_* functions access variables by their 1-based index within the
-     * varlist passed to the plugin call, NOT by their position in the full
-     * dataset.
-     *
+     * Stata Plugin Interface uses 1-based indices into the plugin's varlist.
      * cencode is called as: plugin call ctools_plugin src_var dst_var, args
-     * So the source variable is always index 1, and destination is index 2.
+     * So index 1 = source string variable, index 2 = destination numeric variable.
      */
-    const int var_idx = 1;  /* First variable passed to plugin = source */
-    const int gen_idx = 2;  /* Second variable passed to plugin = destination */
+    const int var_idx = 1;
+    const int gen_idx = 2;
 
     t_start = ctools_timer_seconds();
 
-    /* Parse arguments */
+    /* Parse arguments for options only */
     if (args != NULL && *args != '\0') {
         char args_copy[1024];
         strncpy(args_copy, args, sizeof(args_copy) - 1);
