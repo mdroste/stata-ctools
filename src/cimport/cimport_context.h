@@ -18,6 +18,7 @@
 
 #include "../ctools_arena.h"
 #include "cimport_parse.h"
+#include "cimport_encoding.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -140,6 +141,13 @@ typedef struct CImportContext {
     int num_force_numeric;
     int *force_string_cols;      /* Array of 1-based column indices to force string */
     int num_force_string;
+
+    /* Encoding support */
+    CImportEncoding encoding;           /* Detected or specified encoding */
+    CImportEncoding requested_encoding; /* User-requested encoding (0 = auto) */
+    char *converted_data;               /* UTF-8 converted data (NULL if no conversion) */
+    size_t converted_size;              /* Size of converted data */
+    double time_encoding;               /* Time spent on encoding detection/conversion */
 
     /* Warning tracking for unmatched quotes */
     size_t unmatched_quote_rows[CIMPORT_MAX_WARNINGS];

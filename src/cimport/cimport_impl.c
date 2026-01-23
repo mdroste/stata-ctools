@@ -378,6 +378,7 @@ static void cimport_free_context(CImportContext *ctx) {
     free(ctx->row_offsets);
     free(ctx->force_numeric_cols);
     free(ctx->force_string_cols);
+    free(ctx->converted_data);  /* Free encoding-converted data if any */
     cimport_munmap_file(ctx);
     pthread_mutex_destroy(&ctx->warning_mutex);
     free(ctx);
@@ -393,7 +394,8 @@ static void cimport_clear_cached_context(void) {
 /* Forward declarations */
 static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
-                                          CImportEmptyLinesMode emptylines_mode, int max_quoted_rows);
+                                          CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
+                                          CImportEncoding requested_encoding);
 static void cimport_build_column_cache(CImportContext *ctx);
 
 /* ============================================================================
@@ -565,11 +567,13 @@ static void *cimport_parse_chunk_parallel(void *arg) {
 
 static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
-                                          CImportEmptyLinesMode emptylines_mode, int max_quoted_rows) {
+                                          CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
+                                          CImportEncoding requested_encoding) {
     CImportContext *ctx = calloc(1, sizeof(CImportContext));
     if (!ctx) return NULL;
 
     double t_start, t_end;
+    char msg[512];
 
     ctx->delimiter = delimiter;
     ctx->quote_char = '"';
@@ -590,6 +594,13 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->force_string_cols = NULL;
     ctx->num_force_string = 0;
 
+    /* Initialize encoding */
+    ctx->requested_encoding = requested_encoding;
+    ctx->encoding = CIMPORT_ENC_UTF8;
+    ctx->converted_data = NULL;
+    ctx->converted_size = 0;
+    ctx->time_encoding = 0;
+
     /* Initialize warning tracking */
     ctx->num_unmatched_quote_warnings = 0;
     pthread_mutex_init(&ctx->warning_mutex, NULL);
@@ -602,6 +613,61 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     }
     t_end = ctools_timer_ms();
     ctx->time_mmap = t_end - t_start;
+
+    /* Encoding detection and conversion */
+    t_start = ctools_timer_ms();
+    {
+        CImportEncodingDetection detection;
+        int bom_skip = 0;
+
+        if (requested_encoding != CIMPORT_ENC_UNKNOWN) {
+            /* User specified encoding */
+            ctx->encoding = requested_encoding;
+            /* Still check for BOM to skip it */
+            detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
+            if (detection.encoding == CIMPORT_ENC_UTF8_BOM ||
+                detection.encoding == CIMPORT_ENC_UTF16LE ||
+                detection.encoding == CIMPORT_ENC_UTF16BE) {
+                bom_skip = detection.bom_length;
+            }
+        } else {
+            /* Auto-detect encoding */
+            detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
+            ctx->encoding = detection.encoding;
+            bom_skip = detection.bom_length;
+        }
+
+        if (verbose) {
+            snprintf(msg, sizeof(msg), "(encoding automatically selected: %s)\n",
+                     cimport_encoding_name(ctx->encoding));
+            cimport_display_msg(msg);
+        }
+
+        /* Convert to UTF-8 if needed */
+        if (cimport_encoding_needs_conversion(ctx->encoding) || bom_skip > 0) {
+            char *utf8_data = NULL;
+            size_t utf8_size = 0;
+
+            if (cimport_convert_to_utf8(ctx->file_data, ctx->file_size, ctx->encoding,
+                                         bom_skip, &utf8_data, &utf8_size) == 0) {
+                ctx->converted_data = utf8_data;
+                ctx->converted_size = utf8_size;
+                /* Update file_data to point to converted data */
+                ctx->file_data = ctx->converted_data;
+                ctx->file_size = ctx->converted_size;
+            } else {
+                if (verbose) {
+                    cimport_display_msg("Warning: Encoding conversion failed, using raw data\n");
+                }
+            }
+        } else if (bom_skip > 0) {
+            /* UTF-8 with BOM - just skip the BOM */
+            ctx->file_data += bom_skip;
+            ctx->file_size -= bom_skip;
+        }
+    }
+    t_end = ctools_timer_ms();
+    ctx->time_encoding = t_end - t_start;
 
     if (cimport_parse_header(ctx) != 0) {
         cimport_display_error("Failed to parse header");
@@ -1028,25 +1094,29 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
 
 static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
                                    CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
-                                   CImportEmptyLinesMode emptylines_mode, int max_quoted_rows) {
+                                   CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
+                                   CImportEncoding requested_encoding) {
     char msg[512];
     char macro_val[65536];
 
     cimport_clear_cached_context();
 
     g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, verbose, bindquotes,
-                                       numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows);
+                                       numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
+                                       requested_encoding);
 
-    /* Parse column type overrides from global macros */
-    if (g_cimport_ctx) {
-        g_cimport_ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &g_cimport_ctx->num_force_numeric);
-        g_cimport_ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &g_cimport_ctx->num_force_string);
-    }
     if (!g_cimport_ctx) {
         return 601;
     }
 
     CImportContext *ctx = g_cimport_ctx;
+
+    /* Parse column type overrides from global macros and re-run type inference */
+    ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &ctx->num_force_numeric);
+    ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &ctx->num_force_string);
+    if (ctx->num_force_numeric > 0 || ctx->num_force_string > 0) {
+        cimport_infer_column_types(ctx);
+    }
 
     snprintf(macro_val, sizeof(macro_val), "%zu", ctx->total_rows);
     SF_macro_save("_cimport_nobs", macro_val);
@@ -1120,7 +1190,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
 
 static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
                                    CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
-                                   CImportEmptyLinesMode emptylines_mode, int max_quoted_rows) {
+                                   CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
+                                   CImportEncoding requested_encoding) {
     char msg[512];
 
     CImportContext *ctx = g_cimport_ctx;
@@ -1129,14 +1200,18 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
     if (!used_cache) {
         cimport_clear_cached_context();
         g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, verbose, bindquotes,
-                                           numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows);
+                                           numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
+                                           requested_encoding);
         ctx = g_cimport_ctx;
         if (!ctx) {
             return 601;
         }
-        /* Parse column type overrides */
+        /* Parse column type overrides and re-run type inference if needed */
         ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &ctx->num_force_numeric);
         ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &ctx->num_force_string);
+        if (ctx->num_force_numeric > 0 || ctx->num_force_string > 0) {
+            cimport_infer_column_types(ctx);
+        }
         cimport_display_warnings(ctx);
     }
 
@@ -1287,6 +1362,7 @@ typedef struct {
     char group_separator;
     CImportEmptyLinesMode emptylines_mode;
     int max_quoted_rows;
+    CImportEncoding encoding;
 } CImportOptions;
 
 ST_retcode cimport_main(const char *args) {
@@ -1311,7 +1387,8 @@ ST_retcode cimport_main(const char *args) {
         .decimal_separator = '.',
         .group_separator = '\0',
         .emptylines_mode = CIMPORT_EMPTYLINES_SKIP,
-        .max_quoted_rows = 20
+        .max_quoted_rows = 20,
+        .encoding = CIMPORT_ENC_UNKNOWN  /* Auto-detect by default */
     };
 
     char *token = strtok(args_copy, " ");
@@ -1345,6 +1422,8 @@ ST_retcode cimport_main(const char *args) {
                 opts.emptylines_mode = CIMPORT_EMPTYLINES_FILL;
             } else if (strncmp(token, "maxquotedrows=", 14) == 0) {
                 opts.max_quoted_rows = atoi(token + 14);
+            } else if (strncmp(token, "encoding=", 9) == 0) {
+                opts.encoding = cimport_parse_encoding_name(token + 9);
             } else if (strlen(token) == 1) {
                 opts.delimiter = token[0];
             } else if (strlen(token) == 3 && token[0] == '"' && token[2] == '"') {
@@ -1363,11 +1442,11 @@ ST_retcode cimport_main(const char *args) {
     if (strcmp(opts.mode, "scan") == 0) {
         return cimport_do_scan(opts.filename, opts.delimiter, opts.has_header, opts.verbose, opts.bindquotes,
                                 opts.numeric_type_mode, opts.decimal_separator, opts.group_separator,
-                                opts.emptylines_mode, opts.max_quoted_rows);
+                                opts.emptylines_mode, opts.max_quoted_rows, opts.encoding);
     } else if (strcmp(opts.mode, "load") == 0) {
         return cimport_do_load(opts.filename, opts.delimiter, opts.has_header, opts.verbose, opts.bindquotes,
                                 opts.numeric_type_mode, opts.decimal_separator, opts.group_separator,
-                                opts.emptylines_mode, opts.max_quoted_rows);
+                                opts.emptylines_mode, opts.max_quoted_rows, opts.encoding);
     } else {
         cimport_display_error("cimport: invalid mode. Use 'scan' or 'load'\n");
         return 198;

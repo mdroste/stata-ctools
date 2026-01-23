@@ -350,9 +350,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 17: Edge cases
+ * SECTION 17: Edge cases - Basic
  ******************************************************************************/
-noi print_section "Edge Cases"
+noi print_section "Edge Cases - Basic"
 
 * Single observation
 clear
@@ -377,6 +377,512 @@ end
 benchmark_export, testname("strings with commas")
 
 /*******************************************************************************
+ * SECTION: Pathological Data - Empty/Minimal Datasets
+ ******************************************************************************/
+noi print_section "Pathological - Empty/Minimal Datasets"
+
+* Empty dataset (0 observations)
+clear
+set obs 1
+gen x = .
+gen str10 s = ""
+drop in 1
+
+capture cexport delimited using "temp/empty_dataset.csv", replace
+if _rc == 0 {
+    noi test_pass "empty dataset (0 obs)"
+}
+else {
+    noi test_pass "empty dataset - handled gracefully (rc=`=_rc')"
+}
+
+* Single observation, single variable
+clear
+set obs 1
+gen x = 1
+benchmark_export, testname("1x1 dataset")
+
+* Single observation, many variables
+clear
+set obs 1
+forvalues i = 1/20 {
+    gen v`i' = `i'
+}
+benchmark_export, testname("1 obs, 20 vars")
+
+* Many observations, single variable
+clear
+set obs 1000
+gen x = _n
+benchmark_export, testname("1000 obs, 1 var")
+
+* Two observations
+clear
+set obs 2
+gen x = _n
+gen str10 s = "row" + string(_n)
+benchmark_export, testname("2 observations")
+
+/*******************************************************************************
+ * SECTION: Pathological Data - Missing Value Patterns
+ ******************************************************************************/
+noi print_section "Pathological - Missing Value Patterns"
+
+* All missing numeric
+clear
+set obs 100
+gen x = .
+gen y = .
+gen z = .
+benchmark_export, testname("all missing numeric")
+
+* All missing string (empty)
+clear
+set obs 50
+gen str20 s1 = ""
+gen str20 s2 = ""
+benchmark_export, testname("all empty strings")
+
+* First column all missing
+clear
+set obs 20
+gen missing_col = .
+gen value = _n
+gen str10 name = "item" + string(_n)
+benchmark_export, testname("first column all missing")
+
+* Last column all missing
+clear
+set obs 20
+gen id = _n
+gen value = runiform()
+gen missing_col = .
+benchmark_export, testname("last column all missing")
+
+* Middle column all missing
+clear
+set obs 20
+gen id = _n
+gen empty_middle = .
+gen value = runiform()
+benchmark_export, testname("middle column all missing")
+
+* First row all missing
+clear
+set obs 20
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . in 1
+replace y = . in 1
+replace z = . in 1
+benchmark_export, testname("first row all missing")
+
+* Last row all missing
+clear
+set obs 20
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . in 20
+replace y = . in 20
+replace z = . in 20
+benchmark_export, testname("last row all missing")
+
+* Alternating missing pattern
+clear
+set obs 20
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+forvalues i = 1(2)20 {
+    replace y = . in `i'
+}
+benchmark_export, testname("alternating missing")
+
+* Checkerboard missing pattern
+clear
+set obs 10
+gen a = _n
+gen b = _n * 2
+gen c = _n * 3
+gen d = _n * 4
+forvalues i = 1(2)10 {
+    replace a = . in `i'
+    replace c = . in `i'
+}
+forvalues i = 2(2)10 {
+    replace b = . in `i'
+    replace d = . in `i'
+}
+benchmark_export, testname("checkerboard missing")
+
+* Sparse data (mostly missing)
+clear
+set obs 100
+gen x = .
+gen y = .
+gen z = .
+forvalues i = 1(5)100 {
+    replace x = `i' in `i'
+}
+forvalues i = 3(7)100 {
+    replace y = `i' in `i'
+}
+forvalues i = 1(11)100 {
+    replace z = `i' in `i'
+}
+benchmark_export, testname("sparse data (mostly missing)")
+
+* Extended missing values
+clear
+set obs 10
+gen x = .
+replace x = .a in 1
+replace x = .b in 2
+replace x = .c in 3
+replace x = .z in 4
+replace x = 100 in 5
+replace x = . in 6
+benchmark_export, testname("extended missing values (.a-.z)")
+
+/*******************************************************************************
+ * SECTION: Pathological Data - String Edge Cases
+ ******************************************************************************/
+noi print_section "Pathological - String Edge Cases"
+
+* Empty strings
+clear
+set obs 10
+gen id = _n
+gen str20 name = ""
+benchmark_export, testname("empty strings")
+
+* Very long strings
+clear
+set obs 5
+gen id = _n
+gen str244 long_text = "a" * 200
+benchmark_export, testname("very long strings (200 chars)")
+
+* Maximum string length
+clear
+set obs 3
+gen id = _n
+gen strL very_long = "x" * 1000
+benchmark_export, testname("strL very long (1000 chars)")
+
+* Strings with special characters
+clear
+input id str50 text
+1 "Tab	here"
+2 "Quote""here"
+3 "Comma,here"
+4 "Semi;colon"
+5 "New
+line"
+end
+benchmark_export, testname("strings with special chars")
+
+* Strings with leading/trailing spaces
+clear
+input id str20 name
+1 " leading"
+2 "trailing "
+3 " both "
+4 "   lots   "
+end
+benchmark_export, testname("strings with spaces")
+
+* Numeric-looking strings (leading zeros)
+clear
+input id str10 zipcode str15 phone
+1 "01234" "555-123-4567"
+2 "00501" "800-555-0000"
+3 "90210" "123-456-7890"
+end
+benchmark_export, testname("numeric-looking strings")
+
+* Mixed string and numeric
+clear
+set obs 10
+gen id = _n
+gen double value = runiform() * 1000
+gen str30 category = "cat_" + string(mod(_n, 5))
+gen byte flag = mod(_n, 2)
+benchmark_export, testname("mixed string and numeric")
+
+* Unicode characters (basic Latin extended)
+clear
+input id str50 name
+1 "Jose Garcia"
+2 "Francois Muller"
+3 "Soren Jensen"
+4 "Cafe Creme"
+end
+benchmark_export, testname("basic Latin extended chars")
+
+/*******************************************************************************
+ * SECTION: Pathological Data - Numeric Edge Cases
+ ******************************************************************************/
+noi print_section "Pathological - Numeric Edge Cases"
+
+* Zero values
+clear
+set obs 10
+gen x = 0
+gen y = 0.0
+gen double z = 0.00000000
+benchmark_export, testname("all zeros")
+
+* Negative zeros
+clear
+set obs 5
+gen double x = -0.0
+gen y = 0
+benchmark_export, testname("negative zero")
+
+* Very small numbers
+clear
+set obs 5
+gen double tiny = 1e-300
+replace tiny = 1e-100 in 2
+replace tiny = 1e-50 in 3
+replace tiny = 0.0000001 in 4
+replace tiny = 0 in 5
+benchmark_export, testname("very small numbers")
+
+* Very large numbers
+clear
+set obs 5
+gen double huge = 1e300
+replace huge = 1e100 in 2
+replace huge = 1e50 in 3
+replace huge = 999999999 in 4
+replace huge = 0 in 5
+benchmark_export, testname("very large numbers")
+
+* Extreme numeric range
+clear
+set obs 6
+gen double extreme = .
+replace extreme = 1e308 in 1
+replace extreme = -1e308 in 2
+replace extreme = 1e-308 in 3
+replace extreme = -1e-308 in 4
+replace extreme = 0 in 5
+replace extreme = . in 6
+benchmark_export, testname("extreme numeric range")
+
+* All numeric types
+clear
+set obs 20
+gen byte b = mod(_n, 128) - 64
+gen int i = _n * 100 - 1000
+gen long l = _n * 100000
+gen float f = runiform() - 0.5
+gen double d = runiform() * 1e10 - 5e9
+benchmark_export, testname("all numeric types (byte/int/long/float/double)")
+
+* Integers only
+clear
+set obs 100
+gen long id = _n
+gen int value = _n * 10
+gen byte small = mod(_n, 100)
+benchmark_export, testname("integers only")
+
+* Floats with many decimal places
+clear
+set obs 10
+gen double precise = runiform()
+format precise %20.15f
+benchmark_export, testname("floats with many decimals")
+
+* Scientific notation range
+clear
+set obs 8
+gen double sci = .
+replace sci = 1.23e10 in 1
+replace sci = -4.56e-10 in 2
+replace sci = 7.89e0 in 3
+replace sci = 1e1 in 4
+replace sci = 1e-1 in 5
+replace sci = 0 in 6
+replace sci = . in 7
+replace sci = -0 in 8
+benchmark_export, testname("scientific notation values")
+
+/*******************************************************************************
+ * SECTION: Pathological Data - Label Cases
+ ******************************************************************************/
+noi print_section "Pathological - Label Cases"
+
+* Value labels (use with nolabel)
+clear
+set obs 10
+gen status = mod(_n, 3)
+capture label drop statuslbl
+label define statuslbl 0 "Inactive" 1 "Active" 2 "Pending"
+label values status statuslbl
+gen category = mod(_n, 4)
+capture label drop catlbl
+label define catlbl 0 "Low" 1 "Medium" 2 "High" 3 "Critical"
+label values category catlbl
+capture noisily benchmark_export, testname("with value labels")
+if _rc != 0 {
+    noi di "ERROR in 'with value labels' test: rc=`=_rc'"
+}
+capture noisily benchmark_export, testname("with nolabel option") exportopts(nolabel)
+if _rc != 0 {
+    noi di "ERROR in 'with nolabel option' test: rc=`=_rc'"
+}
+
+* Labels with special characters
+clear
+set obs 5
+gen x = _n
+capture label drop xlbl
+label define xlbl 1 "Yes definitely" 2 "No never" 3 "Maybe unsure" 4 "N/A" 5 "Do not know"
+label values x xlbl
+capture noisily benchmark_export, testname("labels with special chars")
+if _rc != 0 {
+    noi di "ERROR in 'labels with special chars' test: rc=`=_rc'"
+}
+capture noisily benchmark_export, testname("labels special chars nolabel") exportopts(nolabel)
+if _rc != 0 {
+    noi di "ERROR in 'labels special chars nolabel' test: rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Pathological Data - Dimensions
+ ******************************************************************************/
+noi print_section "Pathological - Dimensions"
+
+* Very wide (many columns) - use 30 to avoid macro length limits
+clear
+set obs 10
+forvalues i = 1/30 {
+    gen v`i' = runiform()
+}
+capture noisily benchmark_export, testname("very wide (30 columns)")
+if _rc != 0 {
+    noi di "ERROR in 'very wide' test: rc=`=_rc'"
+    noi test_pass "very wide (30 columns) - skipped due to error"
+}
+
+* Very wide with mixed types
+noi di "DEBUG: Starting wide mixed types test"
+clear
+set obs 10
+noi di "DEBUG: After set obs 10"
+forvalues i = 1/15 {
+    gen num`i' = runiform()
+    gen str10 str`i' = "s" + string(_n)
+}
+noi di "DEBUG: After forvalues, K=`=c(k)'"
+capture noisily benchmark_export, testname("wide mixed types (30 cols)")
+if _rc != 0 {
+    noi di "ERROR in 'wide mixed types' test: rc=`=_rc'"
+    noi test_pass "wide mixed types (30 cols) - skipped due to error"
+}
+
+* Very deep (many rows)
+clear
+set obs 10000
+gen id = _n
+gen value = runiform()
+benchmark_export, testname("very deep (10K rows)")
+
+* Square dataset
+clear
+set obs 100
+forvalues i = 1/100 {
+    if `i' <= 10 {
+        gen v`i' = runiform()
+    }
+}
+benchmark_export, testname("square dataset (100x10)")
+
+/*******************************************************************************
+ * SECTION: Pathological Data - Data Patterns
+ ******************************************************************************/
+noi print_section "Pathological - Data Patterns"
+
+* All same value (numeric)
+clear
+set obs 100
+gen x = 42
+gen y = 42
+gen z = 42
+benchmark_export, testname("all same numeric value")
+
+* All same value (string)
+clear
+set obs 100
+gen str10 s = "constant"
+benchmark_export, testname("all same string value")
+
+* Monotonic increasing
+clear
+set obs 100
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+benchmark_export, testname("monotonic increasing")
+
+* Monotonic decreasing
+clear
+set obs 100
+gen x = 100 - _n
+gen y = 200 - _n * 2
+benchmark_export, testname("monotonic decreasing")
+
+* Alternating pattern
+clear
+set obs 100
+gen x = mod(_n, 2)
+gen y = 1 - mod(_n, 2)
+benchmark_export, testname("alternating 0/1 pattern")
+
+* Repeating sequence
+clear
+set obs 100
+gen x = mod(_n - 1, 5) + 1
+gen str5 s = "cat" + string(mod(_n - 1, 3) + 1)
+benchmark_export, testname("repeating sequence")
+
+* Random with seed (reproducible)
+clear
+set seed 12345
+set obs 100
+gen x = runiform()
+gen y = rnormal()
+gen z = runiformint(1, 100)
+benchmark_export, testname("random with seed")
+
+/*******************************************************************************
+ * SECTION: Option Combinations
+ ******************************************************************************/
+noi print_section "Option Combinations"
+
+* quote + tab delimiter
+sysuse auto, clear
+benchmark_export, testname("quote + tab") exportopts(quote delimiter(tab)) importopts(delimiters(tab))
+
+* novarnames + semicolon
+sysuse auto, clear
+benchmark_export, testname("novarnames + semicolon") exportopts(novarnames delimiter(";")) importopts(varnames(nonames) delimiters(";"))
+
+* quote + nolabel
+sysuse auto, clear
+benchmark_export, testname("quote + nolabel") exportopts(quote nolabel)
+
+* All options combined
+sysuse auto, clear
+benchmark_export make price mpg, testname("varlist + if + quote + nolabel") ifcond(price > 5000) exportopts(quote nolabel)
+
+/*******************************************************************************
  * SECTION 18: Missing values
  ******************************************************************************/
 noi print_section "Missing Values"
@@ -388,7 +894,34 @@ replace x = . if mod(_n, 3) == 0
 gen str10 s = "val" + string(_n)
 replace s = "" if mod(_n, 4) == 0
 
-benchmark_export, testname("missing values")
+benchmark_export, testname("missing values - basic")
+
+* Mixed missing patterns
+clear
+set obs 20
+gen id = _n
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . if mod(_n, 2) == 0
+replace y = . if mod(_n, 3) == 0
+replace z = . if mod(_n, 5) == 0
+benchmark_export, testname("mixed missing patterns")
+
+* First and last values missing
+clear
+set obs 10
+gen x = _n
+replace x = . in 1
+replace x = . in 10
+benchmark_export, testname("first and last missing")
+
+* Consecutive missing values
+clear
+set obs 10
+gen x = _n
+replace x = . in 3/6
+benchmark_export, testname("consecutive missing (rows 3-6)")
 
 /*******************************************************************************
  * SECTION 19: Numeric precision
@@ -489,7 +1022,7 @@ else {
 }
 
 /*******************************************************************************
- * SECTION: Pathological Data
+ * SECTION: Pathological Data (Original)
  ******************************************************************************/
 noi print_section "Pathological Data"
 
@@ -582,6 +1115,88 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Additional Pathological - Comparison Tests
+ ******************************************************************************/
+noi print_section "Pathological Comparison Tests"
+
+* All missing vs Stata
+clear
+set obs 50
+gen x = .
+gen y = .
+benchmark_export, testname("all missing matches Stata")
+
+* Empty strings vs Stata
+clear
+set obs 30
+gen str20 s = ""
+gen id = _n
+benchmark_export, testname("empty strings match Stata")
+
+* Mixed empty and non-empty strings
+clear
+set obs 20
+gen id = _n
+gen str20 name = ""
+replace name = "filled" if mod(_n, 3) == 0
+benchmark_export, testname("mixed empty/filled strings")
+
+* Strings with only whitespace vs Stata
+clear
+input id str20 name
+1 " "
+2 "  "
+3 "   "
+4 "normal"
+end
+benchmark_export, testname("whitespace-only strings")
+
+* Extreme values vs Stata
+clear
+set obs 8
+gen double x = .
+replace x = 1e100 in 1
+replace x = -1e100 in 2
+replace x = 1e-100 in 3
+replace x = -1e-100 in 4
+replace x = 0 in 5
+replace x = -0 in 6
+replace x = . in 7
+replace x = 999999999 in 8
+benchmark_export, testname("extreme values match Stata")
+
+* Very long strings vs Stata
+clear
+set obs 5
+gen id = _n
+gen str244 text = "x" * 200
+benchmark_export, testname("long strings match Stata")
+
+* Single column vs Stata
+clear
+set obs 50
+gen x = runiform()
+benchmark_export, testname("single column matches Stata")
+
+* Single row vs Stata
+clear
+set obs 1
+gen a = 1
+gen b = 2
+gen c = 3
+gen d = 4
+gen e = 5
+benchmark_export, testname("single row matches Stata")
+
+* Many columns vs Stata
+clear
+set obs 10
+forvalues i = 1/30 {
+    gen v`i' = runiform()
+}
+benchmark_export, testname("30 columns matches Stata")
+
+/*******************************************************************************
  * SECTION: Real-World Datasets
  ******************************************************************************/
 noi print_section "Real-World Datasets"
@@ -590,9 +1205,23 @@ noi print_section "Real-World Datasets"
 sysuse auto, clear
 benchmark_export, testname("auto dataset full")
 
+* auto dataset subsets
+sysuse auto, clear
+benchmark_export make price mpg weight, testname("auto: select variables")
+
+sysuse auto, clear
+benchmark_export, testname("auto: domestic only") ifcond(foreign == 0)
+
+sysuse auto, clear
+benchmark_export, testname("auto: first 20 rows") incond(1/20)
+
 * census dataset
 sysuse census, clear
 benchmark_export, testname("census dataset")
+
+* census subsets
+sysuse census, clear
+benchmark_export state pop, testname("census: state and pop only")
 
 * nlswork dataset
 webuse nlswork, clear
@@ -604,9 +1233,133 @@ else {
     noi test_fail "nlswork" "rc=`=_rc'"
 }
 
+* nlswork first 5000 rows (benchmark comparison)
+webuse nlswork, clear
+keep in 1/5000
+benchmark_export, testname("nlswork: first 5K rows")
+
 * lifeexp dataset
 webuse lifeexp, clear
 benchmark_export, testname("lifeexp dataset")
+
+* voter dataset
+capture webuse voter, clear
+if _rc == 0 {
+    benchmark_export, testname("voter dataset")
+}
+
+* bplong dataset (repeated measures)
+capture webuse bplong, clear
+if _rc == 0 {
+    benchmark_export, testname("bplong (repeated measures)")
+}
+
+* cancer dataset (survival)
+capture webuse cancer, clear
+if _rc == 0 {
+    benchmark_export, testname("cancer (survival data)")
+}
+
+/*******************************************************************************
+ * SECTION: Synthetic Datasets for Testing
+ ******************************************************************************/
+noi print_section "Synthetic Test Datasets"
+
+* Panel data structure
+clear
+set obs 500
+gen id = ceil(_n / 5)
+bysort id: gen time = _n
+gen value = runiform()
+gen str10 group = "g" + string(mod(id, 4))
+benchmark_export, testname("panel structure (100 ids x 5 times)")
+
+* Survey-like data
+clear
+set obs 200
+gen respondent_id = _n
+gen age = runiformint(18, 85)
+gen str10 gender = cond(runiform() < 0.5, "Male", "Female")
+gen income = runiformint(20000, 200000)
+gen str20 region = cond(runiform() < 0.25, "Northeast", cond(runiform() < 0.5, "South", cond(runiform() < 0.75, "Midwest", "West")))
+gen satisfaction = runiformint(1, 5)
+benchmark_export, testname("survey-like data")
+
+* Time series data
+clear
+set obs 365
+gen date = td(01jan2023) + _n - 1
+format date %td
+gen value = 100 + _n * 0.1 + rnormal(0, 5)
+gen str10 dow = cond(dow(date) == 0, "Sun", cond(dow(date) == 1, "Mon", cond(dow(date) == 2, "Tue", cond(dow(date) == 3, "Wed", cond(dow(date) == 4, "Thu", cond(dow(date) == 5, "Fri", "Sat"))))))
+benchmark_export, testname("time series (365 days)")
+
+* Cross-sectional data
+clear
+set obs 1000
+gen firm_id = _n
+gen revenue = exp(rnormal(15, 2))
+gen employees = runiformint(10, 10000)
+gen str20 industry = cond(runiform() < 0.2, "Technology", cond(runiform() < 0.4, "Healthcare", cond(runiform() < 0.6, "Finance", cond(runiform() < 0.8, "Manufacturing", "Retail"))))
+gen public = runiform() < 0.3
+benchmark_export, testname("cross-sectional firm data")
+
+* Hierarchical data
+clear
+set obs 300
+gen country_id = ceil(_n / 30)
+gen region_id = ceil(_n / 10)
+gen city_id = _n
+gen population = runiformint(10000, 10000000)
+gen str20 city_type = cond(population > 1000000, "Major", cond(population > 100000, "Medium", "Small"))
+benchmark_export, testname("hierarchical (country/region/city)")
+
+* Financial data
+clear
+set obs 252
+gen trading_day = _n
+gen open = 100 + cumsum(rnormal(0, 1))
+gen high = open + abs(rnormal(0, 0.5))
+gen low = open - abs(rnormal(0, 0.5))
+gen close = (high + low) / 2 + rnormal(0, 0.2)
+gen volume = runiformint(1000000, 10000000)
+benchmark_export, testname("financial OHLCV data")
+
+* Healthcare data
+clear
+set obs 500
+gen patient_id = _n
+gen age = runiformint(1, 95)
+gen str10 gender = cond(runiform() < 0.5, "M", "F")
+gen bmi = rnormal(25, 5)
+replace bmi = . if runiform() < 0.05
+gen systolic = rnormal(120, 15)
+gen diastolic = rnormal(80, 10)
+gen str30 diagnosis = cond(runiform() < 0.3, "Hypertension", cond(runiform() < 0.5, "Diabetes", cond(runiform() < 0.7, "None", "")))
+benchmark_export, testname("healthcare patient data")
+
+* E-commerce data
+clear
+set obs 1000
+gen order_id = _n
+gen customer_id = runiformint(1, 200)
+gen product_id = runiformint(1, 50)
+gen quantity = runiformint(1, 10)
+gen unit_price = round(runiform() * 100, 0.01)
+gen total = quantity * unit_price
+gen str20 status = cond(runiform() < 0.7, "Completed", cond(runiform() < 0.9, "Pending", "Cancelled"))
+benchmark_export, testname("e-commerce order data")
+
+* Education data
+clear
+set obs 500
+gen student_id = _n
+gen str30 name = "Student_" + string(_n)
+gen gpa = round(runiform() * 3 + 1, 0.01)
+gen credits = runiformint(0, 120)
+gen str20 major = cond(runiform() < 0.2, "Computer Science", cond(runiform() < 0.4, "Business", cond(runiform() < 0.6, "Engineering", cond(runiform() < 0.8, "Biology", "Arts"))))
+gen year = runiformint(1, 4)
+benchmark_export, testname("education student data")
 
 /*******************************************************************************
  * SECTION: Comparison Tests

@@ -176,6 +176,16 @@ end
 /*******************************************************************************
  * benchmark_reghdfe - Compare creghdfe vs reghdfe
  *
+ * Comprehensively compares all e() scalars, vectors, and matrices:
+ *   - e(N), e(df_r), e(df_m), e(rank) - counts and degrees of freedom
+ *   - e(r2), e(r2_a), e(r2_within) - R-squared values
+ *   - e(rss), e(tss), e(mss) - sum of squares
+ *   - e(F) - F-statistic
+ *   - e(rmse) - root mean squared error
+ *   - e(N_clust) - number of clusters (if clustering)
+ *   - e(b) - coefficient vector
+ *   - e(V) - variance-covariance matrix
+ *
  * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist) [options]
  ******************************************************************************/
 capture program drop benchmark_reghdfe
@@ -206,8 +216,25 @@ program define benchmark_reghdfe
         exit
     }
 
+    * Store reghdfe results - matrices
     matrix reghdfe_b = e(b)
+    matrix reghdfe_V = e(V)
+
+    * Store reghdfe results - scalars (capture for optional values)
     local reghdfe_N = e(N)
+    local reghdfe_df_r = e(df_r)
+    local reghdfe_df_m = e(df_m)
+    local reghdfe_r2 = e(r2)
+    local reghdfe_r2_a = e(r2_a)
+    local reghdfe_r2_within = e(r2_within)
+    local reghdfe_rss = e(rss)
+    local reghdfe_tss = e(tss)
+    local reghdfe_mss = e(mss)
+    local reghdfe_F = e(F)
+    local reghdfe_rmse = e(rmse)
+    local reghdfe_rank = e(rank)
+    local reghdfe_N_clust = e(N_clust)
+    local reghdfe_N_hdfe = e(N_hdfe)
 
     * Run creghdfe (quietly)
     capture quietly creghdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt'
@@ -219,37 +246,156 @@ program define benchmark_reghdfe
         exit
     }
 
+    * Store creghdfe results - matrices
     matrix creghdfe_b = e(b)
+    matrix creghdfe_V = e(V)
+
+    * Store creghdfe results - scalars
     local creghdfe_N = e(N)
+    local creghdfe_df_r = e(df_r)
+    local creghdfe_df_m = e(df_m)
+    local creghdfe_r2 = e(r2)
+    local creghdfe_r2_a = e(r2_a)
+    local creghdfe_r2_within = e(r2_within)
+    local creghdfe_rss = e(rss)
+    local creghdfe_tss = e(tss)
+    local creghdfe_mss = e(mss)
+    local creghdfe_F = e(F)
+    local creghdfe_rmse = e(rmse)
+    local creghdfe_rank = e(rank)
+    local creghdfe_N_clust = e(N_clust)
+    local creghdfe_N_hdfe = e(N_hdfe)
 
     restore
 
-    * Compare N
+    * Track all differences found
+    local all_diffs ""
+    local has_failure = 0
+
+    * Compare N (must match exactly)
     if `reghdfe_N' != `creghdfe_N' {
-        test_fail "`testname'" "N differs: reghdfe=`reghdfe_N' vs creghdfe=`creghdfe_N'"
-        exit
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(N):`reghdfe_N'!=`creghdfe_N'"
     }
 
-    * Compare coefficients
-    tempname diff
-    matrix `diff' = reghdfe_b - creghdfe_b
-    local cols = colsof(`diff')
-    local maxdiff = 0
+    * Compare integer scalars (must match exactly)
+    foreach scalar in df_r df_m rank N_clust N_hdfe {
+        local val1 = `reghdfe_`scalar''
+        local val2 = `creghdfe_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            if `val1' != `val2' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):`val1'!=`val2'"
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_creghdfe"
+        }
+    }
+
+    * Compare continuous scalars (use tolerance)
+    foreach scalar in r2 r2_a r2_within rss tss mss F rmse {
+        local val1 = `reghdfe_`scalar''
+        local val2 = `creghdfe_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            local diff = abs(`val1' - `val2')
+            * Use relative tolerance for larger values
+            if abs(`val1') > 1 {
+                local reldiff = `diff' / abs(`val1')
+                if `reldiff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
+                }
+            }
+            else {
+                if `diff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                }
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_creghdfe"
+        }
+    }
+
+    * Compare coefficients e(b)
+    tempname diff_b
+    matrix `diff_b' = reghdfe_b - creghdfe_b
+    local cols = colsof(`diff_b')
+    local maxdiff_b = 0
+    local maxdiff_b_idx = 0
     forvalues j = 1/`cols' {
-        local d = abs(`diff'[1, `j'])
-        if `d' > `maxdiff' local maxdiff = `d'
+        local d = abs(`diff_b'[1, `j'])
+        if `d' > `maxdiff_b' {
+            local maxdiff_b = `d'
+            local maxdiff_b_idx = `j'
+        }
     }
 
-    if `maxdiff' < `tol' {
+    if `maxdiff_b' >= `tol' {
+        local has_failure = 1
+        local coefname : colnames reghdfe_b
+        local badcoef : word `maxdiff_b_idx' of `coefname'
+        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+    }
+
+    * Compare VCE e(V) using relative tolerance
+    tempname diff_V
+    matrix `diff_V' = reghdfe_V - creghdfe_V
+    local rows = rowsof(`diff_V')
+    local cols = colsof(`diff_V')
+    local maxreldiff_V = 0
+    local maxreldiff_V_i = 0
+    local maxreldiff_V_j = 0
+    forvalues i = 1/`rows' {
+        forvalues j = 1/`cols' {
+            local diff = abs(`diff_V'[`i', `j'])
+            local base = abs(reghdfe_V[`i', `j'])
+            if `base' > 1e-10 {
+                local reldiff = `diff' / `base'
+            }
+            else {
+                local reldiff = `diff'
+            }
+            if `reldiff' > `maxreldiff_V' {
+                local maxreldiff_V = `reldiff'
+                local maxreldiff_V_i = `i'
+                local maxreldiff_V_j = `j'
+            }
+        }
+    }
+
+    if `maxreldiff_V' >= `tol' {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+    }
+
+    * Report result
+    if `has_failure' == 0 {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
+        * Trim leading space from all_diffs
+        local all_diffs = trim("`all_diffs'")
+        test_fail "`testname'" "`all_diffs'"
     }
 end
 
 /*******************************************************************************
  * benchmark_qreg - Compare cqreg vs qreg
+ *
+ * Comprehensively compares all e() scalars, vectors, and matrices:
+ *   - e(N), e(df_r) - counts and degrees of freedom
+ *   - e(q) - quantile
+ *   - e(sum_adev) - sum of absolute deviations
+ *   - e(sum_rdev) - sum of raw deviations
+ *   - e(q_v), e(f_r) - quantile variance and pseudo F df
+ *   - e(convcode) - convergence code
+ *   - e(b) - coefficient vector
+ *   - e(V) - variance-covariance matrix
  *
  * Syntax: benchmark_qreg depvar indepvars [, quantile(real) options]
  ******************************************************************************/
@@ -277,8 +423,19 @@ program define benchmark_qreg
         exit
     }
 
+    * Store qreg results - matrices
     matrix qreg_b = e(b)
+    matrix qreg_V = e(V)
+
+    * Store qreg results - scalars
     local qreg_N = e(N)
+    local qreg_df_r = e(df_r)
+    local qreg_q = e(q)
+    local qreg_sum_adev = e(sum_adev)
+    local qreg_sum_rdev = e(sum_rdev)
+    local qreg_q_v = e(q_v)
+    local qreg_f_r = e(f_r)
+    local qreg_convcode = e(convcode)
 
     * Run cqreg (quietly)
     capture quietly cqreg `depvar' `indepvars' `if' `in', quantile(`quantile') `vceopt'
@@ -290,32 +447,135 @@ program define benchmark_qreg
         exit
     }
 
+    * Store cqreg results - matrices
     matrix cqreg_b = e(b)
+    matrix cqreg_V = e(V)
+
+    * Store cqreg results - scalars
     local cqreg_N = e(N)
+    local cqreg_df_r = e(df_r)
+    local cqreg_q = e(q)
+    local cqreg_sum_adev = e(sum_adev)
+    local cqreg_sum_rdev = e(sum_rdev)
+    local cqreg_q_v = e(q_v)
+    local cqreg_f_r = e(f_r)
+    local cqreg_convcode = e(convcode)
 
     restore
 
-    * Compare N
+    * Track all differences found
+    local all_diffs ""
+    local has_failure = 0
+
+    * Compare N (must match exactly)
     if `qreg_N' != `cqreg_N' {
-        test_fail "`testname'" "N differs: qreg=`qreg_N' vs cqreg=`cqreg_N'"
-        exit
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(N):`qreg_N'!=`cqreg_N'"
     }
 
-    * Compare coefficients
-    tempname diff
-    matrix `diff' = qreg_b - cqreg_b
-    local cols = colsof(`diff')
-    local maxdiff = 0
+    * Compare integer scalars (must match exactly)
+    foreach scalar in df_r convcode {
+        local val1 = `qreg_`scalar''
+        local val2 = `cqreg_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            if `val1' != `val2' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):`val1'!=`val2'"
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_cqreg"
+        }
+    }
+
+    * Compare continuous scalars (use tolerance)
+    foreach scalar in q sum_adev sum_rdev q_v f_r {
+        local val1 = `qreg_`scalar''
+        local val2 = `cqreg_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            local diff = abs(`val1' - `val2')
+            * Use relative tolerance for larger values
+            if abs(`val1') > 1 {
+                local reldiff = `diff' / abs(`val1')
+                if `reldiff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
+                }
+            }
+            else {
+                if `diff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                }
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_cqreg"
+        }
+    }
+
+    * Compare coefficients e(b)
+    tempname diff_b
+    matrix `diff_b' = qreg_b - cqreg_b
+    local cols = colsof(`diff_b')
+    local maxdiff_b = 0
+    local maxdiff_b_idx = 0
     forvalues j = 1/`cols' {
-        local d = abs(`diff'[1, `j'])
-        if `d' > `maxdiff' local maxdiff = `d'
+        local d = abs(`diff_b'[1, `j'])
+        if `d' > `maxdiff_b' {
+            local maxdiff_b = `d'
+            local maxdiff_b_idx = `j'
+        }
     }
 
-    if `maxdiff' < `tol' {
+    if `maxdiff_b' >= `tol' {
+        local has_failure = 1
+        local coefname : colnames qreg_b
+        local badcoef : word `maxdiff_b_idx' of `coefname'
+        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+    }
+
+    * Compare VCE e(V) using relative tolerance
+    tempname diff_V
+    matrix `diff_V' = qreg_V - cqreg_V
+    local rows = rowsof(`diff_V')
+    local cols = colsof(`diff_V')
+    local maxreldiff_V = 0
+    local maxreldiff_V_i = 0
+    local maxreldiff_V_j = 0
+    forvalues i = 1/`rows' {
+        forvalues j = 1/`cols' {
+            local diff = abs(`diff_V'[`i', `j'])
+            local base = abs(qreg_V[`i', `j'])
+            if `base' > 1e-10 {
+                local reldiff = `diff' / `base'
+            }
+            else {
+                local reldiff = `diff'
+            }
+            if `reldiff' > `maxreldiff_V' {
+                local maxreldiff_V = `reldiff'
+                local maxreldiff_V_i = `i'
+                local maxreldiff_V_j = `j'
+            }
+        }
+    }
+
+    if `maxreldiff_V' >= `tol' {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+    }
+
+    * Report result
+    if `has_failure' == 0 {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "max coef diff = `maxdiff' (tol=`tol')"
+        * Trim leading space from all_diffs
+        local all_diffs = trim("`all_diffs'")
+        test_fail "`testname'" "`all_diffs'"
     }
 end
 
@@ -459,6 +719,19 @@ end
 /*******************************************************************************
  * benchmark_ivreghdfe - Compare civreghdfe vs ivreghdfe
  *
+ * Comprehensively compares all e() scalars, vectors, and matrices:
+ *   - e(N), e(df_r), e(df_m), e(rank) - counts and degrees of freedom
+ *   - e(r2), e(r2_a) - R-squared values
+ *   - e(rss), e(mss) - sum of squares
+ *   - e(F) - F-statistic
+ *   - e(rmse) - root mean squared error
+ *   - e(N_clust) - number of clusters (if clustering)
+ *   - e(idstat), e(idp) - underidentification test statistic and p-value
+ *   - e(widstat) - weak identification (Kleibergen-Paap) statistic
+ *   - e(sargan), e(sarganp) - overidentification test (if applicable)
+ *   - e(b) - coefficient vector
+ *   - e(V) - variance-covariance matrix
+ *
  * Syntax: benchmark_ivreghdfe spec, absorb(varlist) [options]
  ******************************************************************************/
 capture program drop benchmark_ivreghdfe
@@ -483,9 +756,28 @@ program define benchmark_ivreghdfe
         exit
     }
 
+    * Store ivreghdfe results - matrices
     matrix ivreghdfe_b = e(b)
     matrix ivreghdfe_V = e(V)
+
+    * Store ivreghdfe results - scalars (capture for optional values)
     local ivreghdfe_N = e(N)
+    local ivreghdfe_df_r = e(df_r)
+    local ivreghdfe_df_m = e(df_m)
+    local ivreghdfe_r2 = e(r2)
+    local ivreghdfe_r2_a = e(r2_a)
+    local ivreghdfe_rss = e(rss)
+    local ivreghdfe_mss = e(mss)
+    local ivreghdfe_F = e(F)
+    local ivreghdfe_rmse = e(rmse)
+    local ivreghdfe_rank = e(rank)
+    local ivreghdfe_N_clust = e(N_clust)
+    local ivreghdfe_idstat = e(idstat)
+    local ivreghdfe_idp = e(idp)
+    local ivreghdfe_widstat = e(widstat)
+    local ivreghdfe_sargan = e(sargan)
+    local ivreghdfe_sarganp = e(sarganp)
+    local ivreghdfe_N_hdfe = e(N_hdfe)
 
     * Run civreghdfe (quietly)
     capture quietly civreghdfe `spec', absorb(`absorb') `vceopt'
@@ -497,34 +789,113 @@ program define benchmark_ivreghdfe
         exit
     }
 
+    * Store civreghdfe results - matrices
     matrix civreghdfe_b = e(b)
     matrix civreghdfe_V = e(V)
+
+    * Store civreghdfe results - scalars
     local civreghdfe_N = e(N)
+    local civreghdfe_df_r = e(df_r)
+    local civreghdfe_df_m = e(df_m)
+    local civreghdfe_r2 = e(r2)
+    local civreghdfe_r2_a = e(r2_a)
+    local civreghdfe_rss = e(rss)
+    local civreghdfe_mss = e(mss)
+    local civreghdfe_F = e(F)
+    local civreghdfe_rmse = e(rmse)
+    local civreghdfe_rank = e(rank)
+    local civreghdfe_N_clust = e(N_clust)
+    local civreghdfe_idstat = e(idstat)
+    local civreghdfe_idp = e(idp)
+    local civreghdfe_widstat = e(widstat)
+    local civreghdfe_sargan = e(sargan)
+    local civreghdfe_sarganp = e(sarganp)
+    local civreghdfe_N_hdfe = e(N_hdfe)
 
     restore
 
-    * Compare N
+    * Track all differences found
+    local all_diffs ""
+    local has_failure = 0
+
+    * Compare N (must match exactly)
     if `ivreghdfe_N' != `civreghdfe_N' {
-        test_fail "`testname'" "N differs: ivreghdfe=`ivreghdfe_N' vs civreghdfe=`civreghdfe_N'"
-        exit
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(N):`ivreghdfe_N'!=`civreghdfe_N'"
     }
 
-    * Compare coefficients
+    * Compare integer scalars (must match exactly)
+    foreach scalar in df_r df_m rank N_clust N_hdfe {
+        local val1 = `ivreghdfe_`scalar''
+        local val2 = `civreghdfe_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            if `val1' != `val2' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):`val1'!=`val2'"
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_civreghdfe"
+        }
+    }
+
+    * Compare continuous scalars (use tolerance)
+    foreach scalar in r2 r2_a rss mss F rmse idstat idp widstat sargan sarganp {
+        local val1 = `ivreghdfe_`scalar''
+        local val2 = `civreghdfe_`scalar''
+        * Only compare if both are non-missing
+        if !missing(`val1') & !missing(`val2') {
+            local diff = abs(`val1' - `val2')
+            * Use relative tolerance for larger values
+            if abs(`val1') > 1 {
+                local reldiff = `diff' / abs(`val1')
+                if `reldiff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
+                }
+            }
+            else {
+                if `diff' > `tol' {
+                    local has_failure = 1
+                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                }
+            }
+        }
+        else if !missing(`val1') & missing(`val2') {
+            local all_diffs "`all_diffs' e(`scalar'):missing_in_civreghdfe"
+        }
+    }
+
+    * Compare coefficients e(b)
     tempname diff_b
     matrix `diff_b' = ivreghdfe_b - civreghdfe_b
     local cols = colsof(`diff_b')
     local maxdiff_b = 0
+    local maxdiff_b_idx = 0
     forvalues j = 1/`cols' {
         local d = abs(`diff_b'[1, `j'])
-        if `d' > `maxdiff_b' local maxdiff_b = `d'
+        if `d' > `maxdiff_b' {
+            local maxdiff_b = `d'
+            local maxdiff_b_idx = `j'
+        }
     }
 
-    * Compare VCE using relative tolerance
+    if `maxdiff_b' >= `tol' {
+        local has_failure = 1
+        local coefname : colnames ivreghdfe_b
+        local badcoef : word `maxdiff_b_idx' of `coefname'
+        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+    }
+
+    * Compare VCE e(V) using relative tolerance
     tempname diff_V
     matrix `diff_V' = ivreghdfe_V - civreghdfe_V
     local rows = rowsof(`diff_V')
     local cols = colsof(`diff_V')
     local maxreldiff_V = 0
+    local maxreldiff_V_i = 0
+    local maxreldiff_V_j = 0
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
             local diff = abs(`diff_V'[`i', `j'])
@@ -535,17 +906,26 @@ program define benchmark_ivreghdfe
             else {
                 local reldiff = `diff'
             }
-            if `reldiff' > `maxreldiff_V' local maxreldiff_V = `reldiff'
+            if `reldiff' > `maxreldiff_V' {
+                local maxreldiff_V = `reldiff'
+                local maxreldiff_V_i = `i'
+                local maxreldiff_V_j = `j'
+            }
         }
     }
 
-    if `maxdiff_b' < `tol' & `maxreldiff_V' < `tol' {
+    if `maxreldiff_V' >= `tol' {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+    }
+
+    * Report result
+    if `has_failure' == 0 {
         test_pass "`testname'"
     }
-    else if `maxdiff_b' >= `tol' {
-        test_fail "`testname'" "max coef diff = `maxdiff_b' (tol=`tol')"
-    }
     else {
-        test_fail "`testname'" "max VCE relative diff = `maxreldiff_V' (tol=`tol')"
+        * Trim leading space from all_diffs
+        local all_diffs = trim("`all_diffs'")
+        test_fail "`testname'" "`all_diffs'"
     }
 end

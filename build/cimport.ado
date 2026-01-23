@@ -43,7 +43,7 @@ program define cimport, rclass
     * Support both "using filename" and just "filename" (like import delimited does)
     syntax [anything] [using/] [, Delimiters(string) VARNames(string) CLEAR ///
         CASE(string) ENCoding(string) BINDQuotes(string) ///
-        STRIPQuotes ROWRange(string) Verbose THReads(integer 0) ///
+        STRIPQuotes ROWRange(string) COLRange(string) Verbose THReads(integer 0) ///
         ASFloat ASDOUBle NUMERICcols(numlist) STRINGcols(numlist) ///
         DECIMALSEParator(string) GROUPSEParator(string) ///
         MAXQUOTEDrows(integer 20) EMPTYlines(string)]
@@ -122,10 +122,40 @@ program define cimport, rclass
         local case "preserve"
     }
 
-    * Parse encoding - currently only UTF-8 supported
-    if "`encoding'" != "" & "`encoding'" != "utf-8" & "`encoding'" != "UTF-8" {
-        di as text "Warning: cimport currently only supports UTF-8 encoding"
-        di as text "         File will be read as UTF-8"
+    * Parse encoding - supports auto-detection and common encodings
+    * Supported: utf-8, utf-16, iso-8859-1 (latin1), iso-8859-15 (latin9),
+    *            windows-1252 (cp1252), ascii, macroman
+    local encoding_opt ""
+    if "`encoding'" != "" {
+        local enc_lower = lower("`encoding'")
+        * Normalize common encoding names
+        if inlist("`enc_lower'", "utf-8", "utf8") {
+            local encoding_opt "encoding=utf8"
+        }
+        else if inlist("`enc_lower'", "utf-16", "utf16", "utf-16le", "utf16le", "unicode") {
+            local encoding_opt "encoding=utf16le"
+        }
+        else if inlist("`enc_lower'", "utf-16be", "utf16be") {
+            local encoding_opt "encoding=utf16be"
+        }
+        else if inlist("`enc_lower'", "iso-8859-1", "iso88591", "latin1", "latin-1") {
+            local encoding_opt "encoding=iso88591"
+        }
+        else if inlist("`enc_lower'", "iso-8859-15", "iso885915", "latin9", "latin-9") {
+            local encoding_opt "encoding=iso885915"
+        }
+        else if inlist("`enc_lower'", "windows-1252", "windows1252", "cp1252", "win1252") {
+            local encoding_opt "encoding=windows1252"
+        }
+        else if inlist("`enc_lower'", "ascii", "us-ascii") {
+            local encoding_opt "encoding=ascii"
+        }
+        else if inlist("`enc_lower'", "macroman", "macintosh", "x-mac-roman") {
+            local encoding_opt "encoding=macroman"
+        }
+        else {
+            di as text "Warning: Unrecognized encoding '`encoding'', using auto-detection"
+        }
     }
 
     * Parse bindquotes - default is loose (matches Stata's import delimited default)
@@ -153,6 +183,23 @@ program define cimport, rclass
         }
         else {
             local startrow = `rowrange'
+        }
+    }
+
+    * Parse colrange option
+    local startcol = 0
+    local endcol = 0
+    if "`colrange'" != "" {
+        * Parse start:end format
+        local colonpos = strpos("`colrange'", ":")
+        if `colonpos' > 0 {
+            local startcol = substr("`colrange'", 1, `colonpos' - 1)
+            local endcol = substr("`colrange'", `colonpos' + 1, .)
+            if "`startcol'" == "" local startcol = 0
+            if "`endcol'" == "" local endcol = 0
+        }
+        else {
+            local startcol = `colrange'
         }
     }
 
@@ -324,7 +371,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows'"
+        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -453,7 +500,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows'"
+        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local load_rc = _rc
     if `load_rc' {
@@ -478,6 +525,31 @@ program define cimport, rclass
         }
         if `first_keep' > 1 {
             quietly drop in 1/`=`first_keep'-1'
+        }
+    }
+
+    * Apply colrange filtering (post-import)
+    if `startcol' > 0 | `endcol' > 0 {
+        local first_col = max(1, `startcol')
+        local total_cols = c(k)
+        if `endcol' > 0 {
+            local last_col = min(`endcol', `total_cols')
+        }
+        else {
+            local last_col = `total_cols'
+        }
+        * Drop columns outside range
+        if `last_col' < `total_cols' {
+            forvalues i = `total_cols'(-1)`=`last_col'+1' {
+                local vname : word `i' of `allvars'
+                quietly drop `vname'
+            }
+        }
+        if `first_col' > 1 {
+            forvalues i = `=`first_col'-1'(-1)1 {
+                local vname : word `i' of `allvars'
+                quietly drop `vname'
+            }
         }
     }
 

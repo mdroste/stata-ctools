@@ -20,8 +20,10 @@ Fast drop-in replacements for a variety of Stata commands.
 | `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
 | `gstats winsor` | `cwinsor` | Winsorization | **2-10x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
-| `reghdfe` | `creghdfe` | OLS with high-dimensional fixed effects | **10-20x** |
-| `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with high-dimensional fixed effects | **10-20x** |
+| `csdid` | `ccsdid` | Callaway-Sant'Anna diff-in-diffs | **20-30x** |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-20x** |
+| `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with multi-way fixed effects | **10-20x** |
+| `ppmlhdfe` | `cppmlhdfe` | Poisson pseudo-likelihood regression with multi-way fixed effects | **20-40x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
 Some ctools programs include an extended set of options. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [https://www.aeaweb.org/articles?id=10.1257/aer.20221576](Cattaneo et al. 2024). Internal help files for each ctools program provides complete documentation.
@@ -81,13 +83,13 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 
 ## Authorship
 
-99.9% of the code in this repository was written by Claude Opus 4.5 (through Claude Code), with some debugging and refactoring assistance from OpenAI's GPT 5.2 (through OpenAI Codex).
+99.9% of the code in this repository was written by Claude Opus 4.5 (through Claude Code), with some debugging and refactoring assistance from OpenAI GPT 5.2 (through Codex).
 
 
 ## Thanks
 
 - [Sergio Correia](https://github.com/sergiocorreia) for [ftools](https://github.com/sergiocorreia/ftools), [reghdfe](https://github.com/sergiocorreia/reghdfe), and [ivreghdfe](https://github.com/sergiocorreia/ivreghdfe) (with [Lars Vilhuber](https://www.ilr.cornell.edu/people/lars-vilhuber))
-- [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to cowsay [cowsay](https://github.com/mdroste/stata-cowsay) 
+- [Mauricio Caceres Bravo](https://mcaceresb.github.io/) for [gtools](https://github.com/mcaceresb/gtools) and invaluable contributions to [cowsay](https://github.com/mdroste/stata-cowsay) 
 - [Christopher (Kit) Baum](https://www.bc.edu/bc-web/schools/morrissey/departments/economics/people/faculty-directory/christopher-baum.html), [Mark E Schaffer](https://www.hw.ac.uk/profiles/uk/school/ebs/faculty/mark-schaffer), and [Steven Stillman](https://www.unibz.it/en/faculties/economics-management/academic-staff/person/36390-steven-stillman) for [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html)
 - [Sascha Witt](https://github.com/SaschaWitt) for the [In-place Parallel Super Scalar Samplesort (IPS⁴o)](https://github.com/SaschaWitt/ips4o) sorting algorithm.
 - Claude Code
