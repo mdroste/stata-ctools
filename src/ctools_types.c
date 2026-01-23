@@ -226,8 +226,8 @@ static inline void init_perm_prefetch_distances(void)
 {
     if (_perm_prefetch_near == 0) {
         ctools_prefetch_distances dist = ctools_get_prefetch_distances();
-        _perm_prefetch_near = dist.near;
-        _perm_prefetch_far = dist.far;
+        _perm_prefetch_near = dist.near_dist;
+        _perm_prefetch_far = dist.far_dist;
     }
 }
 

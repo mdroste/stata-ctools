@@ -161,8 +161,8 @@ static inline ctools_cache_info ctools_detect_cache_sizes(void)
     For larger caches, we can increase these proportionally.
 */
 typedef struct {
-    int near;       /* Near prefetch distance (into L1) */
-    int far;        /* Far prefetch distance (into L2/L3) */
+    int near_dist;  /* Near prefetch distance (into L1) */
+    int far_dist;   /* Far prefetch distance (into L2/L3) */
     int stream;     /* Streaming prefetch distance */
     int general;    /* General prefetch distance */
 } ctools_prefetch_distances;
@@ -186,14 +186,14 @@ static inline ctools_prefetch_distances ctools_compute_prefetch_distances(void)
     }
 
     /* Base distances scaled by cache size */
-    dist.near = 8 * scale;      /* L1 prefetch: 8-32 elements */
-    dist.far = 32 * scale;      /* L2/L3 prefetch: 32-128 elements */
-    dist.stream = 64 * scale;   /* Streaming: 64-256 elements */
-    dist.general = 16 * scale;  /* General purpose: 16-64 elements */
+    dist.near_dist = 8 * scale;      /* L1 prefetch: 8-32 elements */
+    dist.far_dist = 32 * scale;      /* L2/L3 prefetch: 32-128 elements */
+    dist.stream = 64 * scale;        /* Streaming: 64-256 elements */
+    dist.general = 16 * scale;       /* General purpose: 16-64 elements */
 
     /* Cap at reasonable maximums to avoid prefetching too far ahead */
-    if (dist.near > 64) dist.near = 64;
-    if (dist.far > 256) dist.far = 256;
+    if (dist.near_dist > 64) dist.near_dist = 64;
+    if (dist.far_dist > 256) dist.far_dist = 256;
     if (dist.stream > 512) dist.stream = 512;
     if (dist.general > 128) dist.general = 128;
 
