@@ -200,7 +200,11 @@ program define benchmark_merge
 
     restore
 
-    if `counts_match' & `cf_rc' == 0 {
+    * For m:m merges, only compare counts (Stata's m:m behavior is "unusual" and
+    * implementation-dependent per Stata documentation - we only verify dimensions)
+    local is_mm = ("`mergetype'" == "m:m")
+
+    if `counts_match' & (`cf_rc' == 0 | `is_mm') {
         test_pass "`testname'"
     }
     else if !`counts_match' {
@@ -620,24 +624,54 @@ end
 /*******************************************************************************
  * benchmark_import - Compare cimport vs import delimited
  *
+ * NOTE: Stata's import delimited has auto-detection for headers - if row 1
+ * has the same type signature as row 2, it treats row 1 as data. cimport
+ * always uses row 1 as headers (matching standard CSV conventions).
+ *
+ * To make fair comparisons, this helper forces both commands to use the same
+ * header handling when varnames() is not specified:
+ * - If no varnames option: force varnames(1) on Stata so both use first row as headers
+ * - If varnames(nonames): both treat all rows as data
+ * - If varnames(1): both use first row as headers
+ *
  * Syntax: benchmark_import using filename [, options]
  ******************************************************************************/
 capture program drop benchmark_import
 program define benchmark_import
-    syntax using/, [DELIMiters(string) VARNames(string) CASE(string) testname(string)]
+    syntax using/, [DELIMiters(string) VARNames(string) CASE(string) testname(string) importopts(string)]
 
     if "`testname'" == "" local testname "import `using'"
 
-    * Build option string
-    local opts "clear"
-    if "`delimiters'" != "" local opts "`opts' delimiters(`delimiters')"
-    if "`varnames'" != "" local opts "`opts' varnames(`varnames')"
-    if "`case'" != "" local opts "`opts' case(`case')"
+    * Build option strings for each command
+    * For cimport, use options as provided
+    local cimport_opts "clear"
+    if "`delimiters'" != "" local cimport_opts "`cimport_opts' delimiters(`delimiters')"
+    if "`varnames'" != "" local cimport_opts "`cimport_opts' varnames(`varnames')"
+    if "`case'" != "" local cimport_opts "`cimport_opts' case(`case')"
+
+    * For Stata import delimited, force varnames(1) if not specified
+    * This ensures Stata uses first row as headers like cimport does
+    local stata_opts "clear"
+    if "`delimiters'" != "" local stata_opts "`stata_opts' delimiters(`delimiters')"
+    if "`varnames'" != "" {
+        local stata_opts "`stata_opts' varnames(`varnames')"
+    }
+    else {
+        * Force Stata to use first row as headers to match cimport default
+        local stata_opts "`stata_opts' varnames(1)"
+    }
+    if "`case'" != "" local stata_opts "`stata_opts' case(`case')"
+
+    * Add any additional import options (passed through directly)
+    if `"`importopts'"' != "" {
+        local stata_opts `"`stata_opts' `importopts'"'
+        local cimport_opts `"`cimport_opts' `importopts'"'
+    }
 
     preserve
 
     * Run Stata import (quietly)
-    capture quietly import delimited `using', `opts'
+    capture quietly import delimited `using', `stata_opts'
     local stata_rc = _rc
 
     if `stata_rc' != 0 {
@@ -652,7 +686,7 @@ program define benchmark_import
     quietly save `stata_import'
 
     * Run cimport (quietly)
-    capture quietly cimport delimited `using', `opts'
+    capture quietly cimport delimited `using', `cimport_opts'
     local cimport_rc = _rc
 
     if `cimport_rc' != 0 {
@@ -664,14 +698,64 @@ program define benchmark_import
     local cimport_n = _N
     local cimport_k = c(k)
 
+    * Check dimensions first
+    if `stata_n' != `cimport_n' | `stata_k' != `cimport_k' {
+        restore
+        test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
+        exit
+    }
+
+    * Dimensions match - now compare data content
+    * Note: Variable names may differ (e.g., Stata sanitizes "1" to v1, cimport to v)
+    * So we compare by position rather than by variable name
+
+    * Get variable lists for both datasets
+    quietly ds
+    local cimport_vars `r(varlist)'
+
+    * Rename cimport variables to generic names for comparison
+    local i = 1
+    foreach v of local cimport_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+
+    tempfile cimport_import
+    quietly save `cimport_import'
+
+    * Load Stata import and rename to same generic names
+    quietly use `stata_import', clear
+    quietly ds
+    local stata_vars `r(varlist)'
+
+    local i = 1
+    foreach v of local stata_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+
+    * Sort both by all variables
+    quietly ds
+    local allvars `r(varlist)'
+    quietly sort `allvars'
+
+    tempfile stata_renamed
+    quietly save `stata_renamed'
+
+    quietly use `cimport_import', clear
+    quietly sort `allvars'
+
+    * Now compare
+    capture quietly cf _all using `stata_renamed'
+    local cf_rc = _rc
+
     restore
 
-    * Compare dimensions
-    if `stata_n' == `cimport_n' & `stata_k' == `cimport_k' {
+    if `cf_rc' == 0 {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`stata_k') vs cimport(N=`cimport_n',K=`cimport_k')"
+        test_fail "`testname'" "data content differs (cf _all failed)"
     }
 end
 

@@ -1076,40 +1076,9 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    /* Check for allocation failures during string copying */
-    if (str_arena != NULL && str_arena->has_fallback) {
-        SF_error("cmerge: memory allocation failed during string copy\n");
-        /* Cleanup - free all allocated resources */
-        for (size_t vi = 0; vi < n_output_vars; vi++) {
-            if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
-                /* Free fallback strings not owned by arena */
-                for (size_t i = 0; i < output_nobs; i++) {
-                    if (output_data.vars[vi].data.str[i] &&
-                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
-                        free(output_data.vars[vi].data.str[i]);
-                    }
-                }
-                /* Free the string pointer array */
-                free(output_data.vars[vi].data.str);
-            } else if (output_data.vars[vi].data.dbl) {
-                /* Free numeric buffer */
-                ctools_aligned_free(output_data.vars[vi].data.dbl);
-            }
-        }
-        cmerge_arena_free(str_arena);
-        ctools_aligned_free(output_data.vars);
-        free(output_var_indices);
-        free(output_var_stata_idx);
-        free(output_var_is_key);
-        free(output_var_key_idx);
-        free(output_specs);
-        free(master_orig_rows);
-        if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
-        free(all_var_indices);
-        cache_clear_in_use();
-        return 920;
-    }
+    /* Note: str_arena->has_fallback being set is normal behavior - it means
+     * some strings were allocated via strdup because the arena ran out of space.
+     * This is NOT an error; the fallback strings are freed in cleanup below. */
 
     double t_permute = ctools_timer_ms() - t_start;
 

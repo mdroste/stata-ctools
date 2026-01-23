@@ -10,7 +10,7 @@
  *
  * The cmerge string arena is now a typedef to the shared ctools_string_arena.
  * The cmerge_arena_* functions are thin wrappers that configure the arena
- * with STATIC_FALLBACK mode (never returns NULL).
+ * with STRDUP_FALLBACK mode (falls back to strdup when arena is full).
  */
 
 #ifndef CMERGE_MEMORY_H

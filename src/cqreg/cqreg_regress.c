@@ -307,19 +307,17 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     }
 
     /*
-     * OPTIMIZATION: Create very relaxed config for auxiliary solves.
-     * For sparsity estimation, we only need ~2-3 decimal places of accuracy
-     * since sparsity only affects standard errors (not coefficients).
-     *
-     * Using 1e-4 tolerance (vs default 1e-8) reduces iterations by ~50-60%.
-     * Also cap max iterations at 100 since we don't need high precision.
+     * Configure auxiliary solves for sparsity estimation.
+     * These need to match Stata's precision to get accurate VCE.
+     * Using same tolerance as main solve ensures sparsity estimate
+     * is accurate enough for standard error computation.
      */
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = 100;       /* Cap iterations - we don't need high precision */
-    aux_config.tol_primal = 1e-4;   /* Very relaxed from default 1e-8 */
-    aux_config.tol_dual = 1e-4;     /* Very relaxed from default 1e-8 */
-    aux_config.tol_gap = 1e-4;      /* Very relaxed from default 1e-8 */
+    aux_config.maxiter = 200;       /* Same as main solve */
+    aux_config.tol_primal = 1e-8;   /* Tight tolerance for accurate sparsity */
+    aux_config.tol_dual = 1e-8;     /* Tight tolerance for accurate sparsity */
+    aux_config.tol_gap = 1e-8;      /* Tight tolerance for accurate sparsity */
     aux_config.verbose = 0;         /* Suppress output for aux solves */
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 
@@ -511,7 +509,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int bw_method = read_scalar_int("__cqreg_bw_method", 0);
     ST_int density_method = read_scalar_int("__cqreg_density_method", 1);  /* Default: fitted */
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
-    ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-8);
+    ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-12);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
     ST_int nopreprocess = read_scalar_int("__cqreg_nopreprocess", 0);
 
@@ -643,8 +641,8 @@ ST_retcode cqreg_full_regression(const char *args)
     if (G > 0) {
         double hdfe_start = ctools_timer_seconds();
 
-        /* Initialize HDFE */
-        if (cqreg_hdfe_init(state, fe_var_idx, G, in1, in2, 10000, 1e-8) != 0) {
+        /* Initialize HDFE with filtered observation count */
+        if (cqreg_hdfe_init(state, fe_var_idx, G, N, in1, in2, 10000, 1e-8) != 0) {
             cqreg_state_free(state);
             free(indepvar_idx);
             free(fe_var_idx);

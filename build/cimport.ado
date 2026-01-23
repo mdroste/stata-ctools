@@ -80,7 +80,7 @@ program define cimport, rclass
     }
 
     * Validate delimiter - for now only single character supported
-    * For plugin: pass "tab" keyword instead of actual tab character
+    * For plugin: pass "tab" or "space" keyword instead of actual characters
     local plugin_delim `"`delimiters'"'
     if length(`"`delimiters'"') != 1 {
         * Handle special cases like tab
@@ -97,6 +97,10 @@ program define cimport, rclass
     * Also check if delimiter is already a tab character
     if `"`delimiters'"' == "	" {
         local plugin_delim "tab"
+    }
+    * Handle space delimiter - must pass as keyword since strtok uses space as separator
+    if `"`delimiters'"' == " " {
+        local plugin_delim "space"
     }
 
     * Parse varnames option
@@ -319,7 +323,7 @@ program define cimport, rclass
         di as text "cimport delimited: High-Performance CSV Import"
         di as text "{hline 60}"
         di as text "File:       " as result `"`using'"'
-        di as text "Delimiter:  " as result cond(`"`delimiters'"' == "	", "tab", `"`delimiters'"')
+        di as text "Delimiter:  " as result cond(`"`delimiters'"' == "	", "tab", cond(`"`delimiters'"' == " ", "space", `"`delimiters'"'))
         di as text "Header row: " as result cond(`noheader' == 0, "yes (row 1)", "no")
         di as text "Case:       " as result "`case'"
         di as text "{hline 60}"

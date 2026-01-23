@@ -152,9 +152,11 @@ static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo
         return CIMPORT_NUM_FLOAT;
     }
 
-    if (col->min_value >= -127 && col->max_value <= 100) {
-        return CIMPORT_NUM_BYTE;
-    }
+    /* Always default to int for integers. Type inference samples only a subset
+     * of rows for large files, so byte's narrow range (-127 to 100) risks data
+     * loss if sampling misses outlier values. Int is safe for all practical
+     * integer data while using minimal additional memory (2 bytes vs 1).
+     */
     if (col->min_value >= -32767 && col->max_value <= 32740) {
         return CIMPORT_NUM_INT;
     }
@@ -1406,6 +1408,8 @@ ST_retcode cimport_main(const char *args) {
                 opts.verbose = true;
             } else if (strcmp(token, "tab") == 0) {
                 opts.delimiter = '\t';
+            } else if (strcmp(token, "space") == 0) {
+                opts.delimiter = ' ';
             } else if (strcmp(token, "bindquotes=strict") == 0) {
                 opts.bindquotes = CIMPORT_BINDQUOTES_STRICT;
             } else if (strcmp(token, "bindquotes=loose") == 0) {

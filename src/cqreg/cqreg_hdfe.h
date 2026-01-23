@@ -27,11 +27,12 @@ struct HDFE_State;
  *
  * Parameters:
  *   state     - cqreg state (will have hdfe_state set)
- *   fe_vars   - Array of Stata variable indices for FE variables (1-indexed)
- *   G         - Number of FE variables
- *   in1, in2  - Observation range (from Stata's _N())
- *   maxiter   - Maximum CG iterations (default: 10000)
- *   tolerance - CG convergence tolerance (default: 1e-8)
+ *   fe_vars    - Array of Stata variable indices for FE variables (1-indexed)
+ *   G          - Number of FE variables
+ *   N_filtered - Number of observations after if-condition filtering
+ *   in1, in2   - Observation range (from Stata's _N())
+ *   maxiter    - Maximum CG iterations (default: 10000)
+ *   tolerance  - CG convergence tolerance (default: 1e-8)
  *
  * Returns:
  *   0 on success, error code otherwise
@@ -39,6 +40,7 @@ struct HDFE_State;
 ST_int cqreg_hdfe_init(cqreg_state *state,
                        const ST_int *fe_vars,
                        ST_int G,
+                       ST_int N_filtered,
                        ST_int in1, ST_int in2,
                        ST_int maxiter,
                        ST_double tolerance);
@@ -121,14 +123,15 @@ void cqreg_hdfe_cleanup(cqreg_state *state);
 
 /*
  * Create factor from Stata variable.
- * Reads values and creates level assignments.
+ * Reads values and creates level assignments, filtering by if-condition.
  *
  * Parameters:
- *   var_idx - Stata variable index (1-indexed)
- *   in1     - First observation
- *   in2     - Last observation
- *   levels  - Output: level assignments (N)
- *   counts  - Output: count per level
+ *   var_idx    - Stata variable index (1-indexed)
+ *   in1        - First observation
+ *   in2        - Last observation
+ *   N_filtered - Number of observations after if-condition filtering
+ *   levels     - Output: level assignments (N_filtered)
+ *   counts     - Output: count per level
  *   num_levels - Output: number of unique levels
  *
  * Returns:
@@ -136,6 +139,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state);
  */
 ST_int cqreg_hdfe_create_factor(ST_int var_idx,
                                 ST_int in1, ST_int in2,
+                                ST_int N_filtered,
                                 ST_int *levels,
                                 ST_double *counts,
                                 ST_int *num_levels);

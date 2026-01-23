@@ -1,8 +1,18 @@
-capture do "validation/validate_setup.do"
+* Debug cencode
+clear all
 
-di as text "DEBUG: Basic encoding without if"
+* Add build directory to adopath
+adopath + "./build"
+
 sysuse auto, clear
+list make in 1/5
+describe make
+
+di "About to run cencode..."
+capture drop make_code
 cencode make, generate(make_code) verbose
-count if !missing(make_code)
-di "Non-missing count: " r(N)
-tab make_code in 1/5
+
+di "After cencode:"
+list make make_code in 1/5
+
+sum make_code

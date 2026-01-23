@@ -99,23 +99,25 @@ static ST_int hash_insert(cqreg_hash_table *ht, ST_int key)
 
 ST_int cqreg_hdfe_create_factor(ST_int var_idx,
                                 ST_int in1, ST_int in2,
+                                ST_int N_filtered,
                                 ST_int *levels,
                                 ST_double *counts,
                                 ST_int *num_levels)
 {
-    ST_int N = in2 - in1 + 1;
-    ST_int i, obs;
+    ST_int idx, obs;
 
     /* Create hash table with room for all unique values */
-    ST_int capacity = (ST_int)(N / CQREG_HASH_LOAD) + 1;
+    ST_int capacity = (ST_int)(N_filtered / CQREG_HASH_LOAD) + 1;
     cqreg_hash_table *ht = hash_create(capacity);
     if (ht == NULL) return -1;
 
-    /* Read variable and build level assignments */
-    for (i = 0; i < N; i++) {
-        obs = in1 + i;
-        ST_double val;
+    /* Read variable and build level assignments, filtering by if-condition */
+    idx = 0;
+    for (obs = in1; obs <= in2; obs++) {
+        /* Skip observations that don't pass the if-condition */
+        if (!SF_ifobs(obs)) continue;
 
+        ST_double val;
         if (SF_vdata(var_idx, obs, &val) != 0) {
             hash_free(ht);
             return -2;
@@ -123,15 +125,22 @@ ST_int cqreg_hdfe_create_factor(ST_int var_idx,
 
         /* Convert to integer (FE variables should be integer-valued) */
         ST_int int_val = (ST_int)val;
-        levels[i] = hash_insert(ht, int_val);
+        levels[idx] = hash_insert(ht, int_val);
+        idx++;
+    }
+
+    /* Verify we got the expected number of observations */
+    if (idx != N_filtered) {
+        hash_free(ht);
+        return -3;  /* Observation count mismatch */
     }
 
     *num_levels = ht->size;
 
     /* Count observations per level */
     memset(counts, 0, ht->size * sizeof(ST_double));
-    for (i = 0; i < N; i++) {
-        counts[levels[i] - 1] += 1.0;  /* levels are 1-indexed */
+    for (idx = 0; idx < N_filtered; idx++) {
+        counts[levels[idx] - 1] += 1.0;  /* levels are 1-indexed */
     }
 
     hash_free(ht);
@@ -203,15 +212,15 @@ ST_int cqreg_hdfe_detect_singletons(cqreg_state *state, ST_int *mask)
 ST_int cqreg_hdfe_init(cqreg_state *state,
                        const ST_int *fe_vars,
                        ST_int G,
+                       ST_int N_filtered,
                        ST_int in1, ST_int in2,
                        ST_int maxiter,
                        ST_double tolerance)
 {
-    ST_int N = in2 - in1 + 1;
     ST_int g, t;
     HDFE_State *hdfe = NULL;
 
-    if (G <= 0 || fe_vars == NULL) {
+    if (G <= 0 || fe_vars == NULL || N_filtered <= 0) {
         return -1;
     }
 
@@ -220,7 +229,7 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
     if (hdfe == NULL) return -1;
 
     hdfe->G = G;
-    hdfe->N = N;
+    hdfe->N = N_filtered;  /* Use filtered observation count */
     hdfe->in1 = in1;
     hdfe->in2 = in2;
     hdfe->has_weights = 0;
@@ -240,21 +249,21 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
     for (g = 0; g < G; g++) {
         FE_Factor *f = &hdfe->factors[g];
 
-        /* Allocate level assignments */
-        f->levels = (ST_int *)malloc(N * sizeof(ST_int));
+        /* Allocate level assignments for filtered observations */
+        f->levels = (ST_int *)malloc(N_filtered * sizeof(ST_int));
         if (f->levels == NULL) {
             goto cleanup;
         }
 
         /* Temporary counts (will be resized) */
-        ST_double *tmp_counts = (ST_double *)calloc(N, sizeof(ST_double));
+        ST_double *tmp_counts = (ST_double *)calloc(N_filtered, sizeof(ST_double));
         if (tmp_counts == NULL) {
             goto cleanup;
         }
 
-        /* Create factor from Stata variable */
+        /* Create factor from Stata variable, filtering by if-condition */
         ST_int num_levels;
-        if (cqreg_hdfe_create_factor(fe_vars[g], in1, in2,
+        if (cqreg_hdfe_create_factor(fe_vars[g], in1, in2, N_filtered,
                                      f->levels, tmp_counts, &num_levels) != 0) {
             free(tmp_counts);
             goto cleanup;
@@ -302,10 +311,10 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
     }
 
     for (t = 0; t < hdfe->num_threads; t++) {
-        hdfe->thread_cg_r[t] = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_cg_u[t] = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_cg_v[t] = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_proj[t] = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+        hdfe->thread_cg_r[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
+        hdfe->thread_cg_u[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
+        hdfe->thread_cg_v[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
+        hdfe->thread_proj[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
 
         if (hdfe->thread_cg_r[t] == NULL || hdfe->thread_cg_u[t] == NULL ||
             hdfe->thread_cg_v[t] == NULL || hdfe->thread_proj[t] == NULL) {
@@ -485,50 +494,89 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
     HDFE_State *hdfe = (HDFE_State *)state->hdfe_state;
     ST_int g, t;
 
+    /* Validate state before cleanup to prevent crashes from corrupted data */
+    if (hdfe->G < 0 || hdfe->G > 1000000 ||
+        hdfe->num_threads < 0 || hdfe->num_threads > 10000) {
+        /* State appears corrupted - just NULL out and return */
+        state->hdfe_state = NULL;
+        state->has_hdfe = 0;
+        return;
+    }
+
     /* Free factors */
     if (hdfe->factors != NULL) {
         for (g = 0; g < hdfe->G; g++) {
-            free(hdfe->factors[g].levels);
-            free(hdfe->factors[g].counts);
-            if (hdfe->factors[g].inv_counts) free(hdfe->factors[g].inv_counts);
-            free(hdfe->factors[g].means);
+            if (hdfe->factors[g].levels != NULL) free(hdfe->factors[g].levels);
+            if (hdfe->factors[g].counts != NULL) free(hdfe->factors[g].counts);
+            if (hdfe->factors[g].inv_counts != NULL) free(hdfe->factors[g].inv_counts);
+            if (hdfe->factors[g].means != NULL) free(hdfe->factors[g].means);
+            /* Clear pointers after free to detect double-free */
+            hdfe->factors[g].levels = NULL;
+            hdfe->factors[g].counts = NULL;
+            hdfe->factors[g].inv_counts = NULL;
+            hdfe->factors[g].means = NULL;
         }
         free(hdfe->factors);
+        hdfe->factors = NULL;
     }
 
     /* Free per-thread buffers */
     if (hdfe->thread_cg_r != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
-            cqreg_aligned_free(hdfe->thread_cg_r[t]);
+            if (hdfe->thread_cg_r[t] != NULL) {
+                cqreg_aligned_free(hdfe->thread_cg_r[t]);
+                hdfe->thread_cg_r[t] = NULL;
+            }
         }
         free(hdfe->thread_cg_r);
+        hdfe->thread_cg_r = NULL;
     }
     if (hdfe->thread_cg_u != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
-            cqreg_aligned_free(hdfe->thread_cg_u[t]);
+            if (hdfe->thread_cg_u[t] != NULL) {
+                cqreg_aligned_free(hdfe->thread_cg_u[t]);
+                hdfe->thread_cg_u[t] = NULL;
+            }
         }
         free(hdfe->thread_cg_u);
+        hdfe->thread_cg_u = NULL;
     }
     if (hdfe->thread_cg_v != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
-            cqreg_aligned_free(hdfe->thread_cg_v[t]);
+            if (hdfe->thread_cg_v[t] != NULL) {
+                cqreg_aligned_free(hdfe->thread_cg_v[t]);
+                hdfe->thread_cg_v[t] = NULL;
+            }
         }
         free(hdfe->thread_cg_v);
+        hdfe->thread_cg_v = NULL;
     }
     if (hdfe->thread_proj != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
-            cqreg_aligned_free(hdfe->thread_proj[t]);
+            if (hdfe->thread_proj[t] != NULL) {
+                cqreg_aligned_free(hdfe->thread_proj[t]);
+                hdfe->thread_proj[t] = NULL;
+            }
         }
         free(hdfe->thread_proj);
+        hdfe->thread_proj = NULL;
     }
     if (hdfe->thread_fe_means != NULL) {
-        for (t = 0; t < hdfe->num_threads * hdfe->G; t++) {
-            free(hdfe->thread_fe_means[t]);
+        ST_int total_fe_means = hdfe->num_threads * hdfe->G;
+        for (t = 0; t < total_fe_means; t++) {
+            if (hdfe->thread_fe_means[t] != NULL) {
+                free(hdfe->thread_fe_means[t]);
+                hdfe->thread_fe_means[t] = NULL;
+            }
         }
         free(hdfe->thread_fe_means);
+        hdfe->thread_fe_means = NULL;
     }
 
-    free(hdfe->weights);
+    if (hdfe->weights != NULL) {
+        free(hdfe->weights);
+        hdfe->weights = NULL;
+    }
     free(hdfe);
 
     state->hdfe_state = NULL;

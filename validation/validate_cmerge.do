@@ -1317,7 +1317,7 @@ noi benchmark_merge m:1 name using `str_unicode_using', testname("string key: La
  ******************************************************************************/
 noi print_section "Numeric Key Edge Cases"
 
-* Missing values in numeric keys
+* Missing values in numeric keys (using m:1 since missing values are duplicates)
 clear
 input double id double value1
 1 10
@@ -1334,14 +1334,13 @@ input double id double value2
 1 100
 . 200
 3 300
-. 400
 5 500
 end
 tempfile num_miss_using
 save `num_miss_using'
 
 use `num_miss_master', clear
-noi benchmark_merge 1:1 id using `num_miss_using', testname("numeric key: missing values")
+noi benchmark_merge m:1 id using `num_miss_using', testname("numeric key: missing values (m:1)")
 
 * Extended missing values (.a, .b, etc.)
 clear
@@ -1583,14 +1582,16 @@ tempfile master_only_using
 save `master_only_using'
 
 use `master_only_master', clear
-merge 1:1 id using `master_only_using', nogenerate
+merge 1:1 id using `master_only_using'
 qui count if _merge == 1
 local stata_m1 = r(N)
+drop _merge
 
 use `master_only_master', clear
-cmerge 1:1 id using `master_only_using', nogen noreport
+cmerge 1:1 id using `master_only_using', noreport
 qui count if _merge == 1
 local cmerge_m1 = r(N)
+drop _merge
 
 if `stata_m1' == `cmerge_m1' & `cmerge_m1' == 100 {
     noi test_pass "master only (no using matches)"
@@ -1615,14 +1616,16 @@ tempfile using_only_using
 save `using_only_using'
 
 use `using_only_master', clear
-merge 1:1 id using `using_only_using', nogenerate
+merge 1:1 id using `using_only_using'
 qui count if _merge == 2
 local stata_m2 = r(N)
+drop _merge
 
 use `using_only_master', clear
-cmerge 1:1 id using `using_only_using', nogen noreport
+cmerge 1:1 id using `using_only_using', noreport
 qui count if _merge == 2
 local cmerge_m2 = r(N)
+drop _merge
 
 if `stata_m2' == `cmerge_m2' & `cmerge_m2' == 100 {
     noi test_pass "using only (no master matches)"
@@ -1631,7 +1634,7 @@ else {
     noi test_fail "using only" "m2 counts differ"
 }
 
-* Sparse matches (10% overlap)
+* Sparse matches (10% overlap) - using has unique keys that partially overlap master
 clear
 set obs 1000
 gen id = _n
@@ -1641,7 +1644,8 @@ save `sparse_master'
 
 clear
 set obs 1000
-gen id = cond(runiform() < 0.1, runiformint(1, 1000), _n + 5000)
+* Create unique IDs: first 100 overlap with master (1-100), rest are above (5001-5900)
+gen id = cond(_n <= 100, _n, _n + 4900)
 gen value2 = runiform() * 100
 tempfile sparse_using
 save `sparse_using'
@@ -1680,14 +1684,14 @@ save `miss_nonkey_using'
 use `miss_nonkey_master', clear
 noi benchmark_merge 1:1 id using `miss_nonkey_using', testname("missing in non-key variables")
 
-* First/last rows with missing keys
+* First/last rows with missing keys (only one missing per dataset for valid 1:1)
 clear
 input double id double value
 . 100
 2 200
 3 300
 4 400
-. 500
+6 500
 end
 tempfile first_last_miss_master
 save `first_last_miss_master'

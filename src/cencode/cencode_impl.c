@@ -175,40 +175,62 @@ static int cencode_string_compare(const void *a, const void *b)
 ST_retcode cencode_main(const char *args)
 {
     double t_start, t_parse, t_collect, t_sort, t_encode, t_labels, t_total;
+    int var_idx = 0, gen_idx = 0;
     char label_name[256] = "";
     int noextend = 0;
     size_t nobs;
     ST_retcode rc = 0;
 
     /*
-     * Stata Plugin Interface uses 1-based indices into the plugin's varlist.
-     * cencode is called as: plugin call ctools_plugin src_var dst_var, args
-     * So index 1 = source string variable, index 2 = destination numeric variable.
+     * cencode is called with ALL dataset variables in the varlist:
+     *   plugin call ctools_plugin allvars, "cencode var_idx gen_idx ..."
+     *
+     * This makes varlist indices equal to dataset column indices.
+     * var_idx = source string variable's position in dataset
+     * gen_idx = destination numeric variable's position in dataset
      */
-    const int var_idx = 1;
-    const int gen_idx = 2;
 
     t_start = ctools_timer_seconds();
 
-    /* Parse arguments for options only */
-    if (args != NULL && *args != '\0') {
-        char args_copy[1024];
-        strncpy(args_copy, args, sizeof(args_copy) - 1);
-        args_copy[sizeof(args_copy) - 1] = '\0';
+    /* Parse arguments */
+    if (args == NULL || *args == '\0') {
+        SF_error("cencode: no arguments specified\n");
+        return 198;
+    }
 
-        char *token = strtok(args_copy, " ");
-        while (token != NULL) {
-            if (strncmp(token, "label=", 6) == 0) {
-                strncpy(label_name, token + 6, sizeof(label_name) - 1);
-                label_name[sizeof(label_name) - 1] = '\0';
-            } else if (strcmp(token, "noextend") == 0) {
-                noextend = 1;
-            }
-            token = strtok(NULL, " ");
+    char args_copy[1024];
+    strncpy(args_copy, args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    /* Parse arguments: first two numbers are var_idx and gen_idx */
+    char *token = strtok(args_copy, " ");
+    if (token && (token[0] >= '0' && token[0] <= '9')) {
+        var_idx = atoi(token);
+        token = strtok(NULL, " ");
+    }
+    if (token && (token[0] >= '0' && token[0] <= '9')) {
+        gen_idx = atoi(token);
+        token = strtok(NULL, " ");
+    }
+
+    /* Parse remaining optional arguments */
+    while (token != NULL) {
+        if (strncmp(token, "label=", 6) == 0) {
+            strncpy(label_name, token + 6, sizeof(label_name) - 1);
+            label_name[sizeof(label_name) - 1] = '\0';
+        } else if (strcmp(token, "noextend") == 0) {
+            noextend = 1;
         }
+        token = strtok(NULL, " ");
     }
     (void)noextend;
 
+    if (var_idx < 1 || gen_idx < 1) {
+        SF_error("cencode: invalid variable indices\n");
+        return 198;
+    }
+
+    /* Check source is a string variable */
     if (!SF_var_is_string(var_idx)) {
         SF_error("cencode: source variable must be a string variable\n");
         return 198;
@@ -292,9 +314,9 @@ ST_retcode cencode_main(const char *args)
                 }
             }
             if (is_strl) {
-                SF_strldata(var_idx, obs, large_buf, slen + 1);
+                SF_strldata(SRC_VAR, obs, large_buf, slen + 1);
             } else {
-                SF_sdata(var_idx, obs, large_buf);
+                SF_sdata(SRC_VAR, obs, large_buf);
             }
             large_buf[slen] = '\0';
             str_ptr = large_buf;
@@ -329,7 +351,7 @@ ST_retcode cencode_main(const char *args)
 
     if (n_unique == 0) {
         for (size_t i = 0; i < nobs; i++) {
-            SF_vstore(gen_idx, obs1 + (ST_int)i, SV_missval);
+            SF_vstore(DEST_VAR, obs1 + (ST_int)i, SV_missval);
         }
         SF_scal_save("_cencode_n_unique", 0);
         SF_scal_save("_cencode_n_chunks", 1);
@@ -405,14 +427,36 @@ ST_retcode cencode_main(const char *args)
      * No need to re-read strings - we stored the original codes in Pass 1
      * ======================================================================== */
 
+    /* Debug: count how many obs_codes are non-zero */
+    int debug_nonzero = 0;
+    for (size_t i = 0; i < nobs; i++) {
+        if (obs_codes[i] > 0) debug_nonzero++;
+    }
+    {
+        char dbg[256];
+        snprintf(dbg, sizeof(dbg), "cencode debug: obs_codes nonzero=%d, nobs=%d\n", debug_nonzero, (int)nobs);
+        SF_display(dbg);
+    }
+
     for (size_t i = 0; i < nobs; i++) {
         ST_int obs = obs1 + (ST_int)i;
         int orig_code = obs_codes[i];
 
         if (orig_code > 0) {
-            SF_vstore(gen_idx, obs, (double)code_map[orig_code]);
+            double val_to_store = (double)code_map[orig_code];
+            SF_vstore(DEST_VAR, obs, val_to_store);
+
+            /* Debug: read back to verify */
+            if (i < 3) {
+                double readback;
+                SF_vdata(DEST_VAR, obs, &readback);
+                char dbg[256];
+                snprintf(dbg, sizeof(dbg), "cencode debug: wrote %.0f to obs %d, read back %.0f\n",
+                         val_to_store, (int)obs, readback);
+                SF_display(dbg);
+            }
         } else {
-            SF_vstore(gen_idx, obs, SV_missval);
+            SF_vstore(DEST_VAR, obs, SV_missval);
         }
     }
 

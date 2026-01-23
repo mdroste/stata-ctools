@@ -3,7 +3,7 @@
  * Memory allocation utilities for cmerge
  *
  * Thin wrappers around ctools_arena functions, configured with
- * STATIC_FALLBACK mode for cmerge's never-NULL semantics.
+ * STRDUP_FALLBACK mode to preserve string data when arena is full.
  */
 
 #include <stdlib.h>
@@ -16,8 +16,9 @@
 
 cmerge_string_arena *cmerge_arena_create(size_t capacity)
 {
-    /* Create arena with STATIC_FALLBACK mode - never returns NULL from strdup */
-    return ctools_string_arena_create(capacity, CTOOLS_STRING_ARENA_STATIC_FALLBACK);
+    /* Create arena with STRDUP_FALLBACK mode - uses strdup() when arena is full.
+     * This preserves actual string data (unlike STATIC_FALLBACK which returns empty strings). */
+    return ctools_string_arena_create(capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
 }
 
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)

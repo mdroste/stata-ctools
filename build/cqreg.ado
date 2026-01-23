@@ -16,7 +16,7 @@
 *!   denmethod(method)  - Density estimation: fitted (default), residual
 *!   bwmethod(method)   - Bandwidth method: hsheather (default), bofinger, chamberlain
 *!   verbose            - Display progress information
-*!   tolerance(#)       - Convergence tolerance (default: 1e-8)
+*!   tolerance(#)       - Convergence tolerance (default: 1e-12)
 *!   maxiter(#)         - Maximum iterations (default: 200)
 *!   nopreprocess(#)    - Controls preprocessing algorithm (experimental)
 *!                        Default: 0 (preprocessing disabled)
@@ -29,7 +29,7 @@ program define cqreg, eclass
     local cmdline "cqreg `0'"
 
     syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-8) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TIMEIT TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
 
     * Validate quantile
     if `quantile' <= 0 | `quantile' >= 1 {
@@ -87,6 +87,11 @@ program define cqreg, eclass
         }
         else if "`vce_lower'" == "iid" {
             local vcetype = 0
+        }
+        else if substr("`vce_lower'", 1, 4) == "boot" {
+            di as error "cqreg: vce(bootstrap) is not currently supported"
+            di as error "       Use Stata's qreg for bootstrap standard errors"
+            exit 198
         }
         else {
             di as error "cqreg: unrecognized vce() option: `vce'"
@@ -218,7 +223,7 @@ program define cqreg, eclass
     scalar __cqreg_vce_type = `vcetype'
     scalar __cqreg_bw_method = `bwmethod_num'
     scalar __cqreg_density_method = `denmethod_num'
-    scalar __cqreg_verbose = ("`verbose'" != "")
+    scalar __cqreg_verbose = ("`verbose'" != "" | "`timeit'" != "")
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_nopreprocess = `nopreprocess'
@@ -404,8 +409,8 @@ program define cqreg, eclass
     * Display coefficient table
     ereturn display
 
-    * Show timing breakdown if verbose
-    if "`verbose'" != "" {
+    * Show timing breakdown if verbose or timeit
+    if "`verbose'" != "" | "`timeit'" != "" {
         * Calculate Stata overhead
         local __stata_overhead = `elapsed' - _cqreg_time_total
 

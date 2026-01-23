@@ -189,10 +189,7 @@ program define cmerge, rclass
     local master_nvars = c(k)
     unab master_varlist : _all
 
-    if `master_nobs' == 0 {
-        di as error "cmerge: no observations in master dataset"
-        exit 2000
-    }
+    * Allow empty master - will just add using-only observations
 
     * Get master key variable indices (1-based) - skip for _n merge
     local master_key_indices ""
@@ -450,6 +447,154 @@ program define cmerge, rclass
         else {
             di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `nkeys' as text " keys + " as result `keepusing_count' as text " keepusing vars"
         }
+    }
+
+    * =========================================================================
+    * Special handling for empty datasets (handle entirely in Stata)
+    * =========================================================================
+
+    if `master_nobs' == 0 | `using_nobs' == 0 {
+        * Save using data if needed
+        tempfile using_saved
+        if `using_nobs' > 0 {
+            qui save `using_saved', replace
+        }
+
+        restore
+
+        * Handle empty master: append using with _merge=2
+        if `master_nobs' == 0 & `using_nobs' > 0 {
+            qui append using `using_saved'
+            if "`nogenerate'" == "" {
+                qui gen byte `generate' = 2
+            }
+            local merge_master = 0
+            local merge_using = `using_nobs'
+            local merge_matched = 0
+        }
+        * Handle empty using: keep master with _merge=1
+        else if `master_nobs' > 0 & `using_nobs' == 0 {
+            * Add placeholder keepusing variables
+            foreach vname of local keepusing_names {
+                local vtype : word 1 of `keepusing_types'
+                local keepusing_types : list keepusing_types - vtype
+                capture confirm variable `vname'
+                if _rc {
+                    if substr("`vtype'", 1, 3) == "str" {
+                        qui gen `vtype' `vname' = ""
+                    }
+                    else {
+                        qui gen `vtype' `vname' = .
+                    }
+                }
+            }
+            if "`nogenerate'" == "" {
+                qui gen byte `generate' = 1
+            }
+            local merge_master = `master_nobs'
+            local merge_using = 0
+            local merge_matched = 0
+        }
+        * Handle both empty
+        else {
+            if "`nogenerate'" == "" {
+                qui gen byte `generate' = .
+            }
+            local merge_master = 0
+            local merge_using = 0
+            local merge_matched = 0
+        }
+
+        * Handle keep() option for empty datasets
+        if "`keep'" != "" {
+            local keep_codes ""
+            foreach k of local keep {
+                if "`k'" == "match" | "`k'" == "matched" | "`k'" == "3" {
+                    local keep_codes "`keep_codes' 3"
+                }
+                else if "`k'" == "master" | "`k'" == "1" {
+                    local keep_codes "`keep_codes' 1"
+                }
+                else if "`k'" == "using" | "`k'" == "2" {
+                    local keep_codes "`keep_codes' 2"
+                }
+            }
+            if "`nogenerate'" == "" {
+                local keep_expr ""
+                foreach code of local keep_codes {
+                    if "`keep_expr'" == "" {
+                        local keep_expr "`generate' == `code'"
+                    }
+                    else {
+                        local keep_expr "`keep_expr' | `generate' == `code'"
+                    }
+                }
+                qui keep if `keep_expr'
+            }
+        }
+
+        * Handle assert() option for empty datasets
+        if "`assert'" != "" {
+            local allow_master = 0
+            local allow_using = 0
+            local allow_match = 0
+            foreach a of local assert {
+                if "`a'" == "match" | "`a'" == "matched" | "`a'" == "3" {
+                    local allow_match = 1
+                }
+                else if "`a'" == "master" | "`a'" == "1" {
+                    local allow_master = 1
+                }
+                else if "`a'" == "using" | "`a'" == "2" {
+                    local allow_using = 1
+                }
+            }
+            local assert_failed = 0
+            if !`allow_master' & `merge_master' > 0 {
+                local assert_failed = 1
+            }
+            if !`allow_using' & `merge_using' > 0 {
+                local assert_failed = 1
+            }
+            if !`allow_match' & `merge_matched' > 0 {
+                local assert_failed = 1
+            }
+            if `assert_failed' {
+                di as error "cmerge: assertion failed"
+                exit 9
+            }
+        }
+
+        * Display merge table for empty datasets
+        if "`noreport'" == "" {
+            local disp_not_matched = `merge_master' + `merge_using'
+            di as text ""
+            di as text "    Result" _col(33) "Number of obs"
+            di as text "    {hline 41}"
+            di as text "    Not matched" _col(33) as result %13.0fc `disp_not_matched'
+            if `disp_not_matched' > 0 {
+                di as text "        from master" _col(33) as result %13.0fc `merge_master' as text "  (_merge==1)"
+                di as text "        from using" _col(33) as result %13.0fc `merge_using' as text "  (_merge==2)"
+            }
+            di as text ""
+            di as text "    Matched" _col(33) as result %13.0fc `merge_matched' as text "  (_merge==3)"
+            di as text "    {hline 41}"
+        }
+
+        * Return results for empty datasets
+        return scalar N = _N
+        return scalar N_1 = `merge_master'
+        return scalar N_2 = `merge_using'
+        return scalar N_3 = `merge_matched'
+        return scalar time = .
+        return local using `"`using'"'
+        if `merge_by_n' {
+            return local keyvars "_n"
+        }
+        else {
+            return local keyvars "`keyvars'"
+        }
+        exit 0
     }
 
     * Get variable indices in the reduced using dataset - optimized single pass
@@ -793,24 +938,35 @@ program define cmerge, rclass
     }
 
     * Handle assert option
+    * assert(X Y Z) means all observations must have _merge in {X, Y, Z}
+    * I.e., observations NOT in the allowed set cause failure
     if "`assert'" != "" {
-        local assert_failed = 0
+        local allow_master = 0
+        local allow_using = 0
+        local allow_match = 0
+
         foreach a of local assert {
             if "`a'" == "match" | "`a'" == "matched" | "`a'" == "3" {
-                if `merge_master' > 0 | `merge_using' > 0 {
-                    local assert_failed = 1
-                }
+                local allow_match = 1
             }
             else if "`a'" == "master" | "`a'" == "1" {
-                if `merge_using' > 0 | `merge_matched' > 0 {
-                    local assert_failed = 1
-                }
+                local allow_master = 1
             }
             else if "`a'" == "using" | "`a'" == "2" {
-                if `merge_master' > 0 | `merge_matched' > 0 {
-                    local assert_failed = 1
-                }
+                local allow_using = 1
             }
+        }
+
+        * Check that no disallowed categories exist
+        local assert_failed = 0
+        if !`allow_master' & `merge_master' > 0 {
+            local assert_failed = 1
+        }
+        if !`allow_using' & `merge_using' > 0 {
+            local assert_failed = 1
+        }
+        if !`allow_match' & `merge_matched' > 0 {
+            local assert_failed = 1
         }
 
         if `assert_failed' {

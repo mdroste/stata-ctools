@@ -118,8 +118,37 @@ program define cencode
         }
     }
 
+    * Get variable index
+    unab allvars : *
+    local var_idx = 0
+    local idx = 1
+    foreach v of local allvars {
+        if ("`v'" == "`varlist'") {
+            local var_idx = `idx'
+            continue, break
+        }
+        local ++idx
+    }
+
+    if `var_idx' == 0 {
+        di as error "cencode: could not find variable `varlist'"
+        exit 111
+    }
+
     * Create the destination variable (numeric, long type for sufficient range)
     quietly generate long `generate' = .
+
+    * Get index of new variable
+    unab allvars : *
+    local gen_idx = 0
+    local idx = 1
+    foreach v of local allvars {
+        if ("`v'" == "`generate'") {
+            local gen_idx = `idx'
+            continue, break
+        }
+        local ++idx
+    }
 
     * Build threads option
     local threads_code ""
@@ -141,8 +170,9 @@ program define cencode
         timer on 92
     }
 
-    * Call the C plugin
-    plugin call ctools_plugin `varlist' `generate' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code'"
+    * Call the C plugin with ALL variables (so varlist indices match dataset column indices)
+    unab allvars : *
+    plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code'"
 
     if `__do_timing' {
         timer off 92

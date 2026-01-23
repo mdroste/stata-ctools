@@ -1,7 +1,9 @@
 adopath ++ "./build"
 webuse lifeexp, clear
 describe country
-list country in 1/5
 capture drop country_code
 cencode country, generate(country_code) verbose
-list country country_code in 1/5
+describe country_code
+sum country_code
+list country country_code in 1/10
+label list country_code
