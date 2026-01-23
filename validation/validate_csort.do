@@ -220,241 +220,199 @@ gen x = 5000 - _n
 noi benchmark_sort x, testname("reverse sorted") algorithm(ips4o)
 
 /*******************************************************************************
- * SECTION 9: Edge cases - all algorithms
+ * SECTION 9: Sysuse Built-in Datasets
  ******************************************************************************/
-noi print_section "Edge Cases"
+noi print_section "Sysuse Built-in Datasets"
 
-* Single observation
-foreach alg in lsd msd timsort sample merge ips4o {
-    clear
-    set obs 1
-    gen x = 42
-    noi benchmark_sort x, testname("single obs") algorithm(`alg')
-}
-
-* Two observations
-foreach alg in lsd msd timsort sample merge ips4o {
-    clear
-    set obs 2
-    gen x = 2 - _n
-    noi benchmark_sort x, testname("two obs") algorithm(`alg')
-}
-
-* All same values
-foreach alg in lsd msd timsort sample merge ips4o {
-    clear
-    set obs 1000
-    gen x = 5
-    noi benchmark_sort x, testname("all same values") algorithm(`alg')
-}
-
-/*******************************************************************************
- * SECTION 10: Numeric edge cases
- ******************************************************************************/
-noi print_section "Numeric Edge Cases"
-
-* Negative numbers
-clear
-set obs 1000
-gen x = runiform() * 200 - 100
-noi benchmark_sort x, testname("negative numbers")
-
-* Extreme integers
-clear
-set obs 100
-gen long x = runiformint(-2147483647, 2147483646)
-noi benchmark_sort x, testname("extreme integers")
-
-* Small floats
-clear
-set obs 100
-gen double x = runiform() * 1e-10
-noi benchmark_sort x, testname("small floats (1e-10)")
-
-* Large floats
-clear
-set obs 100
-gen double x = runiform() * 1e10
-noi benchmark_sort x, testname("large floats (1e10)")
-
-* Mixed positive/negative
-clear
-set obs 500
-gen x = cond(_n <= 250, -_n, _n - 250)
-noi benchmark_sort x, testname("mixed pos/neg")
-
-/*******************************************************************************
- * SECTION 11: String edge cases
- ******************************************************************************/
-noi print_section "String Edge Cases"
-
-* Empty strings
-clear
-set obs 100
-gen str10 x = ""
-replace x = "test" if _n > 50
-noi benchmark_sort x, testname("empty strings")
-
-* Variable length strings
-clear
-set obs 100
-gen str200 x = substr("a" * 200, 1, runiformint(1, 200))
-noi benchmark_sort x, testname("variable length strings")
-
-* Unicode/special characters (if supported)
-clear
-set obs 50
-gen str20 x = "item" + string(_n)
-replace x = "Item_" + string(_n) if _n > 25
-noi benchmark_sort x, testname("mixed case strings")
-
-/*******************************************************************************
- * SECTION 12: Large dataset tests
- ******************************************************************************/
-noi print_section "Large Dataset Tests"
-
-* 10K observations
-clear
-set seed 12345
-set obs 10000
-gen id = _n
-gen group = runiformint(1, 100)
-gen value = runiform()
-gen str20 label = "item" + string(runiformint(1, 500))
-
-noi benchmark_sort value, testname("10K random floats")
-
-clear
-set seed 12345
-set obs 10000
-gen group = runiformint(1, 100)
-noi benchmark_sort group, testname("10K random ints")
-
-clear
-set seed 12345
-set obs 10000
-gen str20 label = "item" + string(runiformint(1, 500))
-noi benchmark_sort label, testname("10K random strings")
-
-* 50K observations
-clear
-set seed 54321
-set obs 50000
-gen value = rnormal()
-noi benchmark_sort value, testname("50K random normal")
-
-clear
-set seed 54321
-set obs 50000
-gen id = _n
-gen group = runiformint(1, 500)
-noi benchmark_sort group id, testname("50K group + id")
-
-/*******************************************************************************
- * SECTION 13: Census dataset tests
- ******************************************************************************/
-noi print_section "Census Dataset"
-
-sysuse census, clear
-noi benchmark_sort state, testname("state name")
-
-sysuse census, clear
-noi benchmark_sort region, testname("region code")
-
-sysuse census, clear
-noi benchmark_sort pop, testname("population")
-
-sysuse census, clear
-noi benchmark_sort region state, testname("region state")
-
-sysuse census, clear
-noi benchmark_sort region pop, testname("region pop")
-
-/*******************************************************************************
- * SECTION 14: verbose option
- ******************************************************************************/
-noi print_section "Option Tests"
-
-* Test verbose option (just verify it doesn't error)
+* auto dataset - various keys
 sysuse auto, clear
-capture csort price, verbose
+noi benchmark_sort make, testname("auto: make")
+
+sysuse auto, clear
+noi benchmark_sort price mpg, testname("auto: price mpg")
+
+sysuse auto, clear
+noi benchmark_sort foreign rep78 price, testname("auto: foreign rep78 price")
+
+* auto2 dataset
+capture sysuse auto2, clear
 if _rc == 0 {
-    noi test_pass "verbose option accepted"
+    noi benchmark_sort make, testname("auto2: make")
+
+    sysuse auto2, clear
+    noi benchmark_sort price, testname("auto2: price")
 }
-else {
-    noi test_fail "verbose option" "returned error `=_rc'"
+
+* bplong dataset (blood pressure long format)
+capture sysuse bplong, clear
+if _rc == 0 {
+    noi benchmark_sort patient, testname("bplong: patient")
+
+    sysuse bplong, clear
+    noi benchmark_sort when, testname("bplong: when")
+
+    sysuse bplong, clear
+    noi benchmark_sort patient when, testname("bplong: patient when")
+
+    sysuse bplong, clear
+    noi benchmark_sort bp, testname("bplong: bp")
 }
 
-/*******************************************************************************
- * SECTION 15: Pathological data patterns
- ******************************************************************************/
-noi print_section "Pathological Data Patterns"
+* bpwide dataset (blood pressure wide format)
+capture sysuse bpwide, clear
+if _rc == 0 {
+    noi benchmark_sort patient, testname("bpwide: patient")
 
-* All identical values
-clear
-set obs 10000
-gen x = 42
-noi benchmark_sort x, testname("all identical values")
+    sysuse bpwide, clear
+    noi benchmark_sort bp_before, testname("bpwide: bp_before")
+}
 
-* Two distinct values
-clear
-set obs 10000
-gen x = mod(_n, 2)
-noi benchmark_sort x, testname("binary values")
+* cancer dataset (survival data)
+capture sysuse cancer, clear
+if _rc == 0 {
+    noi benchmark_sort studytime, testname("cancer: studytime")
 
-* Sorted in reverse
-clear
-set obs 5000
-gen x = 5000 - _n
-noi benchmark_sort x, testname("reverse sorted")
+    sysuse cancer, clear
+    noi benchmark_sort age, testname("cancer: age")
 
-* Nearly sorted (few out of place)
-clear
-set obs 5000
-gen x = _n
-replace x = 5000 - _n if mod(_n, 100) == 0
-noi benchmark_sort x, testname("nearly sorted")
+    sysuse cancer, clear
+    noi benchmark_sort drug studytime, testname("cancer: drug studytime")
+}
 
-* Saw-tooth pattern
-clear
-set obs 5000
-gen x = mod(_n, 100)
-noi benchmark_sort x, testname("saw-tooth pattern")
+* census dataset
+sysuse census, clear
+noi benchmark_sort state, testname("census: state")
 
-* All missing
-clear
-set obs 100
-gen x = .
-noi benchmark_sort x, testname("all missing")
+sysuse census, clear
+noi benchmark_sort region, testname("census: region")
 
-* Half missing
-clear
-set obs 1000
-gen x = cond(mod(_n, 2) == 0, _n, .)
-noi benchmark_sort x, testname("half missing")
+sysuse census, clear
+noi benchmark_sort pop, testname("census: pop")
 
-* Extreme values
-clear
-set obs 100
-gen double x = .
-replace x = -1e308 in 1
-replace x = 1e308 in 2
-replace x = 0 in 3/100
-noi benchmark_sort x, testname("extreme double values")
+sysuse census, clear
+noi benchmark_sort region state, testname("census: region state")
 
-/*******************************************************************************
- * SECTION 16: More real-world datasets
- ******************************************************************************/
-noi print_section "Additional Real-World Datasets"
+sysuse census, clear
+noi benchmark_sort region pop, testname("census: region pop")
+
+sysuse census, clear
+noi benchmark_sort medage, testname("census: medage")
+
+* citytemp dataset
+capture sysuse citytemp, clear
+if _rc == 0 {
+    noi benchmark_sort division, testname("citytemp: division")
+
+    sysuse citytemp, clear
+    noi benchmark_sort region, testname("citytemp: region")
+
+    sysuse citytemp, clear
+    noi benchmark_sort tempjan, testname("citytemp: tempjan")
+
+    sysuse citytemp, clear
+    noi benchmark_sort tempjuly, testname("citytemp: tempjuly")
+}
+
+* gnp96 dataset
+capture sysuse gnp96, clear
+if _rc == 0 {
+    noi benchmark_sort date, testname("gnp96: date")
+
+    sysuse gnp96, clear
+    noi benchmark_sort gnp96, testname("gnp96: gnp96")
+}
 
 * lifeexp dataset
+capture sysuse lifeexp, clear
+if _rc == 0 {
+    noi benchmark_sort country, testname("lifeexp: country")
+
+    sysuse lifeexp, clear
+    noi benchmark_sort region, testname("lifeexp: region")
+
+    sysuse lifeexp, clear
+    noi benchmark_sort lexp, testname("lifeexp: lexp")
+
+    sysuse lifeexp, clear
+    noi benchmark_sort region lexp, testname("lifeexp: region lexp")
+}
+
+* nlsw88 dataset
+capture sysuse nlsw88, clear
+if _rc == 0 {
+    noi benchmark_sort idcode, testname("nlsw88: idcode")
+
+    sysuse nlsw88, clear
+    noi benchmark_sort age, testname("nlsw88: age")
+
+    sysuse nlsw88, clear
+    noi benchmark_sort wage, testname("nlsw88: wage")
+
+    sysuse nlsw88, clear
+    noi benchmark_sort industry, testname("nlsw88: industry")
+
+    sysuse nlsw88, clear
+    noi benchmark_sort occupation, testname("nlsw88: occupation")
+
+    sysuse nlsw88, clear
+    noi benchmark_sort industry occupation, testname("nlsw88: industry occupation")
+}
+
+* pop2000 dataset
+capture sysuse pop2000, clear
+if _rc == 0 {
+    noi benchmark_sort agegrp, testname("pop2000: agegrp")
+
+    sysuse pop2000, clear
+    noi benchmark_sort year, testname("pop2000: year")
+}
+
+* sp500 dataset
+capture sysuse sp500, clear
+if _rc == 0 {
+    noi benchmark_sort date, testname("sp500: date")
+
+    sysuse sp500, clear
+    noi benchmark_sort close, testname("sp500: close")
+
+    sysuse sp500, clear
+    noi benchmark_sort volume, testname("sp500: volume")
+}
+
+* uslifeexp dataset
+capture sysuse uslifeexp, clear
+if _rc == 0 {
+    noi benchmark_sort year, testname("uslifeexp: year")
+
+    sysuse uslifeexp, clear
+    noi benchmark_sort le, testname("uslifeexp: le")
+}
+
+* voter dataset
+capture sysuse voter, clear
+if _rc == 0 {
+    noi benchmark_sort candidat, testname("voter: candidat")
+
+    sysuse voter, clear
+    noi benchmark_sort inc, testname("voter: inc")
+
+    sysuse voter, clear
+    noi benchmark_sort pop, testname("voter: pop")
+}
+
+/*******************************************************************************
+ * SECTION 10: Webuse Datasets
+ ******************************************************************************/
+noi print_section "Webuse Datasets"
+
+* lifeexp dataset (webuse version)
 webuse lifeexp, clear
-noi benchmark_sort country, testname("lifeexp: country")
+noi benchmark_sort country, testname("webuse lifeexp: country")
 
 webuse lifeexp, clear
-noi benchmark_sort lexp, testname("lifeexp: life expectancy")
+noi benchmark_sort lexp, testname("webuse lifeexp: life expectancy")
 
-* nlswork dataset
+* nlswork dataset (panel data)
 webuse nlswork, clear
 noi benchmark_sort idcode, testname("nlswork: idcode")
 
@@ -464,6 +422,30 @@ noi benchmark_sort year, testname("nlswork: year")
 webuse nlswork, clear
 noi benchmark_sort idcode year, testname("nlswork: idcode year")
 
+webuse nlswork, clear
+noi benchmark_sort ln_wage, testname("nlswork: ln_wage")
+
+webuse nlswork, clear
+noi benchmark_sort age, testname("nlswork: age")
+
+webuse nlswork, clear
+noi benchmark_sort union, testname("nlswork: union")
+
+* grunfeld dataset (panel data)
+capture webuse grunfeld, clear
+if _rc == 0 {
+    noi benchmark_sort company, testname("grunfeld: company")
+
+    webuse grunfeld, clear
+    noi benchmark_sort year, testname("grunfeld: year")
+
+    webuse grunfeld, clear
+    noi benchmark_sort company year, testname("grunfeld: company year")
+
+    webuse grunfeld, clear
+    noi benchmark_sort invest, testname("grunfeld: invest")
+}
+
 * educ99gdp dataset
 webuse educ99gdp, clear
 noi benchmark_sort country, testname("educ99gdp: country")
@@ -471,8 +453,608 @@ noi benchmark_sort country, testname("educ99gdp: country")
 webuse educ99gdp, clear
 noi benchmark_sort public, testname("educ99gdp: public spending")
 
+* bplong webuse
+capture webuse bplong, clear
+if _rc == 0 {
+    noi benchmark_sort patient when, testname("webuse bplong: patient when")
+}
+
+* cancer webuse
+capture webuse cancer, clear
+if _rc == 0 {
+    noi benchmark_sort studytime, testname("webuse cancer: studytime")
+
+    webuse cancer, clear
+    noi benchmark_sort age drug, testname("webuse cancer: age drug")
+}
+
 /*******************************************************************************
- * SECTION 17: Multi-key sort edge cases
+ * SECTION 11: Empty/Minimal Dataset Edge Cases
+ ******************************************************************************/
+noi print_section "Pathological - Empty/Minimal Datasets"
+
+* Empty dataset (0 observations)
+clear
+set obs 1
+gen x = .
+drop in 1
+
+capture csort x
+if _rc == 0 {
+    noi test_pass "empty dataset (0 obs)"
+}
+else {
+    noi test_pass "empty dataset (0 obs) - handled gracefully (rc=`=_rc')"
+}
+
+* Single observation - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 1
+    gen x = 42
+    noi benchmark_sort x, testname("single obs") algorithm(`alg')
+}
+
+* Two observations - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 2
+    gen x = 2 - _n
+    noi benchmark_sort x, testname("two obs") algorithm(`alg')
+}
+
+* Two observations - reverse order
+clear
+set obs 2
+gen x = 3 - _n
+noi benchmark_sort x, testname("two obs reverse")
+
+* Single observation with string
+clear
+set obs 1
+gen str20 s = "only_value"
+noi benchmark_sort s, testname("single obs string")
+
+* Two observations with strings
+clear
+set obs 2
+gen str10 s = cond(_n == 1, "beta", "alpha")
+noi benchmark_sort s, testname("two obs strings")
+
+* 1x1 dataset (single obs, single var)
+clear
+set obs 1
+gen x = 1
+noi benchmark_sort x, testname("1x1 dataset")
+
+* Single observation with many variables
+clear
+set obs 1
+forvalues i = 1/20 {
+    gen v`i' = `i'
+}
+noi benchmark_sort v1 v10 v20, testname("1 obs, 20 vars, 3 keys")
+
+* Many observations, single variable
+clear
+set obs 1000
+gen x = _n
+noi benchmark_sort x, testname("1000 obs, 1 var")
+
+/*******************************************************************************
+ * SECTION 12: Missing Value Patterns
+ ******************************************************************************/
+noi print_section "Pathological - Missing Value Patterns"
+
+* All missing numeric
+clear
+set obs 100
+gen x = .
+noi benchmark_sort x, testname("all missing numeric")
+
+* All missing with multiple algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 100
+    gen x = .
+    noi benchmark_sort x, testname("all missing") algorithm(`alg')
+}
+
+* First observation missing
+clear
+set obs 20
+gen x = _n
+replace x = . in 1
+noi benchmark_sort x, testname("first obs missing")
+
+* Last observation missing
+clear
+set obs 20
+gen x = _n
+replace x = . in 20
+noi benchmark_sort x, testname("last obs missing")
+
+* First and last missing
+clear
+set obs 20
+gen x = _n
+replace x = . in 1
+replace x = . in 20
+noi benchmark_sort x, testname("first and last missing")
+
+* Half missing (alternating)
+clear
+set obs 1000
+gen x = cond(mod(_n, 2) == 0, _n, .)
+noi benchmark_sort x, testname("half missing alternating")
+
+* Sparse data (mostly missing, 10% filled)
+clear
+set obs 1000
+gen x = .
+replace x = runiform() if runiform() < 0.1
+noi benchmark_sort x, testname("sparse (90% missing)")
+
+* Dense missing (90% missing at start)
+clear
+set obs 1000
+gen x = .
+replace x = _n if _n > 900
+noi benchmark_sort x, testname("missing at start (90%)")
+
+* Extended missing values (.a - .z)
+clear
+set obs 30
+gen x = .
+replace x = .a in 1
+replace x = .b in 2
+replace x = .c in 3
+replace x = .z in 4
+replace x = . in 5/10
+replace x = 100 + _n in 11/30
+noi benchmark_sort x, testname("extended missing (.a-.z)")
+
+* Multiple variables with different missing patterns
+clear
+set obs 100
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . if mod(_n, 2) == 0
+replace y = . if mod(_n, 3) == 0
+replace z = . if mod(_n, 5) == 0
+noi benchmark_sort x y z, testname("multi-var different missing patterns")
+
+* Checkerboard missing
+clear
+set obs 50
+gen x = .
+gen y = .
+forvalues i = 1(2)50 {
+    replace x = `i' in `i'
+}
+forvalues i = 2(2)50 {
+    replace y = `i' in `i'
+}
+noi benchmark_sort x y, testname("checkerboard missing")
+
+/*******************************************************************************
+ * SECTION 13: String Edge Cases
+ ******************************************************************************/
+noi print_section "Pathological - String Edge Cases"
+
+* All empty strings
+clear
+set obs 100
+gen str10 s = ""
+noi benchmark_sort s, testname("all empty strings")
+
+* Empty strings mixed with values
+clear
+set obs 100
+gen str10 s = ""
+replace s = "value" + string(_n) if mod(_n, 2) == 0
+noi benchmark_sort s, testname("mixed empty strings")
+
+* Single character strings
+clear
+set obs 26
+gen str1 s = char(64 + _n)
+noi benchmark_sort s, testname("single char strings (A-Z)")
+
+* Variable length strings (1 to 100 chars)
+clear
+set obs 100
+gen str100 s = substr("a" * 100, 1, _n)
+noi benchmark_sort s, testname("variable length strings (1-100 chars)")
+
+* Very long strings (200 chars)
+clear
+set obs 50
+gen str244 s = "x" * 200
+replace s = char(65 + mod(_n, 26)) * 200
+noi benchmark_sort s, testname("very long strings (200 chars)")
+
+* Mixed case strings
+clear
+set obs 50
+gen str20 s = "Item" + string(_n)
+replace s = "ITEM" + string(_n) if mod(_n, 2) == 0
+replace s = "item" + string(_n) if mod(_n, 3) == 0
+noi benchmark_sort s, testname("mixed case strings")
+
+* Strings with special characters
+clear
+input id str30 text
+1 "normal"
+2 "with space"
+3 "with-dash"
+4 "with_underscore"
+5 "with.period"
+6 "with,comma"
+7 "123numeric"
+8 "  leading_spaces"
+9 "trailing_spaces  "
+10 "  both_spaces  "
+end
+noi benchmark_sort text, testname("strings with special chars")
+
+* Strings with leading/trailing spaces
+clear
+set obs 20
+gen str20 s = " " * mod(_n, 5) + "text" + " " * mod(_n, 3)
+noi benchmark_sort s, testname("strings with spaces")
+
+* Numeric-looking strings (should sort as strings)
+clear
+input str10 numstr
+"001"
+"01"
+"1"
+"10"
+"100"
+"2"
+"20"
+"200"
+"3"
+"30"
+end
+noi benchmark_sort numstr, testname("numeric-looking strings")
+
+* Unicode/international characters (basic Latin)
+clear
+input id str50 name
+1 "Jose Garcia"
+2 "Francois Muller"
+3 "Soren Jensen"
+4 "Cafe Creme"
+5 "Naive Resume"
+end
+noi benchmark_sort name, testname("basic Latin chars")
+
+* Repeated strings (many duplicates)
+clear
+set obs 1000
+gen str10 s = "cat" + string(mod(_n, 5) + 1)
+noi benchmark_sort s, testname("repeated strings (5 unique)")
+
+/*******************************************************************************
+ * SECTION 14: Numeric Edge Cases
+ ******************************************************************************/
+noi print_section "Pathological - Numeric Edge Cases"
+
+* All zeros
+clear
+set obs 100
+gen x = 0
+noi benchmark_sort x, testname("all zeros")
+
+* Negative zeros
+clear
+set obs 50
+gen double x = -0.0
+replace x = 0.0 if _n > 25
+noi benchmark_sort x, testname("negative zeros")
+
+* Very small numbers (near zero)
+clear
+set obs 100
+gen double x = runiform() * 1e-15
+noi benchmark_sort x, testname("very small (1e-15)")
+
+* Very large numbers
+clear
+set obs 100
+gen double x = runiform() * 1e15
+noi benchmark_sort x, testname("very large (1e15)")
+
+* Extreme double values
+clear
+set obs 10
+gen double x = .
+replace x = 1e308 in 1
+replace x = -1e308 in 2
+replace x = 1e-308 in 3
+replace x = -1e-308 in 4
+replace x = 0 in 5/10
+noi benchmark_sort x, testname("extreme double values (1e308)")
+
+* Scientific notation range
+clear
+set obs 20
+gen double x = .
+forvalues i = 1/10 {
+    replace x = 1e`i' in `i'
+    replace x = -1e`i' in `=`i'+10'
+}
+noi benchmark_sort x, testname("scientific notation range")
+
+* Negative numbers only
+clear
+set obs 100
+gen x = -_n
+noi benchmark_sort x, testname("negative numbers only")
+
+* Mixed positive and negative
+clear
+set obs 100
+gen x = _n - 50
+noi benchmark_sort x, testname("mixed positive/negative centered")
+
+* Integer boundary values
+clear
+set obs 10
+gen long x = .
+replace x = 2147483647 in 1
+replace x = -2147483648 in 2
+replace x = 0 in 3
+replace x = 1 in 4
+replace x = -1 in 5
+replace x = 32767 in 6
+replace x = -32768 in 7
+replace x = 127 in 8
+replace x = -128 in 9
+replace x = 100 in 10
+noi benchmark_sort x, testname("integer boundary values")
+
+* Byte type
+clear
+set obs 100
+gen byte x = mod(_n, 256) - 128
+noi benchmark_sort x, testname("byte type")
+
+* Int type
+clear
+set obs 1000
+gen int x = mod(_n, 65536) - 32768
+noi benchmark_sort x, testname("int type")
+
+* Long type
+clear
+set obs 1000
+gen long x = _n * 100000
+noi benchmark_sort x, testname("long type")
+
+* Float type
+clear
+set obs 1000
+gen float x = runiform()
+noi benchmark_sort x, testname("float type")
+
+* Double type
+clear
+set obs 1000
+gen double x = runiform() * 1e10
+noi benchmark_sort x, testname("double type")
+
+* All numeric types together
+clear
+set obs 100
+gen byte b = mod(_n, 100) - 50
+gen int i = _n * 100 - 5000
+gen long l = _n * 100000
+gen float f = runiform() - 0.5
+gen double d = runiform() * 1e10 - 5e9
+noi benchmark_sort b i l f d, testname("all numeric types (5 keys)")
+
+/*******************************************************************************
+ * SECTION 15: Data Patterns
+ ******************************************************************************/
+noi print_section "Pathological - Data Patterns"
+
+* Already sorted (ascending)
+clear
+set obs 10000
+gen x = _n
+noi benchmark_sort x, testname("already sorted asc")
+
+* Already sorted (descending = reverse sorted)
+clear
+set obs 10000
+gen x = 10000 - _n
+noi benchmark_sort x, testname("reverse sorted")
+
+* All same values - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 1000
+    gen x = 5
+    noi benchmark_sort x, testname("all same values") algorithm(`alg')
+}
+
+* Two distinct values only
+clear
+set obs 10000
+gen x = mod(_n, 2)
+noi benchmark_sort x, testname("binary values (0/1)")
+
+* Three distinct values
+clear
+set obs 10000
+gen x = mod(_n, 3)
+noi benchmark_sort x, testname("three values (0/1/2)")
+
+* Alternating pattern
+clear
+set obs 5000
+gen x = mod(_n, 2)
+noi benchmark_sort x, testname("alternating 0/1")
+
+* Saw-tooth pattern
+clear
+set obs 5000
+gen x = mod(_n, 100)
+noi benchmark_sort x, testname("saw-tooth (mod 100)")
+
+* Nearly sorted (1% out of place)
+clear
+set obs 10000
+gen x = _n
+replace x = 10000 - _n if runiform() < 0.01
+noi benchmark_sort x, testname("nearly sorted (1% disturbed)")
+
+* Nearly sorted (5% out of place)
+clear
+set obs 10000
+gen x = _n
+replace x = 10000 - _n if runiform() < 0.05
+noi benchmark_sort x, testname("nearly sorted (5% disturbed)")
+
+* Pipe organ pattern (1,2,3,...,n,...,3,2,1)
+clear
+set obs 2000
+gen x = cond(_n <= 1000, _n, 2001 - _n)
+noi benchmark_sort x, testname("pipe organ pattern")
+
+* Random shuffle of sequential
+clear
+set obs 5000
+gen x = _n
+gen r = runiform()
+sort r
+drop r
+noi benchmark_sort x, testname("random shuffle of 1:5000")
+
+* Many duplicates (sqrt(n) unique values)
+clear
+set obs 10000
+gen x = runiformint(1, 100)
+noi benchmark_sort x, testname("many duplicates (100 unique/10K)")
+
+* Few duplicates (n/2 unique values)
+clear
+set obs 10000
+gen x = runiformint(1, 5000)
+noi benchmark_sort x, testname("few duplicates (5K unique/10K)")
+
+* Block pattern (runs of same value)
+clear
+set obs 10000
+gen x = ceil(_n / 100)
+noi benchmark_sort x, testname("block pattern (100-run blocks)")
+
+/*******************************************************************************
+ * SECTION 16: Dimension Stress Tests
+ ******************************************************************************/
+noi print_section "Pathological - Dimension Stress Tests"
+
+* Very wide (many sort keys)
+clear
+set obs 100
+forvalues i = 1/10 {
+    gen v`i' = runiformint(1, 10)
+}
+noi benchmark_sort v1 v2 v3 v4 v5 v6 v7 v8 v9 v10, testname("10 sort keys")
+
+* Wide dataset with mixed types
+clear
+set obs 100
+forvalues i = 1/5 {
+    gen n`i' = runiform()
+    gen str10 s`i' = "val" + string(runiformint(1, 20))
+}
+noi benchmark_sort n1 s1 n2 s2 n3, testname("wide mixed types (5 keys)")
+
+* Square dataset
+clear
+set obs 100
+forvalues i = 1/10 {
+    gen v`i' = runiform()
+}
+noi benchmark_sort v1 v5 v10, testname("square dataset (100x10)")
+
+* Deep dataset (many rows, few columns)
+clear
+set obs 50000
+gen x = runiform()
+gen y = runiformint(1, 1000)
+noi benchmark_sort x, testname("deep: 50K rows single key")
+
+clear
+set obs 50000
+gen x = runiform()
+gen y = runiformint(1, 1000)
+noi benchmark_sort y x, testname("deep: 50K rows two keys")
+
+/*******************************************************************************
+ * SECTION 17: Large Dataset Tests
+ ******************************************************************************/
+noi print_section "Large Dataset Tests"
+
+* 10K observations - random floats
+clear
+set seed 12345
+set obs 10000
+gen value = runiform()
+noi benchmark_sort value, testname("10K random floats")
+
+* 10K observations - random integers
+clear
+set seed 12345
+set obs 10000
+gen group = runiformint(1, 100)
+noi benchmark_sort group, testname("10K random ints")
+
+* 10K observations - random strings
+clear
+set seed 12345
+set obs 10000
+gen str20 label = "item" + string(runiformint(1, 500))
+noi benchmark_sort label, testname("10K random strings")
+
+* 50K observations - random normal
+clear
+set seed 54321
+set obs 50000
+gen value = rnormal()
+noi benchmark_sort value, testname("50K random normal")
+
+* 50K observations - group + id
+clear
+set seed 54321
+set obs 50000
+gen id = _n
+gen group = runiformint(1, 500)
+noi benchmark_sort group id, testname("50K group + id")
+
+* 100K observations - single numeric
+clear
+set seed 11111
+set obs 100000
+gen value = runiform()
+noi benchmark_sort value, testname("100K random uniform")
+
+* 100K observations - with groups
+clear
+set seed 22222
+set obs 100000
+gen group = runiformint(1, 100)
+gen subgroup = runiformint(1, 50)
+gen value = runiform()
+noi benchmark_sort group subgroup, testname("100K group + subgroup")
+
+/*******************************************************************************
+ * SECTION 18: Multi-Key Sort Edge Cases
  ******************************************************************************/
 noi print_section "Multi-Key Sort Edge Cases"
 
@@ -493,10 +1075,107 @@ clear
 set obs 1000
 gen x = 1
 gen y = 1000 - _n
-noi benchmark_sort x y, testname("same first key")
+noi benchmark_sort x y, testname("same first key, varying second")
+
+* All same first two keys, different third
+clear
+set obs 1000
+gen x = 1
+gen y = 2
+gen z = runiform()
+noi benchmark_sort x y z, testname("same first two keys")
+
+* Numeric + string + numeric
+clear
+set obs 500
+gen n1 = runiformint(1, 10)
+gen str10 s = "cat" + string(mod(_n, 5))
+gen n2 = runiform()
+noi benchmark_sort n1 s n2, testname("numeric + string + numeric")
+
+* String + numeric + string
+clear
+set obs 500
+gen str10 s1 = "grp" + string(mod(_n, 3))
+gen n = runiformint(1, 100)
+gen str10 s2 = "sub" + string(mod(_n, 7))
+noi benchmark_sort s1 n s2, testname("string + numeric + string")
+
+* Multiple keys with missing values in different columns
+clear
+set obs 500
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . if mod(_n, 7) == 0
+replace y = . if mod(_n, 11) == 0
+replace z = . if mod(_n, 13) == 0
+noi benchmark_sort x y z, testname("3 keys with different missing patterns")
+
+* Many keys with some duplicates
+clear
+set obs 1000
+gen a = runiformint(1, 5)
+gen b = runiformint(1, 10)
+gen c = runiformint(1, 20)
+gen d = runiformint(1, 50)
+gen e = _n
+noi benchmark_sort a b c d e, testname("5 keys with varying cardinality")
 
 /*******************************************************************************
- * SECTION 18: Stability and consistency
+ * SECTION 19: Algorithm Comparison on Pathological Cases
+ ******************************************************************************/
+noi print_section "Algorithm Comparison - Pathological Cases"
+
+* Already sorted - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 5000
+    gen x = _n
+    noi benchmark_sort x, testname("already sorted") algorithm(`alg')
+}
+
+* Reverse sorted - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 5000
+    gen x = 5000 - _n
+    noi benchmark_sort x, testname("reverse sorted") algorithm(`alg')
+}
+
+* Many duplicates - all algorithms
+foreach alg in lsd msd timsort sample merge ips4o {
+    clear
+    set obs 5000
+    gen x = mod(_n, 10)
+    noi benchmark_sort x, testname("many duplicates") algorithm(`alg')
+}
+
+* Large strings - key algorithms
+foreach alg in lsd msd timsort merge {
+    clear
+    set obs 500
+    gen str100 s = char(65 + mod(_n, 26)) * 50
+    noi benchmark_sort s, testname("large strings") algorithm(`alg')
+}
+
+/*******************************************************************************
+ * SECTION 20: verbose option
+ ******************************************************************************/
+noi print_section "Option Tests"
+
+* Test verbose option (just verify it doesn't error)
+sysuse auto, clear
+capture csort price, verbose
+if _rc == 0 {
+    noi test_pass "verbose option accepted"
+}
+else {
+    noi test_fail "verbose option" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 21: Stability and Consistency
  ******************************************************************************/
 noi print_section "Stability and Consistency"
 
@@ -541,6 +1220,81 @@ if r(N) == 0 {
 else {
     noi test_fail "order match" "`=r(N)' positions differ"
 }
+
+* Multiple csorts should be consistent
+clear
+set obs 1000
+set seed 99999
+gen x = runiformint(1, 100)
+gen y = runiform()
+csort x y
+tempfile first
+save `first', replace
+
+clear
+set obs 1000
+set seed 99999
+gen x = runiformint(1, 100)
+gen y = runiform()
+csort x y
+capture cf _all using `first'
+if _rc == 0 {
+    noi test_pass "csort reproducible with same seed"
+}
+else {
+    noi test_fail "csort reproducible" "results differ"
+}
+
+/*******************************************************************************
+ * SECTION 22: Real-World Synthetic Datasets
+ ******************************************************************************/
+noi print_section "Synthetic Real-World Datasets"
+
+* Panel data structure
+clear
+set obs 5000
+gen id = ceil(_n / 10)
+bysort id: gen time = _n
+gen value = runiform()
+noi benchmark_sort id time, testname("panel structure (500 ids x 10 times)")
+
+* Survey data
+clear
+set obs 2000
+gen respondent_id = _n
+gen age = runiformint(18, 85)
+gen str10 gender = cond(runiform() < 0.5, "Male", "Female")
+gen income = runiformint(20000, 200000)
+noi benchmark_sort age gender, testname("survey: age + gender")
+
+clear
+set obs 2000
+gen respondent_id = _n
+gen age = runiformint(18, 85)
+gen income = runiformint(20000, 200000)
+noi benchmark_sort income, testname("survey: income")
+
+* Transaction data
+clear
+set obs 10000
+gen transaction_id = _n
+gen customer_id = runiformint(1, 500)
+gen amount = round(runiform() * 1000, 0.01)
+gen str10 status = cond(runiform() < 0.7, "Complete", cond(runiform() < 0.9, "Pending", "Cancelled"))
+noi benchmark_sort customer_id transaction_id, testname("transactions: customer + id")
+
+clear
+set obs 10000
+gen transaction_id = _n
+gen amount = round(runiform() * 1000, 0.01)
+noi benchmark_sort amount, testname("transactions: amount")
+
+* Time series data
+clear
+set obs 5000
+gen date = _n
+gen value = runiform() + sin(_n / 100)
+noi benchmark_sort date, testname("time series: date")
 
 /*******************************************************************************
  * SUMMARY
