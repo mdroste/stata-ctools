@@ -659,6 +659,14 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
 
         df_a -= mobility_groups;
+
+        /* For G >= 3, add additional mobility groups for each FE beyond the second.
+         * This approximates reghdfe's more complex multi-way FE DOF calculation. */
+        if (G > 2) {
+            ST_int extra_mobility = G - 2;
+            df_a -= extra_mobility;
+            mobility_groups += extra_mobility;
+        }
     } else if (G == 1) {
         mobility_groups = 0;
     }
@@ -952,11 +960,19 @@ ST_retcode do_full_regression(int argc, char *argv[])
             for (idx = 0; idx < N; idx++) {
                 weights_compact[idx] *= scale;
             }
-            /* Also normalize the weighted_counts in factors */
+            /* Also normalize the weighted_counts in factors and recompute inv_weighted_counts */
             for (g = 0; g < G; g++) {
                 if (g_state->factors[g].weighted_counts) {
                     for (i = 0; i < g_state->factors[g].num_levels; i++) {
                         g_state->factors[g].weighted_counts[i] *= scale;
+                    }
+                    /* Recompute inv_weighted_counts after scaling */
+                    if (g_state->factors[g].inv_weighted_counts) {
+                        for (i = 0; i < g_state->factors[g].num_levels; i++) {
+                            g_state->factors[g].inv_weighted_counts[i] =
+                                (g_state->factors[g].weighted_counts[i] > 0) ?
+                                1.0 / g_state->factors[g].weighted_counts[i] : 0.0;
+                        }
                     }
                 }
             }
@@ -1066,13 +1082,18 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     memset(is_collinear, 0, K_x * sizeof(ST_int));
 
-    /* Check for FE-absorbed collinearity */
-    ST_double collinear_tol = 1e-9;
+    /* Check for FE-absorbed collinearity - use very small tolerance
+     * Variables that are constant within FE groups but vary across groups
+     * (like time-invariant covariates) should NOT be marked collinear.
+     * Only mark as collinear if the variable has essentially zero variance
+     * after partialling (relative tolerance 1e-14 or absolute < 1e-30). */
+    ST_double collinear_tol = 1e-14;
     num_collinear = 0;
     for (k = 0; k < K_x; k++) {
         ST_double xx_partial = fast_dot(&data[(k+1) * N], &data[(k+1) * N], N);
         ST_double xx_orig = tss[k + 1];
-        if (xx_orig > 0 && (xx_partial / xx_orig) <= collinear_tol) {
+        /* Only mark collinear if essentially zero (both relative and absolute) */
+        if (xx_orig > 0 && (xx_partial / xx_orig) <= collinear_tol && xx_partial < 1e-30) {
             is_collinear[k] = 1;
             num_collinear++;
             sprintf(scalar_name, "__creghdfe_collinear_varnum_%d", k + 1);
@@ -1124,8 +1145,24 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     if (K_keep == 0) {
+        /* All X variables are collinear with FE - report as omitted (like reghdfe) */
         SF_scal_save("__creghdfe_K_keep", 0.0);
         SF_scal_save("__creghdfe_ols_N", (ST_double)N);
+        SF_scal_save("__creghdfe_N", (ST_double)N);
+        SF_scal_save("__creghdfe_has_cons", 1.0);
+        SF_scal_save("__creghdfe_cons", means[0]);  /* Constant = mean(y) */
+        SF_scal_save("__creghdfe_rss", tss[0]);  /* RSS = TSS when no X vars */
+        SF_scal_save("__creghdfe_tss", tss[0]);  /* Total TSS */
+        SF_scal_save("__creghdfe_tss_within", tss[0]);
+        SF_scal_save("__creghdfe_df_a", (ST_double)df_a);
+        SF_scal_save("__creghdfe_df_a_nested_computed", 0.0);
+        SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
+        SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+        /* Save number of FE levels */
+        for (g = 0; g < G; g++) {
+            sprintf(scalar_name, "__creghdfe_num_levels_%d", g + 1);
+            SF_scal_save(scalar_name, (ST_double)factors[g].num_levels);
+        }
         free(xtx); free(is_collinear);
         cleanup_state();
         for (g = 0; g < G; g++) {
@@ -1205,15 +1242,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Compute X'X and X'y on non-collinear data (weighted if using weights) */
     if (has_weights) {
         compute_xtx_xty_weighted(data_keep, g_state->weights, weight_type, N, K_keep + 1, xtx_keep, xty_keep);
-        /* Weighted TSS_within = sum(w_i * y_i^2) - with normalized weights for aw/pw */
+        /* Weighted TSS_within = sum(w_i * y_i^2)
+         * For aw/pw: weights are already normalized (sum=N), use them directly
+         * For fweight: use raw weights directly */
         tss_within = 0.0;
-        ST_double w_scale = 1.0;
-        if (weight_type == 1 || weight_type == 3) {
-            w_scale = (ST_double)N / g_state->sum_weights;
-        }
         for (idx = 0; idx < N; idx++) {
-            ST_double w = g_state->weights[idx] * w_scale;
-            tss_within += w * data_keep[idx] * data_keep[idx];
+            tss_within += g_state->weights[idx] * data_keep[idx] * data_keep[idx];
         }
     } else {
         compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
@@ -1305,7 +1339,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    ST_double corner = 1.0 / N;
+    /* For fweight, use sum(weights) as effective N in corner calculation
+     * This is the 1'W1 term in the block partition formula */
+    ST_double N_corner = (weight_type == 2 && has_weights) ? g_state->sum_weights : (ST_double)N;
+    ST_double corner = 1.0 / N_corner;
     for (i = 0; i < K_keep; i++) {
         corner -= means_x[i] * side[i];
     }

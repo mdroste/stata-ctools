@@ -377,12 +377,15 @@ program define creghdfe, eclass
     local rmse = sqrt(`rss' / `df_r_ols')
 
     * Calculate F-statistic
-    * For unadjusted VCE: use traditional MSS/MSE formula
+    * For unadjusted VCE: use traditional MSS/MSE formula with within-group variation
     * For robust/cluster VCE: use Wald test F = b'*V^-1*b / k
-    local mss = `tss_within' - `rss'
+    * e(mss) = TSS - RSS (total model sum of squares for reporting)
+    * But F uses within-group MSS = tss_within - rss
+    local mss = `tss' - `rss'
+    local mss_within = `tss_within' - `rss'
     if `vcetype' == 0 {
-        * Traditional F-statistic for unadjusted VCE
-        local F = (`mss' / `df_m') / (`rss' / `df_r')
+        * Traditional F-statistic using within-group variation
+        local F = (`mss_within' / `df_m') / (`rss' / `df_r')
     }
     else {
         * Wald F-statistic for robust/cluster VCE - computed after V matrix is built
@@ -392,39 +395,66 @@ program define creghdfe, eclass
     * Build coefficient vector and names
     tempname b V
 
-    * Get coefficients from scalars
-    local K_with_cons = `K_keep' + 1
-    matrix `b' = J(1, `K_with_cons', 0)
-    forval k = 1/`K_keep' {
-        matrix `b'[1, `k'] = __creghdfe_beta_`k'
-    }
-    matrix `b'[1, `K_with_cons'] = `cons'
+    * Always build full matrix with all X vars (including omitted) to match reghdfe
+    local K_full = `K_x' + 1  /* All X vars + constant */
+    matrix `b' = J(1, `K_full', 0)
+    matrix `V' = J(`K_full', `K_full', 0)
 
-    * Get variance matrix
-    matrix `V' = __creghdfe_V[1..`K_with_cons', 1..`K_with_cons']
+    * Fill in coefficients and VCE for non-collinear variables
+    if `K_keep' > 0 {
+        * Build mapping from kept index to full index
+        local kept_idx = 1
+        forval k = 1/`K_x' {
+            local is_collin = __creghdfe_collinear_`k'
+            if `is_collin' == 0 {
+                * Fill coefficient
+                matrix `b'[1, `k'] = __creghdfe_beta_`kept_idx'
+                * Fill VCE row/column
+                local kept_idx2 = 1
+                forval j = 1/`K_x' {
+                    local is_collin_j = __creghdfe_collinear_`j'
+                    if `is_collin_j' == 0 {
+                        matrix `V'[`k', `j'] = __creghdfe_V[`kept_idx', `kept_idx2']
+                        local ++kept_idx2
+                    }
+                }
+                * Cross terms with constant
+                matrix `V'[`k', `K_full'] = __creghdfe_V[`kept_idx', `K_keep'+1]
+                matrix `V'[`K_full', `k'] = __creghdfe_V[`K_keep'+1, `kept_idx']
+                local ++kept_idx
+            }
+        }
+        * Constant variance
+        matrix `V'[`K_full', `K_full'] = __creghdfe_V[`K_keep'+1, `K_keep'+1]
+    }
+    else {
+        * K_keep == 0: set variance for constant only
+        local var_cons = `rss' / (`N_final' * `df_r')
+        matrix `V'[`K_full', `K_full'] = `var_cons'
+    }
+    * Constant coefficient
+    matrix `b'[1, `K_full'] = `cons'
 
     * Label the residual variable (already filled by C plugin)
     if "`resid_varname'" != "" {
         label var `resid_varname' "Residuals"
     }
 
-    * Build column names - use non-collinear indepvars
-    * First, identify which vars were kept (non-collinear)
-    local num_collinear = __creghdfe_num_collinear
+    * Build column names - include omitted vars with o. prefix
     local colnames ""
-    local kept_count = 0
     forval k = 1/`K_x' {
-        local is_collin = 0
-        forval c = 1/`num_collinear' {
-            capture local collin_idx = __creghdfe_collinear_`c'
-            if _rc == 0 & `collin_idx' == `k' {
-                local is_collin = 1
-            }
+        local vname : word `k' of `indepvars'
+        if `K_keep' == 0 {
+            local colnames `colnames' o.`vname'
         }
-        if `is_collin' == 0 {
-            local ++kept_count
-            local vname : word `k' of `indepvars'
-            local colnames `colnames' `vname'
+        else {
+            local is_collin = __creghdfe_collinear_`k'
+            if `is_collin' == 1 {
+                local colnames `colnames' o.`vname'
+            }
+            else {
+                local colnames `colnames' `vname'
+            }
         }
     }
     local colnames `colnames' _cons
@@ -465,12 +495,15 @@ program define creghdfe, eclass
     ereturn scalar r2_a = `r2_a'
     ereturn scalar rmse = `rmse'
     ereturn scalar rss = `rss'
+    ereturn scalar mss = `mss'
     ereturn scalar tss = `tss'
     ereturn scalar tss_within = `tss_within'
     ereturn scalar df_a = `df_a_adjusted'
     ereturn scalar df_a_initial = `df_a'
     ereturn scalar df_a_nested = `df_a_nested'
     ereturn scalar F = `F'
+    ereturn scalar rank = `df_m'
+    ereturn scalar N_hdfe = `nfe'
     ereturn scalar N_hdfe_extended = `mobility_groups'
     ereturn scalar num_singletons = `num_singletons'
 
