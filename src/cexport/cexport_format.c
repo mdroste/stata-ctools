@@ -137,8 +137,9 @@ int cexport_double_to_str(double val, char *buf, int buf_size,
         return ctools_int64_to_str((int64_t)val, buf);
     }
 
-    /* Determine precision based on storage type */
-    int max_frac_digits = (vtype == VARTYPE_FLOAT) ? 8 : 16;
+    /* Determine max significant figures based on storage type.
+     * Stata uses %.16g for doubles and %.8g for floats. */
+    int max_sig_figs = (vtype == VARTYPE_FLOAT) ? 8 : 16;
 
     /* Handle sign */
     int pos = 0;
@@ -148,22 +149,38 @@ int cexport_double_to_str(double val, char *buf, int buf_size,
         abs_val = -val;
     }
 
-    /* FAST PATH 2: Simple decimals (most common in real data)
-     * Values that can be represented exactly with limited decimal places.
-     * Handles values like 1.5, 0.25, 123.456, etc.
+    /* FAST PATH 2: Simple decimals - DISABLED
+     * The fast path cannot reliably match Stata's exact %.8g/%.16g formatting
+     * for all values. Always use snprintf fallback to ensure byte-for-byte
+     * CSV output match with Stata's export delimited.
      *
-     * Upper bound: 1e9 to avoid precision issues with large floats.
-     * Values >= 1e9 may not convert back exactly when reconstructed.
+     * Keep the code path but make condition always false for now.
+     * Can be re-enabled for specific "exact" value ranges later if needed.
      */
-    if (abs_val < 1e9 && abs_val > 1e-10) {
+    if (0 && abs_val < 1e9 && abs_val > 1e-10) {
         /* Extract integer and fractional parts */
         double int_part_d = floor(abs_val);
         double frac_part = abs_val - int_part_d;
 
+        /* Count significant figures in integer part */
+        int int_sig_figs = 0;
+        if (int_part_d >= 1) {
+            uint64_t int_temp = (uint64_t)int_part_d;
+            while (int_temp > 0) {
+                int_sig_figs++;
+                int_temp /= 10;
+            }
+        }
+
+        /* Max decimal places to stay within sig fig limit */
+        int max_decimals = max_sig_figs - int_sig_figs;
+        if (max_decimals < 1) max_decimals = 1;
+        if (max_decimals > 15) max_decimals = 15;
+
         /* Check if fractional part is "simple" (few decimal places needed) */
         if (frac_part > 0) {
             /* Try progressively more decimal places until we get exact match */
-            for (int decimals = 1; decimals <= max_frac_digits && decimals <= 15; decimals++) {
+            for (int decimals = 1; decimals <= max_decimals; decimals++) {
                 double scale = (double)POW10[decimals];
                 double scaled_frac = frac_part * scale;
                 uint64_t frac_int = (uint64_t)(scaled_frac + 0.5);
@@ -176,11 +193,15 @@ int cexport_double_to_str(double val, char *buf, int buf_size,
                     break;
                 }
 
-                /* Check if this representation is exact enough */
+                /* Check if this representation is exact enough.
+                 * For doubles, require very tight tolerance to match Stata's 16-digit precision.
+                 * For floats, allow looser tolerance since they only have ~7 significant figures.
+                 */
                 double reconstructed = int_part_d + (double)frac_int / scale;
                 double rel_error = fabs(reconstructed - abs_val) / abs_val;
 
-                if (rel_error < 1e-15 || (vtype == VARTYPE_FLOAT && rel_error < 1e-8)) {
+                double tolerance = (vtype == VARTYPE_FLOAT) ? 1e-7 : 1e-15;
+                if (rel_error < tolerance) {
                     /* Found exact representation! Format directly. */
                     uint64_t int_part = (uint64_t)int_part_d;
 

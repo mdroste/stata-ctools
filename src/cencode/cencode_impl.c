@@ -175,52 +175,43 @@ static int cencode_string_compare(const void *a, const void *b)
 ST_retcode cencode_main(const char *args)
 {
     double t_start, t_parse, t_collect, t_sort, t_encode, t_labels, t_total;
-    int var_idx = 0, gen_idx = 0;
     char label_name[256] = "";
     int noextend = 0;
     size_t nobs;
     ST_retcode rc = 0;
 
+    /*
+     * IMPORTANT: In Stata's Plugin Interface, SF_var_is_string() and other
+     * SF_* functions access variables by their 1-based index within the
+     * varlist passed to the plugin call, NOT by their position in the full
+     * dataset.
+     *
+     * cencode is called as: plugin call ctools_plugin src_var dst_var, args
+     * So the source variable is always index 1, and destination is index 2.
+     */
+    const int var_idx = 1;  /* First variable passed to plugin = source */
+    const int gen_idx = 2;  /* Second variable passed to plugin = destination */
+
     t_start = ctools_timer_seconds();
 
     /* Parse arguments */
-    if (args == NULL || *args == '\0') {
-        SF_error("cencode: no arguments specified\n");
-        return 198;
-    }
+    if (args != NULL && *args != '\0') {
+        char args_copy[1024];
+        strncpy(args_copy, args, sizeof(args_copy) - 1);
+        args_copy[sizeof(args_copy) - 1] = '\0';
 
-    char args_copy[1024];
-    strncpy(args_copy, args, sizeof(args_copy) - 1);
-    args_copy[sizeof(args_copy) - 1] = '\0';
-
-    char *token = strtok(args_copy, " ");
-    if (!token) {
-        SF_error("cencode: missing source variable index\n");
-        return 198;
-    }
-    var_idx = atoi(token);
-
-    token = strtok(NULL, " ");
-    if (!token) {
-        SF_error("cencode: missing generate variable index\n");
-        return 198;
-    }
-    gen_idx = atoi(token);
-
-    while ((token = strtok(NULL, " ")) != NULL) {
-        if (strncmp(token, "label=", 6) == 0) {
-            strncpy(label_name, token + 6, sizeof(label_name) - 1);
-            label_name[sizeof(label_name) - 1] = '\0';
-        } else if (strcmp(token, "noextend") == 0) {
-            noextend = 1;
+        char *token = strtok(args_copy, " ");
+        while (token != NULL) {
+            if (strncmp(token, "label=", 6) == 0) {
+                strncpy(label_name, token + 6, sizeof(label_name) - 1);
+                label_name[sizeof(label_name) - 1] = '\0';
+            } else if (strcmp(token, "noextend") == 0) {
+                noextend = 1;
+            }
+            token = strtok(NULL, " ");
         }
     }
     (void)noextend;
-
-    if (var_idx < 1 || gen_idx < 1) {
-        SF_error("cencode: invalid variable indices\n");
-        return 198;
-    }
 
     if (!SF_var_is_string(var_idx)) {
         SF_error("cencode: source variable must be a string variable\n");
