@@ -850,13 +850,17 @@ program define civreghdfe, eclass
     * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
     ereturn scalar N_hdfe = `G'
 
-    * Adjusted R-squared: r2_a = 1 - (1 - r2) * (N - 1) / (N - K - df_a_adj - 1)
-    * When FE is fully nested in cluster, use df_a_for_vce (usually 0) instead of df_a
-    * This matches ivreghdfe behavior where nested FE don't count towards df_a for r2_a
-    local df_a_adj = `df_a_for_vce'
-    local adj_denom = `N_used' - `K_total' - `df_a_adj' - 1
+    * Adjusted R-squared (matching ivreghdfe formula)
+    * With absorb: noconstant is set, so constant not added to sdofminus
+    * sdofminus = absorb_ct = max(1, HDFE.df_a)
+    *   - HDFE.df_a = df_a_for_vce (0 if nested, df_a otherwise)
+    *   - ivreghdfe line 670: if HDFE.df_a=0 (nested), force absorb_ct to 1
+    * Formula: r2_a = 1 - (1 - r2) * N / (N - K - sdofminus)  (ivreghdfe line 1304)
+    local sdofminus = max(1, `df_a_for_vce')
+    local adj_denom = `N_used' - `K_total' - `sdofminus'
     if `adj_denom' > 0 {
-        local r2_a = 1 - (1 - `r2') * (`N_used' - 1) / `adj_denom'
+        * With absorb, constant is partialled out, so use N not N-1
+        local r2_a = 1 - (1 - `r2') * `N_used' / `adj_denom'
     }
     else {
         local r2_a = .

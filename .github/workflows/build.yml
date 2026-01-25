@@ -295,7 +295,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add build/*.plugin
+          git add -f build/*.plugin
           git diff --staged --quiet || git commit -m "Update compiled plugins [skip ci]"
           git push
 

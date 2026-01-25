@@ -1206,9 +1206,11 @@ static ST_retcode do_iv_regression(void)
         df_r_val = N - K_total - df_a;
     }
     if (df_r_val <= 0) df_r_val = 1;
-    /* For rmse, use df_a_for_vce when FE is nested in cluster (matches ivreghdfe) */
-    ST_int df_a_for_rmse = (has_cluster && df_a_nested > 0) ? df_a_for_vce : df_a;
-    ST_double rmse = sqrt(rss / (N - K_total - df_a_for_rmse > 0 ? N - K_total - df_a_for_rmse : 1));
+    /* For rmse, use sdofminus = max(1, df_a_for_vce) when nested, df_a otherwise
+       (matches ivreghdfe line 670: if HDFE.df_a=0, force absorb_ct to 1) */
+    ST_int sdofminus = (has_cluster && df_a_nested > 0) ?
+                       (df_a_for_vce > 0 ? df_a_for_vce : 1) : df_a;
+    ST_double rmse = sqrt(rss / (N - K_total - sdofminus > 0 ? N - K_total - sdofminus : 1));
 
     /* Compute model F-statistic: (R2 / K) / ((1 - R2) / df_r) */
     ST_double f_stat = 0.0;

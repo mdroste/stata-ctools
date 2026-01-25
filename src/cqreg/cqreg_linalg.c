@@ -534,13 +534,18 @@ ST_double cqreg_compute_quantile(const ST_double *y, ST_int N, ST_double tau)
 
     /*
      * Compute quantile using Stata's qreg method:
-     * k = ceil(N * tau)
-     * q = y_sorted[k-1]  (convert to 0-indexed)
+     * k = floor((N + 1) * tau)
      *
-     * For example with N=74, tau=0.5:
-     * k = ceil(37) = 37, so q = y_sorted[36]
+     * Examples:
+     * - N=74, tau=0.25: floor(75*0.25) = floor(18.75) = 18, return y[18]
+     * - N=74, tau=0.50: floor(75*0.50) = floor(37.5) = 37, return y[37]
+     * - N=74, tau=0.75: floor(75*0.75) = floor(56.25) = 56, return y[56]
+     * - N=15, tau=0.50: floor(16*0.50) = floor(8.0) = 8, return y[8]
      */
-    ST_int k = (ST_int)ceil((ST_double)N * tau);
+    ST_double pos = ((ST_double)N + 1.0) * tau;
+    ST_int k = (ST_int)floor(pos);
+
+    /* Handle boundary cases */
     if (k < 1) k = 1;
     if (k > N) k = N;
 

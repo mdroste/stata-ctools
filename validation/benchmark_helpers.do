@@ -446,7 +446,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 5e-6)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 1e-6)]
 
     gettoken depvar indepvars : varlist
 
@@ -535,9 +535,7 @@ program define benchmark_qreg
     }
 
     * Compare continuous scalars (use tolerance)
-    * Note: q_v, sum_rdev, and f_r are auxiliary display values that can vary
-    * slightly due to quantile calculation boundary effects. Use larger tolerance.
-    foreach scalar in q sum_adev {
+    foreach scalar in q sum_adev sum_rdev q_v f_r {
         local val1 = `qreg_`scalar''
         local val2 = `cqreg_`scalar''
         * Only compare if both are non-missing
@@ -563,79 +561,72 @@ program define benchmark_qreg
         }
     }
 
-    * Auxiliary display values (q_v, sum_rdev, f_r) - use larger 20% tolerance
-    * These can vary due to different quantile calculation algorithms
-    foreach scalar in q_v sum_rdev f_r {
-        local val1 = `qreg_`scalar''
-        local val2 = `cqreg_`scalar''
-        if !missing(`val1') & !missing(`val2') {
-            local diff = abs(`val1' - `val2')
-            if abs(`val1') > 1 {
-                local reldiff = `diff' / abs(`val1')
-                if `reldiff' > 0.2 {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
-                }
-            }
-            else {
-                if `diff' > 0.2 {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
-                }
-            }
-        }
-    }
-
     * Compare coefficients e(b)
-    tempname diff_b
-    matrix `diff_b' = qreg_b - cqreg_b
-    local cols = colsof(`diff_b')
-    local maxdiff_b = 0
-    local maxdiff_b_idx = 0
-    forvalues j = 1/`cols' {
-        local d = abs(`diff_b'[1, `j'])
-        if `d' > `maxdiff_b' {
-            local maxdiff_b = `d'
-            local maxdiff_b_idx = `j'
-        }
-    }
+    * First check dimensions match
+    local qreg_cols = colsof(qreg_b)
+    local cqreg_cols = colsof(cqreg_b)
 
-    if `maxdiff_b' >= `tol' {
+    if `qreg_cols' != `cqreg_cols' {
         local has_failure = 1
-        local coefname : colnames qreg_b
-        local badcoef : word `maxdiff_b_idx' of `coefname'
-        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+        local all_diffs "`all_diffs' e(b):dim_mismatch(`qreg_cols'!=`cqreg_cols')"
+    }
+    else {
+        tempname diff_b
+        matrix `diff_b' = qreg_b - cqreg_b
+        local cols = colsof(`diff_b')
+        local maxdiff_b = 0
+        local maxdiff_b_idx = 0
+        forvalues j = 1/`cols' {
+            local d = abs(`diff_b'[1, `j'])
+            if `d' > `maxdiff_b' {
+                local maxdiff_b = `d'
+                local maxdiff_b_idx = `j'
+            }
+        }
+
+        if `maxdiff_b' >= `tol' {
+            local has_failure = 1
+            local coefname : colnames qreg_b
+            local badcoef : word `maxdiff_b_idx' of `coefname'
+            local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+        }
     }
 
     * Compare VCE e(V) using relative tolerance
-    tempname diff_V
-    matrix `diff_V' = qreg_V - cqreg_V
-    local rows = rowsof(`diff_V')
-    local cols = colsof(`diff_V')
-    local maxreldiff_V = 0
-    local maxreldiff_V_i = 0
-    local maxreldiff_V_j = 0
-    forvalues i = 1/`rows' {
-        forvalues j = 1/`cols' {
-            local diff = abs(`diff_V'[`i', `j'])
-            local base = abs(qreg_V[`i', `j'])
-            if `base' > 1e-10 {
-                local reldiff = `diff' / `base'
-            }
-            else {
-                local reldiff = `diff'
-            }
-            if `reldiff' > `maxreldiff_V' {
-                local maxreldiff_V = `reldiff'
-                local maxreldiff_V_i = `i'
-                local maxreldiff_V_j = `j'
+    * First check dimensions match (already checked via e(b) above)
+    local qreg_Vrows = rowsof(qreg_V)
+    local cqreg_Vrows = rowsof(cqreg_V)
+
+    if `qreg_Vrows' == `cqreg_Vrows' {
+        tempname diff_V
+        matrix `diff_V' = qreg_V - cqreg_V
+        local rows = rowsof(`diff_V')
+        local cols = colsof(`diff_V')
+        local maxreldiff_V = 0
+        local maxreldiff_V_i = 0
+        local maxreldiff_V_j = 0
+        forvalues i = 1/`rows' {
+            forvalues j = 1/`cols' {
+                local diff = abs(`diff_V'[`i', `j'])
+                local base = abs(qreg_V[`i', `j'])
+                if `base' > 1e-10 {
+                    local reldiff = `diff' / `base'
+                }
+                else {
+                    local reldiff = `diff'
+                }
+                if `reldiff' > `maxreldiff_V' {
+                    local maxreldiff_V = `reldiff'
+                    local maxreldiff_V_i = `i'
+                    local maxreldiff_V_j = `j'
+                }
             }
         }
-    }
 
-    if `maxreldiff_V' >= `tol' {
-        local has_failure = 1
-        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+        if `maxreldiff_V' >= `tol' {
+            local has_failure = 1
+            local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+        }
     }
 
     * Report result

@@ -1381,11 +1381,31 @@ sysuse auto, clear
 noi benchmark_qreg price i.foreign##c.mpg weight, testname("i.foreign##c.mpg: median")
 
 * Factor variables at extreme quantiles
+* Note: qreg fails with error 498 at extreme quantiles (insufficient obs per cell)
+* We test that cqreg handles these the same way as qreg
 sysuse auto, clear
-noi benchmark_qreg price mpg i.rep78, quantile(0.01) testname("i.rep78: q=0.01")
+quietly capture qreg price mpg i.rep78, quantile(0.01)
+local qreg_rc = _rc
+quietly capture cqreg price mpg i.rep78, quantile(0.01)
+local cqreg_rc = _rc
+if `qreg_rc' == `cqreg_rc' {
+    noi test_pass "i.rep78: q=0.01 (both fail with rc=`qreg_rc')"
+}
+else {
+    noi test_fail "i.rep78: q=0.01" "rc mismatch: qreg=`qreg_rc', cqreg=`cqreg_rc'"
+}
 
 sysuse auto, clear
-noi benchmark_qreg price mpg i.rep78, quantile(0.99) testname("i.rep78: q=0.99")
+quietly capture qreg price mpg i.rep78, quantile(0.99)
+local qreg_rc = _rc
+quietly capture cqreg price mpg i.rep78, quantile(0.99)
+local cqreg_rc = _rc
+if `qreg_rc' == `cqreg_rc' {
+    noi test_pass "i.rep78: q=0.99 (both fail with rc=`qreg_rc')"
+}
+else {
+    noi test_fail "i.rep78: q=0.99" "rc mismatch: qreg=`qreg_rc', cqreg=`cqreg_rc'"
+}
 
 /*******************************************************************************
  * SECTION 33: Time Series Operators (L., D., F.)
