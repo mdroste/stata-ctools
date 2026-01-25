@@ -111,6 +111,8 @@ typedef struct CImportContext {
     char delimiter;
     char quote_char;
     bool has_header;
+    int header_row;         /* 1-based row number for header (1 = first row, 0 = no header) */
+    int skip_rows;          /* Number of rows to skip at start of file */
     CImportBindQuotesMode bindquotes;
     CImportParsedChunk *chunks;
     int num_chunks;

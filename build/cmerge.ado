@@ -15,6 +15,45 @@
 *!   cmerge 1:m varlist using filename [, options]
 *!   cmerge m:m varlist using filename [, options]
 
+* Mata helpers for optimized operations
+capture mata: mata drop _cmerge_addvars()
+capture mata: mata drop _cmerge_shared_flags()
+mata:
+void _cmerge_addvars(string rowvector types, string rowvector names)
+{
+    real scalar i, n
+    n = cols(names)
+    for (i = 1; i <= n; i++) {
+        (void) st_addvar(types[i], names[i])
+    }
+}
+
+void _cmerge_shared_flags(string rowvector keepusing, string rowvector master_vars)
+{
+    real scalar i, j, n_ku, n_mv, is_shared
+    string scalar result, vname
+    transmorphic A
+
+    n_ku = cols(keepusing)
+    n_mv = cols(master_vars)
+
+    /* Build associative array for O(1) lookup */
+    A = asarray_create()
+    for (j = 1; j <= n_mv; j++) {
+        asarray(A, master_vars[j], 1)
+    }
+
+    /* Check each keepusing var against the hash */
+    result = ""
+    for (i = 1; i <= n_ku; i++) {
+        is_shared = asarray_contains(A, keepusing[i]) ? 1 : 0
+        result = result + (i > 1 ? " " : "") + strofreal(is_shared)
+    }
+
+    st_local("shared_var_flags", result)
+}
+end
+
 program define cmerge, rclass
     version 14.0
 
@@ -191,23 +230,23 @@ program define cmerge, rclass
 
     * Allow empty master - will just add using-only observations
 
-    * Get master key variable indices (1-based) - skip for _n merge
+    * Get master key variable indices (1-based) using Mata - skip for _n merge
     local master_key_indices ""
     if !`merge_by_n' {
-        local pos = 1
-        foreach v of local master_varlist {
-            foreach var of local keyvars {
-                if "`v'" == "`var'" {
-                    local master_key_indices "`master_key_indices' `pos'"
-                }
-            }
-            local ++pos
-        }
-        * Verify all keys found
+        * Use Mata st_varindex() for O(1) lookup instead of O(n*m) nested loops
+        mata: st_local("master_key_indices", invtokens(strofreal(st_varindex(tokens(st_local("keyvars"))))))
+        * Verify all keys found (check for missing values from st_varindex)
         local n_found : word count `master_key_indices'
         if `n_found' != `nkeys' {
             di as error "cmerge: not all key variables found in master"
             exit 111
+        }
+        * Check for any zeros (variable not found)
+        foreach idx of local master_key_indices {
+            if `idx' == . {
+                di as error "cmerge: not all key variables found in master"
+                exit 111
+            }
         }
     }
 
@@ -244,45 +283,48 @@ program define cmerge, rclass
         timer on 91   /* Pre-plugin1 */
     }
 
-    * Load the platform-appropriate ctools plugin
+    * Load the platform-appropriate ctools plugin (cached after first load)
     capture program list ctools_plugin
     if _rc != 0 {
         local __os = c(os)
         local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
         local __plugin = ""
         if "`__os'" == "Windows" {
             local __plugin "ctools_windows.plugin"
         }
-        else if `__is_mac' {
+        else if "`__os'" == "MacOSX" | strpos(lower("`__machine'"), "mac") > 0 {
+            * Check cached architecture first (avoids subprocess on repeat calls)
             local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
+            if "$CTOOLS_ARCH_CACHE" == "arm64" {
                 local __is_arm = 1
             }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
+            else if "$CTOOLS_ARCH_CACHE" == "x86_64" {
+                local __is_arm = 0
             }
             else {
-                local __plugin "ctools_mac_x86.plugin"
+                * First call - detect and cache
+                if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
+                    local __is_arm = 1
+                    global CTOOLS_ARCH_CACHE "arm64"
+                }
+                else {
+                    tempfile __archfile
+                    quietly shell uname -m > "`__archfile'" 2>&1
+                    tempname __fh
+                    file open `__fh' using "`__archfile'", read text
+                    file read `__fh' __archline
+                    file close `__fh'
+                    capture erase "`__archfile'"
+                    if strpos("`__archline'", "arm64") > 0 {
+                        local __is_arm = 1
+                        global CTOOLS_ARCH_CACHE "arm64"
+                    }
+                    else {
+                        global CTOOLS_ARCH_CACHE "x86_64"
+                    }
+                }
             }
+            local __plugin = cond(`__is_arm', "ctools_mac_arm.plugin", "ctools_mac_x86.plugin")
         }
         else if "`__os'" == "Unix" {
             local __plugin "ctools_linux.plugin"
@@ -402,17 +444,11 @@ program define cmerge, rclass
         }
     }
 
-    * Identify shared variables (exist in both master and using)
+    * Identify shared variables using Mata (O(n) vs O(n*m) nested loops)
+    * A variable is shared if it exists in both master and using
     local shared_var_flags ""
-    foreach vname of local keepusing_names {
-        local is_shared = 0
-        foreach mvar of local master_varlist {
-            if "`mvar'" == "`vname'" {
-                local is_shared = 1
-                continue, break
-            }
-        }
-        local shared_var_flags "`shared_var_flags' `is_shared'"
+    if `keepusing_count' > 0 {
+        mata: _cmerge_shared_flags(tokens(st_local("keepusing_names")), tokens(st_local("master_varlist")))
     }
 
     * Capture value labels from using dataset (unless nolabel specified)
@@ -597,25 +633,17 @@ program define cmerge, rclass
         exit 0
     }
 
-    * Get variable indices in the reduced using dataset - optimized single pass
+    * Get variable indices in the reduced using dataset using Mata
     local using_key_indices ""
     local using_keepusing_indices ""
-    local pos = 1
     unab using_varlist : _all
-    foreach v of local using_varlist {
-        local is_key = 0
-        if !`merge_by_n' {
-            foreach k of local keyvars {
-                if "`v'" == "`k'" {
-                    local using_key_indices "`using_key_indices' `pos'"
-                    local is_key = 1
-                }
-            }
-        }
-        if !`is_key' {
-            local using_keepusing_indices "`using_keepusing_indices' `pos'"
-        }
-        local ++pos
+    if !`merge_by_n' & `nkeys' > 0 {
+        * Use Mata for O(1) key index lookup
+        mata: st_local("using_key_indices", invtokens(strofreal(st_varindex(tokens(st_local("keyvars"))))))
+    }
+    if `keepusing_count' > 0 {
+        * Use Mata for O(1) keepusing index lookup
+        mata: st_local("using_keepusing_indices", invtokens(strofreal(st_varindex(tokens(st_local("keepusing_names"))))))
     }
 
     * Build plugin command for load_using
@@ -716,28 +744,8 @@ program define cmerge, rclass
         local new_var_types "`new_var_types' byte"
     }
 
-    * Create empty template dataset with new variable definitions (FAST append trick)
-    * This is 4.5x faster than Java/Mata because it only adds metadata, not data
+    * Count new variables
     local n_new_vars : word count `new_var_names'
-    tempfile empty_vars_template
-    if `n_new_vars' > 0 {
-        clear
-        qui set obs 1
-        local var_idx = 1
-        foreach vtype of local new_var_types {
-            local vname : word `var_idx' of `new_var_names'
-            * String variables need empty string, numeric need missing
-            if substr("`vtype'", 1, 3) == "str" {
-                qui gen `vtype' `vname' = ""
-            }
-            else {
-                qui gen `vtype' `vname' = .
-            }
-            local ++var_idx
-        }
-        qui drop in 1
-        qui save `empty_vars_template', emptyok replace
-    }
 
     if `__do_timing' {
         timer off 97
@@ -748,12 +756,12 @@ program define cmerge, rclass
 
     if `__do_timing' {
         timer off 96
-        timer on 97   /* append vars */
+        timer on 97   /* add vars via Mata */
     }
 
-    * Append empty template to add variable definitions (FAST - no data initialization)
+    * Create new variables directly using Mata st_addvar() - faster than gen loop + append
     if `n_new_vars' > 0 {
-        qui append using `empty_vars_template'
+        mata: _cmerge_addvars(tokens(st_local("new_var_types")), tokens(st_local("new_var_names")))
     }
 
     if `__do_timing' {
@@ -769,21 +777,13 @@ program define cmerge, rclass
         timer off 99
     }
 
-    * Compute variable indices in a single pass
+    * Compute keepusing variable indices using Mata (O(1) lookup vs O(n*m) loops)
     local keepusing_placeholder_indices ""
-    unab current_varlist : _all
-    foreach vname of local keepusing_names {
-        local pos = 1
-        foreach v of local current_varlist {
-            if "`v'" == "`vname'" {
-                local keepusing_placeholder_indices "`keepusing_placeholder_indices' `pos'"
-                continue, break
-            }
-            local ++pos
-        }
+    if `keepusing_count' > 0 {
+        mata: st_local("keepusing_placeholder_indices", invtokens(strofreal(st_varindex(tokens(st_local("keepusing_names"))))))
     }
 
-    * Get _merge variable index (already in current_varlist from unab)
+    * Get _merge variable index
     local merge_var_idx = 0
     if `need_merge_var' {
         local merge_var_idx = c(k)

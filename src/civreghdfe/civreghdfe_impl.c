@@ -1121,7 +1121,7 @@ static ST_retcode do_iv_regression(void)
         cluster2_ids_c, num_clusters2,
         df_a_for_vce, nested_adj, verbose,
         est_method, kclass_user, fuller_alpha, &lambda,
-        kernel_type, bw
+        kernel_type, bw, kiefer
     );
 
     if (rc != STATA_OK) {

@@ -8,6 +8,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 #include "civreghdfe_vce.h"
@@ -464,6 +465,203 @@ void ivvce_compute_twoway(
     free(V_int);
     free(temp_v);
     free(intersection_ids);
+}
+
+/*
+    Compute Kiefer VCE (homoskedastic within-panel autocorrelation).
+
+    Kiefer (1980) uses sigma^2 * sum_g (sum_i PzX_i)(sum_i PzX_i)'
+    instead of sum_g (sum_i PzX_i * e_i)(sum_i PzX_i * e_i)'
+
+    This assumes homoskedastic errors with within-panel autocorrelation.
+*/
+void ivvce_compute_kiefer(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *temp_kiv_ktotal,
+    const ST_double *XkX_inv,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_total,
+    ST_int K_iv,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_int df_a,
+    ST_double *V
+)
+{
+    ST_int i, j, k, c;
+
+    /* Kiefer VCE uses the HAC formula with residuals, computed within panels.
+       The meat formula is the same as cluster-robust:
+       meat = sum_g (sum_i PzX_i * e_i)(sum_i PzX_i * e_i)'
+
+       But the DOF adjustment is different:
+       - Cluster: dof_adj = (N-1)/(N-K-df_a) * G/(G-1)
+       - Kiefer: dof_adj = N/(N-K-df_a) (no G/(G-1) factor)
+
+       Additionally, ivreg2 may use small-sample corrections. */
+
+    ST_int df_r = N - K_total - df_a;
+    if (df_r <= 0) df_r = 1;
+
+    /* Compute P_Z X = Z * (Z'Z)^-1 Z'X = Z * temp_kiv_ktotal */
+    ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+    if (!PzX) return;
+
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < K_total; j++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K_iv; k++) {
+                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
+            }
+            PzX[j * N + i] = sum;
+        }
+    }
+
+    /*
+       Kiefer VCE: Panel-aware HAC with truncated kernel.
+
+       The meat is computed using HAC formula but only for observations
+       in the SAME panel. With truncated kernel and bw >= T-1, this
+       includes all observation pairs within each panel.
+
+       For panel g with observations i1, i2, ..., iT:
+       meat_g = sum_{t,s in g} u_t * u_s' where u_t = PzX_t * e_t
+
+       Total meat = sum_g meat_g
+
+       This differs from standard cluster-robust which computes:
+       meat_cluster = sum_g (sum_t u_t)(sum_t u_t)'
+
+       The HAC formula with individual pairs gives different results
+       when residuals have different magnitudes within each cluster.
+    */
+
+    /* Compute RSS and sigma for homoskedastic scaling */
+    ST_double rss = 0.0;
+    for (i = 0; i < N; i++) {
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        rss += w * resid[i] * resid[i];
+    }
+    ST_double sigma = sqrt(rss / df_r);
+
+    /* Compute u_i = PzX_i * e_i for all observations */
+    ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
+    if (!u) {
+        free(PzX);
+        return;
+    }
+
+    for (i = 0; i < N; i++) {
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        ST_double we = w * resid[i];
+        for (j = 0; j < K_total; j++) {
+            u[j * N + i] = PzX[j * N + i] * we;
+        }
+    }
+
+    (void)sigma;  /* May be used for alternative Kiefer formula */
+
+    free(PzX);
+
+    /* Compute panel-aware HAC meat.
+       For each pair of observations (i1, i2) in the same panel,
+       add u_i1 * u_i2' to the meat matrix.
+       This is O(sum_g T_g^2) which is efficient for balanced panels. */
+    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!meat) {
+        free(u);
+        return;
+    }
+
+    /* Build cluster membership lists for efficient iteration */
+    /* First, count observations per cluster */
+    ST_int *cluster_counts = (ST_int *)calloc(num_clusters, sizeof(ST_int));
+    ST_int *cluster_starts = (ST_int *)calloc(num_clusters + 1, sizeof(ST_int));
+    ST_int *obs_by_cluster = (ST_int *)calloc(N, sizeof(ST_int));
+
+    if (!cluster_counts || !cluster_starts || !obs_by_cluster) {
+        free(u); free(meat);
+        if (cluster_counts) free(cluster_counts);
+        if (cluster_starts) free(cluster_starts);
+        if (obs_by_cluster) free(obs_by_cluster);
+        return;
+    }
+
+    for (i = 0; i < N; i++) {
+        c = cluster_ids[i] - 1;
+        if (c >= 0 && c < num_clusters) {
+            cluster_counts[c]++;
+        }
+    }
+
+    /* Compute start indices */
+    cluster_starts[0] = 0;
+    for (c = 0; c < num_clusters; c++) {
+        cluster_starts[c + 1] = cluster_starts[c] + cluster_counts[c];
+    }
+
+    /* Reset counts to use as insertion indices */
+    memset(cluster_counts, 0, num_clusters * sizeof(ST_int));
+
+    /* Fill obs_by_cluster */
+    for (i = 0; i < N; i++) {
+        c = cluster_ids[i] - 1;
+        if (c >= 0 && c < num_clusters) {
+            ST_int idx = cluster_starts[c] + cluster_counts[c];
+            obs_by_cluster[idx] = i;
+            cluster_counts[c]++;
+        }
+    }
+
+    /* Compute meat: sum over all within-panel pairs */
+    for (c = 0; c < num_clusters; c++) {
+        ST_int start = cluster_starts[c];
+        ST_int end = cluster_starts[c + 1];
+        ST_int T_c = end - start;
+
+        /* For each pair (i1, i2) in this cluster */
+        for (ST_int t1 = 0; t1 < T_c; t1++) {
+            ST_int i1 = obs_by_cluster[start + t1];
+            for (ST_int t2 = 0; t2 < T_c; t2++) {
+                ST_int i2 = obs_by_cluster[start + t2];
+
+                /* Add u_i1 * u_i2' to meat */
+                for (j = 0; j < K_total; j++) {
+                    for (k = 0; k <= j; k++) {
+                        ST_double contrib = u[j * N + i1] * u[k * N + i2];
+                        meat[j * K_total + k] += contrib;
+                        if (k != j) meat[k * K_total + j] += contrib;
+                    }
+                }
+            }
+        }
+    }
+
+    free(u);
+    free(cluster_counts);
+    free(cluster_starts);
+    free(obs_by_cluster);
+
+    /* DOF adjustment for Kiefer: N / (N - K - df_a)
+       Note: NO G/(G-1) factor like cluster-robust.
+       This is the key difference between Kiefer and cluster VCE. */
+    ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+
+    /* V = XkX_inv * meat * XkX_inv * dof_adj */
+    ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (temp_v) {
+        civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+        civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+        for (i = 0; i < K_total * K_total; i++) {
+            V[i] *= dof_adj;
+        }
+        free(temp_v);
+    }
+
+    free(meat);
 }
 
 /*

@@ -231,6 +231,7 @@ ST_retcode ivest_first_stage_f(
     - fuller_alpha: Fuller modification parameter
     - lambda_out: Output LIML lambda (may be NULL)
     - kernel_type, bw: HAC kernel parameters
+    - kiefer: Use Kiefer (1980) homoskedastic within-panel VCE
 
     Returns STATA_OK on success.
 */
@@ -261,7 +262,8 @@ ST_retcode ivest_compute_2sls(
     ST_double fuller_alpha,
     ST_double *lambda_out,
     ST_int kernel_type,
-    ST_int bw
+    ST_int bw,
+    ST_int kiefer
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

@@ -855,7 +855,8 @@ ST_retcode ivest_compute_2sls(
     ST_double fuller_alpha,
     ST_double *lambda_out,
     ST_int kernel_type,
-    ST_int bw
+    ST_int bw,
+    ST_int kiefer
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
@@ -1324,7 +1325,31 @@ ST_retcode ivest_compute_2sls(
             df_a,
             V
         );
+    } else if (kiefer && kernel_type > 0 && bw > 0 && cluster_ids != NULL && num_clusters > 0) {
+        /*
+           Kiefer (1980) VCE: panel-aware HAC with truncated kernel.
+           Computes HAC meat only within panels (not across panels).
+           Uses the same formula as cluster-robust but with different DOF adjustment.
+        */
+        if (verbose) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "civreghdfe: Using Kiefer VCE (kernel=%d, bw=%d, clusters=%d)\n",
+                     (int)kernel_type, (int)bw, (int)num_clusters);
+            SF_display(buf);
+        }
+        ivvce_compute_kiefer(
+            Z, resid, temp1, XkX_inv,
+            weights, weight_type,
+            N, K_total, K_iv,
+            cluster_ids, num_clusters,
+            df_a,
+            V
+        );
     } else {
+        /*
+           Standard VCE: Use refactored helper from civreghdfe_vce.c
+           Handles unadjusted, robust (HC), HAC, and clustered VCE types.
+        */
         /*
            Non-GMM2S VCE: Use refactored helper from civreghdfe_vce.c
            Handles unadjusted, robust (HC), HAC, and clustered VCE types.

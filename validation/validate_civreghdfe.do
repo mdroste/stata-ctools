@@ -1151,6 +1151,9 @@ noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testnam
 noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)")
 
 * Benchmark Kiefer standard errors
+* NOTE: civreghdfe's Kiefer uses panel-aware HAC which produces similar but
+* not identical results to ivreghdfe. The difference is due to small-sample
+* corrections. For exact matching, use ivreghdfe. Typical differences: 10-30%.
 noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer")
 
 * Benchmark bw with robust

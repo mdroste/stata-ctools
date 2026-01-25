@@ -79,6 +79,15 @@ static void cimport_record_unmatched_quote(CImportContext *ctx, size_t row_num) 
     pthread_mutex_unlock(&ctx->warning_mutex);
 }
 
+/* Skip N rows from the start of data, returning pointer to start of row N+1 */
+static const char *cimport_skip_rows(const char *data, const char *end, int n_rows, char quote_char, CImportBindQuotesMode bindquotes) {
+    const char *ptr = data;
+    for (int i = 0; i < n_rows && ptr < end; i++) {
+        ptr = cimport_find_next_row(ptr, end, quote_char, bindquotes);
+    }
+    return ptr;
+}
+
 /* Display warnings for unmatched quotes (Stata-compatible format) */
 static void cimport_display_warnings(CImportContext *ctx) {
     if (ctx->num_unmatched_quote_warnings == 0) return;
@@ -170,9 +179,17 @@ static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo
 
 static int cimport_parse_header(CImportContext *ctx) {
     CImportFieldRef fields[CTOOLS_MAX_COLUMNS];
-    const char *end = cimport_find_next_row(ctx->file_data, ctx->file_data + ctx->file_size, ctx->quote_char, ctx->bindquotes);
 
-    ctx->num_columns = cimport_parse_row_fast(ctx->file_data, end, ctx->delimiter, ctx->quote_char,
+    /* Skip rows if requested (for varnames(N) where N > 1) */
+    const char *header_start = ctx->file_data;
+    if (ctx->skip_rows > 0) {
+        header_start = cimport_skip_rows(ctx->file_data, ctx->file_data + ctx->file_size,
+                                          ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
+    }
+
+    const char *end = cimport_find_next_row(header_start, ctx->file_data + ctx->file_size, ctx->quote_char, ctx->bindquotes);
+
+    ctx->num_columns = cimport_parse_row_fast(header_start, end, ctx->delimiter, ctx->quote_char,
                                                fields, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
     if (ctx->num_columns <= 0) {
@@ -394,7 +411,7 @@ static void cimport_clear_cached_context(void) {
 }
 
 /* Forward declarations */
-static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
+static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                           CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
                                           CImportEncoding requested_encoding);
@@ -567,7 +584,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
  * Main Parse Function
  * ============================================================================ */
 
-static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
+static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                           CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
                                           CImportEncoding requested_encoding) {
@@ -580,6 +597,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->delimiter = delimiter;
     ctx->quote_char = '"';
     ctx->has_header = has_header;
+    ctx->skip_rows = skip_rows;
     ctx->bindquotes = bindquotes;
     ctx->filename = strdup(filename);
     ctx->verbose = verbose;
@@ -737,6 +755,11 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         const char *ptr = ctx->file_data;
         const char *end = ctx->file_data + ctx->file_size;
 
+        /* Skip rows if requested (for varnames(N) where N > 1) */
+        if (ctx->skip_rows > 0) {
+            ptr = cimport_skip_rows(ptr, end, ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
+        }
+
         while (ptr < end) {
             const char *row_end = cimport_find_next_row(ptr, end, ctx->quote_char, ctx->bindquotes);
 
@@ -805,7 +828,17 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             ptr = row_end;
         }
     } else {
-        size_t chunk_size = ctx->file_size / num_chunks;
+        /* Skip rows if requested (for varnames(N) where N > 1) */
+        const char *data_start = ctx->file_data;
+        size_t data_size = ctx->file_size;
+        if (ctx->skip_rows > 0) {
+            data_start = cimport_skip_rows(ctx->file_data, ctx->file_data + ctx->file_size,
+                                           ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
+            data_size = ctx->file_size - (data_start - ctx->file_data);
+        }
+
+        size_t chunk_size = data_size / num_chunks;
+        size_t start_offset = data_start - ctx->file_data;
 
         size_t *boundaries = ctools_safe_malloc2((size_t)num_chunks + 1, sizeof(size_t));
         if (!boundaries) {
@@ -813,9 +846,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             return NULL;
         }
 
-        boundaries[0] = 0;
+        boundaries[0] = start_offset;
         for (int i = 1; i < num_chunks; i++) {
-            size_t target = i * chunk_size;
+            size_t target = start_offset + i * chunk_size;
             boundaries[i] = cimport_find_safe_boundary(ctx->file_data, ctx->file_size, target, ctx->quote_char, ctx->bindquotes);
         }
         boundaries[num_chunks] = ctx->file_size;
@@ -1116,7 +1149,7 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
  * SCAN Mode
  * ============================================================================ */
 
-static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
+static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                    CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                    CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
                                    CImportEncoding requested_encoding) {
@@ -1125,7 +1158,7 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
 
     cimport_clear_cached_context();
 
-    g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, verbose, bindquotes,
+    g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                        numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
                                        requested_encoding);
 
@@ -1212,7 +1245,7 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
  * LOAD Mode
  * ============================================================================ */
 
-static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has_header, bool verbose, CImportBindQuotesMode bindquotes,
+static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                    CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                    CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
                                    CImportEncoding requested_encoding) {
@@ -1223,7 +1256,7 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 
     if (!used_cache) {
         cimport_clear_cached_context();
-        g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, verbose, bindquotes,
+        g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                            numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
                                            requested_encoding);
         ctx = g_cimport_ctx;
@@ -1379,6 +1412,7 @@ typedef struct {
     char *filename;
     char delimiter;
     bool has_header;
+    int header_row;         /* 1-based row number for header (1 = first row, 0 = no header) */
     bool verbose;
     CImportBindQuotesMode bindquotes;
     CImportNumericTypeMode numeric_type_mode;
@@ -1405,6 +1439,7 @@ ST_retcode cimport_main(const char *args) {
         .filename = NULL,
         .delimiter = ',',
         .has_header = true,
+        .header_row = 1,      /* Default: first row is header */
         .verbose = false,
         .bindquotes = CIMPORT_BINDQUOTES_LOOSE,
         .numeric_type_mode = CIMPORT_NUMTYPE_AUTO,
@@ -1426,6 +1461,10 @@ ST_retcode cimport_main(const char *args) {
         } else {
             if (strcmp(token, "noheader") == 0) {
                 opts.has_header = false;
+                opts.header_row = 0;
+            } else if (strncmp(token, "headerrow=", 10) == 0) {
+                opts.header_row = atoi(token + 10);
+                opts.has_header = (opts.header_row > 0);
             } else if (strcmp(token, "verbose") == 0) {
                 opts.verbose = true;
             } else if (strcmp(token, "tab") == 0) {
@@ -1465,12 +1504,15 @@ ST_retcode cimport_main(const char *args) {
         return 198;
     }
 
+    /* Calculate skip_rows from header_row (header_row=1 means no skip, header_row=3 means skip 2) */
+    int skip_rows = (opts.header_row > 1) ? (opts.header_row - 1) : 0;
+
     if (strcmp(opts.mode, "scan") == 0) {
-        return cimport_do_scan(opts.filename, opts.delimiter, opts.has_header, opts.verbose, opts.bindquotes,
+        return cimport_do_scan(opts.filename, opts.delimiter, opts.has_header, skip_rows, opts.verbose, opts.bindquotes,
                                 opts.numeric_type_mode, opts.decimal_separator, opts.group_separator,
                                 opts.emptylines_mode, opts.max_quoted_rows, opts.encoding);
     } else if (strcmp(opts.mode, "load") == 0) {
-        return cimport_do_load(opts.filename, opts.delimiter, opts.has_header, opts.verbose, opts.bindquotes,
+        return cimport_do_load(opts.filename, opts.delimiter, opts.has_header, skip_rows, opts.verbose, opts.bindquotes,
                                 opts.numeric_type_mode, opts.decimal_separator, opts.group_separator,
                                 opts.emptylines_mode, opts.max_quoted_rows, opts.encoding);
     } else {

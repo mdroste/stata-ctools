@@ -91,20 +91,24 @@ void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n)
     /* Get persistent thread pool */
     ctools_persistent_pool *pool = ctools_get_global_pool();
 
-    /* Allocate auxiliary buffer and thread resources (overflow-safe) */
+    /* Allocate auxiliary buffer and thread resources (overflow-safe)
+     * Use cache-line aligned allocation for histogram arrays to prevent false sharing */
     cmerge_order_pair_t *aux = (cmerge_order_pair_t *)ctools_safe_malloc2(n, sizeof(cmerge_order_pair_t));
     cmerge_hist_args_t *hist_args = (cmerge_hist_args_t *)ctools_safe_malloc2(num_threads, sizeof(cmerge_hist_args_t));
     cmerge_scatter_args_t *scatter_args = (cmerge_scatter_args_t *)ctools_safe_malloc2(num_threads, sizeof(cmerge_scatter_args_t));
-    size_t *all_counts = (size_t *)ctools_safe_malloc3(num_threads, 256, sizeof(size_t));
-    size_t *all_offsets = (size_t *)ctools_safe_malloc3(num_threads, 256, sizeof(size_t));
+    /* Cache-line align histogram arrays to prevent false sharing between threads
+     * Total count = num_threads * 256 buckets */
+    size_t hist_count = (size_t)num_threads * 256;
+    size_t *all_counts = (size_t *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, hist_count, sizeof(size_t));
+    size_t *all_offsets = (size_t *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, hist_count, sizeof(size_t));
 
     if (!aux || !hist_args || !scatter_args || !all_counts || !all_offsets) {
         /* Fallback to qsort on allocation failure */
         free(aux);
         free(hist_args);
         free(scatter_args);
-        free(all_counts);
-        free(all_offsets);
+        ctools_aligned_free(all_counts);
+        ctools_aligned_free(all_offsets);
         qsort(pairs, n, sizeof(cmerge_order_pair_t), cmerge_compare_order_pairs);
         return;
     }
@@ -207,6 +211,6 @@ void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n)
     free(aux);
     free(hist_args);
     free(scatter_args);
-    free(all_counts);
-    free(all_offsets);
+    ctools_aligned_free(all_counts);
+    ctools_aligned_free(all_offsets);
 }

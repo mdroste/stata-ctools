@@ -9,6 +9,17 @@
 #include "cmerge_keys.h"
 #include "cmerge_group_search.h"
 
+/* Prefetch hint macro for read-ahead optimization */
+#if defined(__GNUC__) || defined(__clang__)
+    /* Prefetch for read (0), low temporal locality (0) - data won't be reused soon */
+    #define CMERGE_PREFETCH(addr) __builtin_prefetch((addr), 0, 0)
+    /* Prefetch distance: how many rows ahead to prefetch */
+    #define CMERGE_PREFETCH_DISTANCE 32
+#else
+    #define CMERGE_PREFETCH(addr) ((void)0)
+    #define CMERGE_PREFETCH_DISTANCE 0
+#endif
+
 int64_t cmerge_sorted_join(
     stata_data *master_keys, stata_data *using_keys,
     int nkeys, cmerge_type_t merge_type,
@@ -68,6 +79,20 @@ int64_t cmerge_sorted_join(
         } while (0)
 
     while (m_idx < m_nobs || u_idx < u_nobs) {
+        /* OPTIMIZATION: Prefetch ahead for better cache utilization */
+        #if CMERGE_PREFETCH_DISTANCE > 0
+        if (all_numeric && nkeys > 0) {
+            /* Prefetch master key data ahead */
+            if (m_idx + CMERGE_PREFETCH_DISTANCE < m_nobs) {
+                CMERGE_PREFETCH(&master_keys->vars[0].data.dbl[m_idx + CMERGE_PREFETCH_DISTANCE]);
+            }
+            /* Prefetch using key data ahead */
+            if (u_idx + CMERGE_PREFETCH_DISTANCE < u_nobs) {
+                CMERGE_PREFETCH(&using_keys->vars[0].data.dbl[u_idx + CMERGE_PREFETCH_DISTANCE]);
+            }
+        }
+        #endif
+
         if (m_idx >= m_nobs) {
             /* Master exhausted - bulk add remaining using rows */
             size_t remaining = u_nobs - u_idx;

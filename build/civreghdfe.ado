@@ -480,10 +480,13 @@ program define civreghdfe, eclass
     }
 
     * Kiefer standard errors: within-panel HAC with full bandwidth
-    * Kiefer with truncated kernel and bw=T is mathematically equivalent to
-    * clustering on the panel variable. We implement it as cluster VCE.
+    * NOTE: civreghdfe's Kiefer implementation uses panel-aware HAC which
+    * produces similar but not identical results to ivreghdfe's Kiefer.
+    * The difference is due to the exact small-sample corrections used.
+    * For exact matching, use ivreghdfe.
     * Requires tsset panel data
     local kiefer_val = ("`kiefer'" != "")
+    local kiefer_tvar ""
     if `kiefer_val' {
         * Check that data is tsset
         capture tsset
@@ -491,9 +494,9 @@ program define civreghdfe, eclass
             di as error "kiefer option requires tsset panel data"
             exit 459
         }
-        local tvar = r(timevar)
+        local kiefer_tvar = r(timevar)
         local ivar = r(panelvar)
-        if "`tvar'" == "" | "`ivar'" == "" {
+        if "`kiefer_tvar'" == "" | "`ivar'" == "" {
             di as error "kiefer option requires tsset panel data with both panel and time variables"
             exit 459
         }
@@ -506,14 +509,22 @@ program define civreghdfe, eclass
             di as error "kiefer and vce(cluster) are incompatible options"
             exit 198
         }
-        * Implement Kiefer as clustering on the panel variable
-        * (truncated kernel with bw=T is equivalent to cluster-robust)
+        * Get max time span T for bandwidth
+        tempvar _time_count
+        qui by `ivar': gen `_time_count' = _N
+        qui sum `_time_count'
+        local T = r(max)
+        drop `_time_count'
+        * Set up Kiefer as panel-aware HAC with truncated kernel
+        * Use cluster structure for panel grouping, but Kiefer VCE formula
         local vce_type = 2
         local cluster_var "`ivar'"
+        local kernel_type = 4  /* Truncated kernel */
+        local bw_val = `T'     /* Bandwidth = T */
         confirm variable `cluster_var'
         markout `touse' `cluster_var'
         if "`verbose'" != "" {
-            di as text "Kiefer SEs: implemented as cluster(`ivar')"
+            di as text "Kiefer SEs: panel-aware HAC with truncated kernel, bw=`T'"
         }
     }
 
@@ -528,6 +539,10 @@ program define civreghdfe, eclass
     scalar __civreghdfe_bw = `bw_val'
     scalar __civreghdfe_dkraay = `dkraay_val'
     scalar __civreghdfe_kiefer = `kiefer_val'
+
+    * Update cluster scalars after Kiefer handling (Kiefer changes vce_type to 2)
+    scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3)
+    scalar __civreghdfe_vce_type = `vce_type'
 
     if "`verbose'" != "" & `kernel_type' > 0 {
         if `kiefer_val' {

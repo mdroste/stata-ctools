@@ -360,16 +360,9 @@ program define cimport, rclass
         di ""
     }
 
-    * For headerrow > 1, we import without header and post-process
-    local plugin_noheader = `noheader'
-    local rename_from_row = 0
-    if `headerrow' > 1 {
-        local plugin_noheader = 1
-        local rename_from_row = `headerrow'
-    }
-
     * Build plugin arguments
-    local opt_noheader = cond(`plugin_noheader' == 1, "noheader", "")
+    local opt_noheader = cond(`noheader' == 1, "noheader", "")
+    local opt_headerrow = cond(`headerrow' > 1, "headerrow=`headerrow'", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
     local opt_stripquotes = cond("`stripquotes'" != "", "stripquotes", "")
     local opt_case = "case=`case'"
@@ -413,7 +406,7 @@ program define cimport, rclass
     }
 
     capture noisily plugin call ctools_plugin, ///
-        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
+        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -557,7 +550,7 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
+        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local load_rc = _rc
     if `load_rc' {
@@ -566,40 +559,6 @@ program define cimport, rclass
     }
 
     timer off 13
-
-    * Handle varnames(N) where N > 1: rename variables from row N and drop rows 1-N
-    if `rename_from_row' > 0 & _N >= `rename_from_row' {
-        * Get variable names from the header row
-        local vnum = 1
-        foreach var of varlist * {
-            local newname = `var'[`rename_from_row']
-            * Clean the name to be a valid Stata variable name
-            local newname = ustrregexra("`newname'", "[^a-zA-Z0-9_]", "_")
-            if regexm("`newname'", "^[0-9]") {
-                local newname = "_`newname'"
-            }
-            if "`newname'" == "" | "`newname'" == "_" {
-                local newname = "v`vnum'"
-            }
-            * Truncate to 32 chars
-            local newname = substr("`newname'", 1, 32)
-            * Apply case transformation
-            if "`case'" == "lower" {
-                local newname = lower("`newname'")
-            }
-            else if "`case'" == "upper" {
-                local newname = upper("`newname'")
-            }
-            capture rename `var' `newname'
-            local vnum = `vnum' + 1
-        }
-        * Drop the pre-header and header rows
-        quietly drop in 1/`rename_from_row'
-
-        * Re-infer types: destring columns that should be numeric
-        * This is needed because type inference was done on all rows including pre-header
-        quietly destring *, replace ignore(",")
-    }
 
     * Apply rowrange filtering (post-import)
     * If rowrange only selected header row(s), drop all data

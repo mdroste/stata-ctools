@@ -818,17 +818,33 @@ static ST_retcode cmerge_execute(const char *args)
         t_reorder = ctools_timer_ms() - t_reorder_start;
     }
 
-    /* Count merge results */
+    /* Count merge results and detect identity permutation */
     size_t n_master_only = 0, n_using_only = 0, n_matched = 0;
+    int is_identity_permutation = 1;  /* Assume identity until proven otherwise */
+
     for (size_t i = 0; i < output_nobs; i++) {
         int8_t m = output_specs[i].merge_result;
         n_master_only += (m == 1);
         n_using_only += (m == 2);
         n_matched += (m == 3);
+
+        /* Check if this row is in identity position:
+         * - Must be from master (not using-only)
+         * - Master sorted row must equal output position
+         * - Original row (before sort) must also equal output position */
+        if (is_identity_permutation) {
+            int64_t sorted_row = output_specs[i].master_sorted_row;
+            if (sorted_row < 0 || sorted_row != (int64_t)i) {
+                is_identity_permutation = 0;
+            } else if (master_orig_rows[i] != (int64_t)i) {
+                is_identity_permutation = 0;
+            }
+        }
     }
 
     /* ===================================================================
      * Step 6: Create output data structure with permuted data
+     *         (or skip permutation if identity)
      * =================================================================== */
 
     t_start = ctools_timer_ms();
@@ -957,9 +973,10 @@ static ST_retcode cmerge_execute(const char *args)
     /* Track allocation failures in parallel loop (must be int for OpenMP atomic) */
     int alloc_failed = 0;
 
-    /* Apply permutation to each variable (can be parallelized with OpenMP) */
+    /* Apply permutation to each variable (can be parallelized with OpenMP)
+     * Use static scheduling for better cache locality since work is evenly distributed */
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic)
+    #pragma omp parallel for schedule(static)
     #endif
     for (size_t vi = 0; vi < n_output_vars; vi++) {
         /* Skip remaining work if allocation already failed - use atomic read */
@@ -996,21 +1013,26 @@ static ST_retcode cmerge_execute(const char *args)
                 continue;
             }
 
-            int is_key = output_var_is_key[vi];
-            int key_idx = output_var_key_idx[vi];
-            double *using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
-                                      g_using_cache.keys.vars[key_idx].data.dbl : NULL;
+            /* OPTIMIZATION: Identity permutation fast path - use memcpy */
+            if (is_identity_permutation) {
+                memcpy(dst_var->data.dbl, src_var->data.dbl, output_nobs * sizeof(double));
+            } else {
+                int is_key = output_var_is_key[vi];
+                int key_idx = output_var_key_idx[vi];
+                double *using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
+                                          g_using_cache.keys.vars[key_idx].data.dbl : NULL;
 
-            /* Use master_sorted_row to index into sorted master_data */
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t sorted_row = output_specs[i].master_sorted_row;
-                if (sorted_row >= 0) {
-                    dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
-                } else if (using_key_data != NULL) {
-                    int64_t using_row = output_specs[i].using_sorted_row;
-                    dst_var->data.dbl[i] = (using_row >= 0) ? using_key_data[using_row] : SV_missval;
-                } else {
-                    dst_var->data.dbl[i] = SV_missval;
+                /* Use master_sorted_row to index into sorted master_data */
+                for (size_t i = 0; i < output_nobs; i++) {
+                    int64_t sorted_row = output_specs[i].master_sorted_row;
+                    if (sorted_row >= 0) {
+                        dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
+                    } else if (using_key_data != NULL) {
+                        int64_t using_row = output_specs[i].using_sorted_row;
+                        dst_var->data.dbl[i] = (using_row >= 0) ? using_key_data[using_row] : SV_missval;
+                    } else {
+                        dst_var->data.dbl[i] = SV_missval;
+                    }
                 }
             }
         } else {
@@ -1027,25 +1049,36 @@ static ST_retcode cmerge_execute(const char *args)
             /* Mark this variable as using the shared arena */
             dst_var->_arena = str_arena;
 
-            int is_key = output_var_is_key[vi];
-            int key_idx = output_var_key_idx[vi];
-            char **using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
-                                     g_using_cache.keys.vars[key_idx].data.str : NULL;
-
-            /* Use master_sorted_row to index into sorted master_data */
-            for (size_t i = 0; i < output_nobs; i++) {
-                int64_t sorted_row = output_specs[i].master_sorted_row;
-                if (sorted_row >= 0 && src_var->data.str[sorted_row]) {
-                    dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[sorted_row]);
-                } else if (using_key_data != NULL) {
-                    int64_t using_row = output_specs[i].using_sorted_row;
-                    if (using_row >= 0 && using_key_data[using_row]) {
-                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, using_key_data[using_row]);
+            /* OPTIMIZATION: Identity permutation fast path - direct pointer copy */
+            if (is_identity_permutation) {
+                for (size_t i = 0; i < output_nobs; i++) {
+                    if (src_var->data.str[i]) {
+                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[i]);
                     } else {
                         dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
                     }
-                } else {
-                    dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                }
+            } else {
+                int is_key = output_var_is_key[vi];
+                int key_idx = output_var_key_idx[vi];
+                char **using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
+                                         g_using_cache.keys.vars[key_idx].data.str : NULL;
+
+                /* Use master_sorted_row to index into sorted master_data */
+                for (size_t i = 0; i < output_nobs; i++) {
+                    int64_t sorted_row = output_specs[i].master_sorted_row;
+                    if (sorted_row >= 0 && src_var->data.str[sorted_row]) {
+                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[sorted_row]);
+                    } else if (using_key_data != NULL) {
+                        int64_t using_row = output_specs[i].using_sorted_row;
+                        if (using_row >= 0 && using_key_data[using_row]) {
+                            dst_var->data.str[i] = cmerge_arena_strdup(str_arena, using_key_data[using_row]);
+                        } else {
+                            dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                        }
+                    } else {
+                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                    }
                 }
             }
         }
@@ -1145,21 +1178,53 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* ===================================================================
-     * Step 9: Write keepusing variables from cache (sequential)
+     * Step 9: Write keepusing variables from cache (parallel)
      * =================================================================== */
 
     if (n_keepusing > 0) {
-        for (int kv = 0; kv < n_keepusing; kv++) {
-            cmerge_keepusing_write_args_t ku_args;
-            ku_args.keepusing_idx = kv;
-            ku_args.dest_idx = (ST_int)keepusing_placeholder_indices[kv];
-            ku_args.is_shared = shared_flags[kv];
-            ku_args.update_mode = update_mode;
-            ku_args.replace_mode = replace_mode;
-            ku_args.specs = output_specs;
-            ku_args.output_nobs = output_nobs;
-            ku_args.success = 0;
-            cmerge_write_keepusing_var_thread(&ku_args);
+        /* Allocate array of args for parallel submission */
+        cmerge_keepusing_write_args_t *ku_args_array = malloc(n_keepusing * sizeof(cmerge_keepusing_write_args_t));
+        if (!ku_args_array) {
+            /* Fallback to sequential on allocation failure */
+            for (int kv = 0; kv < n_keepusing; kv++) {
+                cmerge_keepusing_write_args_t ku_args;
+                ku_args.keepusing_idx = kv;
+                ku_args.dest_idx = (ST_int)keepusing_placeholder_indices[kv];
+                ku_args.is_shared = shared_flags[kv];
+                ku_args.update_mode = update_mode;
+                ku_args.replace_mode = replace_mode;
+                ku_args.specs = output_specs;
+                ku_args.output_nobs = output_nobs;
+                ku_args.success = 0;
+                cmerge_write_keepusing_var_thread(&ku_args);
+            }
+        } else {
+            /* Prepare all args */
+            for (int kv = 0; kv < n_keepusing; kv++) {
+                ku_args_array[kv].keepusing_idx = kv;
+                ku_args_array[kv].dest_idx = (ST_int)keepusing_placeholder_indices[kv];
+                ku_args_array[kv].is_shared = shared_flags[kv];
+                ku_args_array[kv].update_mode = update_mode;
+                ku_args_array[kv].replace_mode = replace_mode;
+                ku_args_array[kv].specs = output_specs;
+                ku_args_array[kv].output_nobs = output_nobs;
+                ku_args_array[kv].success = 0;
+            }
+
+            /* Submit all keepusing writes to thread pool */
+            ctools_persistent_pool *pool = ctools_get_global_pool();
+            if (pool != NULL && n_keepusing >= 2) {
+                ctools_persistent_pool_submit_batch(pool, cmerge_write_keepusing_var_thread,
+                                                     ku_args_array, n_keepusing,
+                                                     sizeof(cmerge_keepusing_write_args_t));
+                ctools_persistent_pool_wait(pool);
+            } else {
+                /* Sequential fallback if no pool or only one variable */
+                for (int kv = 0; kv < n_keepusing; kv++) {
+                    cmerge_write_keepusing_var_thread(&ku_args_array[kv]);
+                }
+            }
+            free(ku_args_array);
         }
     }
 

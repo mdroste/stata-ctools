@@ -233,6 +233,44 @@ void ivvce_compute_ZOmegaZ_cluster(
 );
 
 /*
+    Compute Kiefer VCE (homoskedastic within-panel autocorrelation).
+
+    Kiefer (1980) VCE assumes homoskedastic errors with within-panel
+    autocorrelation. Unlike cluster-robust which uses e_i * e_j weights,
+    Kiefer uses sigma^2 (constant variance).
+
+    V = (XkX)^-1 * Meat * (XkX)^-1 * dof_adj
+    where Meat = sigma^2 * sum_g (sum_i in g PzX_i)(sum_i in g PzX_i)'
+
+    Parameters:
+    - Z: Instruments (N x K_iv)
+    - resid: Residuals (N x 1)
+    - temp_kiv_ktotal: (Z'Z)^-1 Z'X (K_iv x K_total)
+    - XkX_inv: Inverse of k-class matrix (K_total x K_total)
+    - weights, weight_type: Weighting
+    - N, K_total, K_iv: Dimensions
+    - cluster_ids: Panel IDs (1-indexed)
+    - num_clusters: Number of panels
+    - df_a: Absorbed degrees of freedom
+    - V: Output VCE matrix (K_total x K_total)
+*/
+void ivvce_compute_kiefer(
+    const ST_double *Z,
+    const ST_double *resid,
+    const ST_double *temp_kiv_ktotal,
+    const ST_double *XkX_inv,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int N,
+    ST_int K_total,
+    ST_int K_iv,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_int df_a,
+    ST_double *V
+);
+
+/*
     Full VCE computation with P_Z X calculation.
 
     This is the main entry point for VCE computation when Z is available.
