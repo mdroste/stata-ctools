@@ -140,6 +140,7 @@ static inline void stream_8_doubles_arm(double *dst, const double *src)
 #endif
 
 /* Unified interface for non-temporal 8-double store */
+__attribute__((unused))
 static inline void stream_store_8_doubles(double *dst, const double *src)
 {
 #if defined(__x86_64__) || defined(_M_X64)
@@ -232,6 +233,7 @@ static int build_inverse_permutation(
 */
 static int _stream_prefetch_dist = 0;
 
+__attribute__((unused))
 static inline int get_stream_prefetch_dist(void)
 {
     if (_stream_prefetch_dist == 0) {

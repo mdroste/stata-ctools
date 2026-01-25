@@ -400,9 +400,24 @@ program define cimport, rclass
         di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
     }
 
-    if `nobs' == 0 {
-        di as error "No data rows found in CSV file"
-        exit 2
+    * Handle empty file or file with header only - match Stata's behavior (rc=0, N=0, k=0)
+    if `nvar' == 0 | `nobs' == 0 {
+        timer off 11
+        timer off 99
+        quietly timer list 99
+        local elapsed = r(t99)
+        if `nobs' == 0 & `nvar' == 0 {
+            di as text "(file is empty)"
+        }
+        else if `nobs' == 0 {
+            di as text "(no data rows found)"
+        }
+        timer clear
+        return scalar N = 0
+        return scalar k = 0
+        return scalar time = `elapsed'
+        return local filename `"`using'"'
+        exit 0
     }
     timer off 11
 

@@ -616,6 +616,20 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     t_end = ctools_timer_ms();
     ctx->time_mmap = t_end - t_start;
 
+    /* Handle empty file - return valid context with 0 columns and 0 rows */
+    if (ctx->file_size == 0) {
+        ctx->num_columns = 0;
+        ctx->columns = NULL;
+        ctx->total_rows = 0;
+        ctx->row_offsets = NULL;
+        ctx->num_chunks = 0;
+        ctx->chunks = NULL;
+        if (verbose) {
+            cimport_display_msg("(empty file - creating empty dataset)\n");
+        }
+        return ctx;
+    }
+
     /* Encoding detection and conversion */
     t_start = ctools_timer_ms();
     {
@@ -989,6 +1003,14 @@ static void *cimport_build_cache_worker(void *arg) {
 
 static void cimport_build_column_cache(CImportContext *ctx) {
     if (ctx->cache_ready) return;
+
+    /* Handle empty file case - no columns or rows to cache */
+    if (ctx->num_columns == 0 || ctx->total_rows == 0) {
+        ctx->col_cache = NULL;
+        ctx->cache_ready = true;
+        ctx->time_cache = 0;
+        return;
+    }
 
     double t_start = ctools_timer_ms();
 

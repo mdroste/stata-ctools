@@ -329,6 +329,7 @@ static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_
     x86 streaming gather: uses non-temporal stores to bypass cache.
     For very large datasets where new_data won't fit in cache.
 */
+__attribute__((unused))
 static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data,
                                                 const double * CTOOLS_RESTRICT old_data,
                                                 const perm_idx_t * CTOOLS_RESTRICT perm,
@@ -369,6 +370,7 @@ static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data
     STNP is a hint that the data won't be accessed again soon, allowing the
     memory system to optimize for write-through behavior.
 */
+__attribute__((unused))
 static void apply_perm_gather_double_streaming(double * CTOOLS_RESTRICT new_data,
                                                 const double * CTOOLS_RESTRICT old_data,
                                                 const perm_idx_t * CTOOLS_RESTRICT perm,

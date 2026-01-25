@@ -35,9 +35,12 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
 
     ctx->file_size = (size_t)file_size.QuadPart;
     if (ctx->file_size == 0) {
+        /* Empty file - set file_data to NULL and return success.
+         * The caller should handle this case by creating an empty dataset. */
         CloseHandle(ctx->file_handle);
-        strcpy(ctx->error_message, "File is empty");
-        return -1;
+        ctx->file_handle = NULL;
+        ctx->file_data = NULL;
+        return 0;
     }
 
     /* Create file mapping */
@@ -106,9 +109,11 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
 
     ctx->file_size = st.st_size;
     if (ctx->file_size == 0) {
+        /* Empty file - set file_data to NULL and return success.
+         * The caller should handle this case by creating an empty dataset. */
         close(fd);
-        strcpy(ctx->error_message, "File is empty");
-        return -1;
+        ctx->file_data = NULL;
+        return 0;
     }
 
     ctx->file_data = mmap(NULL, ctx->file_size, PROT_READ, MAP_PRIVATE, fd, 0);

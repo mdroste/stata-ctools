@@ -398,7 +398,6 @@ ST_retcode cwinsor_main(const char *args)
     double load_start = ctools_timer_seconds();
 
     /* Allocate all data arrays */
-    size_t total_cols = nvars + nby;
     var_data = (double **)malloc(nvars * sizeof(double *));
     if (!var_data) {
         free(var_indices);

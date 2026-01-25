@@ -138,9 +138,9 @@ CImportEncodingDetection cimport_detect_encoding(const char *data, size_t size)
     /* No BOM - use heuristics */
 
     /* Check for null bytes (indicates UTF-16 without BOM) */
-    int null_count = 0;
-    int null_even = 0;
-    int null_odd = 0;
+    size_t null_count = 0;
+    size_t null_even = 0;
+    size_t null_odd = 0;
     size_t check_size = size > 4096 ? 4096 : size;
 
     for (size_t i = 0; i < check_size; i++) {

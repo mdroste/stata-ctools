@@ -145,24 +145,30 @@ void civreghdfe_compute_underid_test(
 
         /* Kleibergen-Paap for robust/cluster VCE */
         if (vce_type != 0) {
-            /* Extract first-stage coefficients: pi = temp1[:, K_exog] */
-            const ST_double *pi = temp1 + K_exog * K_iv;
+            /* Extract first-stage coefficients on EXCLUDED instruments only
+               The pi vector is K_iv x 1, but we only need the last L coefficients
+               (those on excluded instruments, not exogenous variables) */
+            const ST_double *pi_full = temp1 + K_exog * K_iv;
+            const ST_double *pi_excl = pi_full + K_exog;  /* Skip exogenous coefficients */
 
-            /* Compute first-stage residuals: v = X_endog - Z * pi */
+            /* Compute first-stage residuals using FULL pi: v = X_endog - Z * pi */
             ST_double *v = (ST_double *)calloc(N, sizeof(ST_double));
             if (!v) return;
 
             for (i = 0; i < N; i++) {
                 ST_double pred = 0.0;
                 for (k = 0; k < K_iv; k++) {
-                    pred += Z[k * N + i] * pi[k];
+                    pred += Z[k * N + i] * pi_full[k];
                 }
                 v[i] = X_endog[i] - pred;
             }
 
-            /* Compute shat0 for Wald statistic */
-            ST_double *shat0 = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-            ST_double *shat0_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+            /* Compute shat0 for Wald statistic - ONLY for excluded instruments (L x L)
+               The Z matrix is organized as [exogenous, excluded], we need the last L columns */
+            const ST_double *Z_excl = Z + K_exog * N;  /* Pointer to excluded instruments */
+
+            ST_double *shat0 = (ST_double *)calloc(L * L, sizeof(ST_double));
+            ST_double *shat0_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
             if (!shat0 || !shat0_inv) {
                 free(v); free(shat0); free(shat0_inv);
                 return;
@@ -170,7 +176,7 @@ void civreghdfe_compute_underid_test(
 
             if (vce_type == 2 && cluster_ids && num_clusters > 0) {
                 /* Cluster-robust with small-sample correction G/(G-1) */
-                ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                 if (!cluster_Zv) {
                     free(v); free(shat0); free(shat0_inv);
                     return;
@@ -180,16 +186,16 @@ void civreghdfe_compute_underid_test(
                     ST_int c = cluster_ids[i] - 1;
                     if (c < 0 || c >= num_clusters) continue;
                     ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                    for (k = 0; k < K_iv; k++) {
-                        cluster_Zv[c * K_iv + k] += w * Z[k * N + i] * v[i];
+                    for (k = 0; k < L; k++) {
+                        cluster_Zv[c * L + k] += w * Z_excl[k * N + i] * v[i];
                     }
                 }
 
                 for (ST_int c = 0; c < num_clusters; c++) {
-                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                        for (ST_int kj = 0; kj < K_iv; kj++) {
-                            shat0[kj * K_iv + ki] +=
-                                cluster_Zv[c * K_iv + ki] * cluster_Zv[c * K_iv + kj];
+                    for (ST_int ki = 0; ki < L; ki++) {
+                        for (ST_int kj = 0; kj < L; kj++) {
+                            shat0[kj * L + ki] +=
+                                cluster_Zv[c * L + ki] * cluster_Zv[c * L + kj];
                         }
                     }
                 }
@@ -198,7 +204,7 @@ void civreghdfe_compute_underid_test(
                 /* Apply small-sample correction: G/(G-1) */
                 if (num_clusters > 1) {
                     ST_double cluster_adj = (ST_double)num_clusters / (ST_double)(num_clusters - 1);
-                    for (ST_int ki = 0; ki < K_iv * K_iv; ki++) {
+                    for (ST_int ki = 0; ki < L * L; ki++) {
                         shat0[ki] *= cluster_adj;
                     }
                 }
@@ -207,19 +213,19 @@ void civreghdfe_compute_underid_test(
                 for (i = 0; i < N; i++) {
                     ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
                     ST_double v2w = w * v[i] * v[i];
-                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                        for (ST_int kj = 0; kj < K_iv; kj++) {
-                            shat0[kj * K_iv + ki] += v2w * Z[ki * N + i] * Z[kj * N + i];
+                    for (ST_int ki = 0; ki < L; ki++) {
+                        for (ST_int kj = 0; kj < L; kj++) {
+                            shat0[kj * L + ki] += v2w * Z_excl[ki * N + i] * Z_excl[kj * N + i];
                         }
                     }
                 }
             }
 
-            /* Invert shat0 */
-            memcpy(shat0_inv, shat0, K_iv * K_iv * sizeof(ST_double));
-            ST_int shat_ok = (cholesky(shat0_inv, K_iv) == 0);
+            /* Invert shat0 (L x L matrix) */
+            memcpy(shat0_inv, shat0, L * L * sizeof(ST_double));
+            ST_int shat_ok = (cholesky(shat0_inv, L) == 0);
             if (shat_ok) {
-                shat_ok = (invert_from_cholesky(shat0_inv, K_iv, shat0_inv) == 0);
+                shat_ok = (invert_from_cholesky(shat0_inv, L, shat0_inv) == 0);
             }
 
             if (shat_ok) {
@@ -228,69 +234,98 @@ void civreghdfe_compute_underid_test(
                 ST_int df_adjust = N - K_iv - df_a - 1;
                 if (df_adjust <= 0) df_adjust = 1;
 
-                /* Compute ZtX_e = Z'X_endog (moment condition) */
-                ST_double *ZtX_e = (ST_double *)calloc(K_iv, sizeof(ST_double));
-                if (ZtX_e) {
-                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                        ST_double sum = 0.0;
-                        for (ST_int kj = 0; kj < K_iv; kj++) {
-                            sum += ZtZ[kj * K_iv + ki] * pi[kj];
-                        }
-                        ZtX_e[ki] = sum;
-                    }
-
-                    /* Compute shat0_inv * ZtX_e */
-                    ST_double *shat0_inv_ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
-                    if (shat0_inv_ZtX) {
-                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                /* Compute Z_excl'Z_excl (L x L matrix) */
+                ST_double *ZtZ_excl = (ST_double *)calloc(L * L, sizeof(ST_double));
+                if (ZtZ_excl) {
+                    for (ST_int ki = 0; ki < L; ki++) {
+                        for (ST_int kj = 0; kj < L; kj++) {
                             ST_double sum = 0.0;
-                            for (ST_int kj = 0; kj < K_iv; kj++) {
-                                sum += shat0_inv[kj * K_iv + ki] * ZtX_e[kj];
+                            for (i = 0; i < N; i++) {
+                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                sum += w * Z_excl[ki * N + i] * Z_excl[kj * N + i];
                             }
-                            shat0_inv_ZtX[ki] = sum;
+                            ZtZ_excl[kj * L + ki] = sum;
                         }
-
-                        /* Compute ZtZ * shat0_inv * ZtX */
-                        ST_double *ZtZ_shat0_inv_ZtX = (ST_double *)calloc(K_iv, sizeof(ST_double));
-                        if (ZtZ_shat0_inv_ZtX) {
-                            for (ST_int ki = 0; ki < K_iv; ki++) {
-                                ST_double sum = 0.0;
-                                for (ST_int kj = 0; kj < K_iv; kj++) {
-                                    sum += ZtZ[kj * K_iv + ki] * shat0_inv_ZtX[kj];
-                                }
-                                ZtZ_shat0_inv_ZtX[ki] = sum;
-                            }
-
-                            /* KP Wald = pi' * ZtZ * shat0_inv * ZtZ * pi */
-                            ST_double kp_wald_raw = 0.0;
-                            for (ST_int ki = 0; ki < K_iv; ki++) {
-                                kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtX[ki];
-                            }
-
-                            /* KP rk Wald F formula from ivreghdfe:
-                               - Non-cluster: chi2 / N * (N - K_iv - sdofminus) / L
-                               - Cluster: chi2 / (N-1) * (N - K_iv - sdofminus) * (G-1)/G / L
-                               Note: shat0 has G/(G-1) for cluster, so shat0_inv has (G-1)/G.
-                               df_adjust = N - K_iv - df_a - 1 accounts for partialled-out constant.
-                               For non-cluster robust, ranktest normalizes shat by (N-1) not N,
-                               so we need to multiply by N/(N-1). */
-                            if (vce_type == 2 && num_clusters > 1) {
-                                /* Cluster formula - (G-1)/G already in kp_wald_raw via shat0 */
-                                ST_double kp_wald = kp_wald_raw / (ST_double)(N - 1);
-                                kp_wald *= (ST_double)df_adjust;
-                                *kp_f = kp_wald / (ST_double)L;
-                            } else {
-                                /* Non-cluster robust: ranktest uses N/(N-1) normalization */
-                                ST_double kp_wald = kp_wald_raw * (ST_double)N / (ST_double)(N - 1);
-                                kp_wald = kp_wald * (ST_double)df_adjust / (ST_double)N;
-                                *kp_f = kp_wald / (ST_double)L;
-                            }
-
-                            free(ZtZ_shat0_inv_ZtX);
-                        }
-                        free(shat0_inv_ZtX);
                     }
-                    free(ZtX_e);
+
+                    /* Compute ZtZ_excl * pi_excl */
+                    ST_double *ZtX_e = (ST_double *)calloc(L, sizeof(ST_double));
+                    if (ZtX_e) {
+                        for (ST_int ki = 0; ki < L; ki++) {
+                            ST_double sum = 0.0;
+                            for (ST_int kj = 0; kj < L; kj++) {
+                                sum += ZtZ_excl[kj * L + ki] * pi_excl[kj];
+                            }
+                            ZtX_e[ki] = sum;
+                        }
+
+                        /* Compute shat0_inv * ZtX_e */
+                        ST_double *shat0_inv_ZtX = (ST_double *)calloc(L, sizeof(ST_double));
+                        if (shat0_inv_ZtX) {
+                            for (ST_int ki = 0; ki < L; ki++) {
+                                ST_double sum = 0.0;
+                                for (ST_int kj = 0; kj < L; kj++) {
+                                    sum += shat0_inv[kj * L + ki] * ZtX_e[kj];
+                                }
+                                shat0_inv_ZtX[ki] = sum;
+                            }
+
+                            /* Compute ZtZ_excl * shat0_inv * ZtX */
+                            ST_double *ZtZ_shat0_inv_ZtX = (ST_double *)calloc(L, sizeof(ST_double));
+                            if (ZtZ_shat0_inv_ZtX) {
+                                for (ST_int ki = 0; ki < L; ki++) {
+                                    ST_double sum = 0.0;
+                                    for (ST_int kj = 0; kj < L; kj++) {
+                                        sum += ZtZ_excl[kj * L + ki] * shat0_inv_ZtX[kj];
+                                    }
+                                    ZtZ_shat0_inv_ZtX[ki] = sum;
+                                }
+
+                                /* KP Wald = pi_excl' * ZtZ_excl * shat0_inv * ZtZ_excl * pi_excl */
+                                ST_double kp_wald_raw = 0.0;
+                                for (ST_int ki = 0; ki < L; ki++) {
+                                    kp_wald_raw += pi_excl[ki] * ZtZ_shat0_inv_ZtX[ki];
+                                }
+
+                            /* KP rk Wald F formula from ivreghdfe/ranktest:
+
+                               ranktest computes: Wald = pihat' * Qzz * shat0_inv * Qzz * pihat
+                               where Qzz = ZtZ/N (moment matrix normalized by N)
+
+                               Then chi2 = Wald * N, and:
+                               kp_f = chi2 / N * (N - K_iv - df_a) / L
+                                    = Wald * (N - K_iv - df_a) / L
+
+                               My kp_wald_raw = pihat' * ZtZ * shat0_inv * ZtZ * pihat
+                               So Wald = kp_wald_raw / N^2
+
+                               Therefore:
+                               kp_f = (kp_wald_raw / N^2) * (N - K_iv - df_a) / L
+
+                               For cluster, shat0 already has G/(G-1) correction built in.
+                               For cluster case, ivreghdfe uses (N-1) in denominator and (G-1)/G factor,
+                               but the (G-1)/G is already in shat0_inv, so we just need (N-1) adjustment. */
+                            ST_int dof = N - K_iv - df_a;
+                            if (dof <= 0) dof = 1;
+
+                            if (vce_type == 2 && num_clusters > 1) {
+                                /* Cluster formula: chi2/(N-1) * (N-K_iv-df_a) * (G-1)/G / L
+                                   The (G-1)/G is already in shat0_inv via shat0's G/(G-1) factor.
+                                   So: kp_f = kp_wald_raw / N^2 / ((N-1)/N) * dof / L
+                                            = kp_wald_raw / (N * (N-1)) * dof / L */
+                                *kp_f = kp_wald_raw / ((ST_double)N * (ST_double)(N - 1)) * (ST_double)dof / (ST_double)L;
+                            } else {
+                                /* Non-cluster robust: kp_f = kp_wald_raw / N^2 * dof / L */
+                                *kp_f = kp_wald_raw / ((ST_double)N * (ST_double)N) * (ST_double)dof / (ST_double)L;
+                            }
+
+                                free(ZtZ_shat0_inv_ZtX);
+                            }
+                            free(shat0_inv_ZtX);
+                        }
+                        free(ZtX_e);
+                    }
+                    free(ZtZ_excl);
                 }
 
                 /* Compute KP LM using X_endog directly */

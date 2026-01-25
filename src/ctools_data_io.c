@@ -170,6 +170,7 @@ static inline void stream_doubles_8(double * restrict dst, const double * restri
     Non-temporal store for 16 doubles (bypasses cache).
     Use for large writes that won't be read again soon.
 */
+__attribute__((unused))
 static inline void stream_doubles_16(double * restrict dst, const double * restrict src)
 {
 #if defined(CTOOLS_X86) && defined(__SSE2__)
