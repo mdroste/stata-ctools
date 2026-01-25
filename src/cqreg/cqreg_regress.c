@@ -430,6 +430,180 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     return sparsity;
 }
 
+/*
+ * Estimate per-observation densities for robust VCE using Stata's fitted method.
+ *
+ * This implements Stata's qreg vce(robust) approach:
+ * 1. Fit QR at τ-h to get β_lo
+ * 2. Fit QR at τ+h to get β_hi
+ * 3. For each observation i:
+ *    f_i = (2*h) / (x_i' * β_hi - x_i' * β_lo)
+ *
+ * This is the "fitted" method density estimator - it uses predicted values
+ * from auxiliary quantile regressions rather than kernel density estimation.
+ *
+ * Parameters:
+ *   obs_density  - Output: per-observation density estimates (N)
+ *   y            - Response variable (N)
+ *   X            - Design matrix (N x K, column-major)
+ *   N            - Number of observations
+ *   K            - Number of regressors
+ *   quantile     - Target quantile (0 < τ < 1)
+ *   bw_method    - Bandwidth selection method
+ *   ipm_config   - IPM solver configuration
+ *   main_beta    - Beta from main solve (for warm start)
+ *   out_bandwidth - Output: bandwidth used
+ *
+ * Returns:
+ *   Average sparsity (for compatibility with IID method)
+ */
+static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
+                                                  const ST_double *y,
+                                                  const ST_double *X,
+                                                  ST_int N, ST_int K,
+                                                  ST_double quantile,
+                                                  cqreg_bw_method bw_method,
+                                                  const cqreg_ipm_config *ipm_config,
+                                                  const ST_double *main_beta,
+                                                  ST_double *out_bandwidth)
+{
+    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double q_lo = quantile - h;
+    ST_double q_hi = quantile + h;
+
+    *out_bandwidth = h;
+
+    /* Check bounds */
+    if (q_lo <= 0.0 || q_hi >= 1.0) {
+        /* Fallback to uniform density */
+        for (ST_int i = 0; i < N; i++) {
+            obs_density[i] = 1.0;
+        }
+        return 1.0;
+    }
+
+    /* Allocate temporary arrays for beta coefficients */
+    ST_double *beta_lo = (ST_double *)malloc(K * sizeof(ST_double));
+    ST_double *beta_hi = (ST_double *)malloc(K * sizeof(ST_double));
+
+    if (beta_lo == NULL || beta_hi == NULL) {
+        free(beta_lo);
+        free(beta_hi);
+        for (ST_int i = 0; i < N; i++) {
+            obs_density[i] = 1.0;
+        }
+        return 1.0;
+    }
+
+    /* Configure auxiliary solves */
+    cqreg_ipm_config aux_config;
+    cqreg_ipm_config_init(&aux_config);
+    aux_config.maxiter = 200;
+    aux_config.tol_primal = 1e-8;
+    aux_config.tol_dual = 1e-8;
+    aux_config.tol_gap = 1e-8;
+    aux_config.verbose = 0;
+    aux_config.use_mehrotra = ipm_config->use_mehrotra;
+
+    /* Create temporary IPM states for the auxiliary regressions */
+    cqreg_ipm_state *ipm_lo = cqreg_ipm_create(N, K, &aux_config);
+    cqreg_ipm_state *ipm_hi = cqreg_ipm_create(N, K, &aux_config);
+
+    if (ipm_lo == NULL || ipm_hi == NULL) {
+        cqreg_ipm_free(ipm_lo);
+        cqreg_ipm_free(ipm_hi);
+        free(beta_lo);
+        free(beta_hi);
+        for (ST_int i = 0; i < N; i++) {
+            obs_density[i] = 1.0;
+        }
+        return 1.0;
+    }
+
+    /* Initialize from main_beta for warm start */
+    if (main_beta != NULL) {
+        memcpy(beta_lo, main_beta, K * sizeof(ST_double));
+        memcpy(beta_hi, main_beta, K * sizeof(ST_double));
+    }
+
+    /* Solve quantile regression at q_lo and q_hi */
+    ST_int rc_lo = 0, rc_hi = 0;
+
+#ifdef _OPENMP
+    #pragma omp parallel sections
+    {
+        #pragma omp section
+        { rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo); }
+        #pragma omp section
+        { rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi); }
+    }
+#else
+    rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo);
+    rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
+#endif
+
+    /* Check convergence */
+    if (rc_lo <= 0 || rc_hi <= 0) {
+        cqreg_ipm_free(ipm_lo);
+        cqreg_ipm_free(ipm_hi);
+        free(beta_lo);
+        free(beta_hi);
+        for (ST_int i = 0; i < N; i++) {
+            obs_density[i] = 1.0;
+        }
+        return 1.0;
+    }
+
+    /*
+     * Compute per-observation densities using Stata's formula:
+     * f_i = (2*h) / (xb_hi - xb_lo)
+     *
+     * where xb_lo = x_i' * beta_lo, xb_hi = x_i' * beta_hi
+     *
+     * If (xb_hi - xb_lo) is too small, set f_i = 0 (Stata uses sqrt(c(epsdouble)))
+     */
+    ST_double eps_sqrt = sqrt(2.2e-16);  /* sqrt of machine epsilon */
+    ST_double total_density = 0.0;
+    ST_double two_h = 2.0 * h;
+
+    for (ST_int i = 0; i < N; i++) {
+        /* Compute xb_lo = x_i' * beta_lo and xb_hi = x_i' * beta_hi */
+        ST_double xb_lo = 0.0;
+        ST_double xb_hi = 0.0;
+
+        for (ST_int k = 0; k < K; k++) {
+            ST_double x_ik = X[k * N + i];  /* Column-major: X[i,k] = X[k*N + i] */
+            xb_lo += x_ik * beta_lo[k];
+            xb_hi += x_ik * beta_hi[k];
+        }
+
+        ST_double diff = xb_hi - xb_lo;
+
+        if (diff > eps_sqrt) {
+            obs_density[i] = two_h / diff;
+        } else {
+            obs_density[i] = 0.0;
+        }
+
+        total_density += obs_density[i];
+    }
+
+    /* Cleanup */
+    cqreg_ipm_free(ipm_lo);
+    cqreg_ipm_free(ipm_hi);
+    free(beta_lo);
+    free(beta_hi);
+
+    /* Return average sparsity */
+    ST_double avg_density = total_density / N;
+    if (avg_density < 1e-10) avg_density = 1e-10;
+
+    main_debug_log("Fitted per-obs density: avg_density=%.6f, sparsity=%.6f\n",
+                   avg_density, 1.0 / avg_density);
+
+    return 1.0 / avg_density;
+}
+
 /* ============================================================================
  * Helper: Store results to Stata
  * ============================================================================ */
@@ -617,6 +791,29 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("Data loaded successfully\n");
 
+    /* Check for degenerate cases: constant y or constant x columns */
+    /* Constant y: all values of y are the same */
+    {
+        ST_double y_min = state->y[0];
+        ST_double y_max = state->y[0];
+        for (ST_int i = 1; i < N; i++) {
+            if (state->y[i] < y_min) y_min = state->y[i];
+            if (state->y[i] > y_max) y_max = state->y[i];
+        }
+        if (y_max - y_min < 1e-12) {
+            ctools_error("cqreg", "Dependent variable has no variation (constant)");
+            cqreg_state_free(state);
+            free(indepvar_idx);
+            free(fe_var_idx);
+            main_debug_close();
+            return 198;
+        }
+    }
+
+    /* Note: Constant regressors are handled by _rmcoll in the Stata layer,
+     * which drops collinear variables before calling the plugin.
+     * So we don't need to check for constant x here. */
+
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
     state->q_v = cqreg_compute_quantile(state->y, N, quantile);
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
@@ -776,13 +973,17 @@ ST_retcode cqreg_full_regression(const char *args)
      * - FITTED: Per-observation densities with Powell sandwich
      */
     if (state->density_method == CQREG_DENSITY_FITTED && state->vce_type == CQREG_VCE_ROBUST) {
-        /* Fitted method for robust: compute per-observation densities */
-        state->sparsity = cqreg_estimate_fitted_density(state->obs_density,
-                                                        state->y,
-                                                        state->residuals,
-                                                        N, quantile,
-                                                        state->bw_method);
-        state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
+        /* Fitted method for robust: compute per-observation densities using
+         * Stata's approach - difference quotients from QR at τ±h.
+         * f_i = (2h) / (Q̂(τ+h|x_i) - Q̂(τ-h|x_i))
+         */
+        state->sparsity = estimate_fitted_per_obs_density(state->obs_density,
+                                                          state->y, state->X,
+                                                          N, K, quantile,
+                                                          state->bw_method,
+                                                          &ipm_config,
+                                                          state->beta,
+                                                          &state->bandwidth);
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
         /* Fitted method for IID: use Siddiqui difference quotient method.
          * This fits QR at τ±h and computes sparsity at mean(X).

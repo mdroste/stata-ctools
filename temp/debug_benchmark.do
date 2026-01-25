@@ -1,38 +1,33 @@
-* Debug benchmark_import varnames(1) fix
+adopath ++ build
+sysuse auto, clear
 
-clear all
-cd "/Users/Mike/Documents/GitHub/stata-ctools"
-adopath ++ "build"
+* Run ivreghdfe
+di "=== ivreghdfe ==="
+ivreghdfe price (mpg = weight), absorb(foreign)
+local ivreghdfe_N_hdfe = e(N_hdfe)
+local ivreghdfe_r2_a = e(r2_a)
 
-* Load helpers
-quietly do "validation/validate_setup.do"
+* Run civreghdfe
+sysuse auto, clear
+di ""
+di "=== civreghdfe ==="
+civreghdfe price (mpg = weight), absorb(foreign)
+local civreghdfe_N_hdfe = e(N_hdfe)
+local civreghdfe_r2_a = e(r2_a)
 
-* Test with all numeric headers file
-file open fh using "temp/numeric_headers.csv", write replace
-file write fh "1,2,3,4,5" _n
-file write fh "10,20,30,40,50" _n
-file write fh "11,21,31,41,51" _n
-file close fh
-
-di _n "=== DEBUG: All numeric headers test ==="
-di "File contents:"
-type "temp/numeric_headers.csv"
-
-di _n "Test 1: Stata with default options"
-import delimited using "temp/numeric_headers.csv", clear
-di "N = " _N ", K = " c(k)
-desc, short
-
-di _n "Test 2: Stata with varnames(1)"
-import delimited using "temp/numeric_headers.csv", clear varnames(1)
-di "N = " _N ", K = " c(k)
-desc, short
-
-di _n "Test 3: cimport with default options"
-cimport delimited using "temp/numeric_headers.csv", clear
-di "N = " _N ", K = " c(k)
-desc, short
-
-* Now test through benchmark_import
-di _n "=== Running benchmark_import ==="
-benchmark_import using "temp/numeric_headers.csv", testname("test numeric headers via benchmark")
+* Compare
+di ""
+di "=== Comparison ==="
+di "ivreghdfe N_hdfe = `ivreghdfe_N_hdfe'"
+di "civreghdfe N_hdfe = `civreghdfe_N_hdfe'"
+if `ivreghdfe_N_hdfe' == `civreghdfe_N_hdfe' {
+    di "N_hdfe: MATCH"
+}
+else {
+    di "N_hdfe: MISMATCH"
+}
+di ""
+di "ivreghdfe r2_a = `ivreghdfe_r2_a'"
+di "civreghdfe r2_a = `civreghdfe_r2_a'"
+local diff = `ivreghdfe_r2_a' - `civreghdfe_r2_a'
+di "Difference = `diff'"

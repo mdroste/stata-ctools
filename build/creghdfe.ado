@@ -69,7 +69,39 @@ program define creghdfe, eclass
 
     * Parse variable list
     gettoken depvar indepvars : varlist
-    local nvars : word count `varlist'
+
+    * Expand factor variables to temporary numeric variables
+    if "`indepvars'" != "" {
+        * Step 1: Expand factor variables to temp numeric vars
+        fvrevar `indepvars' if `touse'
+        local indepvars_fvrevar "`r(varlist)'"
+
+        * Step 2: Remove collinear variables (including base levels of factors)
+        _rmcoll `indepvars_fvrevar' if `touse', forcedrop
+        local indepvars_expanded "`r(varlist)'"
+
+        * Step 3: Get proper coefficient names using fvexpand
+        fvexpand `indepvars' if `touse'
+        local coef_names_all "`r(varlist)'"
+
+        * Filter out base levels (those with 'b' or 'o' notation)
+        local coef_names ""
+        foreach v of local coef_names_all {
+            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+                local coef_names `coef_names' `v'
+            }
+        }
+
+        * Build expanded varlist for plugin
+        local varlist_expanded "`depvar' `indepvars_expanded'"
+    }
+    else {
+        local indepvars_expanded ""
+        local varlist_expanded "`depvar'"
+        local coef_names ""
+    }
+
+    local nvars : word count `varlist_expanded'
     local nfe : word count `absorb'
 
     * Parse VCE option
@@ -247,7 +279,8 @@ program define creghdfe, eclass
     timer on 98
 
     * Build varlist for plugin: depvar indepvars fe_vars [cluster_var] [weight_var] [resid_var]
-    local plugin_varlist `varlist' `absorb'
+    * Use expanded varlist (factor variables converted to temp numeric vars)
+    local plugin_varlist `varlist_expanded' `absorb'
     if `vcetype' == 2 {
         local plugin_varlist `plugin_varlist' `clustervar'
     }
@@ -441,9 +474,10 @@ program define creghdfe, eclass
     }
 
     * Build column names - include omitted vars with o. prefix
+    * Use coef_names which has proper factor variable notation
     local colnames ""
     forval k = 1/`K_x' {
-        local vname : word `k' of `indepvars'
+        local vname : word `k' of `coef_names'
         if `K_keep' == 0 {
             local colnames `colnames' o.`vname'
         }

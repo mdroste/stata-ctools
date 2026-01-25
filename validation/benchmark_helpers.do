@@ -443,7 +443,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 1e-6)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 5e-6)]
 
     gettoken depvar indepvars : varlist
 

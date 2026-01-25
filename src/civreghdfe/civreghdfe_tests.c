@@ -125,17 +125,21 @@ void civreghdfe_compute_underid_test(
 
     if (K_endog == 1 && first_stage_F) {
         /* Single endogenous variable: simple formulas */
+        /* first_stage_F is already the partial F-stat from excluded instruments
+           after controlling for exogenous regressors (computed in civreghdfe_estimate.c) */
         ST_double F = first_stage_F[0];
         ST_int df_resid = N - K_iv - df_a;
         if (df_resid <= 0) df_resid = 1;
 
-        /* partial_R² = (L * F) / (L * F + df_resid) */
+        /* Recover partial_R² from F: partial_R² = (L * F) / (L * F + df_resid)
+           This is the partial R² of excluded instruments after controlling for exogenous */
         ST_double partial_r2 = ((ST_double)L * F) / ((ST_double)L * F + (ST_double)df_resid);
 
-        /* Anderson LM = N * partial_R² */
+        /* Anderson LM = N * partial_R² (based on canonical correlations)
+           For single endogenous, this equals N * partial_R² */
         *underid_stat = (ST_double)N * partial_r2;
 
-        /* Cragg-Donald F = first-stage F for single endogenous */
+        /* Cragg-Donald F = partial first-stage F for single endogenous */
         *cd_f = F;
 
         /* Kleibergen-Paap for robust/cluster VCE */

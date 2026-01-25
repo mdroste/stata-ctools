@@ -204,6 +204,7 @@ static int parse_options(const char *args, cdestring_options *opts)
                     case 'n': opts->ignore_chars[i++] = '\n'; break;
                     case 't': opts->ignore_chars[i++] = '\t'; break;
                     case 'r': opts->ignore_chars[i++] = '\r'; break;
+                    case 's': opts->ignore_chars[i++] = ' '; break;
                     case '\\': opts->ignore_chars[i++] = '\\'; break;
                     default: opts->ignore_chars[i++] = *ignore_ptr; break;
                 }
@@ -281,6 +282,13 @@ static int process_variable(int src_idx, int dst_idx,
     /* Process each observation sequentially */
     for (size_t i = 0; i < nobs; i++) {
         ST_int obs = obs1 + (ST_int)i;
+
+        /* Skip observations that don't meet the if/in condition */
+        if (!SF_ifobs(obs)) {
+            SF_vstore(dst_idx, obs, SV_missval);
+            continue;
+        }
+
         int slen = SF_sdatalen(src_idx, obs);
 
         /* Empty string -> missing */

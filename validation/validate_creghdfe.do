@@ -1049,6 +1049,404 @@ gen y = x + rnormal()
 noi benchmark_reghdfe y x, absorb(id) vce(cluster cluster_id) testname("highly imbalanced clusters")
 
 /*******************************************************************************
+ * SECTION 29: Factor variables (i.varname)
+ *
+ * NOTE: creghdfe handles factor variables by expanding them via fvrevar, but
+ * the output e(b) matrix currently does not include columns for omitted base
+ * levels (which reghdfe includes with coefficient=0). This means direct matrix
+ * comparison via benchmark_reghdfe will fail due to conformability.
+ *
+ * Tests here verify that:
+ *   1. creghdfe runs without error on factor variable specifications
+ *   2. Key results (N, r2, non-base coefficients) match reghdfe
+ ******************************************************************************/
+noi print_section "Factor Variables"
+
+* Basic factor variable with i.foreign (2 levels)
+sysuse auto, clear
+quietly reghdfe price mpg weight i.foreign, absorb(rep78)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+local reghdfe_coef_foreign = _b[1.foreign]
+
+capture quietly creghdfe price mpg weight i.foreign, absorb(rep78)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+    capture local creghdfe_coef_foreign = _b[1.foreign]
+    if _rc != 0 local creghdfe_coef_foreign = _b[foreign]
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < 1e-6 {
+        noi test_pass "i.foreign (2 levels)"
+    }
+    else {
+        noi test_fail "i.foreign (2 levels)" "N or r2 or coef differs"
+    }
+}
+else {
+    noi test_fail "i.foreign (2 levels)" "creghdfe returned error `=_rc'"
+}
+
+* Factor variable with more levels - i.rep78 (5 levels)
+sysuse auto, clear
+quietly reghdfe price mpg weight i.rep78, absorb(foreign)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price mpg weight i.rep78, absorb(foreign)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.rep78 (5 levels)"
+    }
+    else {
+        noi test_fail "i.rep78 (5 levels)" "N=`reghdfe_N'/`creghdfe_N' r2=`reghdfe_r2'/`creghdfe_r2'"
+    }
+}
+else {
+    noi test_fail "i.rep78 (5 levels)" "creghdfe returned error `=_rc'"
+}
+
+* Factor variable with robust SE
+sysuse auto, clear
+quietly reghdfe price mpg weight i.foreign, absorb(rep78) vce(robust)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price mpg weight i.foreign, absorb(rep78) vce(robust)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.foreign + robust"
+    }
+    else {
+        noi test_fail "i.foreign + robust" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.foreign + robust" "creghdfe returned error `=_rc'"
+}
+
+* Factor variable with clustering
+sysuse auto, clear
+quietly reghdfe price mpg weight i.rep78, absorb(foreign) vce(cluster foreign)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price mpg weight i.rep78, absorb(foreign) vce(cluster foreign)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.rep78 + cluster"
+    }
+    else {
+        noi test_fail "i.rep78 + cluster" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.rep78 + cluster" "creghdfe returned error `=_rc'"
+}
+
+* Factor variable with panel data
+webuse nlswork, clear
+keep in 1/5000
+quietly reghdfe ln_wage age tenure i.race, absorb(idcode)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe ln_wage age tenure i.race, absorb(idcode)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.race panel"
+    }
+    else {
+        noi test_fail "i.race panel" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.race panel" "creghdfe returned error `=_rc'"
+}
+
+* Factor variable with two-way FE
+webuse nlswork, clear
+keep in 1/5000
+quietly reghdfe ln_wage age tenure i.race, absorb(idcode year)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe ln_wage age tenure i.race, absorb(idcode year)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.race two-way FE"
+    }
+    else {
+        noi test_fail "i.race two-way FE" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.race two-way FE" "creghdfe returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 30: Time series operators (L., D., F.)
+ *
+ * NOTE: creghdfe does not currently support direct time series operators
+ * (L., D., F.) in the varlist - these require pre-generation of lagged/
+ * differenced variables. This section tests the workaround approach.
+ *
+ * Tests verify that creghdfe matches reghdfe when using manually generated
+ * lag/difference variables instead of time series operators.
+ ******************************************************************************/
+noi print_section "Time Series Operators"
+
+* Test with manually created lag variable (workaround for L.)
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+gen L2_mvalue = L2.mvalue
+
+quietly reghdfe invest L_mvalue kstock, absorb(company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+local reghdfe_coef = _b[L_mvalue]
+
+capture quietly creghdfe invest L_mvalue kstock, absorb(company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+    local creghdfe_coef = _b[L_mvalue]
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+        noi test_pass "manual lag (L.mvalue equivalent)"
+    }
+    else {
+        noi test_fail "manual lag" "N or r2 or coef differs"
+    }
+}
+else {
+    noi test_fail "manual lag" "creghdfe returned error `=_rc'"
+}
+
+* Test with multiple manually created lags
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+gen L2_mvalue = L2.mvalue
+
+quietly reghdfe invest L_mvalue L2_mvalue kstock, absorb(company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue L2_mvalue kstock, absorb(company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "manual multiple lags (L. L2. equivalent)"
+    }
+    else {
+        noi test_fail "manual multiple lags" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "manual multiple lags" "creghdfe returned error `=_rc'"
+}
+
+* Test with manually created difference variable (workaround for D.)
+webuse grunfeld, clear
+xtset company year
+gen D_mvalue = D.mvalue
+
+quietly reghdfe invest D_mvalue kstock, absorb(company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+local reghdfe_coef = _b[D_mvalue]
+
+capture quietly creghdfe invest D_mvalue kstock, absorb(company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+    local creghdfe_coef = _b[D_mvalue]
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+        noi test_pass "manual difference (D.mvalue equivalent)"
+    }
+    else {
+        noi test_fail "manual difference" "N or r2 or coef differs"
+    }
+}
+else {
+    noi test_fail "manual difference" "creghdfe returned error `=_rc'"
+}
+
+* Test with manually created lead variable (workaround for F.)
+webuse grunfeld, clear
+xtset company year
+gen F_mvalue = F.mvalue
+
+quietly reghdfe invest F_mvalue kstock, absorb(company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+local reghdfe_coef = _b[F_mvalue]
+
+capture quietly creghdfe invest F_mvalue kstock, absorb(company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+    local creghdfe_coef = _b[F_mvalue]
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+        noi test_pass "manual lead (F.mvalue equivalent)"
+    }
+    else {
+        noi test_fail "manual lead" "N or r2 or coef differs"
+    }
+}
+else {
+    noi test_fail "manual lead" "creghdfe returned error `=_rc'"
+}
+
+* Test with manually created lag + two-way FE
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+
+quietly reghdfe invest L_mvalue kstock, absorb(company year)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue kstock, absorb(company year)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "manual lag + two-way FE"
+    }
+    else {
+        noi test_fail "manual lag + two-way FE" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "manual lag + two-way FE" "creghdfe returned error `=_rc'"
+}
+
+* Test with manually created lag + robust SE
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+
+quietly reghdfe invest L_mvalue kstock, absorb(company) vce(robust)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue kstock, absorb(company) vce(robust)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "manual lag + robust"
+    }
+    else {
+        noi test_fail "manual lag + robust" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "manual lag + robust" "creghdfe returned error `=_rc'"
+}
+
+* Test with manually created lag + clustering
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+
+quietly reghdfe invest L_mvalue kstock, absorb(company) vce(cluster company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue kstock, absorb(company) vce(cluster company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "manual lag + cluster"
+    }
+    else {
+        noi test_fail "manual lag + cluster" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "manual lag + cluster" "creghdfe returned error `=_rc'"
+}
+
+* nlswork panel with manually created lag
+webuse nlswork, clear
+keep in 1/10000
+xtset idcode year
+gen L_tenure = L.tenure
+
+quietly reghdfe ln_wage L_tenure age, absorb(idcode)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe ln_wage L_tenure age, absorb(idcode)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "nlswork manual lag"
+    }
+    else {
+        noi test_fail "nlswork manual lag" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "nlswork manual lag" "creghdfe returned error `=_rc'"
+}
+
+* nlswork panel with manually created difference
+webuse nlswork, clear
+keep in 1/10000
+xtset idcode year
+gen D_tenure = D.tenure
+
+quietly reghdfe ln_wage D_tenure age, absorb(idcode)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe ln_wage D_tenure age, absorb(idcode)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "nlswork manual difference"
+    }
+    else {
+        noi test_fail "nlswork manual difference" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "nlswork manual difference" "creghdfe returned error `=_rc'"
+}
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 

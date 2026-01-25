@@ -94,21 +94,76 @@ program define civreghdfe, eclass
     local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
     local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
 
-    * Validate variables exist
+    * Validate dependent variable exists
     foreach v of local depvar {
-        confirm numeric variable `v'
-    }
-    foreach v of local endogvars {
-        confirm numeric variable `v'
-    }
-    foreach v of local instruments {
-        confirm numeric variable `v'
-    }
-    foreach v of local exogvars {
         confirm numeric variable `v'
     }
     foreach v of local absorb {
         confirm variable `v'
+    }
+
+    * Mark sample early for fvrevar
+    marksample touse
+    markout `touse' `depvar' `absorb'
+
+    * Expand factor variables for endogenous variables
+    local endogvars_coef ""
+    if "`endogvars'" != "" {
+        fvrevar `endogvars' if `touse'
+        local endogvars_fvrevar "`r(varlist)'"
+        _rmcoll `endogvars_fvrevar' if `touse', forcedrop
+        local endogvars_expanded "`r(varlist)'"
+
+        fvexpand `endogvars' if `touse'
+        local endogvars_names_all "`r(varlist)'"
+        foreach v of local endogvars_names_all {
+            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+                local endogvars_coef `endogvars_coef' `v'
+            }
+        }
+    }
+    else {
+        local endogvars_expanded ""
+    }
+
+    * Expand factor variables for exogenous variables
+    local exogvars_coef ""
+    if "`exogvars'" != "" {
+        fvrevar `exogvars' if `touse'
+        local exogvars_fvrevar "`r(varlist)'"
+        _rmcoll `exogvars_fvrevar' if `touse', forcedrop
+        local exogvars_expanded "`r(varlist)'"
+
+        fvexpand `exogvars' if `touse'
+        local exogvars_names_all "`r(varlist)'"
+        foreach v of local exogvars_names_all {
+            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+                local exogvars_coef `exogvars_coef' `v'
+            }
+        }
+    }
+    else {
+        local exogvars_expanded ""
+    }
+
+    * Expand factor variables for instruments
+    local instruments_coef ""
+    if "`instruments'" != "" {
+        fvrevar `instruments' if `touse'
+        local instruments_fvrevar "`r(varlist)'"
+        _rmcoll `instruments_fvrevar' if `touse', forcedrop
+        local instruments_expanded "`r(varlist)'"
+
+        fvexpand `instruments' if `touse'
+        local instruments_names_all "`r(varlist)'"
+        foreach v of local instruments_names_all {
+            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+                local instruments_coef `instruments_coef' `v'
+            }
+        }
+    }
+    else {
+        local instruments_expanded ""
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -167,14 +222,14 @@ program define civreghdfe, eclass
         }
     }
 
-    * Count variables
-    local K_endog : word count `endogvars'
-    local K_exog : word count `exogvars'
-    local K_inst_excl : word count `instruments'
+    * Count variables (using expanded counts)
+    local K_endog : word count `endogvars_expanded'
+    local K_exog : word count `exogvars_expanded'
+    local K_inst_excl : word count `instruments_expanded'
     local G : word count `absorb'
 
-    * Build full instrument list (exogenous + excluded instruments)
-    local all_instruments `exogvars' `instruments'
+    * Build full instrument list (exogenous + excluded instruments) - use expanded
+    local all_instruments `exogvars_expanded' `instruments_expanded'
     local K_iv : word count `all_instruments'
 
     * Check identification
@@ -249,9 +304,8 @@ program define civreghdfe, eclass
         confirm numeric variable `weight_var'
     }
 
-    * Mark sample
-    marksample touse
-    markout `touse' `depvar' `endogvars' `exogvars' `instruments' `absorb'
+    * Mark out additional variables from sample (touse already created earlier for fvrevar)
+    markout `touse' `endogvars_expanded' `exogvars_expanded' `instruments_expanded'
     if "`cluster_var'" != "" {
         markout `touse' `cluster_var'
     }
@@ -571,7 +625,8 @@ program define civreghdfe, eclass
 
     * Build variable list for plugin
     * Order: depvar, endogvars, exogvars, all_instruments, absorb, [cluster], [cluster2], [weight]
-    local plugin_vars `depvar' `endogvars' `exogvars' `all_instruments' `absorb'
+    * Use expanded variables (factor variables converted to temp numeric vars)
+    local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `all_instruments' `absorb'
     if `vce_type' == 2 | `vce_type' == 3 {
         local plugin_vars `plugin_vars' `cluster_var'
     }
@@ -611,8 +666,13 @@ program define civreghdfe, eclass
 
     * Get number of levels for each FE (for absorbed DOF table)
     forval g = 1/`G' {
-        capture local fe_levels_`g' = __civreghdfe_num_levels_`g'
-        if _rc != 0 local fe_levels_`g' = .
+        capture confirm scalar __civreghdfe_num_levels_`g'
+        if _rc == 0 {
+            local fe_levels_`g' = scalar(__civreghdfe_num_levels_`g')
+        }
+        else {
+            local fe_levels_`g' = .
+        }
         local fe_nested_`g' = 0
     }
 
@@ -637,13 +697,15 @@ program define civreghdfe, eclass
     matrix `V_temp' = __civreghdfe_V
 
     * Build variable names in [endog, exog] order (matching C output)
+    * Use coefficient names which have proper factor variable notation
     * Exclude partialled variables from varnames
     local varnames ""
-    foreach v of local endogvars {
+    foreach v of local endogvars_coef {
         local varnames `varnames' `v'
     }
-    foreach v of local exogvars {
+    foreach v of local exogvars_coef {
         * Check if this variable was partialled out
+        * Note: partial() uses original var names, so we check against original exogvars
         local is_partial = 0
         foreach pv of local partial_vars {
             if "`v'" == "`pv'" {
@@ -767,9 +829,27 @@ program define civreghdfe, eclass
     * Store additional statistics
     ereturn scalar rss = `rss'
     ereturn scalar tss = `tss'
+    ereturn scalar mss = `tss' - `rss'
     ereturn scalar r2 = `r2'
     ereturn scalar rmse = `rmse'
     ereturn scalar F = `F_wald'
+
+    * Model degrees of freedom
+    ereturn scalar df_m = `K_total'
+
+    * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
+    ereturn scalar N_hdfe = `G'
+
+    * Adjusted R-squared: r2_a = 1 - (1 - r2) * (N - 1) / (N - K - df_a)
+    * For IV regression with HDFE, df_a already includes absorbed FE
+    local adj_denom = `N_used' - `K_total' - `df_a'
+    if `adj_denom' > 0 {
+        local r2_a = 1 - (1 - `r2') * (`N_used' - 1) / `adj_denom'
+    }
+    else {
+        local r2_a = .
+    }
+    ereturn scalar r2_a = `r2_a'
 
     * Display results in ivreghdfe format (if header not suppressed)
     if "`header'" == "" {
@@ -1067,7 +1147,9 @@ program define civreghdfe, eclass
         ereturn scalar sargan = `sargan_val'
         ereturn scalar sargan_df = `sargan_df'
         if `sargan_df' > 0 {
-            ereturn scalar sargan_p = chi2tail(`sargan_df', `sargan_val')
+            local sargan_pval = chi2tail(`sargan_df', `sargan_val')
+            ereturn scalar sargan_p = `sargan_pval'
+            ereturn scalar sarganp = `sargan_pval'
         }
         ereturn scalar cd_f = `cd_f_val'
 

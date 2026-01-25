@@ -1341,19 +1341,23 @@ ST_retcode ivest_compute_2sls(
 
     /* Step 10: Compute first-stage F statistics */
     /* For each endogenous variable, compute F-stat from first stage regression */
+    /* The F tests whether excluded instruments are jointly significant,
+       controlling for exogenous regressors. Uses partial R² approach:
+       F = ((R²_full - R²_reduced) / L) / ((1 - R²_full) / df_resid) */
     if (first_stage_F) {
         for (ST_int e = 0; e < K_endog; e++) {
-            /* First stage: X_endog[e] = [X_exog, Z_excluded] * gamma + error */
-            /* F-stat tests whether excluded instruments are jointly significant */
-
-            /* Simplified: Use partial R-squared approach */
-            /* F = ((R^2_full - R^2_reduced) / q) / ((1 - R^2_full) / (N - K_full)) */
-
-            /* For now, compute simple F using projection */
             const ST_double *X_e = X_endog + e * N;
 
-            /* Compute X_e'P_Z X_e */
-            ST_double xpx = 0.0;
+            /* Compute X_e'X_e */
+            ST_double xx = 0.0;
+            for (i = 0; i < N; i++) {
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                xx += w * X_e[i] * X_e[i];
+            }
+            if (xx <= 0) xx = 1.0;
+
+            /* Compute R²_full: R² from projecting X_e onto all instruments Z */
+            ST_double xpx_full = 0.0;
             for (i = 0; i < N; i++) {
                 ST_double pz_xe = 0.0;
                 for (k = 0; k < K_iv; k++) {
@@ -1364,39 +1368,88 @@ ST_retcode ivest_compute_2sls(
                     pz_xe += Z[k * N + i] * ziz_inv_zx;
                 }
                 ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                xpx += w * X_e[i] * pz_xe;
+                xpx_full += w * X_e[i] * pz_xe;
+            }
+            ST_double r2_full = xpx_full / xx;
+            if (r2_full > 1.0) r2_full = 1.0;
+            if (r2_full < 0.0) r2_full = 0.0;
+
+            /* Compute R²_reduced: R² from projecting X_e onto only exogenous regressors */
+            ST_double r2_reduced = 0.0;
+            if (K_exog > 0) {
+                /* Build Z_exog'Z_exog (K_exog x K_exog) from ZtZ */
+                ST_double *ZeZe = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                ST_double *ZeZe_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                ST_double *ZeXe = (ST_double *)calloc(K_exog, sizeof(ST_double));
+
+                if (ZeZe && ZeZe_inv && ZeXe) {
+                    /* Extract Z_exog'Z_exog from ZtZ */
+                    for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                        for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                            ZeZe[l2 * K_exog + l1] = ZtZ[l2 * K_iv + l1];
+                        }
+                    }
+
+                    /* Compute Z_exog'X_e */
+                    for (ST_int l = 0; l < K_exog; l++) {
+                        ST_double sum = 0.0;
+                        for (i = 0; i < N; i++) {
+                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                            sum += w * Z[l * N + i] * X_e[i];
+                        }
+                        ZeXe[l] = sum;
+                    }
+
+                    /* Invert Z_exog'Z_exog */
+                    memcpy(ZeZe_inv, ZeZe, K_exog * K_exog * sizeof(ST_double));
+                    if (cholesky(ZeZe_inv, K_exog) == 0 &&
+                        invert_from_cholesky(ZeZe_inv, K_exog, ZeZe_inv) == 0) {
+
+                        /* Compute X_e'P_exog X_e = ZeXe' * ZeZe_inv * ZeXe */
+                        ST_double xpx_reduced = 0.0;
+                        for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                            ST_double temp = 0.0;
+                            for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                temp += ZeZe_inv[l2 * K_exog + l1] * ZeXe[l2];
+                            }
+                            xpx_reduced += ZeXe[l1] * temp;
+                        }
+                        r2_reduced = xpx_reduced / xx;
+                        if (r2_reduced > 1.0) r2_reduced = 1.0;
+                        if (r2_reduced < 0.0) r2_reduced = 0.0;
+                    }
+                }
+
+                free(ZeZe);
+                free(ZeZe_inv);
+                free(ZeXe);
             }
 
-            /* Compute X_e'X_e */
-            ST_double xx = 0.0;
-            for (i = 0; i < N; i++) {
-                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                xx += w * X_e[i] * X_e[i];
-            }
+            /* Partial R² = R²_full - R²_reduced */
+            ST_double partial_r2 = r2_full - r2_reduced;
+            if (partial_r2 < 0.0) partial_r2 = 0.0;
 
-            /* R^2 of projection */
-            ST_double r2 = xpx / xx;
-            if (r2 > 1.0) r2 = 1.0;
-            if (r2 < 0.0) r2 = 0.0;
-
-            /* F-stat: (R^2 / q) / ((1 - R^2) / (N - K_iv - df_a)) */
-            ST_int q = K_iv - K_exog;  /* Number of excluded instruments */
-            if (q <= 0) q = 1;
+            /* F = (partial_R² / L) / ((1 - R²_full) / df_resid) */
+            ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
+            if (L <= 0) L = 1;
             ST_int denom_df = N - K_iv - df_a;
             if (denom_df <= 0) denom_df = 1;
 
-            first_stage_F[e] = (r2 / (ST_double)q) / ((1.0 - r2) / (ST_double)denom_df);
+            ST_double denom = (1.0 - r2_full) / (ST_double)denom_df;
+            if (denom <= 0.0) denom = 1e-10;
+
+            first_stage_F[e] = (partial_r2 / (ST_double)L) / denom;
             if (first_stage_F[e] < 0) first_stage_F[e] = 0;
 
             /* Save partial R² for ffirst display */
             char r2_name[64];
             snprintf(r2_name, sizeof(r2_name), "__civreghdfe_partial_r2_%d", (int)(e + 1));
-            SF_scal_save(r2_name, r2);
+            SF_scal_save(r2_name, partial_r2);
 
             if (verbose) {
                 char buf[256];
-                snprintf(buf, sizeof(buf), "  First-stage F[%d] = %g (R^2 = %g)\n",
-                         (int)e, first_stage_F[e], r2);
+                snprintf(buf, sizeof(buf), "  First-stage F[%d] = %g (partial R² = %g, R²_full = %g)\n",
+                         (int)e, first_stage_F[e], partial_r2, r2_full);
                 SF_display(buf);
             }
         }

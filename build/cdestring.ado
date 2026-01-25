@@ -162,22 +162,6 @@ program define cdestring
     * Reset _rc to 0 (110 means plugin already loaded, which is fine)
     capture confirm number 1
 
-    * Get all variable names for index lookup
-    unab allvars : *
-
-    * Build list of source variable indices
-    local src_indices ""
-    foreach v of local varlist {
-        local idx = 1
-        foreach av of local allvars {
-            if "`av'" == "`v'" {
-                local src_indices "`src_indices' `idx'"
-                continue, break
-            }
-            local ++idx
-        }
-    }
-
     * Create destination variables
     if "`replace'" != "" {
         * For replace, we create temporary variables first, then replace
@@ -211,8 +195,24 @@ program define cdestring
         }
     }
 
-    * Get destination variable indices (after creating them)
+    * Get all variable names and build indices for plugin call
+    * Pass ALL variables to plugin so indices match dataset positions
     unab allvars : *
+
+    * Build list of source variable indices (position in allvars)
+    local src_indices ""
+    foreach v of local varlist {
+        local idx = 1
+        foreach av of local allvars {
+            if "`av'" == "`v'" {
+                local src_indices "`src_indices' `idx'"
+                continue, break
+            }
+            local ++idx
+        }
+    }
+
+    * Build list of destination variable indices (position in allvars)
     local dst_indices ""
     foreach v of local dest_varlist {
         local idx = 1
@@ -225,6 +225,7 @@ program define cdestring
         }
     }
 
+
     * Build option strings for C plugin
     local threads_code ""
     if `threads' > 0 {
@@ -234,7 +235,9 @@ program define cdestring
     local ignore_code ""
     if `"`ignore'"' != "" {
         * Escape special characters for passing to C
+        * Order matters: first escape backslashes, then encode spaces
         local ignore_escaped = subinstr(`"`ignore'"', "\", "\\", .)
+        local ignore_escaped = subinstr(`"`ignore_escaped'"', " ", "\s", .)
         local ignore_code "ignore=`ignore_escaped'"
     }
 
@@ -273,8 +276,8 @@ program define cdestring
         local ++i
     }
 
-    * Call the C plugin
-    plugin call ctools_plugin `varlist' `dest_varlist' `if' `in', ///
+    * Call the C plugin with ALL variables (so indices match dataset positions)
+    plugin call ctools_plugin `allvars' `if' `in', ///
         "cdestring `threads_code' `cmd_indices' nvars=`nvars' `ignore_code' `force_code' `percent_code' `dpcomma_code' `verbose_code'"
 
     local plugin_rc = _rc

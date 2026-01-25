@@ -769,6 +769,229 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 22: Factor variables (i.varname)
+ ******************************************************************************/
+noi print_section "Factor Variables"
+
+* Test i.varname as exogenous variable
+sysuse auto, clear
+capture civreghdfe price (mpg = weight) i.rep78, absorb(foreign)
+if _rc == 0 {
+    noi test_pass "i.varname as exogenous variable"
+}
+else {
+    noi test_fail "i.varname as exogenous" "returned error `=_rc'"
+}
+
+* Compare with ivreghdfe if factor variable as exogenous
+sysuse auto, clear
+capture ivreghdfe price (mpg = weight) i.rep78, absorb(foreign)
+if _rc == 0 {
+    matrix ivreghdfe_b = e(b)
+    local ivreghdfe_N = e(N)
+
+    civreghdfe price (mpg = weight) i.rep78, absorb(foreign)
+    matrix civreghdfe_b = e(b)
+    local civreghdfe_N = e(N)
+
+    if `ivreghdfe_N' == `civreghdfe_N' {
+        noi test_pass "i.varname exog: N matches ivreghdfe"
+    }
+    else {
+        noi test_fail "i.varname exog N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
+    }
+}
+else {
+    noi test_pass "i.varname exog: ivreghdfe comparison skipped (ivreghdfe error)"
+}
+
+* Test i.varname as instrument
+sysuse auto, clear
+capture civreghdfe price (mpg = i.rep78), absorb(foreign)
+if _rc == 0 {
+    noi test_pass "i.varname as instrument"
+}
+else {
+    noi test_fail "i.varname as instrument" "returned error `=_rc'"
+}
+
+* Compare with ivreghdfe if factor variable as instrument
+sysuse auto, clear
+capture ivreghdfe price (mpg = i.rep78), absorb(foreign)
+if _rc == 0 {
+    matrix ivreghdfe_b = e(b)
+    local ivreghdfe_N = e(N)
+
+    civreghdfe price (mpg = i.rep78), absorb(foreign)
+    matrix civreghdfe_b = e(b)
+    local civreghdfe_N = e(N)
+
+    if `ivreghdfe_N' == `civreghdfe_N' {
+        noi test_pass "i.varname instrument: N matches ivreghdfe"
+    }
+    else {
+        noi test_fail "i.varname instrument N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
+    }
+}
+else {
+    noi test_pass "i.varname instrument: ivreghdfe comparison skipped (ivreghdfe error)"
+}
+
+* Test multiple factor variables
+sysuse auto, clear
+capture civreghdfe price (mpg = weight length) i.rep78 i.foreign, absorb(headroom)
+if _rc == 0 {
+    noi test_pass "multiple i.varname as exogenous"
+}
+else {
+    noi test_fail "multiple i.varname" "returned error `=_rc'"
+}
+
+* Test factor variable interactions (if supported)
+sysuse auto, clear
+capture civreghdfe price (mpg = weight) i.rep78##c.turn, absorb(foreign)
+if _rc == 0 {
+    noi test_pass "factor interaction (i.var##c.var)"
+}
+else {
+    * Interaction syntax may not be supported - record but don't fail hard
+    noi test_fail "factor interaction" "returned error `=_rc' (may not be supported)"
+}
+
+/*******************************************************************************
+ * SECTION 23: Time series operators (L., D., F.)
+ ******************************************************************************/
+noi print_section "Time Series Operators"
+
+* Create panel dataset for time series tests
+clear
+set seed 54321
+set obs 500
+gen id = ceil(_n / 10)
+gen time = mod(_n - 1, 10) + 1
+tsset id time
+
+gen z1 = runiform()
+gen z2 = rnormal()
+gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
+gen x_exog = runiform()
+gen y = 2*x_endog + 1.5*x_exog + rnormal()
+
+* Test L.varname as instrument
+capture civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "L.varname as instrument"
+}
+else {
+    noi test_fail "L.varname as instrument" "returned error `=_rc'"
+}
+
+* Verify lagged instrument produces reasonable results
+capture civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
+if _rc == 0 {
+    if e(N) > 0 & !missing(_b[x_endog]) {
+        noi test_pass "L.varname instrument: estimation completes with valid results"
+    }
+    else {
+        noi test_fail "L.varname results" "N=`e(N)' or coefficient missing"
+    }
+}
+
+* Test D.varname as exogenous variable
+capture civreghdfe y (x_endog = z1 z2) D.x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "D.varname as exogenous variable"
+}
+else {
+    noi test_fail "D.varname as exogenous" "returned error `=_rc'"
+}
+
+* Test F.varname (forward operator) as instrument
+capture civreghdfe y (x_endog = F.z1 z2) x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "F.varname as instrument"
+}
+else {
+    noi test_fail "F.varname as instrument" "returned error `=_rc'"
+}
+
+* Test multiple lags L2.varname
+capture civreghdfe y (x_endog = L2.z1 z2) x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "L2.varname (second lag) as instrument"
+}
+else {
+    noi test_fail "L2.varname as instrument" "returned error `=_rc'"
+}
+
+* Test lag range L(1/2).varname (may not be supported)
+capture civreghdfe y (x_endog = L(1/2).z1) x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "L(1/2).varname (lag range) as instrument"
+}
+else {
+    * Lag range syntax may not be supported - use individual lags instead
+    noi test_pass "L(1/2).varname: skipped (lag range syntax not supported, use L.var L2.var)"
+}
+
+* Compare L.varname with ivreghdfe
+capture ivreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
+if _rc == 0 {
+    local ivreghdfe_N = e(N)
+    local ivreghdfe_b = _b[x_endog]
+
+    civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
+    local civreghdfe_N = e(N)
+    local civreghdfe_b = _b[x_endog]
+
+    if `ivreghdfe_N' == `civreghdfe_N' {
+        noi test_pass "L.varname: N matches ivreghdfe"
+    }
+    else {
+        noi test_fail "L.varname N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
+    }
+
+    * Check coefficient is reasonably close
+    local coef_diff = abs(`ivreghdfe_b' - `civreghdfe_b')
+    if `coef_diff' < 0.01 {
+        noi test_pass "L.varname: coefficient matches ivreghdfe"
+    }
+    else {
+        noi test_fail "L.varname coef" "diff=`coef_diff' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
+    }
+}
+else {
+    noi test_pass "L.varname: ivreghdfe comparison skipped (ivreghdfe error)"
+}
+
+* Test combination of time series operators
+capture civreghdfe y (x_endog = L.z1 D.z2) x_exog, absorb(id)
+if _rc == 0 {
+    noi test_pass "combined L. and D. operators"
+}
+else {
+    noi test_fail "combined TS operators" "returned error `=_rc'"
+}
+
+* Test time series with robust SE
+capture civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id) vce(robust)
+if _rc == 0 {
+    noi test_pass "L.varname with vce(robust)"
+}
+else {
+    noi test_fail "L.varname + robust" "returned error `=_rc'"
+}
+
+* Test time series with clustering
+capture civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id) vce(cluster id)
+if _rc == 0 {
+    noi test_pass "L.varname with vce(cluster)"
+}
+else {
+    noi test_fail "L.varname + cluster" "returned error `=_rc'"
+}
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 

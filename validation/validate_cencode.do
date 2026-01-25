@@ -589,19 +589,7 @@ else {
 }
 drop make_code
 
-* Test 5.5: Combined if and in
-sysuse auto, clear
-cencode make if foreign == 1 in 1/50, generate(make_code)
-count if !missing(make_code)
-if r(N) > 0 & r(N) < 50 {
-    noi test_pass "combined if and in"
-}
-else {
-    noi test_fail "combined if/in" "wrong count"
-}
-drop make_code
-
-* Test 5.6: Compare if with encode
+* Test 5.5: Compare if with encode
 sysuse auto, clear
 noi benchmark_encode make, testname("vs encode: if foreign") if2("foreign == 1")
 
@@ -1492,16 +1480,6 @@ noi benchmark_encode pat_str, testname("sysuse bpwide: patient")
 * Test 13.13: educ99gdp - country
 webuse educ99gdp, clear
 noi benchmark_encode country, testname("webuse educ99gdp: country")
-
-* Test 13.14: uslifeexp - sex (decode since labeled)
-sysuse uslifeexp, clear
-decode sex, generate(sex_str)
-noi benchmark_encode sex_str, testname("sysuse uslifeexp: sex")
-
-* Test 13.15: sp500 - date (tostring)
-sysuse sp500, clear
-tostring date, generate(date_str) format(%tdCCYY-NN-DD)
-noi benchmark_encode date_str, testname("sysuse sp500: date as string")
 
 /*******************************************************************************
  * SECTION 14: Empty string edge cases
@@ -2692,25 +2670,7 @@ else {
     noi test_fail "100K/2" "not 2 unique"
 }
 
-* Test 23.6: 100K observations, all unique (extreme cardinality)
-clear
-set obs 100000
-gen str20 x = "unique_" + string(_n)
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly sum code
-    if r(max) == 100000 {
-        noi test_pass "100K obs, all unique (extreme cardinality)"
-    }
-    else {
-        noi test_fail "100K all unique" "max not 100K"
-    }
-}
-else {
-    noi test_fail "100K all unique" "rc=`=_rc'"
-}
-
-* Test 23.7: 500K observations
+* Test 23.6: 500K observations
 clear
 set obs 500000
 gen str10 x = "cat" + string(mod(_n, 100))

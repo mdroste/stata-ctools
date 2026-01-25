@@ -286,6 +286,13 @@ ST_retcode cencode_main(const char *args)
 
     for (size_t i = 0; i < nobs && !collect_error; i++) {
         ST_int obs = obs1 + (ST_int)i;
+
+        /* Skip observations that don't meet the if condition */
+        if (!SF_ifobs(obs)) {
+            obs_codes[i] = 0;  /* not in sample */
+            continue;
+        }
+
         int slen = SF_sdatalen(var_idx, obs);
 
         if (slen <= 0) {
@@ -314,9 +321,9 @@ ST_retcode cencode_main(const char *args)
                 }
             }
             if (is_strl) {
-                SF_strldata(SRC_VAR, obs, large_buf, slen + 1);
+                SF_strldata(var_idx, obs, large_buf, slen + 1);
             } else {
-                SF_sdata(SRC_VAR, obs, large_buf);
+                SF_sdata(var_idx, obs, large_buf);
             }
             large_buf[slen] = '\0';
             str_ptr = large_buf;
@@ -351,7 +358,7 @@ ST_retcode cencode_main(const char *args)
 
     if (n_unique == 0) {
         for (size_t i = 0; i < nobs; i++) {
-            SF_vstore(DEST_VAR, obs1 + (ST_int)i, SV_missval);
+            SF_vstore(gen_idx, obs1 + (ST_int)i, SV_missval);
         }
         SF_scal_save("_cencode_n_unique", 0);
         SF_scal_save("_cencode_n_chunks", 1);
@@ -427,36 +434,14 @@ ST_retcode cencode_main(const char *args)
      * No need to re-read strings - we stored the original codes in Pass 1
      * ======================================================================== */
 
-    /* Debug: count how many obs_codes are non-zero */
-    int debug_nonzero = 0;
-    for (size_t i = 0; i < nobs; i++) {
-        if (obs_codes[i] > 0) debug_nonzero++;
-    }
-    {
-        char dbg[256];
-        snprintf(dbg, sizeof(dbg), "cencode debug: obs_codes nonzero=%d, nobs=%d\n", debug_nonzero, (int)nobs);
-        SF_display(dbg);
-    }
-
     for (size_t i = 0; i < nobs; i++) {
         ST_int obs = obs1 + (ST_int)i;
         int orig_code = obs_codes[i];
 
         if (orig_code > 0) {
-            double val_to_store = (double)code_map[orig_code];
-            SF_vstore(DEST_VAR, obs, val_to_store);
-
-            /* Debug: read back to verify */
-            if (i < 3) {
-                double readback;
-                SF_vdata(DEST_VAR, obs, &readback);
-                char dbg[256];
-                snprintf(dbg, sizeof(dbg), "cencode debug: wrote %.0f to obs %d, read back %.0f\n",
-                         val_to_store, (int)obs, readback);
-                SF_display(dbg);
-            }
+            SF_vstore(gen_idx, obs, (double)code_map[orig_code]);
         } else {
-            SF_vstore(DEST_VAR, obs, SV_missval);
+            SF_vstore(gen_idx, obs, SV_missval);
         }
     }
 

@@ -45,8 +45,44 @@ program define cqreg, eclass
 
     * Parse variable list
     gettoken depvar indepvars : varlist
-    local nvars : word count `varlist'
-    local K_x = `nvars' - 1  // number of independent variables
+
+    * Expand factor variables to temporary numeric variables
+    * This handles i.varname, c.varname, etc.
+    if "`indepvars'" != "" {
+        * Step 1: Expand factor variables to temp numeric vars
+        fvrevar `indepvars' if `touse'
+        local indepvars_fvrevar "`r(varlist)'"
+
+        * Step 2: Remove collinear variables (including base levels of factors)
+        * This matches what Stata's estimation commands do internally
+        _rmcoll `indepvars_fvrevar' if `touse', forcedrop
+        local indepvars_expanded "`r(varlist)'"
+
+        * Step 3: Get proper coefficient names using fvexpand
+        * These names will be like "age 2.drug 3.drug" (base levels omitted)
+        fvexpand `indepvars' if `touse'
+        local coef_names_all "`r(varlist)'"
+
+        * Filter out base levels (those with 'b' or 'o' notation)
+        local coef_names ""
+        foreach v of local coef_names_all {
+            * Skip omitted (o.) and base (b.) levels
+            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+                local coef_names `coef_names' `v'
+            }
+        }
+
+        * Build expanded varlist for plugin
+        local varlist_expanded "`depvar' `indepvars_expanded'"
+    }
+    else {
+        local indepvars_expanded ""
+        local varlist_expanded "`depvar'"
+        local coef_names ""
+    }
+
+    local nvars : word count `varlist_expanded'
+    local K_x = `nvars' - 1  // number of independent variables (after expansion)
     local nfe = 0
     if "`absorb'" != "" {
         local nfe : word count `absorb'
@@ -239,7 +275,8 @@ program define cqreg, eclass
     timer on 99
 
     * Build varlist for plugin: depvar indepvars [fe_vars] [cluster_var]
-    local plugin_varlist `varlist'
+    * Use expanded varlist (factor variables converted to temp numeric vars)
+    local plugin_varlist `varlist_expanded'
     if `nfe' > 0 {
         local plugin_varlist `plugin_varlist' `absorb'
     }
@@ -312,12 +349,11 @@ program define cqreg, eclass
     matrix `V' = __cqreg_V[1..`K_with_cons', 1..`K_with_cons']
 
     * Build column names for matrices
+    * Use coef_names which has proper factor variable notation (e.g., 2.drug)
     local colnames ""
     if `K_x' > 0 {
-        foreach v of local indepvars {
-            * Handle factor variables
-            local vname = subinstr("`v'", ".", "_", .)
-            local colnames `colnames' `vname'
+        foreach v of local coef_names {
+            local colnames `colnames' `v'
         }
     }
     local colnames `colnames' _cons

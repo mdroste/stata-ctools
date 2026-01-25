@@ -1195,9 +1195,18 @@ static ST_retcode do_iv_regression(void)
     }
 
     ST_double r2 = (tss > 0) ? 1.0 - rss / tss : 0.0;
-    ST_int df_r_val = N - K_total - df_a;
+
+    /* Compute df_r:
+       - For clustered VCE: df_r = num_clusters - 1 (Stata convention)
+       - Otherwise: df_r = N - K - df_a */
+    ST_int df_r_val;
+    if (has_cluster) {
+        df_r_val = num_clusters - 1;
+    } else {
+        df_r_val = N - K_total - df_a;
+    }
     if (df_r_val <= 0) df_r_val = 1;
-    ST_double rmse = sqrt(rss / df_r_val);
+    ST_double rmse = sqrt(rss / (N - K_total - df_a > 0 ? N - K_total - df_a : 1));
 
     /* Compute model F-statistic: (R2 / K) / ((1 - R2) / df_r) */
     ST_double f_stat = 0.0;
