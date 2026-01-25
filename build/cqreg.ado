@@ -59,16 +59,24 @@ program define cqreg, eclass
         local indepvars_expanded "`r(varlist)'"
 
         * Step 3: Get proper coefficient names using fvexpand
-        * These names will be like "age 2.drug 3.drug" (base levels omitted)
+        * These names will be like "age 1b.drug 2.drug 3.drug" (including base levels)
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Filter out base levels (those with 'b' or 'o' notation)
+        * Keep ALL coefficient names (including base/omitted levels) for matrix labeling
+        * We need to track which ones are base levels to insert 0s later
         local coef_names ""
+        local coef_is_base ""
         foreach v of local coef_names_all {
-            * Skip omitted (o.) and base (b.) levels
-            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
+            if "`v'" != "" {
                 local coef_names `coef_names' `v'
+                * Mark if this is a base (b.) or omitted (o.) level
+                if regexm("`v'", "[0-9]+b\.") | regexm("`v'", "^o\.") | regexm("`v'", "#.*b\.") | regexm("`v'", "#o\.") {
+                    local coef_is_base `coef_is_base' 1
+                }
+                else {
+                    local coef_is_base `coef_is_base' 0
+                }
             }
         }
 
