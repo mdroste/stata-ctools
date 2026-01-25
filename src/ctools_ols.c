@@ -10,6 +10,7 @@
 #include <string.h>
 #include <math.h>
 #include "ctools_ols.h"
+#include "ctools_config.h"
 
 /* ========================================================================
  * Cholesky decomposition: A = L * L' (in-place, returns L in lower triangle)
@@ -55,7 +56,7 @@ ST_int ctools_cholesky(ST_double *A, ST_int n)
 ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 {
     ST_int i, j, k;
-    ST_double *L_inv = (ST_double *)calloc(n * n, sizeof(ST_double));
+    ST_double *L_inv = (ST_double *)ctools_safe_calloc3((size_t)n, (size_t)n, sizeof(ST_double));
 
     if (!L_inv) return -1;
 
@@ -91,10 +92,10 @@ ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 
 ST_int ctools_invert_spd(ST_double *A, ST_int n, ST_double *A_inv)
 {
-    ST_double *L = (ST_double *)malloc(n * n * sizeof(ST_double));
+    ST_double *L = (ST_double *)ctools_safe_malloc3((size_t)n, (size_t)n, sizeof(ST_double));
     if (!L) return -1;
 
-    memcpy(L, A, n * n * sizeof(ST_double));
+    memcpy(L, A, (size_t)n * (size_t)n * sizeof(ST_double));
 
     if (ctools_cholesky(L, n) != 0) {
         free(L);
@@ -113,8 +114,8 @@ ST_int ctools_invert_spd(ST_double *A, ST_int n, ST_double *A_inv)
 ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, ST_double *x)
 {
     ST_int i, j;
-    ST_double *L = (ST_double *)malloc(n * n * sizeof(ST_double));
-    ST_double *y = (ST_double *)malloc(n * sizeof(ST_double));
+    ST_double *L = (ST_double *)ctools_safe_malloc3((size_t)n, (size_t)n, sizeof(ST_double));
+    ST_double *y = (ST_double *)ctools_safe_malloc2((size_t)n, sizeof(ST_double));
 
     if (!L || !y) {
         free(L);
@@ -122,7 +123,7 @@ ST_int ctools_solve_cholesky(const ST_double *A, const ST_double *b, ST_int n, S
         return -1;
     }
 
-    memcpy(L, A, n * n * sizeof(ST_double));
+    memcpy(L, A, (size_t)n * (size_t)n * sizeof(ST_double));
 
     if (ctools_cholesky(L, n) != 0) {
         free(L);

@@ -187,21 +187,21 @@ static ST_retcode do_iv_regression(void)
 
     N_total = N_ifobs;
 
-    /* Allocate output arrays */
-    ST_double *y = (ST_double *)malloc((size_t)N_total * sizeof(ST_double));
-    ST_double *X_endog = (K_endog > 0) ? (ST_double *)malloc((size_t)N_total * K_endog * sizeof(ST_double)) : NULL;
-    ST_double *X_exog = (K_exog > 0) ? (ST_double *)malloc((size_t)N_total * K_exog * sizeof(ST_double)) : NULL;
-    ST_double *Z = (ST_double *)malloc((size_t)N_total * K_iv * sizeof(ST_double));
-    ST_double *weights = has_weights ? (ST_double *)malloc((size_t)N_total * sizeof(ST_double)) : NULL;
-    ST_int *cluster_ids = has_cluster ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
-    ST_int *cluster2_ids = has_cluster2 ? (ST_int *)malloc((size_t)N_total * sizeof(ST_int)) : NULL;
+    /* Allocate output arrays (with overflow-safe multiplication) */
+    ST_double *y = (ST_double *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_double));
+    ST_double *X_endog = (K_endog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_endog, sizeof(ST_double)) : NULL;
+    ST_double *X_exog = (K_exog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_exog, sizeof(ST_double)) : NULL;
+    ST_double *Z = (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_iv, sizeof(ST_double));
+    ST_double *weights = has_weights ? (ST_double *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_double)) : NULL;
+    ST_int *cluster_ids = has_cluster ? (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int)) : NULL;
+    ST_int *cluster2_ids = has_cluster2 ? (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int)) : NULL;
 
-    /* Allocate FE level arrays */
-    ST_int **fe_levels = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
+    /* Allocate FE level arrays (with overflow-safe multiplication) */
+    ST_int **fe_levels = (ST_int **)ctools_safe_malloc2((size_t)G, sizeof(ST_int *));
     int fe_alloc_failed = 0;
     if (fe_levels) {
         for (ST_int g = 0; g < G; g++) {
-            fe_levels[g] = (ST_int *)malloc((size_t)N_total * sizeof(ST_int));
+            fe_levels[g] = (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int));
             if (!fe_levels[g]) fe_alloc_failed = 1;
         }
     } else {

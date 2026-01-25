@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include "stplugin.h"
 #include "cbinscatter_resid.h"
+#include "../ctools_config.h"
 
 /* Use SF_is_missing() from stplugin.h for missing value checks */
 
@@ -137,12 +138,12 @@ ST_retcode ols_residualize(
 
     (void)weight_type;  /* Currently unused, reserved for future */
 
-    /* Allocate working arrays */
-    XtX = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
-    Xty = (ST_double *)calloc(K, sizeof(ST_double));
-    Xtx = (ST_double *)calloc(K, sizeof(ST_double));
-    beta_y = (ST_double *)malloc(K * sizeof(ST_double));
-    beta_x = (ST_double *)malloc(K * sizeof(ST_double));
+    /* Allocate working arrays (with overflow-safe multiplication) */
+    XtX = (ST_double *)ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(ST_double));
+    Xty = (ST_double *)ctools_safe_calloc2((size_t)K, sizeof(ST_double));
+    Xtx = (ST_double *)ctools_safe_calloc2((size_t)K, sizeof(ST_double));
+    beta_y = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
+    beta_x = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
 
     if (!XtX || !Xty || !Xtx || !beta_y || !beta_x) {
         rc = CBINSCATTER_ERR_MEMORY;

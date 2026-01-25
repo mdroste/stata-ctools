@@ -34,12 +34,14 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
     }
 
     ctx->file_size = (size_t)file_size.QuadPart;
+    ctx->mmap_size = ctx->file_size;
     if (ctx->file_size == 0) {
         /* Empty file - set file_data to NULL and return success.
          * The caller should handle this case by creating an empty dataset. */
         CloseHandle(ctx->file_handle);
         ctx->file_handle = NULL;
         ctx->file_data = NULL;
+        ctx->mmap_data = NULL;
         return 0;
     }
 
@@ -64,13 +66,20 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
         return -1;
     }
 
+    /* Store original mmap pointer for later unmapping
+     * (file_data may be modified for BOM skip or encoding conversion) */
+    ctx->mmap_data = ctx->file_data;
+
     return 0;
 }
 
 void cimport_munmap_file(CImportContext *ctx)
 {
-    if (ctx->file_data) {
-        UnmapViewOfFile(ctx->file_data);
+    /* Use mmap_data (original pointer) for unmapping, not file_data
+     * which may have been modified for BOM skip or encoding conversion */
+    if (ctx->mmap_data) {
+        UnmapViewOfFile(ctx->mmap_data);
+        ctx->mmap_data = NULL;
         ctx->file_data = NULL;
     }
     if (ctx->mapping_handle) {
@@ -108,11 +117,13 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
     }
 
     ctx->file_size = st.st_size;
+    ctx->mmap_size = st.st_size;
     if (ctx->file_size == 0) {
         /* Empty file - set file_data to NULL and return success.
          * The caller should handle this case by creating an empty dataset. */
         close(fd);
         ctx->file_data = NULL;
+        ctx->mmap_data = NULL;
         return 0;
     }
 
@@ -123,8 +134,13 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Cannot mmap file: %s", strerror(errno));
         ctx->file_data = NULL;
+        ctx->mmap_data = NULL;
         return -1;
     }
+
+    /* Store original mmap pointer for later unmapping
+     * (file_data may be modified for BOM skip or encoding conversion) */
+    ctx->mmap_data = ctx->file_data;
 
     /* Advise kernel about sequential access pattern */
 #ifdef __linux__
@@ -138,8 +154,11 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
 
 void cimport_munmap_file(CImportContext *ctx)
 {
-    if (ctx->file_data) {
-        munmap(ctx->file_data, ctx->file_size);
+    /* Use mmap_data/mmap_size (original values) for unmapping, not file_data/file_size
+     * which may have been modified for BOM skip or encoding conversion */
+    if (ctx->mmap_data) {
+        munmap(ctx->mmap_data, ctx->mmap_size);
+        ctx->mmap_data = NULL;
         ctx->file_data = NULL;
     }
 }

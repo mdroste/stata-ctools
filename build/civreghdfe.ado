@@ -758,7 +758,14 @@ program define civreghdfe, eclass
     * Store scalars
     ereturn scalar N = `N_used'
     ereturn scalar df_r = `df_r'
-    ereturn scalar df_a = `df_a'
+    * Report df_a_for_vce when clustering (matches ivreghdfe behavior)
+    * When FE is nested in cluster, df_a_for_vce = 0
+    if `vce_type' == 2 | `vce_type' == 3 {
+        ereturn scalar df_a = `df_a_for_vce'
+    }
+    else {
+        ereturn scalar df_a = `df_a'
+    }
     ereturn scalar K = `K'
     ereturn scalar level = `level'
     ereturn scalar K_endog = `K_endog'

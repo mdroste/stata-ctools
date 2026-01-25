@@ -102,6 +102,8 @@ typedef enum {
 typedef struct CImportContext {
     char *file_data;
     size_t file_size;
+    char *mmap_data;      /* Original mmap pointer (for munmap) */
+    size_t mmap_size;     /* Original mmap size (for munmap) */
     char *filename;
     CImportColumnInfo *columns;
     int num_columns;

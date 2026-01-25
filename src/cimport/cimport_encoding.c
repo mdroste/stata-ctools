@@ -439,7 +439,12 @@ int cimport_utf16_to_utf8(const char *data, size_t size, bool is_little_endian,
     const unsigned char *bytes = (const unsigned char *)data;
 
     /* Allocate output buffer (worst case: each UTF-16 unit -> 3 UTF-8 bytes) */
-    size_t max_out = (size / 2) * 3 + 1;
+    /* Overflow check: (size/2) * 3 + 1 */
+    size_t units = size / 2;
+    if (units > (SIZE_MAX - 1) / 3) {
+        return -1;  /* Overflow */
+    }
+    size_t max_out = units * 3 + 1;
     char *output = malloc(max_out);
     if (!output) return -1;
 
@@ -517,6 +522,10 @@ int cimport_convert_to_utf8(const char *data, size_t size, CImportEncoding encod
 
     /* Single-byte encodings: allocate worst-case buffer */
     /* ISO-8859-1/Windows-1252: each byte can become up to 3 UTF-8 bytes */
+    /* Overflow check: size * 3 + 1 */
+    if (size > (SIZE_MAX - 1) / 3) {
+        return -1;  /* Overflow */
+    }
     size_t max_out = size * 3 + 1;
     char *output = malloc(max_out);
     if (!output) return -1;

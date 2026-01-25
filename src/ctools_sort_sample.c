@@ -405,6 +405,7 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
 
     /* Per-thread temp buffers for bucket sorting (FIX: avoids race condition) */
     perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !sample_temp || !splitters || !temp_order ||
         !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
@@ -495,7 +496,7 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     }
 
     /* Compute per-thread write offsets within each bucket */
-    size_t *thread_bucket_offsets = (size_t *)malloc(num_threads * num_threads * sizeof(size_t));
+    thread_bucket_offsets = (size_t *)malloc(num_threads * num_threads * sizeof(size_t));
     if (!thread_bucket_offsets) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
@@ -570,9 +571,8 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
         }
     }
 
-    free(thread_bucket_offsets);
-
 cleanup:
+    free(thread_bucket_offsets);
     free(all_samples);
     free(sample_temp);
     free(splitters);
@@ -620,6 +620,7 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
     perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !splitters || !temp_order ||
         !bucket_counts || !bucket_sizes || !bucket_offsets || !thread_temps) {
@@ -699,7 +700,7 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
         bucket_offsets[b] = bucket_offsets[b-1] + bucket_sizes[b-1];
     }
 
-    size_t *thread_bucket_offsets = (size_t *)malloc(num_threads * num_threads * sizeof(size_t));
+    thread_bucket_offsets = (size_t *)malloc(num_threads * num_threads * sizeof(size_t));
     if (!thread_bucket_offsets) {
         rc = STATA_ERR_MEMORY;
         goto cleanup;
@@ -766,9 +767,8 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
         }
     }
 
-    free(thread_bucket_offsets);
-
 cleanup:
+    free(thread_bucket_offsets);
     free(all_samples);
     free(splitters);
     ctools_aligned_free(temp_order);
