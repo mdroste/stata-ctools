@@ -698,12 +698,6 @@ ST_retcode cexport_main(const char *args)
     g_ctx.nobs_loaded = nobs;
     nvars = SF_nvars();
 
-    if (nobs == 0) {
-        SF_error("cexport: no observations to export\n");
-        cexport_context_cleanup(&g_ctx);
-        return 2000;
-    }
-
     if (nvars == 0) {
         SF_error("cexport: no variables to export\n");
         cexport_context_cleanup(&g_ctx);

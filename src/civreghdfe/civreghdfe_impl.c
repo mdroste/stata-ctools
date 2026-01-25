@@ -97,11 +97,13 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
 
     /* HAC parameters */
-    ST_int kernel_type = 0, bw = 0, dkraay = 0;
+    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0;
     SF_scal_use("__civreghdfe_kernel", &dval); kernel_type = (ST_int)dval;
     SF_scal_use("__civreghdfe_bw", &dval); bw = (ST_int)dval;
     SF_scal_use("__civreghdfe_dkraay", &dval); dkraay = (ST_int)dval;
+    SF_scal_use("__civreghdfe_kiefer", &dval); kiefer = (ST_int)dval;
     (void)dkraay;  /* Reserved for Driscoll-Kraay panel HAC */
+    (void)kiefer;  /* Kiefer SEs are handled via kernel_type = 6 */
 
     if (verbose) {
         char buf[512];

@@ -803,6 +803,17 @@ noi print_section "varnames Options"
 benchmark_import using "temp/noheader.csv", testname("varnames(nonames)") importopts(varnames(nonames))
 benchmark_import using "temp/basic.csv", testname("varnames(1)") importopts(varnames(1))
 
+* Create test file with header on row 3
+file open fh using "temp/varnames_row3.csv", write replace
+file write fh "skip1,skip2" _n
+file write fh "ignore,this" _n
+file write fh "name,value" _n
+file write fh "Alice,100" _n
+file write fh "Bob,200" _n
+file close fh
+
+benchmark_import using "temp/varnames_row3.csv", testname("varnames(3)") importopts(varnames(3))
+
 /*******************************************************************************
  * SECTION: case Options
  ******************************************************************************/
@@ -862,11 +873,11 @@ else {
     noi test_fail "stringcols" "cimport failed with rc=`=_rc'"
 }
 
-cimport_test using "temp/basic.csv", testname("numericcols forces numeric") ///
-    importopts(numericcols(2)) expectn(5)
+benchmark_import using "temp/basic.csv", testname("numericcols forces numeric") ///
+    importopts(numericcols(2))
 
-cimport_test using "temp/zipcodes.csv", testname("stringcols multiple columns") ///
-    importopts(stringcols(1 3)) expectn(3)
+benchmark_import using "temp/zipcodes.csv", testname("stringcols multiple columns") ///
+    importopts(stringcols(1 3))
 
 /*******************************************************************************
  * SECTION: decimalseparator/groupseparator Options
@@ -910,19 +921,19 @@ cimport_test using "temp/basic.csv", testname("threads(1)") importopts(threads(1
  ******************************************************************************/
 noi print_section "rowrange Option"
 
-cimport_test using "temp/range_test.csv", testname("rowrange(10:20)") ///
-    importopts(rowrange(10:20)) expectn(11)
+benchmark_import using "temp/range_test.csv", testname("rowrange(10:20)") ///
+    importopts(rowrange(10:20))
 
-cimport_test using "temp/range_test.csv", testname("rowrange(50:) to end") ///
-    importopts(rowrange(50:)) expectn(51)
+benchmark_import using "temp/range_test.csv", testname("rowrange(50:) to end") ///
+    importopts(rowrange(50:))
 
 /*******************************************************************************
  * SECTION: colrange Option
  ******************************************************************************/
 noi print_section "colrange Option"
 
-cimport_test using "temp/range_test.csv", testname("colrange(2:4)") ///
-    importopts(colrange(2:4)) expectk(3)
+benchmark_import using "temp/range_test.csv", testname("colrange(2:4)") ///
+    importopts(colrange(2:4))
 
 /*******************************************************************************
  * SECTION: Encoding Options
@@ -930,8 +941,8 @@ cimport_test using "temp/range_test.csv", testname("colrange(2:4)") ///
 noi print_section "Encoding Options"
 
 * Test 1-2: UTF-8 basic
-cimport_test using "temp/basic.csv", testname("UTF-8 auto-detection") expectn(5)
-cimport_test using "temp/basic.csv", testname("encoding(utf-8) explicit") importopts(encoding(utf-8)) expectn(5)
+benchmark_import using "temp/basic.csv", testname("UTF-8 auto-detection")
+benchmark_import using "temp/basic.csv", testname("encoding(utf-8) explicit") importopts(encoding(utf-8))
 
 * Test 3: UTF-8 international characters
 file open fh using "temp/utf8_special.csv", write replace
@@ -940,7 +951,7 @@ file write fh "Jose Garcia,Sao Paulo" _n
 file write fh "Francois Muller,Zurich" _n
 file close fh
 
-cimport_test using "temp/utf8_special.csv", testname("UTF-8 international chars") expectn(2)
+benchmark_import using "temp/utf8_special.csv", testname("UTF-8 international chars")
 
 * Test 4: UTF-8 with BOM
 file open fh using "temp/utf8_bom.csv", write replace
@@ -965,16 +976,16 @@ file write fh "name,value" _n
 file write fh "caf" _char(233) ",100" _n
 file close fh
 
-cimport_test using "temp/latin1_test.csv", testname("encoding(latin1)") importopts(encoding(latin1)) expectn(1)
+benchmark_import using "temp/latin1_test.csv", testname("encoding(latin1)") importopts(encoding(latin1))
 
 file open fh using "temp/cp1252_test.csv", write replace
 file write fh "text,value" _n
 file write fh _char(147) "quoted" _char(148) ",100" _n
 file close fh
 
-cimport_test using "temp/cp1252_test.csv", testname("encoding(windows-1252)") importopts(encoding(windows-1252)) expectn(1)
-cimport_test using "temp/basic.csv", testname("encoding(latin9)") importopts(encoding(latin9)) expectn(5)
-cimport_test using "temp/basic.csv", testname("encoding(ascii)") importopts(encoding(ascii)) expectn(5)
+benchmark_import using "temp/cp1252_test.csv", testname("encoding(windows-1252)") importopts(encoding(windows-1252))
+benchmark_import using "temp/basic.csv", testname("encoding(latin9)") importopts(encoding(latin9))
+benchmark_import using "temp/basic.csv", testname("encoding(ascii)") importopts(encoding(ascii))
 
 * Test 9: MacRoman
 file open fh using "temp/macroman_test.csv", write replace
@@ -982,7 +993,7 @@ file write fh "text,value" _n
 file write fh _char(138) _char(140) ",100" _n
 file close fh
 
-cimport_test using "temp/macroman_test.csv", testname("encoding(macroman)") importopts(encoding(macroman)) expectn(1)
+benchmark_import using "temp/macroman_test.csv", testname("encoding(macroman)") importopts(encoding(macroman))
 
 * Test 10: UTF-8 auto-detection with multi-byte
 file open fh using "temp/autodetect_utf8.csv", write replace
@@ -990,7 +1001,7 @@ file write fh "city,country" _n
 file write fh "M" _char(195) _char(188) "nchen,Germany" _n
 file close fh
 
-cimport_test using "temp/autodetect_utf8.csv", testname("auto-detection UTF-8 multi-byte") expectn(1)
+benchmark_import using "temp/autodetect_utf8.csv", testname("auto-detection UTF-8 multi-byte")
 
 * Test 11: UTF-16LE with BOM
 file open fh using "temp/utf16le_bom.csv", write replace
@@ -1041,7 +1052,7 @@ else {
 }
 
 * Test 15: Large file with encoding
-cimport_test using "temp/large_10k.csv", testname("large file UTF-8 (10K rows)") expectn(10000)
+benchmark_import using "temp/large_10k.csv", testname("large file UTF-8 (10K rows)")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Empty and Minimal Files
@@ -1075,14 +1086,14 @@ else {
 }
 
 * Single empty row after header
-cimport_test using "temp/single_empty_row.csv", testname("single empty row") expectn(1)
+benchmark_import using "temp/single_empty_row.csv", testname("single empty row")
 
 * Tiny datasets
-cimport_test using "temp/tiny_1x1.csv", testname("tiny 1x1 dataset") expectn(1) expectk(1)
-cimport_test using "temp/tiny_1xN.csv", testname("tiny 1xN dataset") expectn(1) expectk(10)
-cimport_test using "temp/tiny_Nx1.csv", testname("tiny Nx1 dataset") expectn(100) expectk(1)
-cimport_test using "temp/single_row.csv", testname("single row CSV") expectn(1)
-cimport_test using "temp/single_col.csv", testname("single column CSV") expectn(20)
+benchmark_import using "temp/tiny_1x1.csv", testname("tiny 1x1 dataset")
+benchmark_import using "temp/tiny_1xN.csv", testname("tiny 1xN dataset")
+benchmark_import using "temp/tiny_Nx1.csv", testname("tiny Nx1 dataset")
+benchmark_import using "temp/single_row.csv", testname("single row CSV")
+benchmark_import using "temp/single_col.csv", testname("single column CSV")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Missing Value Patterns
@@ -1096,127 +1107,53 @@ file write fh ",," _n
 file write fh ",," _n
 file close fh
 
-cimport_test using "temp/all_empty.csv", testname("all empty values") expectn(2)
-
-* One column entirely missing
-cimport_test using "temp/one_col_all_missing.csv", testname("one column all missing") expectn(5)
-
-* One row entirely missing
-cimport_test using "temp/one_row_all_missing.csv", testname("one row all missing") expectn(5)
-
-* Empty rows in the middle
-cimport_test using "temp/empty_rows_middle.csv", testname("empty rows in middle") expectn(5)
-
-* First column all missing
-cimport_test using "temp/first_col_missing.csv", testname("first column all missing") expectn(10)
-
-* Last column all missing
-cimport_test using "temp/last_col_missing.csv", testname("last column all missing") expectn(10)
-
-* First row all missing
-cimport_test using "temp/first_row_missing.csv", testname("first data row all missing") expectn(10)
-
-* Last row all missing
-cimport_test using "temp/last_row_missing.csv", testname("last row all missing") expectn(10)
-
-* All columns empty (just commas)
-cimport_test using "temp/all_columns_empty.csv", testname("all columns empty (commas only)") expectn(10)
-
-* Alternating missing pattern
-cimport_test using "temp/alternating_missing.csv", testname("alternating missing pattern") expectn(20)
-
-* Checkerboard missing pattern
-cimport_test using "temp/checkerboard_missing.csv", testname("checkerboard missing pattern") expectn(10)
-
-* Sparse data (mostly missing)
-cimport_test using "temp/sparse_data.csv", testname("sparse data (80% missing)") expectn(50)
-
-* Compare missing value handling with Stata
-benchmark_import using "temp/missing.csv", testname("missing values match Stata")
-benchmark_import using "temp/one_col_all_missing.csv", testname("one col missing matches Stata")
-benchmark_import using "temp/empty_rows_middle.csv", testname("empty rows matches Stata")
+benchmark_import using "temp/all_empty.csv", testname("all empty values")
+benchmark_import using "temp/one_col_all_missing.csv", testname("one column all missing")
+benchmark_import using "temp/one_row_all_missing.csv", testname("one row all missing")
+benchmark_import using "temp/empty_rows_middle.csv", testname("empty rows in middle")
+benchmark_import using "temp/first_col_missing.csv", testname("first column all missing")
+benchmark_import using "temp/last_col_missing.csv", testname("last column all missing")
+benchmark_import using "temp/first_row_missing.csv", testname("first data row all missing")
+benchmark_import using "temp/last_row_missing.csv", testname("last row all missing")
+benchmark_import using "temp/all_columns_empty.csv", testname("all columns empty (commas only)")
+benchmark_import using "temp/alternating_missing.csv", testname("alternating missing pattern")
+benchmark_import using "temp/checkerboard_missing.csv", testname("checkerboard missing pattern")
+benchmark_import using "temp/sparse_data.csv", testname("sparse data (80% missing)")
+benchmark_import using "temp/missing.csv", testname("missing values")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Whitespace Handling
  ******************************************************************************/
 noi print_section "Pathological Data - Whitespace"
 
-* Leading whitespace
-cimport_test using "temp/leading_whitespace.csv", testname("leading whitespace in fields") expectn(3)
+benchmark_import using "temp/leading_whitespace.csv", testname("leading whitespace in fields")
+benchmark_import using "temp/trailing_whitespace.csv", testname("trailing whitespace in fields")
+benchmark_import using "temp/mixed_whitespace.csv", testname("mixed whitespace")
 
-* Trailing whitespace
-cimport_test using "temp/trailing_whitespace.csv", testname("trailing whitespace in fields") expectn(3)
-
-* Mixed whitespace
-cimport_test using "temp/mixed_whitespace.csv", testname("mixed whitespace") expectn(2)
-
-* Whitespace-only fields
+* Whitespace-only fields - behavior may differ from Stata (tabs vs spaces)
 cimport_test using "temp/whitespace_only_fields.csv", testname("whitespace-only fields") expectn(3)
-
-* Compare whitespace handling with Stata
-benchmark_import using "temp/leading_whitespace.csv", testname("leading whitespace matches Stata")
-benchmark_import using "temp/trailing_whitespace.csv", testname("trailing whitespace matches Stata")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Line Endings
  ******************************************************************************/
 noi print_section "Pathological Data - Line Endings"
 
-* File ending without newline
-cimport_test using "temp/no_final_newline.csv", testname("no final newline") expectn(2)
-
-* Windows line endings (CRLF)
-cimport_test using "temp/crlf_endings.csv", testname("Windows CRLF line endings") expectn(2)
-
-* Mixed line endings
-cimport_test using "temp/mixed_line_endings.csv", testname("mixed line endings") expectn(3)
-
-* Blank lines in middle
-capture cimport delimited using "temp/blank_lines_middle.csv", clear
-if _rc == 0 {
-    noi test_pass "blank lines in middle (N=`=_N')"
-}
-else {
-    noi test_fail "blank lines in middle" "rc=`=_rc'"
-}
+benchmark_import using "temp/no_final_newline.csv", testname("no final newline")
+benchmark_import using "temp/crlf_endings.csv", testname("Windows CRLF line endings")
+benchmark_import using "temp/mixed_line_endings.csv", testname("mixed line endings")
+benchmark_import using "temp/blank_lines_middle.csv", testname("blank lines in middle")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Column Count Variations
  ******************************************************************************/
 noi print_section "Pathological Data - Column Variations"
 
-* Fewer columns in some rows
-capture cimport delimited using "temp/fewer_cols.csv", clear
-if _rc == 0 {
-    noi test_pass "fewer columns in some rows (N=`=_N', K=`=c(k)')"
-}
-else {
-    noi test_pass "fewer columns - handled gracefully (rc=`=_rc')"
-}
+benchmark_import using "temp/fewer_cols.csv", testname("fewer columns in some rows")
+benchmark_import using "temp/extra_cols.csv", testname("extra columns in some rows")
+benchmark_import using "temp/trailing_commas.csv", testname("trailing commas (all rows)")
+benchmark_import using "temp/trailing_commas_some.csv", testname("trailing commas (some rows)")
 
-* Extra columns in some rows
-capture cimport delimited using "temp/extra_cols.csv", clear
-if _rc == 0 {
-    noi test_pass "extra columns in some rows (N=`=_N', K=`=c(k)')"
-}
-else {
-    noi test_pass "extra columns - handled gracefully (rc=`=_rc')"
-}
-
-* Trailing commas on all rows
-cimport_test using "temp/trailing_commas.csv", testname("trailing commas (all rows)") expectn(3)
-
-* Trailing commas on some rows
-capture cimport delimited using "temp/trailing_commas_some.csv", clear
-if _rc == 0 {
-    noi test_pass "trailing commas (some rows) - N=`=_N'"
-}
-else {
-    noi test_pass "trailing commas (some) - handled gracefully (rc=`=_rc')"
-}
-
-* Very wide file (100 columns)
-cimport_test using "temp/very_wide.csv", testname("very wide (100 columns)") expectn(5) expectk(100)
+benchmark_import using "temp/very_wide.csv", testname("very wide (100 columns)")
 
 * Many columns (20)
 file open fh using "temp/many_cols.csv", write replace
@@ -1236,62 +1173,28 @@ forvalues j = 1/50 {
 }
 file close fh
 
-cimport_test using "temp/many_cols.csv", testname("20 columns CSV") expectn(50) expectk(20)
+benchmark_import using "temp/many_cols.csv", testname("20 columns CSV")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Header Issues
  ******************************************************************************/
 noi print_section "Pathological Data - Headers"
 
-* Duplicate header names
-capture cimport delimited using "temp/duplicate_headers.csv", clear
-if _rc == 0 {
-    noi test_pass "duplicate headers handled (N=`=_N', K=`=c(k)')"
-}
-else {
-    noi test_pass "duplicate headers - handled gracefully (rc=`=_rc')"
-}
-
-* Special characters in headers
-capture cimport delimited using "temp/special_header_chars.csv", clear
-if _rc == 0 {
-    noi test_pass "special chars in headers (N=`=_N')"
-}
-else {
-    noi test_pass "special header chars - handled gracefully (rc=`=_rc')"
-}
-
-* Headers with spaces
-cimport_test using "temp/headers_with_spaces.csv", testname("headers with spaces") expectn(2)
-
-* Numeric headers
-cimport_test using "temp/numeric_headers.csv", testname("numeric headers") expectn(2)
-
-* Very long header names
-cimport_test using "temp/long_headers.csv", testname("very long header names") expectn(2)
+benchmark_import using "temp/duplicate_headers.csv", testname("duplicate headers")
+benchmark_import using "temp/special_header_chars.csv", testname("special chars in headers")
+benchmark_import using "temp/headers_with_spaces.csv", testname("headers with spaces")
+benchmark_import using "temp/numeric_headers.csv", testname("numeric headers")
+benchmark_import using "temp/long_headers.csv", testname("very long header names")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Quoting Issues
  ******************************************************************************/
 noi print_section "Pathological Data - Quoting"
 
-* Quoted fields with embedded commas - test import succeeds
-cimport_test using "temp/embedded_commas.csv", testname("embedded commas import") expectn(3)
-
-* Quoted fields with embedded quotes
-capture cimport delimited using "temp/embedded_quotes.csv", clear
-if _rc == 0 {
-    noi test_pass "embedded quotes (escaped) - N=`=_N'"
-}
-else {
-    noi test_pass "embedded quotes - handled gracefully (rc=`=_rc')"
-}
-
-* Mixed quoting
-cimport_test using "temp/mixed_quoting.csv", testname("mixed quoting styles") expectn(3)
-
-* Quoted fields comparison with Stata
-benchmark_import using "temp/quoted.csv", testname("quoted fields match Stata")
+benchmark_import using "temp/embedded_commas.csv", testname("embedded commas")
+benchmark_import using "temp/embedded_quotes.csv", testname("embedded quotes (escaped)")
+benchmark_import using "temp/mixed_quoting.csv", testname("mixed quoting styles")
+benchmark_import using "temp/quoted.csv", testname("quoted fields")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Numeric Edge Cases
@@ -1307,7 +1210,7 @@ forvalues i = 1/10 {
 }
 file close fh
 
-cimport_test using "temp/long_lines.csv", testname("long lines (100 chars)") expectn(10)
+benchmark_import using "temp/long_lines.csv", testname("long lines (100 chars)")
 
 * Numeric edge values
 file open fh using "temp/numeric_edge.csv", write replace
@@ -1319,103 +1222,55 @@ file write fh "-1e10" _n
 file write fh "0.000001" _n
 file close fh
 
-cimport_test using "temp/numeric_edge.csv", testname("numeric edge values") expectn(5)
-
-* Scientific notation
-cimport_test using "temp/scientific_notation.csv", testname("scientific notation") expectn(3)
-
-* Negative numbers
-cimport_test using "temp/negative_numbers.csv", testname("negative numbers") expectn(3)
-
-* Mixed positive and negative
-cimport_test using "temp/mixed_signs.csv", testname("mixed signs (+/-)") expectn(5)
-
-* Compare numeric handling with Stata
-benchmark_import using "temp/numerics.csv", testname("numerics match Stata")
-benchmark_import using "temp/scientific_notation.csv", testname("scientific notation matches Stata")
-benchmark_import using "temp/negative_numbers.csv", testname("negative numbers match Stata")
+benchmark_import using "temp/numeric_edge.csv", testname("numeric edge values")
+benchmark_import using "temp/scientific_notation.csv", testname("scientific notation")
+benchmark_import using "temp/negative_numbers.csv", testname("negative numbers")
+benchmark_import using "temp/mixed_signs.csv", testname("mixed signs (+/-)")
+benchmark_import using "temp/numerics.csv", testname("numerics")
 
 /*******************************************************************************
  * SECTION: Pathological Data - String Edge Cases
  ******************************************************************************/
 noi print_section "Pathological Data - String Edge Cases"
 
-* Very long strings
-cimport_test using "temp/very_long_strings.csv", testname("very long strings (500 chars)") expectn(5)
-
-* Numeric-looking strings
-cimport_test using "temp/numeric_strings.csv", testname("numeric-looking strings") expectn(3)
-
-* Only string data
-cimport_test using "temp/strings_only.csv", testname("strings only (no numeric)") expectn(4)
+benchmark_import using "temp/very_long_strings.csv", testname("very long strings (500 chars)")
+benchmark_import using "temp/numeric_strings.csv", testname("numeric-looking strings")
+benchmark_import using "temp/strings_only.csv", testname("strings only (no numeric)")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Type Inference
  ******************************************************************************/
 noi print_section "Pathological Data - Type Inference"
 
-* Boolean-like values
-cimport_test using "temp/boolean_like.csv", testname("boolean-like values") expectn(4)
+benchmark_import using "temp/boolean_like.csv", testname("boolean-like values")
+benchmark_import using "temp/date_formats.csv", testname("date-like values")
 
-* Date-like values
-cimport_test using "temp/date_formats.csv", testname("date-like values") expectn(3)
-
-* Time-like values
+* Time formats - column parsing may differ from Stata
 cimport_test using "temp/time_formats.csv", testname("time-like values") expectn(3)
 
-* Currency values
+* Currency values - quoting/parsing may differ from Stata
 cimport_test using "temp/currency_values.csv", testname("currency values") expectn(2)
 
-* Percentage values
-cimport_test using "temp/percentage_values.csv", testname("percentage values") expectn(3)
-
-* Ambiguous types (numeric then string)
-capture cimport delimited using "temp/ambiguous_types.csv", clear
-if _rc == 0 {
-    noi test_pass "ambiguous types - N=`=_N', mixed col type inferred"
-}
-else {
-    noi test_fail "ambiguous types" "rc=`=_rc'"
-}
-
-* Type change mid-column
-capture cimport delimited using "temp/type_change.csv", clear
-if _rc == 0 {
-    noi test_pass "type change mid-column - N=`=_N'"
-}
-else {
-    noi test_fail "type change mid-column" "rc=`=_rc'"
-}
-
-* Compare type inference with Stata (where exact match is expected)
-benchmark_import using "temp/boolean_like.csv", testname("boolean-like matches Stata")
+benchmark_import using "temp/percentage_values.csv", testname("percentage values")
+benchmark_import using "temp/ambiguous_types.csv", testname("ambiguous types")
+benchmark_import using "temp/type_change.csv", testname("type change mid-column")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Data Density
  ******************************************************************************/
 noi print_section "Pathological Data - Data Density"
 
-* All same value
-cimport_test using "temp/all_same_value.csv", testname("all same value (1,1,1)") expectn(50)
-
-* Dense data (no missing)
-cimport_test using "temp/dense_data.csv", testname("dense data (no missing)") expectn(100)
-
-* Very deep file (5000 rows, 2 cols)
-cimport_test using "temp/very_deep.csv", testname("very deep (5000x2)") expectn(5000)
-
-* Square file (10x10)
-cimport_test using "temp/square_10x10.csv", testname("square data (10x10)") expectn(10) expectk(10)
-
-* Compare dense data with Stata
-benchmark_import using "temp/dense_data.csv", testname("dense data matches Stata")
+benchmark_import using "temp/all_same_value.csv", testname("all same value (1,1,1)")
+benchmark_import using "temp/dense_data.csv", testname("dense data (no missing)")
+benchmark_import using "temp/very_deep.csv", testname("very deep (5000x2)")
+benchmark_import using "temp/square_10x10.csv", testname("square data (10x10)")
 
 /*******************************************************************************
  * SECTION: Large File Tests
  ******************************************************************************/
 noi print_section "Large File Tests"
 
-cimport_test using "temp/large_10k.csv", testname("10K rows import") expectn(10000)
+benchmark_import using "temp/large_10k.csv", testname("10K rows import")
 
 * 50K rows
 file open fh using "temp/large_50k.csv", write replace
@@ -1425,7 +1280,7 @@ forvalues i = 1/50000 {
 }
 file close fh
 
-cimport_test using "temp/large_50k.csv", testname("50K rows import") expectn(50000)
+benchmark_import using "temp/large_50k.csv", testname("50K rows import")
 
 * Large file with many columns
 file open fh using "temp/large_wide.csv", write replace
@@ -1445,7 +1300,7 @@ forvalues j = 1/1000 {
 }
 file close fh
 
-cimport_test using "temp/large_wide.csv", testname("large wide (1Kx50)") expectn(1000) expectk(50)
+benchmark_import using "temp/large_wide.csv", testname("large wide (1Kx50)")
 
 * Large file with mixed types
 file open fh using "temp/large_mixed.csv", write replace
@@ -1457,7 +1312,7 @@ forvalues i = 1/20000 {
 }
 file close fh
 
-cimport_test using "temp/large_mixed.csv", testname("large mixed types (20K)") expectn(20000)
+benchmark_import using "temp/large_mixed.csv", testname("large mixed types (20K)")
 
 /*******************************************************************************
  * SECTION: Synthetic Test Datasets
@@ -1475,8 +1330,7 @@ forvalues id = 1/100 {
 }
 file close fh
 
-cimport_test using "temp/panel_data.csv", testname("panel data (100x5)") expectn(500)
-benchmark_import using "temp/panel_data.csv", testname("panel data matches Stata")
+benchmark_import using "temp/panel_data.csv", testname("panel data (100x5)")
 
 * Survey data with missing
 file open fh using "temp/survey_data.csv", write replace
@@ -1496,7 +1350,7 @@ forvalues i = 1/200 {
 }
 file close fh
 
-cimport_test using "temp/survey_data.csv", testname("survey data with missing") expectn(200)
+benchmark_import using "temp/survey_data.csv", testname("survey data with missing")
 
 * Financial OHLCV data
 file open fh using "temp/financial_ohlcv.csv", write replace
@@ -1514,7 +1368,7 @@ forvalues i = 1/252 {
 }
 file close fh
 
-cimport_test using "temp/financial_ohlcv.csv", testname("financial OHLCV data") expectn(252)
+benchmark_import using "temp/financial_ohlcv.csv", testname("financial OHLCV data")
 
 * E-commerce data
 file open fh using "temp/ecommerce_orders.csv", write replace
@@ -1530,8 +1384,7 @@ forvalues i = 1/1000 {
 }
 file close fh
 
-cimport_test using "temp/ecommerce_orders.csv", testname("e-commerce orders") expectn(1000)
-benchmark_import using "temp/ecommerce_orders.csv", testname("e-commerce matches Stata")
+benchmark_import using "temp/ecommerce_orders.csv", testname("e-commerce orders")
 
 * Healthcare data with complex types
 file open fh using "temp/healthcare_data.csv", write replace
@@ -1550,7 +1403,7 @@ forvalues i = 1/500 {
 }
 file close fh
 
-cimport_test using "temp/healthcare_data.csv", testname("healthcare patient data") expectn(500)
+benchmark_import using "temp/healthcare_data.csv", testname("healthcare patient data")
 
 * Education data
 file open fh using "temp/education_data.csv", write replace
@@ -1564,8 +1417,7 @@ forvalues i = 1/500 {
 }
 file close fh
 
-cimport_test using "temp/education_data.csv", testname("education student data") expectn(500)
-benchmark_import using "temp/education_data.csv", testname("education data matches Stata")
+benchmark_import using "temp/education_data.csv", testname("education student data")
 
 /*******************************************************************************
  * SECTION: Malformed CSV Handling
@@ -1702,47 +1554,39 @@ else {
 noi print_section "Option Edge Cases"
 
 * rowrange edge cases
-cimport_test using "temp/range_test.csv", testname("rowrange(1:1) single row") ///
-    importopts(rowrange(1:1)) expectn(1)
+benchmark_import using "temp/range_test.csv", testname("rowrange(1:1) header only") ///
+    importopts(rowrange(1:1))
 
-cimport_test using "temp/range_test.csv", testname("rowrange(100:100) last row") ///
-    importopts(rowrange(100:100)) expectn(1)
+benchmark_import using "temp/range_test.csv", testname("rowrange(101:101) last row") ///
+    importopts(rowrange(101:101))
 
-capture cimport delimited using "temp/range_test.csv", rowrange(101:200) clear
-if _rc == 0 & _N == 0 {
-    noi test_pass "rowrange beyond file - empty result"
-}
-else if _rc != 0 {
-    noi test_pass "rowrange beyond file - handled gracefully (rc=`=_rc')"
-}
-else {
-    noi test_fail "rowrange beyond file" "unexpected N=`=_N'"
-}
+benchmark_import using "temp/range_test.csv", testname("rowrange beyond file") ///
+    importopts(rowrange(102:200))
 
 * colrange edge cases
-cimport_test using "temp/range_test.csv", testname("colrange(1:1) first col only") ///
-    importopts(colrange(1:1)) expectk(1)
+benchmark_import using "temp/range_test.csv", testname("colrange(1:1) first col only") ///
+    importopts(colrange(1:1))
 
-cimport_test using "temp/range_test.csv", testname("colrange(5:5) last col only") ///
-    importopts(colrange(5:5)) expectk(1)
+benchmark_import using "temp/range_test.csv", testname("colrange(5:5) last col only") ///
+    importopts(colrange(5:5))
 
 * Combined rowrange and colrange
-cimport_test using "temp/range_test.csv", testname("rowrange + colrange") ///
-    importopts(rowrange(10:20) colrange(2:4)) expectn(11) expectk(3)
+benchmark_import using "temp/range_test.csv", testname("rowrange + colrange") ///
+    importopts(rowrange(10:20) colrange(2:4))
 
 * stringcols with all columns
-cimport_test using "temp/numerics.csv", testname("stringcols(1 2 3) all cols") ///
-    importopts(stringcols(1 2 3)) expectn(3)
+benchmark_import using "temp/numerics.csv", testname("stringcols(1 2 3) all cols") ///
+    importopts(stringcols(1 2 3))
 
 * asfloat with large numbers
-cimport_test using "temp/large_10k.csv", testname("asfloat large dataset") ///
-    importopts(asfloat) expectn(10000)
+benchmark_import using "temp/large_10k.csv", testname("asfloat large dataset") ///
+    importopts(asfloat)
 
 * asdouble with precision
-cimport_test using "temp/numerics.csv", testname("asdouble precision") ///
-    importopts(asdouble) expectn(3)
+benchmark_import using "temp/numerics.csv", testname("asdouble precision") ///
+    importopts(asdouble)
 
-* Multiple threads
+* Multiple threads (cimport-specific option)
 cimport_test using "temp/large_10k.csv", testname("threads(4) large file") ///
     importopts(threads(4)) expectn(10000)
 
@@ -1989,7 +1833,7 @@ file write fh `"1,"","' _n
 file write fh `"2,"","' _n
 file close fh
 
-cimport_test using "temp/quoted_vs_unquoted_empty.csv", testname("quoted vs unquoted empty") expectn(2)
+benchmark_import using "temp/quoted_vs_unquoted_empty.csv", testname("quoted vs unquoted empty")
 
 * Single quote character as field
 file open fh using "temp/single_quote_field.csv", write replace
@@ -1998,7 +1842,7 @@ file write fh `"1,"""",100"' _n
 file write fh "2,normal,200" _n
 file close fh
 
-cimport_test using "temp/single_quote_field.csv", testname("single quote as field") expectn(2)
+benchmark_import using "temp/single_quote_field.csv", testname("single quote as field")
 
 * Quote at field boundaries only
 file open fh using "temp/boundary_quotes.csv", write replace
@@ -2054,7 +1898,7 @@ file write fh `"1,"""Triple""" quoted"' _n
 file write fh "2,normal" _n
 file close fh
 
-cimport_test using "temp/triple_quotes.csv", testname("triple quotes") expectn(2)
+benchmark_import using "temp/triple_quotes.csv", testname("triple quotes")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Numeric Edge Cases
@@ -2071,7 +1915,7 @@ file write fh "4,infinity" _n
 file write fh "5,-infinity" _n
 file close fh
 
-cimport_test using "temp/infinity_values.csv", testname("infinity representations") expectn(5)
+benchmark_import using "temp/infinity_values.csv", testname("infinity representations")
 
 * NaN representations
 file open fh using "temp/nan_values.csv", write replace
@@ -2083,7 +1927,7 @@ file write fh "4,NA" _n
 file write fh "5,N/A" _n
 file close fh
 
-cimport_test using "temp/nan_values.csv", testname("NaN representations") expectn(5)
+benchmark_import using "temp/nan_values.csv", testname("NaN representations")
 
 * Hexadecimal values
 file open fh using "temp/hex_values.csv", write replace
@@ -2094,7 +1938,7 @@ file write fh "3,0x00" _n
 file write fh "4,0xDEADBEEF" _n
 file close fh
 
-cimport_test using "temp/hex_values.csv", testname("hexadecimal values") expectn(4)
+benchmark_import using "temp/hex_values.csv", testname("hexadecimal values")
 
 * Numbers with thousands separators
 file open fh using "temp/thousands_sep.csv", write replace
@@ -2104,7 +1948,7 @@ file write fh `"2,"1,000,000""' _n
 file write fh `"3,"12,345,678.90""' _n
 file close fh
 
-cimport_test using "temp/thousands_sep.csv", testname("thousands separators") expectn(3)
+benchmark_import using "temp/thousands_sep.csv", testname("thousands separators")
 
 * Numbers with leading plus sign
 file open fh using "temp/leading_plus.csv", write replace
@@ -2184,7 +2028,7 @@ file write fh "3,<>?/" _n
 file write fh "4,[]{}|" _n
 file close fh
 
-cimport_test using "temp/special_char_strings.csv", testname("special character strings") expectn(4)
+benchmark_import using "temp/special_char_strings.csv", testname("special character strings")
 
 * Strings with backslashes
 file open fh using "temp/backslash_strings.csv", write replace
@@ -2194,7 +2038,7 @@ file write fh "2,\\server\share" _n
 file write fh "3,path\\to\\file" _n
 file close fh
 
-cimport_test using "temp/backslash_strings.csv", testname("backslash in strings") expectn(3)
+benchmark_import using "temp/backslash_strings.csv", testname("backslash in strings")
 
 * Strings with forward slashes
 file open fh using "temp/slash_strings.csv", write replace
@@ -2227,7 +2071,7 @@ file write fh "3,.........." _n
 file write fh "4,,,,,,,,,," _n
 file close fh
 
-cimport_test using "temp/repeated_chars.csv", testname("repeated characters") expectn(4)
+benchmark_import using "temp/repeated_chars.csv", testname("repeated characters")
 
 * Control characters (except null which was tested)
 file open fh using "temp/control_chars.csv", write replace
@@ -2253,6 +2097,7 @@ file write fh "2," _char(200) _char(210) _char(220) _n
 file write fh "3," _char(250) _char(251) _char(252) _n
 file close fh
 
+* High ASCII - encoding interpretation may differ from Stata
 cimport_test using "temp/high_ascii.csv", testname("high ASCII characters") expectn(3)
 
 /*******************************************************************************
@@ -2370,7 +2215,7 @@ file write fh ",," _n
 file write fh "2,200" _n
 file close fh
 
-cimport_test using "temp/many_empty_rows.csv", testname("many consecutive empty rows") expectn(7)
+benchmark_import using "temp/many_empty_rows.csv", testname("many consecutive empty rows")
 
 * Many consecutive blank lines
 file open fh using "temp/many_blank_lines.csv", write replace
@@ -2670,7 +2515,7 @@ forvalues j = 1/10 {
 }
 file close fh
 
-cimport_test using "temp/very_very_wide.csv", testname("very wide (200 columns)") expectn(10) expectk(200)
+benchmark_import using "temp/very_very_wide.csv", testname("very wide (200 columns)")
 
 * 100K rows
 file open fh using "temp/large_100k.csv", write replace
@@ -2680,7 +2525,7 @@ forvalues i = 1/100000 {
 }
 file close fh
 
-cimport_test using "temp/large_100k.csv", testname("100K rows") expectn(100000)
+benchmark_import using "temp/large_100k.csv", testname("100K rows")
 
 * Large file with many string columns
 file open fh using "temp/large_strings.csv", write replace
@@ -2690,7 +2535,7 @@ forvalues i = 1/10000 {
 }
 file close fh
 
-cimport_test using "temp/large_strings.csv", testname("large with strings (10K)") expectn(10000)
+benchmark_import using "temp/large_strings.csv", testname("large with strings (10K)")
 
 * Large file with high missing rate
 file open fh using "temp/large_sparse.csv", write replace
@@ -2707,7 +2552,7 @@ forvalues i = 1/10000 {
 }
 file close fh
 
-cimport_test using "temp/large_sparse.csv", testname("large sparse (70% missing)") expectn(10000)
+benchmark_import using "temp/large_sparse.csv", testname("large sparse (70% missing)")
 
 /*******************************************************************************
  * SECTION: Real-World Data Patterns
@@ -2841,8 +2686,8 @@ benchmark_import using "temp/mixedcase.csv", testname("varnames(1) + case(lower)
     importopts(varnames(1) case(lower))
 
 * stringcols + asfloat
-cimport_test using "temp/zipcodes.csv", testname("stringcols + asfloat") ///
-    importopts(stringcols(1) asfloat) expectn(3)
+benchmark_import using "temp/zipcodes.csv", testname("stringcols + asfloat") ///
+    importopts(stringcols(1) asfloat)
 
 * delimiter + encoding
 benchmark_import using "temp/semicolon.csv", testname("delimiter + encoding") ///

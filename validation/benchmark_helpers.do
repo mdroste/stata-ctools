@@ -877,7 +877,11 @@ end
  ******************************************************************************/
 capture program drop benchmark_ivreghdfe
 program define benchmark_ivreghdfe
-    syntax anything(name=spec), Absorb(varlist) [vce(string) testname(string) tol(real 1e-7)]
+    syntax anything(name=spec), Absorb(varlist) ///
+        [vce(string) testname(string) tol(real 1e-7) ///
+        LIML FULLER(real 0) Kclass(real 0) GMM2s CUE COVIV ///
+        BW(integer 0) KERNEL(string) DKRAAY(integer 0) KIEFER ///
+        b0(string)]
 
     if "`testname'" == "" local testname "ivreghdfe `spec', absorb(`absorb')"
 
@@ -885,10 +889,30 @@ program define benchmark_ivreghdfe
     local vceopt ""
     if "`vce'" != "" local vceopt "vce(`vce')"
 
+    * Build estimator options
+    local estopts ""
+    if "`liml'" != "" local estopts "`estopts' liml"
+    if `fuller' != 0 local estopts "`estopts' fuller(`fuller')"
+    if `kclass' != 0 local estopts "`estopts' kclass(`kclass')"
+    if "`gmm2s'" != "" local estopts "`estopts' gmm2s"
+    if "`cue'" != "" local estopts "`estopts' cue"
+    if "`coviv'" != "" local estopts "`estopts' coviv"
+
+    * Build HAC options
+    local hacopts ""
+    if `bw' != 0 local hacopts "`hacopts' bw(`bw')"
+    if "`kernel'" != "" local hacopts "`hacopts' kernel(`kernel')"
+    if `dkraay' != 0 local hacopts "`hacopts' dkraay(`dkraay')"
+    if "`kiefer'" != "" local hacopts "`hacopts' kiefer"
+
+    * Build b0 option (if specified)
+    local b0opt ""
+    if "`b0'" != "" local b0opt "b0(`b0')"
+
     preserve
 
     * Run ivreghdfe (quietly)
-    capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt'
+    capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
     local ivreghdfe_rc = _rc
 
     if `ivreghdfe_rc' != 0 {
@@ -921,7 +945,7 @@ program define benchmark_ivreghdfe
     local ivreghdfe_N_hdfe = e(N_hdfe)
 
     * Run civreghdfe (quietly)
-    capture quietly civreghdfe `spec', absorb(`absorb') `vceopt'
+    capture quietly civreghdfe `spec', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
     local civreghdfe_rc = _rc
 
     if `civreghdfe_rc' != 0 {

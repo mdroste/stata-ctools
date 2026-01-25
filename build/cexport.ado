@@ -211,11 +211,6 @@ program define cexport, rclass
         exit 198
     }
 
-    if `nobs' == 0 {
-        di as error "cexport: no observations to export"
-        exit 2000
-    }
-
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
     if _rc != 0 {

@@ -36,6 +36,7 @@
 #define CENCODE_HASH_LOAD_FACTOR 0.75
 #define CENCODE_MAX_LABELS      65536
 #define CENCODE_STR_BUF_SIZE    2048
+#define CENCODE_EXISTING_BUF    32000
 
 /* ============================================================================
  * Hash Table for String -> Integer Mapping
@@ -151,6 +152,105 @@ static int cencode_hash_insert(cencode_hash_table *ht, const char *key, uint32_t
     return ht->entries[idx].value;
 }
 
+/* Insert with a specific value (for existing labels) */
+static int cencode_hash_insert_value(cencode_hash_table *ht, const char *key, int value)
+{
+    if ((double)ht->count / ht->capacity >= CENCODE_HASH_LOAD_FACTOR) {
+        if (cencode_hash_resize(ht, ht->capacity * 2) != 0) {
+            return -1;
+        }
+    }
+
+    uint32_t hash = cencode_hash_string(key);
+    size_t idx = hash % ht->capacity;
+
+    while (ht->entries[idx].key) {
+        if (ht->entries[idx].hash == hash &&
+            strcmp(ht->entries[idx].key, key) == 0) {
+            return ht->entries[idx].value;  /* Already exists */
+        }
+        idx = (idx + 1) % ht->capacity;
+    }
+
+    char *key_copy = ctools_string_arena_strdup(ht->arena, key);
+    if (!key_copy) return -1;
+
+    ht->entries[idx].key = key_copy;
+    ht->entries[idx].hash = hash;
+    ht->entries[idx].value = value;
+    ht->count++;
+
+    return value;
+}
+
+/* Lookup a key, return its value or 0 if not found */
+static int cencode_hash_lookup(cencode_hash_table *ht, const char *key)
+{
+    uint32_t hash = cencode_hash_string(key);
+    size_t idx = hash % ht->capacity;
+
+    while (ht->entries[idx].key) {
+        if (ht->entries[idx].hash == hash &&
+            strcmp(ht->entries[idx].key, key) == 0) {
+            return ht->entries[idx].value;
+        }
+        idx = (idx + 1) % ht->capacity;
+    }
+    return 0;  /* Not found */
+}
+
+/* Parse existing labels from format: "value1|string1||value2|string2||..." */
+static int cencode_parse_existing_labels(cencode_hash_table *ht, const char *existing_str)
+{
+    if (!existing_str || *existing_str == '\0') return 0;
+
+    char *buf = malloc(strlen(existing_str) + 1);
+    if (!buf) return -1;
+    strcpy(buf, existing_str);
+
+    char *pos = buf;
+    while (*pos) {
+        /* Parse value */
+        char *pipe = strchr(pos, '|');
+        if (!pipe) break;
+        *pipe = '\0';
+        int value = atoi(pos);
+        pos = pipe + 1;
+
+        /* Find end of string (|| or end of buffer) */
+        char *end = strstr(pos, "||");
+        if (end) {
+            *end = '\0';
+        }
+
+        /* Unescape the string */
+        char *dst = pos;
+        char *src = pos;
+        while (*src) {
+            if (*src == '\\' && (*(src+1) == '|' || *(src+1) == '\\')) {
+                src++;
+            }
+            *dst++ = *src++;
+        }
+        *dst = '\0';
+
+        /* Insert into hash table */
+        if (cencode_hash_insert_value(ht, pos, value) < 0) {
+            free(buf);
+            return -1;
+        }
+
+        if (end) {
+            pos = end + 2;  /* Skip || */
+        } else {
+            break;
+        }
+    }
+
+    free(buf);
+    return 0;
+}
+
 /* ============================================================================
  * Sorted String List
  * ============================================================================ */
@@ -178,6 +278,7 @@ ST_retcode cencode_main(const char *args)
     int var_idx = 0, gen_idx = 0;
     char label_name[256] = "";
     int noextend = 0;
+    char *existing_labels_str = NULL;
     size_t nobs;
     ST_retcode rc = 0;
 
@@ -198,9 +299,14 @@ ST_retcode cencode_main(const char *args)
         return 198;
     }
 
-    char args_copy[1024];
-    strncpy(args_copy, args, sizeof(args_copy) - 1);
-    args_copy[sizeof(args_copy) - 1] = '\0';
+    /* Make a larger copy for existing= which can be very long */
+    size_t args_len = strlen(args);
+    char *args_copy = malloc(args_len + 1);
+    if (!args_copy) {
+        SF_error("cencode: memory allocation failed\n");
+        return 920;
+    }
+    strcpy(args_copy, args);
 
     /* Parse arguments: first two numbers are var_idx and gen_idx */
     char *token = strtok(args_copy, " ");
@@ -220,18 +326,42 @@ ST_retcode cencode_main(const char *args)
             label_name[sizeof(label_name) - 1] = '\0';
         } else if (strcmp(token, "noextend") == 0) {
             noextend = 1;
+        } else if (strncmp(token, "existing=", 9) == 0) {
+            /* existing= contains label mappings: value1|string1||value2|string2||... */
+            existing_labels_str = token + 9;
         }
         token = strtok(NULL, " ");
     }
-    (void)noextend;
+
+    /* Build existing labels hash table if noextend with existing labels */
+    cencode_hash_table existing_ht;
+    int have_existing = 0;
+    if (noextend && existing_labels_str && *existing_labels_str) {
+        if (cencode_hash_init(&existing_ht, CENCODE_HASH_INIT_SIZE) != 0) {
+            free(args_copy);
+            SF_error("cencode: memory allocation failed for existing labels\n");
+            return 920;
+        }
+        if (cencode_parse_existing_labels(&existing_ht, existing_labels_str) != 0) {
+            cencode_hash_free(&existing_ht);
+            free(args_copy);
+            SF_error("cencode: failed to parse existing labels\n");
+            return 920;
+        }
+        have_existing = 1;
+    }
 
     if (var_idx < 1 || gen_idx < 1) {
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
         SF_error("cencode: invalid variable indices\n");
         return 198;
     }
 
     /* Check source is a string variable */
     if (!SF_var_is_string(var_idx)) {
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
         SF_error("cencode: source variable must be a string variable\n");
         return 198;
     }
@@ -241,8 +371,20 @@ ST_retcode cencode_main(const char *args)
     nobs = (size_t)(obs2 - obs1 + 1);
 
     if (nobs == 0) {
-        SF_error("cencode: no observations in sample\n");
-        return 2000;
+        /* Empty dataset - match Stata's encode behavior (return success) */
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
+        SF_scal_save("_cencode_n_unique", 0);
+        SF_scal_save("_cencode_n_chunks", 1);
+        SF_macro_save("_cencode_labels_0", "");
+        SF_scal_save("_cencode_time_parse", ctools_timer_seconds() - t_start);
+        SF_scal_save("_cencode_time_load", 0);
+        SF_scal_save("_cencode_time_collect", 0);
+        SF_scal_save("_cencode_time_sort", 0);
+        SF_scal_save("_cencode_time_encode", 0);
+        SF_scal_save("_cencode_time_labels", 0);
+        SF_scal_save("_cencode_time_total", ctools_timer_seconds() - t_start);
+        return 0;
     }
 
     t_parse = ctools_timer_seconds();
@@ -257,15 +399,22 @@ ST_retcode cencode_main(const char *args)
      * ======================================================================== */
 
     cencode_hash_table ht;
-    if (cencode_hash_init(&ht, CENCODE_HASH_INIT_SIZE) != 0) {
-        SF_error("cencode: memory allocation failed for hash table\n");
-        return 920;
+    int need_ht = !have_existing;  /* Only need hash table if not using existing labels */
+    if (need_ht) {
+        if (cencode_hash_init(&ht, CENCODE_HASH_INIT_SIZE) != 0) {
+            if (have_existing) cencode_hash_free(&existing_ht);
+            free(args_copy);
+            SF_error("cencode: memory allocation failed for hash table\n");
+            return 920;
+        }
     }
 
-    /* Allocate array to store original codes for each observation */
+    /* Allocate array to store codes for each observation */
     int *obs_codes = malloc(nobs * sizeof(int));
     if (!obs_codes) {
-        cencode_hash_free(&ht);
+        if (need_ht) cencode_hash_free(&ht);
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed for observation codes\n");
         return 920;
     }
@@ -277,7 +426,9 @@ ST_retcode cencode_main(const char *args)
 
     if (!buf) {
         free(obs_codes);
-        cencode_hash_free(&ht);
+        if (need_ht) cencode_hash_free(&ht);
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed\n");
         return 920;
     }
@@ -329,12 +480,19 @@ ST_retcode cencode_main(const char *args)
             str_ptr = large_buf;
         }
 
-        uint32_t hash = cencode_hash_string(str_ptr);
-        int code = cencode_hash_insert(&ht, str_ptr, hash);
-        if (code < 0) {
-            collect_error = 1;
+        if (have_existing) {
+            /* Use existing label mapping - look up string in existing_ht */
+            int code = cencode_hash_lookup(&existing_ht, str_ptr);
+            obs_codes[i] = code;  /* 0 if not found (will become missing) */
         } else {
-            obs_codes[i] = code;  /* Store the original code */
+            /* Normal path - collect unique strings */
+            uint32_t hash = cencode_hash_string(str_ptr);
+            int code = cencode_hash_insert(&ht, str_ptr, hash);
+            if (code < 0) {
+                collect_error = 1;
+            } else {
+                obs_codes[i] = code;  /* Store the original code */
+            }
         }
     }
 
@@ -346,13 +504,66 @@ ST_retcode cencode_main(const char *args)
 
     if (collect_error) {
         free(obs_codes);
-        cencode_hash_free(&ht);
+        if (need_ht) cencode_hash_free(&ht);
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed during collection\n");
         return 920;
     }
 
     t_collect = ctools_timer_seconds();
     double time_collect = t_collect - t_parse;
+
+    /* ========================================================================
+     * Handle existing labels path (noextend with pre-existing label)
+     * ======================================================================== */
+
+    if (have_existing) {
+        /* Write encoded values directly - obs_codes already contain final codes */
+        for (size_t i = 0; i < nobs; i++) {
+            ST_int obs = obs1 + (ST_int)i;
+            int code = obs_codes[i];
+
+            if (code > 0) {
+                SF_vstore(gen_idx, obs, (double)code);
+            } else {
+                SF_vstore(gen_idx, obs, SV_missval);
+            }
+        }
+
+        free(obs_codes);
+        cencode_hash_free(&existing_ht);
+        free(args_copy);
+
+        t_total = ctools_timer_seconds();
+
+        /* No new labels to define - using existing */
+        SF_scal_save("_cencode_n_unique", 0);  /* Signal no new labels needed */
+        SF_scal_save("_cencode_n_chunks", 1);
+        SF_macro_save("_cencode_labels_0", "");
+
+        SF_scal_save("_cencode_time_parse", time_parse);
+        SF_scal_save("_cencode_time_load", time_collect);
+        SF_scal_save("_cencode_time_collect", 0);
+        SF_scal_save("_cencode_time_sort", 0);
+        SF_scal_save("_cencode_time_encode", t_total - t_collect);
+        SF_scal_save("_cencode_time_labels", 0);
+        SF_scal_save("_cencode_time_total", t_total - t_start);
+
+#ifdef _OPENMP
+        SF_scal_save("_cencode_openmp_enabled", 1.0);
+        SF_scal_save("_cencode_threads_max", (double)omp_get_max_threads());
+#else
+        SF_scal_save("_cencode_openmp_enabled", 0.0);
+        SF_scal_save("_cencode_threads_max", 1.0);
+#endif
+
+        return 0;
+    }
+
+    /* ========================================================================
+     * Normal path - sort and create new labels
+     * ======================================================================== */
 
     size_t n_unique = ht.count;
 
@@ -366,6 +577,7 @@ ST_retcode cencode_main(const char *args)
 
         free(obs_codes);
         cencode_hash_free(&ht);
+        free(args_copy);
 
         t_total = ctools_timer_seconds();
         SF_scal_save("_cencode_time_parse", time_parse);
@@ -385,6 +597,7 @@ ST_retcode cencode_main(const char *args)
         SF_error(msg);
         free(obs_codes);
         cencode_hash_free(&ht);
+        free(args_copy);
         return 198;
     }
 
@@ -396,6 +609,7 @@ ST_retcode cencode_main(const char *args)
     if (!sorted_strings) {
         free(obs_codes);
         cencode_hash_free(&ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed\n");
         return 920;
     }
@@ -416,6 +630,7 @@ ST_retcode cencode_main(const char *args)
         free(sorted_strings);
         free(obs_codes);
         cencode_hash_free(&ht);
+        free(args_copy);
         SF_error("cencode: too many unique values\n");
         return 920;
     }
@@ -426,6 +641,7 @@ ST_retcode cencode_main(const char *args)
         free(sorted_strings);
         free(obs_codes);
         cencode_hash_free(&ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed\n");
         return 920;
     }
@@ -476,6 +692,7 @@ ST_retcode cencode_main(const char *args)
         free(code_map);
         free(sorted_strings);
         cencode_hash_free(&ht);
+        free(args_copy);
         SF_error("cencode: memory allocation failed\n");
         return 920;
     }
@@ -540,6 +757,7 @@ ST_retcode cencode_main(const char *args)
     free(code_map);
     free(sorted_strings);
     cencode_hash_free(&ht);
+    free(args_copy);
 
     /* Store timing */
     SF_scal_save("_cencode_time_parse", time_parse);

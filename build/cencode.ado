@@ -159,10 +159,39 @@ program define cencode
     * Build label option
     local label_code "label=`label'"
 
-    * Build noextend option
+    * Build noextend option and extract existing label mappings if needed
     local noextend_code ""
-    if "`noextend'" != "" {
+    local existing_code ""
+    if "`extend'" == "noextend" {
         local noextend_code "noextend"
+        * Check if the label already exists and extract its mappings
+        capture label list `label'
+        if _rc == 0 {
+            * Label exists - extract value->string mappings
+            * We pass these to the C plugin so it uses existing codes
+            local existing_mappings ""
+
+            * Iterate through reasonable range of label values
+            * Most labels use small positive integers
+            forvalues v = 1/1000 {
+                local lbl : label `label' `v', strict
+                if `"`lbl'"' != "" {
+                    * This value has a label - escape special characters
+                    local lbl_escaped = subinstr(`"`lbl'"', "\", "\\", .)
+                    local lbl_escaped = subinstr(`"`lbl_escaped'"', "|", "\|", .)
+                    if "`existing_mappings'" == "" {
+                        local existing_mappings "`v'|`lbl_escaped'"
+                    }
+                    else {
+                        local existing_mappings "`existing_mappings'||`v'|`lbl_escaped'"
+                    }
+                }
+            }
+
+            if "`existing_mappings'" != "" {
+                local existing_code "existing=`existing_mappings'"
+            }
+        }
     }
 
     if `__do_timing' {
@@ -172,7 +201,7 @@ program define cencode
 
     * Call the C plugin with ALL variables (so varlist indices match dataset column indices)
     unab allvars : *
-    plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code'"
+    plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code' `existing_code'"
 
     if `__do_timing' {
         timer off 92
@@ -189,7 +218,7 @@ program define cencode
     if `n_unique' > 0 {
         * Check if label already exists
         local label_exists = 0
-        if "`noextend'" != "" {
+        if "`extend'" == "noextend" {
             capture label list `label'
             if _rc == 0 {
                 local label_exists = 1

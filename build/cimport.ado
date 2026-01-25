@@ -104,14 +104,23 @@ program define cimport, rclass
     }
 
     * Parse varnames option
+    * varnames(N) uses row N as header, skips rows 1 to N-1
+    * varnames(nonames) means no header row
     local noheader = 0
+    local headerrow = 1
     if "`varnames'" != "" {
         if "`varnames'" == "nonames" {
             local noheader = 1
+            local headerrow = 0
         }
-        else if "`varnames'" != "1" {
-            di as error "cimport: varnames() must be 1 or nonames"
-            exit 198
+        else {
+            * Must be a positive integer
+            capture confirm integer number `varnames'
+            if _rc != 0 | `varnames' < 1 {
+                di as error "cimport: varnames() must be a positive integer or nonames"
+                exit 198
+            }
+            local headerrow = `varnames'
         }
     }
 
@@ -174,8 +183,11 @@ program define cimport, rclass
     }
 
     * Parse rowrange option
+    * NOTE: Stata's rowrange uses 1-based FILE line numbers (line 1 = header if present)
+    * We convert to data row numbers for internal use
     local startrow = 0
     local endrow = 0
+    local rowrange_header_only = 0
     if "`rowrange'" != "" {
         * Parse start:end format
         local colonpos = strpos("`rowrange'", ":")
@@ -187,6 +199,24 @@ program define cimport, rclass
         }
         else {
             local startrow = `rowrange'
+        }
+
+        * Convert from file line numbers to data row numbers
+        * headerrow is the file line containing variable names (0 if nonames)
+        * Data row 1 is at file line (headerrow + 1) if header exists, else line 1
+        if `noheader' == 0 {
+            * Has header at line `headerrow'
+            * Check if rowrange only selects header/pre-header row(s)
+            if `endrow' > 0 & `endrow' <= `headerrow' {
+                local rowrange_header_only = 1
+            }
+            if `startrow' > 0 {
+                local startrow = max(1, `startrow' - `headerrow')
+            }
+            if `endrow' > 0 {
+                local endrow = `endrow' - `headerrow'
+                if `endrow' < 1 local endrow = 0
+            }
         }
     }
 
@@ -324,14 +354,22 @@ program define cimport, rclass
         di as text "{hline 60}"
         di as text "File:       " as result `"`using'"'
         di as text "Delimiter:  " as result cond(`"`delimiters'"' == "	", "tab", cond(`"`delimiters'"' == " ", "space", `"`delimiters'"'))
-        di as text "Header row: " as result cond(`noheader' == 0, "yes (row 1)", "no")
+        di as text "Header row: " as result cond(`noheader' == 1, "no", "row `headerrow'")
         di as text "Case:       " as result "`case'"
         di as text "{hline 60}"
         di ""
     }
 
+    * For headerrow > 1, we import without header and post-process
+    local plugin_noheader = `noheader'
+    local rename_from_row = 0
+    if `headerrow' > 1 {
+        local plugin_noheader = 1
+        local rename_from_row = `headerrow'
+    }
+
     * Build plugin arguments
-    local opt_noheader = cond(`noheader' == 1, "noheader", "")
+    local opt_noheader = cond(`plugin_noheader' == 1, "noheader", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
     local opt_stripquotes = cond("`stripquotes'" != "", "stripquotes", "")
     local opt_case = "case=`case'"
@@ -529,8 +567,46 @@ program define cimport, rclass
 
     timer off 13
 
+    * Handle varnames(N) where N > 1: rename variables from row N and drop rows 1-N
+    if `rename_from_row' > 0 & _N >= `rename_from_row' {
+        * Get variable names from the header row
+        local vnum = 1
+        foreach var of varlist * {
+            local newname = `var'[`rename_from_row']
+            * Clean the name to be a valid Stata variable name
+            local newname = ustrregexra("`newname'", "[^a-zA-Z0-9_]", "_")
+            if regexm("`newname'", "^[0-9]") {
+                local newname = "_`newname'"
+            }
+            if "`newname'" == "" | "`newname'" == "_" {
+                local newname = "v`vnum'"
+            }
+            * Truncate to 32 chars
+            local newname = substr("`newname'", 1, 32)
+            * Apply case transformation
+            if "`case'" == "lower" {
+                local newname = lower("`newname'")
+            }
+            else if "`case'" == "upper" {
+                local newname = upper("`newname'")
+            }
+            capture rename `var' `newname'
+            local vnum = `vnum' + 1
+        }
+        * Drop the pre-header and header rows
+        quietly drop in 1/`rename_from_row'
+
+        * Re-infer types: destring columns that should be numeric
+        * This is needed because type inference was done on all rows including pre-header
+        quietly destring *, replace ignore(",")
+    }
+
     * Apply rowrange filtering (post-import)
-    if `startrow' > 0 | `endrow' > 0 {
+    * If rowrange only selected header row(s), drop all data
+    if `rowrange_header_only' == 1 {
+        quietly drop in 1/l
+    }
+    else if `startrow' > 0 | `endrow' > 0 {
         local first_keep = max(1, `startrow')
         if `endrow' > 0 {
             local last_keep = min(`endrow', _N)

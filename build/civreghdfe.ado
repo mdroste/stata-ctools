@@ -26,6 +26,8 @@ program define civreghdfe, eclass
         BW(integer 0) ///
         KERNEL(string) ///
         DKRAAY(integer 0) ///
+        KIEFER ///
+        B0(string) ///
         RESiduals(name) ///
         NOConstant ///
         Level(cilevel) ///
@@ -477,8 +479,46 @@ program define civreghdfe, eclass
         local kernel_type = 1
     }
 
+    * Kiefer standard errors: within-panel HAC with full bandwidth
+    * Kiefer with truncated kernel and bw=T is mathematically equivalent to
+    * clustering on the panel variable. We implement it as cluster VCE.
+    * Requires tsset panel data
+    local kiefer_val = ("`kiefer'" != "")
+    if `kiefer_val' {
+        * Check that data is tsset
+        capture tsset
+        if _rc != 0 {
+            di as error "kiefer option requires tsset panel data"
+            exit 459
+        }
+        local tvar = r(timevar)
+        local ivar = r(panelvar)
+        if "`tvar'" == "" | "`ivar'" == "" {
+            di as error "kiefer option requires tsset panel data with both panel and time variables"
+            exit 459
+        }
+        * Kiefer is incompatible with robust and cluster options
+        if `vce_type' == 1 {
+            di as error "kiefer and vce(robust) are incompatible options"
+            exit 198
+        }
+        if `vce_type' == 2 | `vce_type' == 3 {
+            di as error "kiefer and vce(cluster) are incompatible options"
+            exit 198
+        }
+        * Implement Kiefer as clustering on the panel variable
+        * (truncated kernel with bw=T is equivalent to cluster-robust)
+        local vce_type = 2
+        local cluster_var "`ivar'"
+        confirm variable `cluster_var'
+        markout `touse' `cluster_var'
+        if "`verbose'" != "" {
+            di as text "Kiefer SEs: implemented as cluster(`ivar')"
+        }
+    }
+
     * Set default bandwidth if kernel specified but no bandwidth
-    if `kernel_type' > 0 & `bw_val' == 0 {
+    if `kernel_type' > 0 & `kernel_type' < 6 & `bw_val' == 0 {
         * Default: Newey-West optimal bandwidth = floor(4*(N/100)^(2/9))
         local bw_val = floor(4 * (`N'/100)^(2/9))
         if `bw_val' < 1 local bw_val = 1
@@ -487,11 +527,35 @@ program define civreghdfe, eclass
     scalar __civreghdfe_kernel = `kernel_type'
     scalar __civreghdfe_bw = `bw_val'
     scalar __civreghdfe_dkraay = `dkraay_val'
+    scalar __civreghdfe_kiefer = `kiefer_val'
 
     if "`verbose'" != "" & `kernel_type' > 0 {
-        di as text "HAC: kernel=`kernel_type', bandwidth=`bw_val'"
-        if `dkraay_val' > 0 {
-            di as text "Driscoll-Kraay standard errors with lag `dkraay_val'"
+        if `kiefer_val' {
+            di as text "Kiefer standard errors (within-group HAC)"
+        }
+        else {
+            di as text "HAC: kernel=`kernel_type', bandwidth=`bw_val'"
+            if `dkraay_val' > 0 {
+                di as text "Driscoll-Kraay standard errors with lag `dkraay_val'"
+            }
+        }
+    }
+
+    * Handle b0() initial values option
+    * For iterative estimators like CUE, b0 provides starting values
+    scalar __civreghdfe_has_b0 = 0
+    if "`b0'" != "" {
+        capture confirm matrix `b0'
+        if _rc == 0 {
+            matrix __civreghdfe_b0 = `b0'
+            scalar __civreghdfe_has_b0 = 1
+            if "`verbose'" != "" {
+                di as text "Using initial values from matrix `b0'"
+            }
+        }
+        else {
+            di as error "b0(`b0'): matrix not found"
+            exit 198
         }
     }
 
@@ -1455,6 +1519,9 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_kernel
     capture scalar drop __civreghdfe_bw
     capture scalar drop __civreghdfe_dkraay
+    capture scalar drop __civreghdfe_kiefer
+    capture scalar drop __civreghdfe_has_b0
+    capture matrix drop __civreghdfe_b0
     capture scalar drop __civreghdfe_sargan
     capture scalar drop __civreghdfe_sargan_df
     capture scalar drop __civreghdfe_cd_f

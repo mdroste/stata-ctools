@@ -1053,6 +1053,110 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 24: IV Estimator Options (liml, fuller, kclass, gmm2s, cue)
+ ******************************************************************************/
+noi print_section "IV Estimator Options"
+
+* Create test data for estimator tests
+clear
+set seed 12345
+set obs 500
+gen firm = ceil(_n / 10)
+gen z1 = runiform()
+gen z2 = rnormal()
+gen z3 = runiform() + 0.1*rnormal()
+gen x_endog = 0.5*z1 + 0.3*z2 + 0.2*z3 + rnormal()
+gen x_exog = runiform()
+gen y = 2*x_endog + 1.5*x_exog + rnormal()
+
+* Benchmark LIML against ivreghdfe
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) liml testname("liml")
+
+* Benchmark Fuller LIML
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) fuller(1) testname("fuller(1)")
+
+* Benchmark Fuller with alpha=4
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) fuller(4) testname("fuller(4)")
+
+* Benchmark k-class with k=0.5
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) kclass(0.5) testname("kclass(0.5)")
+
+* kclass(1) should equal 2SLS - verify coefficients match
+ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) kclass(1)
+local kclass_b = _b[x_endog]
+ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm)
+local tsls_b = _b[x_endog]
+local diff = abs(`kclass_b' - `tsls_b')
+if `diff' < 1e-6 {
+    noi test_pass "kclass(1) equals 2SLS"
+}
+else {
+    noi test_fail "kclass(1) vs 2SLS" "diff=`diff'"
+}
+
+* Benchmark GMM two-step
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s testname("gmm2s")
+
+* Benchmark GMM two-step with robust
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(robust) testname("gmm2s + robust")
+
+* Benchmark CUE
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue testname("cue")
+
+* Benchmark coviv
+noi benchmark_ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) coviv testname("coviv")
+
+* Test b0() option - just check it's accepted (initial values don't change 2SLS result)
+matrix b0 = (2, 1.5)
+capture civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) b0(b0)
+if _rc == 0 {
+    noi test_pass "b0(matrix) accepted"
+}
+else {
+    noi test_fail "b0(matrix)" "returned error `=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 25: HAC/Kernel Options (bw, kernel, dkraay, kiefer)
+ ******************************************************************************/
+noi print_section "HAC/Kernel Options"
+
+* Create panel data for HAC tests
+clear
+set seed 54321
+set obs 500
+gen id = ceil(_n / 10)
+gen time = mod(_n - 1, 10) + 1
+tsset id time
+
+gen z1 = runiform()
+gen z2 = rnormal()
+gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
+gen x_exog = runiform()
+gen y = 2*x_endog + 1.5*x_exog + rnormal()
+
+* Benchmark kernel(bartlett) with bw(2)
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(bartlett) bw(2) testname("kernel(bartlett) bw(2)")
+
+* Benchmark kernel(parzen) with bw(3)
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(parzen) bw(3) testname("kernel(parzen) bw(3)")
+
+* Benchmark kernel(qs) with bw(2)
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(qs) bw(2) testname("kernel(qs) bw(2)")
+
+* Benchmark Driscoll-Kraay with lag 2
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testname("dkraay(2)")
+
+* Benchmark Driscoll-Kraay with lag 4
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)")
+
+* Benchmark Kiefer standard errors
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer")
+
+* Benchmark bw with robust
+noi benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) testname("bw(2) + robust")
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 

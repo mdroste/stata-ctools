@@ -201,14 +201,8 @@ void civreghdfe_compute_underid_test(
                 }
                 free(cluster_Zv);
 
-                /* Apply small-sample correction: G/(G-1)
-                   This matches ranktest's cluster variance adjustment */
-                if (num_clusters > 1) {
-                    ST_double cluster_adj = (ST_double)num_clusters / (ST_double)(num_clusters - 1);
-                    for (ST_int ki = 0; ki < L * L; ki++) {
-                        shat0[ki] *= cluster_adj;
-                    }
-                }
+                /* No small-sample adjustment to shat0 - the adjustment is
+                   handled through the denominator and dof in the formula */
             } else {
                 /* HC robust */
                 for (i = 0; i < N; i++) {
@@ -290,30 +284,46 @@ void civreghdfe_compute_underid_test(
 
                             /* KP rk Wald F formula from ivreghdfe/ranktest:
 
-                               ivreghdfe computes: kp_f = chi2/N * (N - K_iv - df_a) / L
-                               where chi2 = Wald * N from ranktest.
+                               In ranktest, the chi2 statistic is computed as:
+                               gbar = (1/N) * Z' * X_endog
+                               chi2 = gbar' * shat0_inv * gbar * N = (Z'X)' * shat0_inv * Z'X / N
 
-                               My kp_wald_raw = pi' * ZtZ * shat0_inv * ZtZ * pi
-                               And Wald = pi' * Qzz * shat0_inv * Qzz * pi where Qzz = ZtZ/N
-                               So: chi2 = Wald * N = kp_wald_raw / N
+                               In civreghdfe:
+                               kp_wald_raw = pi' * ZtZ * shat0_inv * ZtZ * pi
+                                           = (Z'X)' * shat0_inv * Z'X  (no 1/N division)
+                                           = N * chi2
 
-                               Therefore: kp_f = (kp_wald_raw/N) / N * (N - K_iv - df_a) / L
-                                              = kp_wald_raw / N * (N - K_iv - df_a) / L / N
+                               ivreghdfe formula: widstat = chi2/N * dof/L = (kp_wald_raw/N)/N * dof/L
 
-                               But empirically, dividing by N^2 gives wrong scale.
-                               The correct formula that matches is:
-                               kp_f = kp_wald_raw / N * (N - K_iv - df_a) / L
+                               So: kp_f = kp_wald_raw / N^2 * dof / L
 
-                               For cluster: ivreghdfe uses chi2/(N-1) * (G-1)/G
-                               The (G-1)/G is already in shat0_inv. */
+                               For cluster, shat0 has G/(G-1) correction applied. */
 
-                            ST_int dof = N - K_iv - df_a;
+                            /* KP F-stat formula differs between robust and cluster VCE:
+                               - Robust: F = chi2/N * (N - K_iv - df_a) / L
+                               - Cluster: F = chi2/(N-1) * (N - K_iv - sdofminus) * (G-1)/G / L
+                               See ivreghdfe.ado lines 1829 and 1832-1835.
+
+                               For robust, the original formula with denom=N worked,
+                               suggesting kp_wald_raw is already scaled appropriately.
+                               For cluster, we need (N-1) in denominator plus (G-1)/G. */
+                            ST_int dof;
+                            ST_double denom;
+                            ST_double cluster_adj;
+                            if (vce_type == 2) {
+                                /* Cluster: dof excludes df_a, includes sdofminus=1 */
+                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
+                                denom = (ST_double)(N - 1);
+                                cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
+                            } else {
+                                /* Robust: dof includes df_a */
+                                dof = N - K_iv - df_a;
+                                denom = (ST_double)N;
+                                cluster_adj = 1.0;
+                            }
                             if (dof <= 0) dof = 1;
 
-                            /* KP F = kp_wald_raw / N * dof / L
-                               For cluster, shat0 has G/(G-1), so shat0_inv has (G-1)/G.
-                               This formula matches ivreghdfe empirically for all cases. */
-                            *kp_f = kp_wald_raw / (ST_double)N * (ST_double)dof / (ST_double)L;
+                            *kp_f = kp_wald_raw / denom * (ST_double)dof * cluster_adj / (ST_double)L;
 
                                 free(ZtZ_shat0_inv_ZtX);
                             }
