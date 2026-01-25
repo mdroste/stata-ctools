@@ -73,10 +73,11 @@ void civreghdfe_compute_first_stage_F(
         if (r2 > 1.0) r2 = 1.0;
         if (r2 < 0.0) r2 = 0.0;
 
-        /* F-stat: (R^2 / q) / ((1 - R^2) / (N - K_iv - df_a)) */
+        /* F-stat: (R^2 / q) / ((1 - R^2) / (N - K_iv - df_a - 1))
+           The -1 is for the constant partialled out by HDFE */
         ST_int q = K_iv - K_exog;  /* Number of excluded instruments */
         if (q <= 0) q = 1;
-        ST_int denom_df = N - K_iv - df_a;
+        ST_int denom_df = N - K_iv - df_a - 1;
         if (denom_df <= 0) denom_df = 1;
 
         first_stage_F[e] = (r2 / (ST_double)q) / ((1.0 - r2) / (ST_double)denom_df);
@@ -222,8 +223,10 @@ void civreghdfe_compute_underid_test(
             }
 
             if (shat_ok) {
-                ST_int Nminus_wald = N - df_a - 1;
-                if (Nminus_wald <= 0) Nminus_wald = 1;
+                /* DOF adjustment matches ivreghdfe: N - K_iv - df_a - 1
+                   The -1 is for the constant partialled out by HDFE */
+                ST_int df_adjust = N - K_iv - df_a - 1;
+                if (df_adjust <= 0) df_adjust = 1;
 
                 /* Compute ZtX_e = Z'X_endog (moment condition) */
                 ST_double *ZtX_e = (ST_double *)calloc(K_iv, sizeof(ST_double));
@@ -264,9 +267,24 @@ void civreghdfe_compute_underid_test(
                                 kp_wald_raw += pi[ki] * ZtZ_shat0_inv_ZtX[ki];
                             }
 
-                            /* KP rk Wald F = (Nminus_wald / N) * kp_wald_raw / L */
-                            ST_double kp_wald = kp_wald_raw * (ST_double)Nminus_wald / (ST_double)N;
-                            *kp_f = kp_wald / (ST_double)L;
+                            /* KP rk Wald F formula from ivreghdfe:
+                               - Non-cluster: chi2 / N * (N - K_iv - sdofminus) / L
+                               - Cluster: chi2 / (N-1) * (N - K_iv - sdofminus) * (G-1)/G / L
+                               Note: shat0 has G/(G-1) for cluster, so shat0_inv has (G-1)/G.
+                               df_adjust = N - K_iv - df_a - 1 accounts for partialled-out constant.
+                               Non-cluster robust also needs N/(N-K_iv) adjustment to match ranktest. */
+                            if (vce_type == 2 && num_clusters > 1) {
+                                /* Cluster formula - (G-1)/G already in kp_wald_raw via shat0 */
+                                ST_double kp_wald = kp_wald_raw / (ST_double)(N - 1);
+                                kp_wald *= (ST_double)df_adjust;
+                                *kp_f = kp_wald / (ST_double)L;
+                            } else {
+                                /* Non-cluster robust formula - includes N/(N-1) adjustment */
+                                ST_double kp_wald = kp_wald_raw * (ST_double)df_adjust / (ST_double)N;
+                                /* Apply small-sample adjustment N/(N-1) to match ranktest */
+                                kp_wald *= (ST_double)N / (ST_double)(N - 1);
+                                *kp_f = kp_wald / (ST_double)L;
+                            }
 
                             free(ZtZ_shat0_inv_ZtX);
                         }
