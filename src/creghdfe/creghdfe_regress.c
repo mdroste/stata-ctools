@@ -1601,6 +1601,21 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
             resid[idx] = data_keep[idx] - y_hat;
         }
+
+        /* Recompute RSS from residuals directly for better numerical precision.
+         * The formula RSS = TSS - sum(beta * X'Y) suffers from catastrophic
+         * cancellation when R^2 is close to 1. Computing RSS = sum(resid^2)
+         * is more numerically stable. */
+        rss = 0.0;
+        if (has_weights) {
+            for (idx = 0; idx < N; idx++) {
+                rss += g_state->weights[idx] * resid[idx] * resid[idx];
+            }
+        } else {
+            for (idx = 0; idx < N; idx++) {
+                rss += resid[idx] * resid[idx];
+            }
+        }
     }
 
     if (vcetype == 0) {

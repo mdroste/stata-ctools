@@ -296,7 +296,7 @@ forvalues j = 1/`cols' {
     if `d' > `maxdiff' local maxdiff = `d'
 }
 
-if `maxdiff' < 1e-6 {
+if `maxdiff' < 1e-7 {
     noi test_pass "coefficients match (maxdiff=`maxdiff')"
 }
 else {

@@ -272,17 +272,17 @@ void civreghdfe_compute_underid_test(
                                - Cluster: chi2 / (N-1) * (N - K_iv - sdofminus) * (G-1)/G / L
                                Note: shat0 has G/(G-1) for cluster, so shat0_inv has (G-1)/G.
                                df_adjust = N - K_iv - df_a - 1 accounts for partialled-out constant.
-                               Non-cluster robust also needs N/(N-K_iv) adjustment to match ranktest. */
+                               For non-cluster robust, ranktest normalizes shat by (N-1) not N,
+                               so we need to multiply by N/(N-1). */
                             if (vce_type == 2 && num_clusters > 1) {
                                 /* Cluster formula - (G-1)/G already in kp_wald_raw via shat0 */
                                 ST_double kp_wald = kp_wald_raw / (ST_double)(N - 1);
                                 kp_wald *= (ST_double)df_adjust;
                                 *kp_f = kp_wald / (ST_double)L;
                             } else {
-                                /* Non-cluster robust formula - includes N/(N-1) adjustment */
-                                ST_double kp_wald = kp_wald_raw * (ST_double)df_adjust / (ST_double)N;
-                                /* Apply small-sample adjustment N/(N-1) to match ranktest */
-                                kp_wald *= (ST_double)N / (ST_double)(N - 1);
+                                /* Non-cluster robust: ranktest uses N/(N-1) normalization */
+                                ST_double kp_wald = kp_wald_raw * (ST_double)N / (ST_double)(N - 1);
+                                kp_wald = kp_wald * (ST_double)df_adjust / (ST_double)N;
                                 *kp_f = kp_wald / (ST_double)L;
                             }
 

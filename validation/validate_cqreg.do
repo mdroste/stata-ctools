@@ -266,7 +266,7 @@ if _rc == 0 {
     quietly cqreg studytime age drug
     local cqreg_adev = e(sum_adev)
     local adev_diff = abs(`qreg_adev' - `cqreg_adev')
-    if `adev_diff' < 1e-6 {
+    if `adev_diff' < 1e-7 {
         noi test_pass "cancer: median (same objective, alternate solution OK)"
     }
     else {
@@ -601,7 +601,7 @@ forvalues j = 1/2 {
     local d = abs(diff[1, `j'])
     if `d' > `maxdiff' local maxdiff = `d'
 }
-if `maxdiff' < 1e-6 {
+if `maxdiff' < 1e-7 {
     noi test_pass "very small y (1e-8 scale) - coefficients match"
 }
 else {
@@ -1098,7 +1098,7 @@ else {
         * Check objective function (sum_adev) matches within tolerance
         local adev_diff = abs(`qreg_adev' - `cqreg_adev')
         local adev_reldiff = `adev_diff' / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "i.foreign: median"
         }
         else {
@@ -1126,7 +1126,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "i.rep78: median"
         }
         else {
@@ -1154,7 +1154,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "i.rep78: q=0.25"
         }
         else {
@@ -1182,7 +1182,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "i.rep78: q=0.75"
         }
         else {
@@ -1210,7 +1210,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "i.foreign i.rep78: median"
         }
         else {
@@ -1238,7 +1238,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "nlsw88 i.race: median"
         }
         else {
@@ -1266,7 +1266,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "nlsw88 i.race: q=0.10"
         }
         else {
@@ -1294,7 +1294,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "nlsw88 i.race: q=0.90"
         }
         else {
@@ -1322,7 +1322,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "nlsw88 i.occupation: median"
         }
         else {
@@ -1350,7 +1350,7 @@ else {
     }
     else {
         local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-6 {
+        if `adev_reldiff' < 1e-7 {
             noi test_pass "nlsw88 i.industry: median"
         }
         else {
@@ -1367,44 +1367,104 @@ sysuse auto, clear
 noi benchmark_qreg price c.mpg#i.foreign weight, quantile(0.25) testname("c.mpg#i.foreign: q=0.25")
 
 * Factor-by-factor interaction (i.var#i.var)
-* NOTE: cqreg does not include base level columns in output, causing dimension mismatch
-* This is a known limitation - coefficients for non-base levels are correct
+* NOTE: These tests may have alternate optimal solutions (same objective, different coefficients)
+* Compare sum_adev (objective value) rather than individual coefficients
 sysuse nlsw88, clear
 quietly qreg wage i.race#i.married age
+local qreg_N = e(N)
+local qreg_adev = e(sum_adev)
 local qreg_cols = colsof(e(b))
-quietly cqreg wage i.race#i.married age
-local cqreg_cols = colsof(e(b))
-if `qreg_cols' == `cqreg_cols' {
-    noi benchmark_qreg wage i.race#i.married age, testname("i.race#i.married: median")
+
+capture quietly cqreg wage i.race#i.married age
+if _rc != 0 {
+    noi test_fail "i.race#i.married: median" "cqreg returned error `=_rc'"
 }
 else {
-    noi test_pass "i.race#i.married: median (dimension differs - known limitation)"
+    local cqreg_N = e(N)
+    local cqreg_adev = e(sum_adev)
+    local cqreg_cols = colsof(e(b))
+
+    if `qreg_N' != `cqreg_N' {
+        noi test_fail "i.race#i.married: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
+    }
+    else if `qreg_cols' != `cqreg_cols' {
+        noi test_fail "i.race#i.married: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
+    }
+    else {
+        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
+        if `adev_reldiff' < 1e-7 {
+            noi test_pass "i.race#i.married: median (alternate solution OK)"
+        }
+        else {
+            noi test_fail "i.race#i.married: median" "sum_adev reldiff=`adev_reldiff'"
+        }
+    }
 }
 
 * Base level specification (ib#.var)
-* NOTE: ib# specifications require matching Stata's internal FV machinery
+* NOTE: These tests may have alternate optimal solutions
 sysuse auto, clear
 quietly qreg price mpg ib3.rep78
+local qreg_N = e(N)
+local qreg_adev = e(sum_adev)
 local qreg_cols = colsof(e(b))
-quietly cqreg price mpg ib3.rep78
-local cqreg_cols = colsof(e(b))
-if `qreg_cols' == `cqreg_cols' {
-    noi benchmark_qreg price mpg ib3.rep78, testname("ib3.rep78: median")
+
+capture quietly cqreg price mpg ib3.rep78
+if _rc != 0 {
+    noi test_fail "ib3.rep78: median" "cqreg returned error `=_rc'"
 }
 else {
-    noi test_pass "ib3.rep78: median (dimension differs - known limitation)"
+    local cqreg_N = e(N)
+    local cqreg_adev = e(sum_adev)
+    local cqreg_cols = colsof(e(b))
+
+    if `qreg_N' != `cqreg_N' {
+        noi test_fail "ib3.rep78: median" "N differs"
+    }
+    else if `qreg_cols' != `cqreg_cols' {
+        noi test_fail "ib3.rep78: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
+    }
+    else {
+        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
+        if `adev_reldiff' < 1e-7 {
+            noi test_pass "ib3.rep78: median (alternate solution OK)"
+        }
+        else {
+            noi test_fail "ib3.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+        }
+    }
 }
 
 sysuse auto, clear
 quietly qreg price mpg ib3.rep78, quantile(0.75)
+local qreg_N = e(N)
+local qreg_adev = e(sum_adev)
 local qreg_cols = colsof(e(b))
-quietly cqreg price mpg ib3.rep78, quantile(0.75)
-local cqreg_cols = colsof(e(b))
-if `qreg_cols' == `cqreg_cols' {
-    noi benchmark_qreg price mpg ib3.rep78, quantile(0.75) testname("ib3.rep78: q=0.75")
+
+capture quietly cqreg price mpg ib3.rep78, quantile(0.75)
+if _rc != 0 {
+    noi test_fail "ib3.rep78: q=0.75" "cqreg returned error `=_rc'"
 }
 else {
-    noi test_pass "ib3.rep78: q=0.75 (dimension differs - known limitation)"
+    local cqreg_N = e(N)
+    local cqreg_adev = e(sum_adev)
+    local cqreg_cols = colsof(e(b))
+
+    if `qreg_N' != `cqreg_N' {
+        noi test_fail "ib3.rep78: q=0.75" "N differs"
+    }
+    else if `qreg_cols' != `cqreg_cols' {
+        noi test_fail "ib3.rep78: q=0.75" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
+    }
+    else {
+        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
+        if `adev_reldiff' < 1e-7 {
+            noi test_pass "ib3.rep78: q=0.75 (alternate solution OK)"
+        }
+        else {
+            noi test_fail "ib3.rep78: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+        }
+    }
 }
 
 * Full factorial interaction (i.var##c.var)
@@ -1494,7 +1554,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld L.mvalue: median"
             }
             else {
@@ -1521,7 +1581,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld L.mvalue: q=0.25"
             }
             else {
@@ -1548,7 +1608,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld L.mvalue: q=0.75"
             }
             else {
@@ -1575,7 +1635,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld D.mvalue: median"
             }
             else {
@@ -1602,7 +1662,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld D.mvalue: q=0.25"
             }
             else {
@@ -1629,7 +1689,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld D.mvalue: q=0.75"
             }
             else {
@@ -1656,7 +1716,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld L2.mvalue: median"
             }
             else {
@@ -1683,7 +1743,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld L.mvalue D.kstock: median"
             }
             else {
@@ -1710,7 +1770,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "grunfeld F.mvalue: median"
             }
             else {
@@ -1748,7 +1808,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "nlswork L.tenure: median"
             }
             else {
@@ -1775,7 +1835,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "nlswork L.tenure: q=0.25"
             }
             else {
@@ -1802,7 +1862,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "nlswork L.tenure: q=0.75"
             }
             else {
@@ -1829,7 +1889,7 @@ if _rc == 0 {
         }
         else {
             local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-6 {
+            if `adev_reldiff' < 1e-7 {
                 noi test_pass "nlswork D.tenure: median"
             }
             else {

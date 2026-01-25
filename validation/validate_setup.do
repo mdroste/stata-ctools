@@ -27,7 +27,7 @@ global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
 
 * Default tolerance
-global DEFAULT_TOL = 1e-6
+global DEFAULT_TOL = 1e-7
 
 * Initialize failure tracking (up to 100 failures)
 global FAILURE_COUNT = 0

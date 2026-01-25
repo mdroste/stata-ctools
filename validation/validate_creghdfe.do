@@ -1076,7 +1076,7 @@ if _rc == 0 {
     capture local creghdfe_coef_foreign = _b[1.foreign]
     if _rc != 0 local creghdfe_coef_foreign = _b[foreign]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < 1e-7 {
         noi test_pass "i.foreign (2 levels)"
     }
     else {
@@ -1098,7 +1098,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.rep78 (5 levels)"
     }
     else {
@@ -1120,7 +1120,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.foreign + robust"
     }
     else {
@@ -1142,7 +1142,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.rep78 + cluster"
     }
     else {
@@ -1165,7 +1165,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.race panel"
     }
     else {
@@ -1188,7 +1188,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.race two-way FE"
     }
     else {
@@ -1210,7 +1210,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "c.mpg#i.foreign interaction"
     }
     else {
@@ -1232,7 +1232,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.race#i.married interaction"
     }
     else {
@@ -1254,7 +1254,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "ib3.rep78 (custom base level)"
     }
     else {
@@ -1276,7 +1276,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.foreign##c.mpg full factorial"
     }
     else {
@@ -1299,7 +1299,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "i.race i.union (multiple factors)"
     }
     else {
@@ -1339,7 +1339,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[L_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
         noi test_pass "manual lag (L.mvalue equivalent)"
     }
     else {
@@ -1365,7 +1365,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "manual multiple lags (L. L2. equivalent)"
     }
     else {
@@ -1392,7 +1392,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[D_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
         noi test_pass "manual difference (D.mvalue equivalent)"
     }
     else {
@@ -1419,7 +1419,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[F_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
         noi test_pass "manual lead (F.mvalue equivalent)"
     }
     else {
@@ -1444,7 +1444,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "manual lag + two-way FE"
     }
     else {
@@ -1469,7 +1469,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "manual lag + robust"
     }
     else {
@@ -1494,7 +1494,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "manual lag + cluster"
     }
     else {
@@ -1520,7 +1520,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "nlswork manual lag"
     }
     else {
@@ -1546,7 +1546,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "nlswork manual difference"
     }
     else {
@@ -1606,7 +1606,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "lead and lag together"
     }
     else {
@@ -1631,7 +1631,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
         noi test_pass "manual lag + i.company factor"
     }
     else {

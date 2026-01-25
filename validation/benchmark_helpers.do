@@ -235,7 +235,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_reghdfe
 program define benchmark_reghdfe
-    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(string) testname(string) tol(real 1e-6)]
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(string) testname(string) tol(real 1e-7)]
 
     gettoken depvar indepvars : varlist
 
@@ -446,7 +446,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 1e-6)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 1e-7)]
 
     gettoken depvar indepvars : varlist
 
@@ -877,7 +877,7 @@ end
  ******************************************************************************/
 capture program drop benchmark_ivreghdfe
 program define benchmark_ivreghdfe
-    syntax anything(name=spec), Absorb(varlist) [vce(string) testname(string) tol(real 1e-6)]
+    syntax anything(name=spec), Absorb(varlist) [vce(string) testname(string) tol(real 1e-7)]
 
     if "`testname'" == "" local testname "ivreghdfe `spec', absorb(`absorb')"
 

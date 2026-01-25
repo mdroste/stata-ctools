@@ -53,33 +53,53 @@ program define cqreg, eclass
         fvrevar `indepvars' if `touse'
         local indepvars_fvrevar "`r(varlist)'"
 
-        * Step 2: Remove collinear variables (including base levels of factors)
+        * Step 2: Get coefficient names from fvexpand (same order as fvrevar)
+        * These names include base level notation (e.g., "1b.rep78 2.rep78 3.rep78")
+        fvexpand `indepvars' if `touse'
+        local coef_names_all "`r(varlist)'"
+
+        * Step 3: Remove collinear variables (including base levels of factors)
         * This matches what Stata's estimation commands do internally
         _rmcoll `indepvars_fvrevar' if `touse', forcedrop
         local indepvars_expanded "`r(varlist)'"
 
-        * Step 3: Get proper coefficient names using fvexpand
-        * These names will be like "age 2.drug 3.drug" (base levels omitted)
-        fvexpand `indepvars' if `touse'
-        local coef_names_all "`r(varlist)'"
-
-        * Filter out base levels (those with 'b' or 'o' notation)
-        * Note: This means cqreg output may have fewer columns than qreg for factor vars
+        * Step 4: Build mapping - identify which positions are base levels
+        * fvrevar and fvexpand have 1:1 positional correspondence
+        * A position is a base level if its temp var was dropped by _rmcoll
+        local n_all : word count `coef_names_all'
+        local coef_is_base ""
         local coef_names ""
-        foreach v of local coef_names_all {
-            * Skip omitted (o.) and base (b.) levels
-            if !regexm("`v'", "[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
-                local coef_names `coef_names' `v'
+        local plugin_pos = 1
+        forval i = 1/`n_all' {
+            local fv_var : word `i' of `indepvars_fvrevar'
+            local fv_name : word `i' of `coef_names_all'
+            * Check if this temp var is in the remaining (non-dropped) list
+            local is_kept = 0
+            foreach remaining of local indepvars_expanded {
+                if "`remaining'" == "`fv_var'" {
+                    local is_kept = 1
+                }
+            }
+            if `is_kept' {
+                * This variable was kept (not a base level)
+                local coef_is_base `coef_is_base' 0
+                local coef_names `coef_names' `fv_name'
+            }
+            else {
+                * This variable was dropped (base level or omitted)
+                local coef_is_base `coef_is_base' 1
             }
         }
 
-        * Build expanded varlist for plugin
+        * Build expanded varlist for plugin (only non-base vars)
         local varlist_expanded "`depvar' `indepvars_expanded'"
     }
     else {
         local indepvars_expanded ""
         local varlist_expanded "`depvar'"
         local coef_names ""
+        local coef_names_all ""
+        local coef_is_base ""
     }
 
     local nvars : word count `varlist_expanded'
@@ -333,8 +353,14 @@ program define cqreg, eclass
         if _rc != 0 local num_clusters = .
     }
 
-    * Build coefficient vector
-    tempname b V
+    * Build coefficient vector - including base level columns with zeros
+    tempname b V b_full V_full
+
+    * Count total coefficients including base levels
+    local n_all : word count `coef_names_all'
+    local K_full = `n_all' + 1  // all coefficients plus constant
+
+    * First build the compact b and V from plugin (only non-base vars)
     local K_with_cons = `K_keep' + 1
     matrix `b' = J(1, `K_with_cons', 0)
     forval k = 1/`K_keep' {
@@ -345,14 +371,55 @@ program define cqreg, eclass
         capture scalar drop __tmp
     }
     matrix `b'[1, `K_with_cons'] = `cons'
-
-    * Get VCE matrix
     matrix `V' = __cqreg_V[1..`K_with_cons', 1..`K_with_cons']
 
-    * Build column names for matrices
-    * Use coef_names which has proper factor variable notation (e.g., 2.drug)
+    * Now expand to include base level columns
+    if `n_all' > 0 & `n_all' > `K_keep' {
+        * There are base levels to insert
+        matrix `b_full' = J(1, `K_full', 0)
+        matrix `V_full' = J(`K_full', `K_full', 0)
+
+        * Map plugin positions to full positions
+        local plugin_pos = 1
+        forval i = 1/`n_all' {
+            local is_base : word `i' of `coef_is_base'
+            if `is_base' == 0 {
+                * Copy coefficient from plugin
+                matrix `b_full'[1, `i'] = `b'[1, `plugin_pos']
+                * Copy VCE row and column
+                local plugin_pos2 = 1
+                forval j = 1/`n_all' {
+                    local is_base2 : word `j' of `coef_is_base'
+                    if `is_base2' == 0 {
+                        matrix `V_full'[`i', `j'] = `V'[`plugin_pos', `plugin_pos2']
+                        local plugin_pos2 = `plugin_pos2' + 1
+                    }
+                }
+                * Copy constant's row/col entries
+                matrix `V_full'[`i', `K_full'] = `V'[`plugin_pos', `K_with_cons']
+                matrix `V_full'[`K_full', `i'] = `V'[`K_with_cons', `plugin_pos']
+                local plugin_pos = `plugin_pos' + 1
+            }
+            * Base levels keep their zeros
+        }
+        * Copy constant coefficient and VCE diagonal
+        matrix `b_full'[1, `K_full'] = `cons'
+        matrix `V_full'[`K_full', `K_full'] = `V'[`K_with_cons', `K_with_cons']
+
+        * Use the full matrices
+        matrix `b' = `b_full'
+        matrix `V' = `V_full'
+        local K_with_cons = `K_full'
+    }
+
+    * Build column names for matrices - use ALL names including base levels
     local colnames ""
-    if `K_x' > 0 {
+    if `n_all' > 0 {
+        foreach v of local coef_names_all {
+            local colnames `colnames' `v'
+        }
+    }
+    else if `K_x' > 0 {
         foreach v of local coef_names {
             local colnames `colnames' `v'
         }
