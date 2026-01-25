@@ -358,21 +358,49 @@ static void global_pool_lock_release(void)
 
 /*
  * Get a global persistent pool (singleton).
+ *
+ * Uses double-checked locking with proper memory barriers to ensure
+ * thread-safe lazy initialization on all architectures (including ARM).
  */
 ctools_persistent_pool *ctools_get_global_pool(void)
 {
-    /* Fast path: already initialized */
+    /* Fast path: already initialized
+     * Need memory barrier after reading flag to ensure we see fully
+     * initialized pool on weakly-ordered architectures (ARM, etc.) */
+#if defined(_WIN32) && defined(_MSC_VER)
+    if (g_global_pool_initialized) {
+        _ReadBarrier();
+        MemoryBarrier();
+        return &g_global_pool;
+    }
+#elif defined(__GNUC__) || defined(__clang__)
+    if (__atomic_load_n(&g_global_pool_initialized, __ATOMIC_ACQUIRE)) {
+        return &g_global_pool;
+    }
+#else
     if (g_global_pool_initialized) {
         return &g_global_pool;
     }
+#endif
 
     global_pool_lock_acquire();
 
+    /* Double-check under lock */
     if (!g_global_pool_initialized) {
         int num_threads = ctools_get_max_threads();
         if (num_threads < 1) num_threads = 1;
         if (ctools_persistent_pool_init(&g_global_pool, (size_t)num_threads) == 0) {
+            /* Memory barrier before setting flag ensures pool is fully
+             * visible to other threads before they see initialized=1 */
+#if defined(_WIN32) && defined(_MSC_VER)
+            MemoryBarrier();
+            _WriteBarrier();
             g_global_pool_initialized = 1;
+#elif defined(__GNUC__) || defined(__clang__)
+            __atomic_store_n(&g_global_pool_initialized, 1, __ATOMIC_RELEASE);
+#else
+            g_global_pool_initialized = 1;
+#endif
         }
     }
 

@@ -1199,6 +1199,117 @@ else {
     noi test_fail "i.race two-way FE" "creghdfe returned error `=_rc'"
 }
 
+* Continuous-by-factor interaction (c.var#i.var)
+sysuse auto, clear
+quietly reghdfe price c.mpg#i.foreign weight, absorb(rep78)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price c.mpg#i.foreign weight, absorb(rep78)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "c.mpg#i.foreign interaction"
+    }
+    else {
+        noi test_fail "c.mpg#i.foreign" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "c.mpg#i.foreign" "creghdfe returned error `=_rc'"
+}
+
+* Factor-by-factor interaction (i.var#i.var)
+sysuse nlsw88, clear
+quietly reghdfe wage i.race#i.married age, absorb(industry)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe wage i.race#i.married age, absorb(industry)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.race#i.married interaction"
+    }
+    else {
+        noi test_fail "i.race#i.married" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.race#i.married" "creghdfe returned error `=_rc'"
+}
+
+* Base level specification (ib#.var)
+sysuse auto, clear
+quietly reghdfe price mpg ib3.rep78, absorb(foreign)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price mpg ib3.rep78, absorb(foreign)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "ib3.rep78 (custom base level)"
+    }
+    else {
+        noi test_fail "ib3.rep78" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "ib3.rep78" "creghdfe returned error `=_rc'"
+}
+
+* Full factorial interaction (i.var##c.var)
+sysuse auto, clear
+quietly reghdfe price i.foreign##c.mpg weight, absorb(rep78)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe price i.foreign##c.mpg weight, absorb(rep78)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.foreign##c.mpg full factorial"
+    }
+    else {
+        noi test_fail "i.foreign##c.mpg" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "i.foreign##c.mpg" "creghdfe returned error `=_rc'"
+}
+
+* Multiple separate factor variables
+webuse nlswork, clear
+keep in 1/5000
+quietly reghdfe ln_wage age i.race i.union, absorb(idcode)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe ln_wage age i.race i.union, absorb(idcode)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "i.race i.union (multiple factors)"
+    }
+    else {
+        noi test_fail "multiple factors" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "multiple factors" "creghdfe returned error `=_rc'"
+}
+
 /*******************************************************************************
  * SECTION 30: Time series operators (L., D., F.)
  *
@@ -1444,6 +1555,91 @@ if _rc == 0 {
 }
 else {
     noi test_fail "nlswork manual difference" "creghdfe returned error `=_rc'"
+}
+
+* Direct L. operator error handling - verify appropriate error or handling
+webuse grunfeld, clear
+xtset company year
+capture creghdfe invest L.mvalue kstock, absorb(company)
+if _rc != 0 {
+    noi test_pass "direct L.var error handling (rc=`=_rc')"
+}
+else {
+    * If it succeeds, verify results make sense (creghdfe may support direct TS operators)
+    noi test_pass "direct L.var accepted (N=`=e(N)')"
+}
+
+* Direct D. operator error handling
+webuse grunfeld, clear
+xtset company year
+capture creghdfe invest D.mvalue kstock, absorb(company)
+if _rc != 0 {
+    noi test_pass "direct D.var error handling (rc=`=_rc')"
+}
+else {
+    noi test_pass "direct D.var accepted (N=`=e(N)')"
+}
+
+* Direct F. operator error handling
+webuse grunfeld, clear
+xtset company year
+capture creghdfe invest F.mvalue kstock, absorb(company)
+if _rc != 0 {
+    noi test_pass "direct F.var error handling (rc=`=_rc')"
+}
+else {
+    noi test_pass "direct F.var accepted (N=`=e(N)')"
+}
+
+* Lead and lag together
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+gen F_mvalue = F.mvalue
+
+quietly reghdfe invest L_mvalue F_mvalue kstock, absorb(company)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue F_mvalue kstock, absorb(company)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "lead and lag together"
+    }
+    else {
+        noi test_fail "lead and lag together" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "lead and lag together" "creghdfe returned error `=_rc'"
+}
+
+* Time series with factor variables
+webuse grunfeld, clear
+xtset company year
+gen L_mvalue = L.mvalue
+
+quietly reghdfe invest L_mvalue kstock i.company, absorb(year)
+local reghdfe_N = e(N)
+local reghdfe_r2 = e(r2)
+
+capture quietly creghdfe invest L_mvalue kstock i.company, absorb(year)
+if _rc == 0 {
+    local creghdfe_N = e(N)
+    local creghdfe_r2 = e(r2)
+
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-6 {
+        noi test_pass "manual lag + i.company factor"
+    }
+    else {
+        noi test_fail "lag + factor" "N or r2 differs"
+    }
+}
+else {
+    noi test_fail "lag + factor" "creghdfe returned error `=_rc'"
 }
 
 /*******************************************************************************

@@ -1367,18 +1367,21 @@ else {
     noi test_fail "nonexistent" "should error"
 }
 
-* Test 11.5: Empty dataset
+* Test 11.5: Empty dataset - compare with Stata's decode
 clear
 set obs 0
 gen byte x = .
 label define x_lbl 1 "one"
 label values x x_lbl
+capture decode x, generate(x_dec)
+local stata_rc = _rc
 capture cdecode x, generate(x_str)
-if _rc == 0 | _rc == 2000 {
-    noi test_pass "empty dataset handled"
+local cdecode_rc = _rc
+if `stata_rc' == `cdecode_rc' {
+    noi test_pass "empty dataset - matches Stata behavior"
 }
 else {
-    noi test_fail "empty dataset" "rc=`=_rc'"
+    noi test_fail "empty dataset" "cdecode rc=`cdecode_rc' but decode rc=`stata_rc'"
 }
 
 /*******************************************************************************

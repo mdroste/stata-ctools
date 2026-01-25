@@ -411,7 +411,17 @@ ST_retcode cencode_main(const char *args)
 
     qsort(sorted_strings, n_unique, sizeof(cencode_string_entry), cencode_string_compare);
 
-    int *code_map = malloc((n_unique + 1) * sizeof(int));
+    /* Check for overflow in (n_unique + 1) */
+    if (n_unique >= SIZE_MAX) {
+        free(sorted_strings);
+        free(obs_codes);
+        cencode_hash_free(&ht);
+        SF_error("cencode: too many unique values\n");
+        return 920;
+    }
+
+    /* Use overflow-safe allocation */
+    int *code_map = ctools_safe_malloc2(n_unique + 1, sizeof(int));
     if (!code_map) {
         free(sorted_strings);
         free(obs_codes);

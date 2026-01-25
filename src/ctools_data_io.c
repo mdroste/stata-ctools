@@ -280,6 +280,26 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
             SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
+                /* Cleanup on allocation failure:
+                 * - Free fallback strings (not owned by arena)
+                 * - Free the string pointer array
+                 * - Free the arena itself */
+                if (arena != NULL) {
+                    for (size_t j = 0; j < i; j++) {
+                        if (str_ptr[j] != NULL && !ctools_string_arena_owns(arena, str_ptr[j])) {
+                            free(str_ptr[j]);
+                        }
+                    }
+                    ctools_string_arena_free(arena);
+                    var->_arena = NULL;
+                } else {
+                    /* No arena - all strings were strdup'd */
+                    for (size_t j = 0; j < i; j++) {
+                        free(str_ptr[j]);
+                    }
+                }
+                ctools_aligned_free(var->data.str);
+                var->data.str = NULL;
                 return -1;
             }
         }

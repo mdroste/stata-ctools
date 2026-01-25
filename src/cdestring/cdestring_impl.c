@@ -115,7 +115,10 @@ static int strip_percent(char *str, int *len)
  * Parse variable indices from command string.
  * Format: "src1 dst1 src2 dst2 ... nvars=N [options]"
  *
- * Returns 0 on success, -1 on error.
+ * Returns:
+ *   0 on success
+ *  -1 on syntax error (invalid arguments)
+ *  -2 on memory allocation failure
  */
 static int parse_options(const char *args, cdestring_options *opts)
 {
@@ -127,7 +130,7 @@ static int parse_options(const char *args, cdestring_options *opts)
 
     /* Make a working copy */
     char *args_copy = strdup(args);
-    if (!args_copy) return -1;
+    if (!args_copy) return -2;  /* Memory allocation failure */
 
     /* First, find nvars= to know how many variables */
     const char *nvars_ptr = strstr(args, "nvars=");
@@ -148,7 +151,7 @@ static int parse_options(const char *args, cdestring_options *opts)
         free(opts->src_indices);
         free(opts->dst_indices);
         free(args_copy);
-        return -1;
+        return -2;  /* Memory allocation failure */
     }
 
     /* Parse variable indices (pairs of src, dst) */
@@ -399,7 +402,12 @@ ST_retcode cdestring_main(const char *args)
     t_start = ctools_timer_seconds();
 
     /* Parse arguments */
-    if (parse_options(args, &opts) != 0) {
+    int parse_rc = parse_options(args, &opts);
+    if (parse_rc != 0) {
+        if (parse_rc == -2) {
+            SF_error("cdestring: memory allocation failed\n");
+            return 920;
+        }
         SF_error("cdestring: invalid arguments\n");
         return 198;
     }

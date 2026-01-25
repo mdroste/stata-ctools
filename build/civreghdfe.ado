@@ -56,12 +56,17 @@ program define civreghdfe, eclass
     }
 
     * Parse the varlist with parentheses for endogenous vars and instruments
-    * Format: depvar (endog1 endog2 = inst1 inst2 inst3) exog1 exog2
+    * Format: depvar [exog_before] (endog1 endog2 = inst1 inst2 inst3) [exog_after]
     local 0 `"`0'"'
 
-    * Get dependent variable (first token)
-    gettoken depvar rest : 0, parse("(")
+    * First get everything before the opening parenthesis
+    gettoken before_paren rest : 0, parse("(")
+    local before_paren = strtrim("`before_paren'")
+
+    * First token of before_paren is depvar, rest is exogenous vars before parentheses
+    gettoken depvar exog_before : before_paren
     local depvar = strtrim("`depvar'")
+    local exog_before = strtrim("`exog_before'")
 
     * Check for parentheses containing endogenous = instruments
     if strpos("`rest'", "(") == 0 {
@@ -82,7 +87,11 @@ program define civreghdfe, eclass
     }
 
     local paren_content = substr("`rest'", 1, `paren_end' - 1)
-    local exogvars = strtrim(substr("`rest'", `paren_end' + 1, .))
+    local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
+
+    * Combine exogenous variables from before and after parentheses
+    local exogvars `exog_before' `exog_after'
+    local exogvars = strtrim("`exogvars'")
 
     * Parse endogenous = instruments
     local eq_pos = strpos("`paren_content'", "=")
@@ -657,6 +666,7 @@ program define civreghdfe, eclass
     local N_used = __civreghdfe_N
     local df_r = __civreghdfe_df_r
     local df_a = __civreghdfe_df_a
+    local df_a_for_vce = __civreghdfe_df_a_for_vce
     local K = __civreghdfe_K
     local rss = __civreghdfe_rss
     local tss = __civreghdfe_tss
@@ -840,9 +850,11 @@ program define civreghdfe, eclass
     * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
     ereturn scalar N_hdfe = `G'
 
-    * Adjusted R-squared: r2_a = 1 - (1 - r2) * (N - 1) / (N - K - df_a)
-    * For IV regression with HDFE, df_a already includes absorbed FE
-    local adj_denom = `N_used' - `K_total' - `df_a'
+    * Adjusted R-squared: r2_a = 1 - (1 - r2) * (N - 1) / (N - K - df_a_adj - 1)
+    * When FE is fully nested in cluster, use df_a_for_vce (usually 0) instead of df_a
+    * This matches ivreghdfe behavior where nested FE don't count towards df_a for r2_a
+    local df_a_adj = `df_a_for_vce'
+    local adj_denom = `N_used' - `K_total' - `df_a_adj' - 1
     if `adj_denom' > 0 {
         local r2_a = 1 - (1 - `r2') * (`N_used' - 1) / `adj_denom'
     }

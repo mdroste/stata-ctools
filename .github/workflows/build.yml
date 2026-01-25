@@ -177,7 +177,7 @@ jobs:
 
           # Get all source files
           SOURCES=$(find src -name "*.c" | tr '\n' ' ')
-          INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe"
+          INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe -Isrc/cencode -Isrc/cwinsor -Isrc/cdestring -Isrc/cdecode"
 
           echo "Compiling with OpenMP support (statically linked)..."
           echo "CFLAGS: $CFLAGS"

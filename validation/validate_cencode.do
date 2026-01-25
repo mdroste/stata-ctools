@@ -1329,16 +1329,19 @@ else {
     noi test_fail "invalid name" "should error"
 }
 
-* Test 11.5: Empty dataset
+* Test 11.5: Empty dataset - compare with Stata's encode
 clear
 set obs 0
 gen str10 x = ""
+capture encode x, generate(x_enc)
+local stata_rc = _rc
 capture cencode x, generate(x_code)
-if _rc == 0 | _rc == 2000 {
-    noi test_pass "empty dataset handled"
+local cencode_rc = _rc
+if `stata_rc' == `cencode_rc' {
+    noi test_pass "empty dataset - matches Stata behavior"
 }
 else {
-    noi test_fail "empty dataset" "rc=`=_rc'"
+    noi test_fail "empty dataset" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
 }
 
 /*******************************************************************************
@@ -2417,7 +2420,7 @@ else {
     noi test_fail "case duplicates" "not 4 unique"
 }
 
-* Test 21.4: Case sort order
+* Test 21.4: Case sort order - compare with Stata's encode
 clear
 set obs 4
 gen str10 x = ""
@@ -2425,15 +2428,17 @@ replace x = "Zebra" in 1
 replace x = "apple" in 2
 replace x = "APPLE" in 3
 replace x = "zebra" in 4
-cencode x, generate(code)
-gsort code
-local first = x[1]
-local last = x[4]
-if "`first'" == "APPLE" | "`first'" == "Apple" {
-    noi test_pass "uppercase sorts before lowercase"
+encode x, generate(code_stata)
+cencode x, generate(code_ctools)
+gsort code_stata
+local stata_first = x[1]
+gsort code_ctools
+local ctools_first = x[1]
+if "`stata_first'" == "`ctools_first'" {
+    noi test_pass "case sort order matches Stata"
 }
 else {
-    noi test_pass "case sort order determined"
+    noi test_fail "case sort order" "cencode first=`ctools_first' but encode first=`stata_first'"
 }
 
 * Test 21.5: Compare case sensitivity with encode
@@ -2460,11 +2465,11 @@ label define mylab 1 "odd" 2 "even"
 cencode x, generate(code) label(mylab) noextend
 local lbl_1 : label mylab 1
 local lbl_2 : label mylab 2
-if "`lbl_1'" == "odd" | "`lbl_2'" == "even" {
+if "`lbl_1'" == "odd" & "`lbl_2'" == "even" {
     noi test_pass "noextend uses existing label"
 }
 else {
-    noi test_pass "noextend with existing label"
+    noi test_fail "noextend label" "expected 1=odd,2=even but got 1=`lbl_1',2=`lbl_2'"
 }
 capture label drop mylab
 
@@ -2476,32 +2481,53 @@ capture label drop extlab
 label define extlab 1 "cat1" 2 "cat2"
 capture cencode x, generate(code) label(extlab)
 if _rc == 0 {
-    noi test_pass "extending existing labels"
+    * Verify all 5 categories are encoded
+    quietly tab code
+    if r(r) == 5 {
+        noi test_pass "extending existing labels"
+    }
+    else {
+        noi test_fail "extending labels" "expected 5 categories, got `=r(r)'"
+    }
 }
 else {
-    noi test_pass "extend label handled (rc=`=_rc')"
+    noi test_fail "extending labels" "cencode failed with rc=`=_rc'"
 }
 capture label drop extlab
 
-* Test 22.3: Very long label text (244 chars in value)
+* Test 22.3: Very long label text (244 chars in value) - compare with Stata
 clear
 set obs 3
 gen str244 x = ""
 replace x = "a" * 240 in 1
 replace x = "b" * 240 in 2
 replace x = "c" * 240 in 3
-capture cencode x, generate(code)
-if _rc == 0 {
-    local lbl1 : label (code) 1
-    if strlen("`lbl1'") >= 200 {
-        noi test_pass "very long label text preserved"
+capture encode x, generate(code_stata)
+local stata_rc = _rc
+local stata_len = 0
+if `stata_rc' == 0 {
+    local stata_lbl : label (code_stata) 1
+    local stata_len = strlen("`stata_lbl'")
+}
+capture cencode x, generate(code_ctools)
+local cencode_rc = _rc
+if `stata_rc' == `cencode_rc' {
+    if `cencode_rc' == 0 {
+        local ctools_lbl : label (code_ctools) 1
+        local ctools_len = strlen("`ctools_lbl'")
+        if `ctools_len' == `stata_len' {
+            noi test_pass "very long label text matches Stata"
+        }
+        else {
+            noi test_fail "long label text" "cencode len=`ctools_len' but encode len=`stata_len'"
+        }
     }
     else {
-        noi test_pass "long label text (may be truncated)"
+        noi test_pass "very long label text - both error (as expected)"
     }
 }
 else {
-    noi test_fail "long label text" "rc=`=_rc'"
+    noi test_fail "long label text" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
 }
 
 * Test 22.4: 100 unique values

@@ -1,46 +1,38 @@
-* Debug webuse nlswork comparison
-
-clear all
-cd "/Users/Mike/Documents/GitHub/stata-ctools"
-adopath ++ "build"
-
-* Load and export
-di "=== Load webuse nlswork ==="
+adopath ++ build
 webuse nlswork, clear
-desc, short
-export delimited using "temp/nlswork.csv", replace
+xtset idcode year
 
-* Import with Stata
-di _n "=== Import with Stata (varnames(1)) ==="
-import delimited using "temp/nlswork.csv", varnames(1) clear
-desc, short
-list in 1/3
+* ivreghdfe
+di "=== ivreghdfe ==="
+ivreghdfe ln_wage tenure (ttl_exp = age), absorb(idcode) vce(cluster idcode)
+local iv_r2 = e(r2)
+local iv_r2_a = e(r2_a)
+local iv_N = e(N)
+local iv_df_r = e(df_r)
+local iv_df_a = e(df_a)
+local iv_df_m = e(df_m)
+local iv_rmse = e(rmse)
 
-* Import with cimport
-di _n "=== Import with cimport ==="
-cimport delimited using "temp/nlswork.csv", clear
-desc, short
-list in 1/3
+* civreghdfe
+webuse nlswork, clear
+xtset idcode year
+di ""
+di "=== civreghdfe ==="
+civreghdfe ln_wage tenure (ttl_exp = age), absorb(idcode) vce(cluster idcode)
+local civ_r2 = e(r2)
+local civ_r2_a = e(r2_a)
+local civ_N = e(N)
+local civ_df_r = e(df_r)
+local civ_df_a = e(df_a)
+local civ_df_m = e(df_m)
+local civ_rmse = e(rmse)
 
-* Detailed comparison
-di _n "=== Detailed comparison ==="
-import delimited using "temp/nlswork.csv", varnames(1) clear
-tempfile stata_data
-save `stata_data', replace
-
-cimport delimited using "temp/nlswork.csv", clear
-tempfile cimport_data
-save `cimport_data', replace
-
-* Check types
-di _n "Stata variable types:"
-use `stata_data', clear
-desc
-
-di _n "cimport variable types:"
-use `cimport_data', clear
-desc
-
-* Try cf with verbose
-use `stata_data', clear
-cf _all using `cimport_data', verbose
+* Compare
+di ""
+di "=== Comparison ==="
+di "ivreghdfe: r2=`iv_r2' r2_a=`iv_r2_a' N=`iv_N' df_r=`iv_df_r' df_a=`iv_df_a' df_m=`iv_df_m' rmse=`iv_rmse'"
+di "civreghdfe: r2=`civ_r2' r2_a=`civ_r2_a' N=`civ_N' df_r=`civ_df_r' df_a=`civ_df_a' df_m=`civ_df_m' rmse=`civ_rmse'"
+di ""
+di "r2 diff = " `iv_r2' - `civ_r2'
+di "r2_a diff = " `iv_r2_a' - `civ_r2_a'
+di "rmse diff = " `iv_rmse' - `civ_rmse'

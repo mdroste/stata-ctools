@@ -395,15 +395,17 @@ set obs 50
 gen str10 x = string(_n)
 gen flag = mod(_n, 2)
 cdestring x if flag == 1, replace
-* Should only convert odd observations
+* Should only convert odd observations (flag==1)
+* Even observations (flag==0) become missing after replace
 count if missing(x) & flag == 0
 local n_missing = r(N)
-* Even obs should still be string (but replace makes them missing if not in sample)
-if `n_missing' == 25 {
+count if !missing(x) & flag == 1
+local n_converted = r(N)
+if `n_missing' == 25 & `n_converted' == 25 {
     noi test_pass "replace with if condition"
 }
 else {
-    noi test_fail "replace if" "unexpected missing count"
+    noi test_fail "replace if" "missing=`n_missing' converted=`n_converted'"
 }
 
 * Test 3.8: Replace with in range
@@ -471,16 +473,20 @@ noi benchmark_destring x, testname("vs destring: ignore $") generate(x) ignore("
 * Test 4.3: Ignore multiple characters
 clear
 set obs 5
-gen str30 x = "$" + string(_n * 1000) + ",00"
-replace x = subinstr(x, "000", ",000", 1) if _n >= 1
+gen str30 x = ""
+replace x = "$1,000" in 1
+replace x = "$2,500" in 2
+replace x = "$10,000" in 3
+replace x = "$25,000" in 4
+replace x = "$100,000" in 5
 cdestring x, generate(x_num) ignore("$,")
-* Should handle currency-like formatting
-capture confirm numeric variable x_num
-if _rc == 0 {
+* Should strip $ and , to get numeric values
+local pass = (x_num[1] == 1000) & (x_num[2] == 2500) & (x_num[3] == 10000)
+if `pass' {
     noi test_pass "ignore multiple characters"
 }
 else {
-    noi test_fail "ignore multiple" "conversion failed"
+    noi test_fail "ignore multiple" "wrong values"
 }
 
 * Test 4.4: Ignore comma in numbers
@@ -912,11 +918,10 @@ else {
 
 * Test 8.3: if condition works correctly (destring doesn't support if/in)
 clear
+set seed 12345
 set obs 100
 gen str10 x = string(_n)
 gen value = runiform()
-set seed 12345
-replace value = runiform()
 cdestring x if value > 0.5, generate(x_num)
 * Count how many observations match the condition
 count if value > 0.5
@@ -1157,7 +1162,13 @@ set obs 50000
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num)
 if _rc == 0 {
-    noi test_pass "50K observations"
+    count if x_num == _n
+    if r(N) == 50000 {
+        noi test_pass "50K observations"
+    }
+    else {
+        noi test_fail "50K obs" "only `r(N)' correct"
+    }
 }
 else {
     noi test_fail "50K obs" "rc=`=_rc'"
@@ -1169,7 +1180,13 @@ set obs 100000
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num)
 if _rc == 0 {
-    noi test_pass "100K observations"
+    count if x_num == _n
+    if r(N) == 100000 {
+        noi test_pass "100K observations"
+    }
+    else {
+        noi test_fail "100K obs" "only `r(N)' correct"
+    }
 }
 else {
     noi test_fail "100K obs" "rc=`=_rc'"
@@ -1211,7 +1228,13 @@ set obs 50000
 gen str20 x = "$" + string(_n)
 capture cdestring x, generate(x_num) ignore("$")
 if _rc == 0 {
-    noi test_pass "50K with ignore"
+    count if x_num == _n
+    if r(N) == 50000 {
+        noi test_pass "50K with ignore"
+    }
+    else {
+        noi test_fail "50K ignore" "only `r(N)' correct"
+    }
 }
 else {
     noi test_fail "50K ignore" "rc=`=_rc'"
@@ -1223,7 +1246,14 @@ set obs 50000
 gen str15 x = string(_n) + "%"
 capture cdestring x, generate(x_num) percent
 if _rc == 0 {
-    noi test_pass "50K with percent"
+    * Values should be _n / 100
+    count if abs(x_num - _n/100) < 1e-10
+    if r(N) == 50000 {
+        noi test_pass "50K with percent"
+    }
+    else {
+        noi test_fail "50K percent" "only `r(N)' correct"
+    }
 }
 else {
     noi test_fail "50K percent" "rc=`=_rc'"

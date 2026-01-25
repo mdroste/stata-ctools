@@ -16,6 +16,7 @@
 
 #include "cqreg_ipm.h"
 #include "cqreg_linalg.h"
+#include "../ctools_config.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -980,9 +981,15 @@ static ST_int solve_subsample_qr(
 {
     ST_int i, j;
 
-    /* Allocate subsample data - cast to size_t to prevent 32-bit overflow */
+    /* Compute allocation size with overflow check */
+    size_t mk_size;
+    if (ctools_safe_alloc_size((size_t)m, (size_t)K, sizeof(ST_double), &mk_size) != 0) {
+        return -1;  /* Overflow */
+    }
+
+    /* Allocate subsample data */
     ST_double *y_sub = (ST_double *)malloc((size_t)m * sizeof(ST_double));
-    ST_double *X_sub = (ST_double *)malloc((size_t)m * K * sizeof(ST_double));
+    ST_double *X_sub = (ST_double *)malloc(mk_size);
     if (!y_sub || !X_sub) {
         free(y_sub);
         free(X_sub);

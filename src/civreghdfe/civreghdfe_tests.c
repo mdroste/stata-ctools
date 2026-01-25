@@ -168,7 +168,7 @@ void civreghdfe_compute_underid_test(
             }
 
             if (vce_type == 2 && cluster_ids && num_clusters > 0) {
-                /* Cluster-robust */
+                /* Cluster-robust with small-sample correction G/(G-1) */
                 ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
                 if (!cluster_Zv) {
                     free(v); free(shat0); free(shat0_inv);
@@ -193,6 +193,14 @@ void civreghdfe_compute_underid_test(
                     }
                 }
                 free(cluster_Zv);
+
+                /* Apply small-sample correction: G/(G-1) */
+                if (num_clusters > 1) {
+                    ST_double cluster_adj = (ST_double)num_clusters / (ST_double)(num_clusters - 1);
+                    for (ST_int ki = 0; ki < K_iv * K_iv; ki++) {
+                        shat0[ki] *= cluster_adj;
+                    }
+                }
             } else {
                 /* HC robust */
                 for (i = 0; i < N; i++) {

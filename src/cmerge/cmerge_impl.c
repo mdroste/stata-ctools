@@ -146,13 +146,17 @@ static ST_retcode cmerge_load_using(const char *args)
         }
         else if (strcmp(token, "n_keepusing") == 0) {
             token = strtok(NULL, " ");
-            if (token) n_keepusing = atoi(token);
+            if (token) {
+                n_keepusing = atoi(token);
+                /* Clamp to prevent buffer overflow */
+                if (n_keepusing > CMERGE_MAX_VARS) n_keepusing = CMERGE_MAX_VARS;
+            }
         }
         else if (strcmp(token, "keepusing_indices") == 0) {
             in_keepusing_indices = 1;
             keepusing_idx = 0;
         }
-        else if (in_keepusing_indices && keepusing_idx < n_keepusing) {
+        else if (in_keepusing_indices && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
             keepusing_indices[keepusing_idx++] = atoi(token);
         }
         else if (strcmp(token, "verbose") == 0) {
@@ -469,13 +473,17 @@ static ST_retcode cmerge_execute(const char *args)
         }
         else if (strcmp(token, "n_keepusing") == 0) {
             token = strtok(NULL, " ");
-            if (token) n_keepusing = atoi(token);
+            if (token) {
+                n_keepusing = atoi(token);
+                /* Clamp to prevent buffer overflow */
+                if (n_keepusing > CMERGE_MAX_VARS) n_keepusing = CMERGE_MAX_VARS;
+            }
         }
         else if (strcmp(token, "keepusing_placeholders") == 0) {
             in_keepusing_placeholders = 1;
             keepusing_idx = 0;
         }
-        else if (in_keepusing_placeholders && keepusing_idx < n_keepusing) {
+        else if (in_keepusing_placeholders && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
             keepusing_placeholder_indices[keepusing_idx++] = atoi(token);
         }
         else if (strcmp(token, "merge_var_idx") == 0) {
@@ -500,7 +508,7 @@ static ST_retcode cmerge_execute(const char *args)
             replace_mode = 1;
         }
         else if (strcmp(token, "shared_flags") == 0) {
-            for (int i = 0; i < n_keepusing; i++) {
+            for (int i = 0; i < n_keepusing && i < CMERGE_MAX_VARS; i++) {
                 token = strtok(NULL, " ");
                 shared_flags[i] = token ? atoi(token) : 0;
             }

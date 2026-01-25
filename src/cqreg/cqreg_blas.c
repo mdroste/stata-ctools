@@ -636,8 +636,14 @@ ST_int blas_solve_weighted_ls(const ST_double *X, ST_int N, ST_int K,
      * Solve (X'DX) * beta = X'Dy via Cholesky
      */
 
+    /* Compute K*K size with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        return -1;  /* Overflow */
+    }
+
     /* Allocate workspace */
-    ST_double *XDX = (ST_double *)malloc(K * K * sizeof(ST_double));
+    ST_double *XDX = (ST_double *)malloc(kk_size);
     ST_double *Dy = (ST_double *)malloc(N * sizeof(ST_double));
     ST_double *rhs = (ST_double *)malloc(K * sizeof(ST_double));
 

@@ -2781,10 +2781,10 @@ save `using_assert'
 use `master_assert', clear
 capture cmerge 1:1 id using `using_assert', assert(match) nogenerate noreport
 if _rc == 0 {
-    noi test_pass "assert(match) passes"
+    noi test_pass "assert(match) passes when all match"
 }
 else {
-    noi test_pass "assert(match) correctly fails when expected"
+    noi test_fail "assert(match)" "should pass when all observations match, but rc=`=_rc'"
 }
 
 /*******************************************************************************

@@ -1206,7 +1206,9 @@ static ST_retcode do_iv_regression(void)
         df_r_val = N - K_total - df_a;
     }
     if (df_r_val <= 0) df_r_val = 1;
-    ST_double rmse = sqrt(rss / (N - K_total - df_a > 0 ? N - K_total - df_a : 1));
+    /* For rmse, use df_a_for_vce when FE is nested in cluster (matches ivreghdfe) */
+    ST_int df_a_for_rmse = (has_cluster && df_a_nested > 0) ? df_a_for_vce : df_a;
+    ST_double rmse = sqrt(rss / (N - K_total - df_a_for_rmse > 0 ? N - K_total - df_a_for_rmse : 1));
 
     /* Compute model F-statistic: (R2 / K) / ((1 - R2) / df_r) */
     ST_double f_stat = 0.0;
@@ -1223,6 +1225,7 @@ static ST_retcode do_iv_regression(void)
     SF_scal_save("__civreghdfe_N", (ST_double)N);
     SF_scal_save("__civreghdfe_df_r", (ST_double)df_r_val);
     SF_scal_save("__civreghdfe_df_a", (ST_double)df_a);
+    SF_scal_save("__civreghdfe_df_a_for_vce", (ST_double)df_a_for_vce);
     SF_scal_save("__civreghdfe_K", (ST_double)K_total);
     SF_scal_save("__civreghdfe_rss", rss);
     SF_scal_save("__civreghdfe_tss", tss);

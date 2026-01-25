@@ -1048,13 +1048,16 @@ cimport_test using "temp/large_10k.csv", testname("large file UTF-8 (10K rows)")
  ******************************************************************************/
 noi print_section "Pathological Data - Empty/Minimal Files"
 
-* Empty file (0 bytes)
+* Empty file (0 bytes) - compare with Stata's behavior
+capture import delimited using "temp/empty_file.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/empty_file.csv", clear
-if _rc != 0 {
-    noi test_pass "empty file (0 bytes) - handled gracefully"
+local cimport_rc = _rc
+if `stata_rc' == `cimport_rc' {
+    noi test_pass "empty file (0 bytes) - matches Stata behavior"
 }
 else {
-    noi test_pass "empty file (0 bytes) - imported (N=`=_N')"
+    noi test_fail "empty file" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Header only (no data rows)

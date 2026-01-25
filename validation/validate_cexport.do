@@ -419,12 +419,16 @@ gen x = .
 gen str10 s = ""
 drop in 1
 
+* Compare empty dataset behavior with Stata's export delimited
+capture export delimited using "temp/empty_dataset_stata.csv", replace
+local stata_rc = _rc
 capture cexport delimited using "temp/empty_dataset.csv", replace
-if _rc == 0 {
-    noi test_pass "empty dataset (0 obs)"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    noi test_pass "empty dataset (0 obs) - matches Stata behavior"
 }
 else {
-    noi test_pass "empty dataset - handled gracefully (rc=`=_rc')"
+    noi test_fail "empty dataset" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 * Single observation, single variable
@@ -565,7 +569,7 @@ forvalues i = 1(11)100 {
 }
 benchmark_export, testname("sparse data (mostly missing)")
 
-* Extended missing values - test export only (cexport may handle differently than Stata)
+* Extended missing values - compare with Stata's behavior
 clear
 set obs 10
 gen x = .
@@ -575,12 +579,15 @@ replace x = .c in 3
 replace x = .z in 4
 replace x = 100 in 5
 replace x = . in 6
+capture export delimited using "temp/ext_missing_stata.csv", replace
+local stata_rc = _rc
 capture cexport delimited using "temp/ext_missing.csv", replace
-if _rc == 0 {
-    noi test_pass "extended missing values (.a-.z) - exported"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    noi test_pass "extended missing values (.a-.z) - matches Stata behavior"
 }
 else {
-    noi test_pass "extended missing values - handled gracefully (rc=`=_rc')"
+    noi test_fail "extended missing values" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 /*******************************************************************************

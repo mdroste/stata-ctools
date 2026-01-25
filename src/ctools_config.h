@@ -203,21 +203,59 @@ static inline ctools_prefetch_distances ctools_compute_prefetch_distances(void)
 /*
     Global prefetch distances - initialized once.
     Use ctools_get_prefetch_distances() to access.
+
+    Thread-safety: Uses atomic operations for the initialization flag to prevent
+    data races. Multiple threads may compute distances simultaneously during
+    first access (benign race - all produce same result), but the flag ensures
+    we don't read partially-written struct fields.
 */
 static ctools_prefetch_distances _ctools_prefetch_dist = {0, 0, 0, 0};
+#if defined(__GNUC__) || defined(__clang__)
+static volatile int _ctools_prefetch_initialized = 0;
+#else
 static int _ctools_prefetch_initialized = 0;
+#endif
 
 /*
     Get adaptive prefetch distances (lazy initialization).
-    Thread-safe for reading after first call.
+    Thread-safe using double-checked locking pattern with memory barriers.
 */
 static inline ctools_prefetch_distances ctools_get_prefetch_distances(void)
 {
-    if (!_ctools_prefetch_initialized) {
-        _ctools_prefetch_dist = ctools_compute_prefetch_distances();
-        _ctools_prefetch_initialized = 1;
+    /* Fast path with acquire semantics */
+#if defined(__GNUC__) || defined(__clang__)
+    if (__atomic_load_n(&_ctools_prefetch_initialized, __ATOMIC_ACQUIRE)) {
+        return _ctools_prefetch_dist;
     }
-    return _ctools_prefetch_dist;
+#elif defined(_WIN32) && defined(_MSC_VER)
+    if (_ctools_prefetch_initialized) {
+        MemoryBarrier();
+        return _ctools_prefetch_dist;
+    }
+#else
+    if (_ctools_prefetch_initialized) {
+        return _ctools_prefetch_dist;
+    }
+#endif
+
+    /* Slow path: compute distances.
+     * Multiple threads may compute simultaneously - this is a benign race
+     * since all threads produce identical results. The atomic store ensures
+     * subsequent readers see fully-written struct. */
+    ctools_prefetch_distances dist = ctools_compute_prefetch_distances();
+    _ctools_prefetch_dist = dist;
+
+    /* Release semantics: ensure struct write is visible before flag */
+#if defined(__GNUC__) || defined(__clang__)
+    __atomic_store_n(&_ctools_prefetch_initialized, 1, __ATOMIC_RELEASE);
+#elif defined(_WIN32) && defined(_MSC_VER)
+    MemoryBarrier();
+    _ctools_prefetch_initialized = 1;
+#else
+    _ctools_prefetch_initialized = 1;
+#endif
+
+    return dist;
 }
 
 /*
@@ -401,12 +439,19 @@ void ctools_reset_max_threads(void);
 
 #if defined(_WIN32) && defined(_MSC_VER)
     #include <intrin.h>
-    #define ctools_memory_barrier() _ReadWriteBarrier(); MemoryBarrier()
+    #define ctools_memory_barrier() do { _ReadWriteBarrier(); MemoryBarrier(); } while(0)
 #elif defined(__GNUC__) || defined(__clang__)
     #define ctools_memory_barrier() __sync_synchronize()
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+    /* C11 atomics available */
+    #include <stdatomic.h>
+    #define ctools_memory_barrier() atomic_thread_fence(memory_order_seq_cst)
 #else
-    /* Fallback: compiler barrier only */
-    #define ctools_memory_barrier() do { __asm__ __volatile__("" ::: "memory"); } while(0)
+    /* Fallback: volatile access acts as a compiler barrier.
+     * This provides no hardware memory ordering guarantees but prevents
+     * compiler reordering. Safe for single-threaded or already-locked contexts. */
+    static volatile int _ctools_barrier_dummy = 0;
+    #define ctools_memory_barrier() do { _ctools_barrier_dummy = _ctools_barrier_dummy; } while(0)
 #endif
 
 /* ============================================================================
