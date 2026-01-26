@@ -25,6 +25,7 @@
 #include "cbinscatter_impl.h"
 #include "cbinscatter_types.h"
 #include "cbinscatter_bins.h"
+#include "cbinscatter_binsreg.h"
 #include "cbinscatter_resid.h"
 #include "cbinscatter_fit.h"
 
@@ -349,8 +350,13 @@ static ST_retcode load_data(
     for (i = 0; i < N; i++) {
         int valid = 1;
 
+        /* Check Stata's if condition - CRITICAL for proper filtering */
+        if (SF_ifobs(i + in1) == 0) {
+            valid = 0;
+        }
+
         /* Check y and x */
-        if (SF_is_missing(y[i]) || SF_is_missing(x[i])) {
+        if (valid && (SF_is_missing(y[i]) || SF_is_missing(x[i]))) {
             valid = 0;
         }
 
@@ -542,7 +548,7 @@ static ST_retcode do_compute_bins(void) {
 
         if (config.verbose) {
             if (config.method == 1) {
-                SF_display("cbinscatter: using binsreg method (bin on raw X, residualize Y only)\n");
+                SF_display("cbinscatter: using binsreg method (bin on raw X, regression adjustment)\n");
             } else {
                 SF_display("cbinscatter: using classic method (residualize both X and Y)\n");
             }
@@ -550,26 +556,21 @@ static ST_retcode do_compute_bins(void) {
 
         /*
          * Method 0 (classic): Residualize both Y and X, bin on residualized X
-         * Method 1 (binsreg): Only residualize Y, bin on raw X
+         * Method 1 (binsreg): Bin on raw X, use regression Y ~ bins + controls
          *   (Cattaneo et al. "On Binscatter" approach)
+         *
+         * For binsreg method:
+         *   - Controls only: Skip residualization here; binsreg function handles it
+         *   - Absorb only: DO NOT residualize here - handled by adjust_bins_binsreg_hdfe
+         *   - Absorb + Controls: DO NOT residualize here - handled by adjust_bins_binsreg_hdfe
+         *
+         * The binsreg HDFE adjustment uses the FWL theorem correctly by demeaning
+         * BOTH Y and bin indicators, which is different from simple HDFE demeaning.
          */
         if (config.method == 1) {
-            /* Binsreg method: Y-only residualization */
-            if (config.has_absorb && config.has_controls) {
-                rc = combined_residualize_y_only(y, controls, fe_vars, N_valid,
-                                                  config.num_controls, config.num_absorb,
-                                                  weights, config.weight_type,
-                                                  config.maxiter, config.tolerance,
-                                                  config.verbose, &dropped);
-            } else if (config.has_absorb) {
-                rc = hdfe_residualize_y_only(y, fe_vars, N_valid, config.num_absorb,
-                                              weights, config.weight_type,
-                                              config.maxiter, config.tolerance,
-                                              config.verbose, &dropped);
-            } else {
-                rc = ols_residualize_y_only(y, controls, N_valid, config.num_controls,
-                                             weights, config.weight_type);
-            }
+            /* Binsreg method: skip residualization here.
+             * For absorb cases, adjust_bins_binsreg_hdfe will handle the FWL approach.
+             * For controls-only, adjust_bins_binsreg handles it via regression. */
         } else {
             /* Classic method: Residualize both Y and X */
             if (config.has_absorb && config.has_controls) {
@@ -587,11 +588,11 @@ static ST_retcode do_compute_bins(void) {
                 rc = ols_residualize(y, x, controls, N_valid, config.num_controls,
                                      weights, config.weight_type);
             }
-        }
 
-        if (rc != CBINSCATTER_OK) {
-            SF_error("cbinscatter: residualization failed\n");
-            goto cleanup;
+            if (rc != CBINSCATTER_OK) {
+                SF_error("cbinscatter: residualization failed\n");
+                goto cleanup;
+            }
         }
 
         results.obs_dropped += dropped;
@@ -658,12 +659,30 @@ static ST_retcode do_compute_bins(void) {
         ST_double *y_group = (ST_double *)malloc(n_group * sizeof(ST_double));
         ST_double *x_group = (ST_double *)malloc(n_group * sizeof(ST_double));
         ST_double *w_group = NULL;
+        ST_double *c_group = NULL;  /* Controls for this group */
+        ST_int *fe_group = NULL;    /* FE vars for this group */
+
         if (weights) {
             w_group = (ST_double *)malloc(n_group * sizeof(ST_double));
         }
 
-        if (!y_group || !x_group || (weights && !w_group)) {
-            free(y_group); free(x_group); free(w_group);
+        /* For binsreg method with controls or absorb, we need group controls/FE */
+        int use_binsreg_ctrl = (config.method == 1 && config.has_controls && config.num_controls > 0);
+        int use_binsreg_hdfe = (config.method == 1 && config.has_absorb);
+
+        if (use_binsreg_ctrl || use_binsreg_hdfe) {
+            if (config.has_controls && config.num_controls > 0) {
+                c_group = (ST_double *)malloc((size_t)n_group * config.num_controls * sizeof(ST_double));
+            }
+        }
+        if (use_binsreg_hdfe && config.num_absorb > 0) {
+            fe_group = (ST_int *)malloc((size_t)n_group * config.num_absorb * sizeof(ST_int));
+        }
+
+        if (!y_group || !x_group || (weights && !w_group) ||
+            (use_binsreg_ctrl && config.has_controls && !c_group) ||
+            (use_binsreg_hdfe && config.num_absorb > 0 && !fe_group)) {
+            free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
@@ -674,6 +693,16 @@ static ST_retcode do_compute_bins(void) {
                 y_group[j] = y[i];
                 x_group[j] = x[i];
                 if (w_group) w_group[j] = weights[i];
+                if (c_group) {
+                    for (ST_int k = 0; k < config.num_controls; k++) {
+                        c_group[k * n_group + j] = controls[k * N_valid + i];
+                    }
+                }
+                if (fe_group) {
+                    for (ST_int k = 0; k < config.num_absorb; k++) {
+                        fe_group[k * n_group + j] = fe_vars[k * N_valid + i];
+                    }
+                }
                 j++;
             }
         }
@@ -682,14 +711,110 @@ static ST_retcode do_compute_bins(void) {
         if (config.discrete) {
             rc = compute_bins_discrete(y_group, x_group, w_group, n_group,
                                        config.compute_se, group);
+        } else if (use_binsreg_ctrl && !use_binsreg_hdfe) {
+            /* Binsreg method with controls only (no absorb): use regression adjustment */
+            rc = compute_bins_single_group_binsreg(y_group, x_group, c_group, w_group,
+                                                    n_group, config.num_controls,
+                                                    &config, group);
         } else {
+            /* Standard binning - compute bin assignments and X means */
             rc = compute_bins_single_group(y_group, x_group, w_group, n_group,
                                            &config, group);
+        }
+
+        if (rc != CBINSCATTER_OK) {
+            free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+            goto cleanup;
+        }
+
+        /* For binsreg method with absorb: apply FWL-based HDFE adjustment */
+        if (use_binsreg_hdfe && group->bins != NULL && group->num_bins > 0) {
+            /* Extract bin assignments */
+            ST_int *bin_ids = (ST_int *)malloc(n_group * sizeof(ST_int));
+            if (!bin_ids) {
+                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+
+            /* Assign observations to bins based on their x values */
+            for (ST_int i = 0; i < n_group; i++) {
+                /* Find which bin this observation belongs to */
+                ST_int assigned_bin = 1;  /* Default to first bin */
+                for (ST_int b = 0; b < group->num_bins; b++) {
+                    /* Check if x is below the upper bound of this bin */
+                    if (b == group->num_bins - 1) {
+                        /* Last bin includes all remaining */
+                        assigned_bin = b + 1;
+                        break;
+                    }
+                    /* Check against next bin's x_mean as approximate boundary */
+                    ST_double x_mid = (group->bins[b].x_mean + group->bins[b + 1].x_mean) / 2.0;
+                    if (x_group[i] <= x_mid) {
+                        assigned_bin = b + 1;
+                        break;
+                    }
+                }
+                bin_ids[i] = assigned_bin;
+            }
+
+            /* Use the bin_id that was already stored during initial binning */
+            /* Re-extract bin assignments by checking which bin each obs is in */
+            /* Actually, we need to use the quantile-based assignment */
+            /* Let's re-use the binning logic by looking at percentiles */
+
+            /* Simpler approach: Sort x and assign to bins by percentile */
+            /* Since compute_bins_single_group already computed the bins based on
+             * x quantiles, we can reconstruct the bin assignments */
+            ST_double *x_sorted = (ST_double *)malloc(n_group * sizeof(ST_double));
+            ST_int *sort_idx = (ST_int *)malloc(n_group * sizeof(ST_int));
+            if (!x_sorted || !sort_idx) {
+                free(bin_ids); free(x_sorted); free(sort_idx);
+                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
+            }
+
+            /* Copy and sort x */
+            memcpy(x_sorted, x_group, n_group * sizeof(ST_double));
+            for (ST_int i = 0; i < n_group; i++) sort_idx[i] = i;
+
+            /* Simple insertion sort for small n, or we rely on approximate assignment */
+            /* For correctness, use rank-based assignment */
+            for (ST_int i = 0; i < n_group; i++) {
+                /* Count how many x values are less than this one */
+                ST_int rank = 0;
+                for (ST_int k = 0; k < n_group; k++) {
+                    if (x_group[k] < x_group[i] || (x_group[k] == x_group[i] && k < i)) {
+                        rank++;
+                    }
+                }
+                /* Assign to bin based on rank percentile */
+                ST_int bin_num = (rank * group->num_bins) / n_group;
+                if (bin_num >= group->num_bins) bin_num = group->num_bins - 1;
+                bin_ids[i] = bin_num + 1;  /* 1-based */
+            }
+
+            free(x_sorted);
+            free(sort_idx);
+
+            /* Apply FWL-based HDFE adjustment */
+            rc = adjust_bins_binsreg_hdfe(y_group, c_group, fe_group, bin_ids, w_group,
+                                           n_group,
+                                           config.has_controls ? config.num_controls : 0,
+                                           config.num_absorb,
+                                           config.weight_type,
+                                           config.maxiter, config.tolerance,
+                                           group);
+
+            free(bin_ids);
         }
 
         free(y_group);
         free(x_group);
         free(w_group);
+        free(c_group);
+        free(fe_group);
 
         if (rc != CBINSCATTER_OK) goto cleanup;
     }

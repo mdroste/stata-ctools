@@ -1,4 +1,4 @@
-*! version 1.2.0 21Jan2026
+*! version 0.9.0 26Jan2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!

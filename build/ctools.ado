@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 0.9.0 26Jan2026
 *! ctools: C-accelerated tools for Stata
 *! Main info program for the ctools suite
 
@@ -75,7 +75,7 @@ program define ctools
     di as text ""
     di as text "{bf:ctools} - C-accelerated tools for Stata"
     di as text "{hline 50}"
-    di as text "Version 1.1.0"
+    di as text "Version 0.9.0"
     di as text ""
     di as text "Available commands:"
     di as text "  {help csort:csort}      - Replaces -sort-"

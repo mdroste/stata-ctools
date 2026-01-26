@@ -209,8 +209,9 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
 {
     if (j == 0) return 1.0;
     if (bw <= 0) return 0.0;
+    if (j > bw) return 0.0;  /* No weight beyond bandwidth */
 
-    ST_double x = (ST_double)j / (ST_double)(bw + 1);
+    ST_double x = (ST_double)j / (ST_double)bw;  /* ivreg2 uses j/bw, not j/(bw+1) */
 
     switch (kernel_type) {
         case 1:  /* Bartlett / Newey-West */

@@ -1117,6 +1117,176 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 24b: GMM2S and CUE Strict Coefficient/VCE Tests (tol=1e-8)
+ ******************************************************************************/
+noi print_section "GMM2S/CUE Strict Tests (tol=1e-8)"
+
+local tol = 1e-8
+
+* GMM2S basic - verify coefficient and VCE match
+qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
+local iv_b = _b[x_endog]
+local iv_V11 = e(V)[1,1]
+
+qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
+local c_b = _b[x_endog]
+local c_V11 = e(V)[1,1]
+
+local b_diff = abs(`iv_b' - `c_b')
+local V_diff = abs(`c_V11' - `iv_V11')
+
+if `b_diff' < `tol' & `V_diff' < `tol' {
+    noi test_pass "gmm2s strict (coef diff=`b_diff', VCE diff=`V_diff')"
+}
+else {
+    noi test_fail "gmm2s strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+}
+
+* GMM2S + cluster - verify coefficient and VCE match
+qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(cluster firm)
+local iv_b = _b[x_endog]
+local iv_V11 = e(V)[1,1]
+
+qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(cluster firm)
+local c_b = _b[x_endog]
+local c_V11 = e(V)[1,1]
+
+local b_diff = abs(`iv_b' - `c_b')
+local V_diff = abs(`c_V11' - `iv_V11')
+
+if `b_diff' < `tol' & `V_diff' < `tol' {
+    noi test_pass "gmm2s + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+}
+else {
+    noi test_fail "gmm2s + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+}
+
+* CUE basic - verify coefficient and VCE match
+qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue
+local iv_b = _b[x_endog]
+local iv_V11 = e(V)[1,1]
+
+qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue
+local c_b = _b[x_endog]
+local c_V11 = e(V)[1,1]
+
+local b_diff = abs(`iv_b' - `c_b')
+local V_diff = abs(`c_V11' - `iv_V11')
+
+if `b_diff' < `tol' & `V_diff' < `tol' {
+    noi test_pass "cue strict (coef diff=`b_diff', VCE diff=`V_diff')"
+}
+else {
+    noi test_fail "cue strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+}
+
+* CUE + cluster - verify coefficient and VCE match
+qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue vce(cluster firm)
+local iv_b = _b[x_endog]
+local iv_V11 = e(V)[1,1]
+
+qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue vce(cluster firm)
+local c_b = _b[x_endog]
+local c_V11 = e(V)[1,1]
+
+local b_diff = abs(`iv_b' - `c_b')
+local V_diff = abs(`c_V11' - `iv_V11')
+
+if `b_diff' < `tol' & `V_diff' < `tol' {
+    noi test_pass "cue + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+}
+else {
+    noi test_fail "cue + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+}
+
+* Just-identified case: GMM2S and CUE should equal 2SLS
+clear
+set seed 12345
+set obs 500
+gen firm = ceil(_n / 10)
+gen z1 = runiform()
+gen x_endog = 0.5*z1 + rnormal()
+gen x_exog = runiform()
+gen y = 2*x_endog + 1.5*x_exog + rnormal()
+
+civreghdfe y (x_endog = z1) x_exog, absorb(firm)
+local b_2sls = _b[x_endog]
+
+civreghdfe y (x_endog = z1) x_exog, absorb(firm) gmm2s
+local b_gmm = _b[x_endog]
+
+civreghdfe y (x_endog = z1) x_exog, absorb(firm) cue
+local b_cue = _b[x_endog]
+
+local diff_gmm = abs(`b_2sls' - `b_gmm')
+local diff_cue = abs(`b_2sls' - `b_cue')
+
+if `diff_gmm' < `tol' {
+    noi test_pass "gmm2s = 2sls just-identified (diff=`diff_gmm')"
+}
+else {
+    noi test_fail "gmm2s just-identified" "diff=`diff_gmm'"
+}
+
+if `diff_cue' < `tol' {
+    noi test_pass "cue = 2sls just-identified (diff=`diff_cue')"
+}
+else {
+    noi test_fail "cue just-identified" "diff=`diff_cue'"
+}
+
+* Multiple endogenous variables with GMM2S
+clear
+set seed 12345
+set obs 500
+gen firm = ceil(_n / 10)
+gen z1 = runiform()
+gen z2 = rnormal()
+gen z3 = runiform() + 0.1*rnormal()
+gen z4 = rnormal() + 0.2*z1
+gen x_endog1 = 0.5*z1 + 0.3*z2 + rnormal()
+gen x_endog2 = 0.4*z3 + 0.3*z4 + rnormal()
+gen x_exog = runiform()
+gen y = 2*x_endog1 + 1.5*x_endog2 + 1.0*x_exog + rnormal()
+
+qui ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) gmm2s
+local iv_b1 = _b[x_endog1]
+local iv_b2 = _b[x_endog2]
+
+qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) gmm2s
+local c_b1 = _b[x_endog1]
+local c_b2 = _b[x_endog2]
+
+local diff1 = abs(`iv_b1' - `c_b1')
+local diff2 = abs(`iv_b2' - `c_b2')
+
+if `diff1' < `tol' & `diff2' < `tol' {
+    noi test_pass "gmm2s two endog strict (diff1=`diff1', diff2=`diff2')"
+}
+else {
+    noi test_fail "gmm2s two endog strict" "diff1=`diff1', diff2=`diff2'"
+}
+
+* Multiple endogenous variables with CUE
+qui ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) cue
+local iv_b1 = _b[x_endog1]
+local iv_b2 = _b[x_endog2]
+
+qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) cue
+local c_b1 = _b[x_endog1]
+local c_b2 = _b[x_endog2]
+
+local diff1 = abs(`iv_b1' - `c_b1')
+local diff2 = abs(`iv_b2' - `c_b2')
+
+if `diff1' < `tol' & `diff2' < `tol' {
+    noi test_pass "cue two endog strict (diff1=`diff1', diff2=`diff2')"
+}
+else {
+    noi test_fail "cue two endog strict" "diff1=`diff1', diff2=`diff2'"
+}
+
+/*******************************************************************************
  * SECTION 25: HAC/Kernel Options (bw, kernel, dkraay, kiefer)
  ******************************************************************************/
 noi print_section "HAC/Kernel Options"

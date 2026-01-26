@@ -1,4 +1,4 @@
-*! version 1.1.0 21Jan2026
+*! version 0.9.0 26Jan2026
 *! cimport: C-accelerated CSV import for Stata
 *! Part of the ctools suite
 *!
@@ -33,9 +33,16 @@ program define cimport, rclass
     * Parse the subcommand
     gettoken subcmd 0 : 0, parse(" ,")
 
-    if "`subcmd'" != "delimited" {
+    if "`subcmd'" == "excel" {
+        * Dispatch to Excel import handler
+        cimport_excel `0'
+        return add
+        exit
+    }
+    else if "`subcmd'" != "delimited" {
         di as error "cimport: unknown subcommand `subcmd'"
         di as error "Syntax: cimport delimited using filename [, options]"
+        di as error "        cimport excel using filename [, options]"
         exit 198
     }
 
@@ -636,6 +643,330 @@ program define cimport, rclass
             di as text "  OpenMP enabled:         " as result %4.0f `__openmp_enabled'
             di as text "  Max threads available:  " as result %4.0f `__threads_max'
         }
+    }
+
+    timer clear
+
+    * Return results
+    return scalar N = _N
+    return scalar k = c(k)
+    return scalar time = `elapsed'
+    return local filename `"`using'"'
+
+end
+
+/*******************************************************************************
+ * cimport_excel: Import Excel (.xlsx) files
+ *
+ * Syntax: cimport excel [using] filename [, options]
+ *
+ * Options:
+ *   sheet(name)            - Worksheet to import (default: first sheet)
+ *   cellrange([start][:end]) - Cell range to import (e.g., A1:D100, A1, :D100)
+ *   firstrow               - First row contains variable names
+ *   allstring              - Import all columns as strings
+ *   case(preserve|lower|upper) - Variable name case handling
+ *   clear                  - Clear current data before import
+ *   verbose                - Display timing information
+ ******************************************************************************/
+program define cimport_excel, rclass
+    version 14.0
+
+    syntax [anything] [using/] [, SHEET(string) CELLRange(string) FIRSTrow ///
+        ALLString CASE(string) CLEAR Verbose]
+
+    * Handle filename - can come from using/ or as first positional argument
+    if `"`using'"' == "" & `"`anything'"' != "" {
+        local using `"`anything'"'
+    }
+    if `"`using'"' == "" {
+        di as error "cimport excel: filename required"
+        di as error "Syntax: cimport excel [using] filename [, options]"
+        exit 198
+    }
+
+    * Validate file exists
+    confirm file `"`using'"'
+
+    * Validate .xlsx extension
+    local ext = substr(`"`using'"', -5, 5)
+    if lower("`ext'") != ".xlsx" {
+        di as error "cimport excel: file must have .xlsx extension"
+        exit 198
+    }
+
+    * Clear data if requested
+    if "`clear'" != "" {
+        clear
+    }
+
+    * Check that no data exists
+    if _N > 0 | c(k) > 0 {
+        di as error "data in memory would be lost"
+        di as error "use the clear option to discard current data"
+        exit 4
+    }
+
+    * Parse case option (default is preserve)
+    if "`case'" != "" {
+        if !inlist("`case'", "preserve", "lower", "upper") {
+            di as error "cimport excel: case() must be preserve, lower, or upper"
+            exit 198
+        }
+    }
+    else {
+        local case "preserve"
+    }
+
+    * Load the platform-appropriate ctools plugin if not already loaded
+    capture program list ctools_plugin
+    if _rc != 0 {
+        local __os = c(os)
+        local __machine = c(machine_type)
+        local __is_mac = 0
+        if "`__os'" == "MacOSX" {
+            local __is_mac = 1
+        }
+        else if strpos(lower("`__machine'"), "mac") > 0 {
+            local __is_mac = 1
+        }
+        local __plugin = ""
+        if "`__os'" == "Windows" {
+            local __plugin "ctools_windows.plugin"
+        }
+        else if `__is_mac' {
+            local __is_arm = 0
+            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
+                local __is_arm = 1
+            }
+            if `__is_arm' == 0 {
+                tempfile __archfile
+                quietly shell uname -m > "`__archfile'" 2>&1
+                tempname __fh
+                file open `__fh' using "`__archfile'", read text
+                file read `__fh' __archline
+                file close `__fh'
+                capture erase "`__archfile'"
+                if strpos("`__archline'", "arm64") > 0 {
+                    local __is_arm = 1
+                }
+            }
+            if `__is_arm' {
+                local __plugin "ctools_mac_arm.plugin"
+            }
+            else {
+                local __plugin "ctools_mac_x86.plugin"
+            }
+        }
+        else if "`__os'" == "Unix" {
+            local __plugin "ctools_linux.plugin"
+        }
+        else {
+            local __plugin "ctools.plugin"
+        }
+        capture program ctools_plugin, plugin using("`__plugin'")
+        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
+            capture program ctools_plugin, plugin using("ctools.plugin")
+        }
+        if _rc != 0 & _rc != 110 {
+            di as error "cimport excel: Could not load ctools plugin"
+            exit 601
+        }
+    }
+
+    * Display info if verbose
+    if "`verbose'" != "" {
+        di as text ""
+        di as text "{hline 60}"
+        di as text "cimport excel: High-Performance Excel Import"
+        di as text "{hline 60}"
+        di as text "File:       " as result `"`using'"'
+        if "`sheet'" != "" {
+            di as text "Sheet:      " as result "`sheet'"
+        }
+        if "`cellrange'" != "" {
+            di as text "Cell range: " as result "`cellrange'"
+        }
+        di as text "First row:  " as result cond("`firstrow'" != "", "variable names", "data")
+        di as text "Case:       " as result "`case'"
+        di as text "{hline 60}"
+        di ""
+    }
+
+    * Build plugin arguments
+    local opt_sheet = cond("`sheet'" != "", "sheet=`sheet'", "")
+    local opt_cellrange = cond("`cellrange'" != "", "cellrange=`cellrange'", "")
+    local opt_firstrow = cond("`firstrow'" != "", "firstrow", "")
+    local opt_allstring = cond("`allstring'" != "", "allstring", "")
+    local opt_verbose = cond("`verbose'" != "", "verbose", "")
+    local opt_case = "case=`case'"
+
+    * Record start time
+    timer clear 99
+    timer on 99
+
+    * =========================================================================
+    * PHASE 1: Scan the XLSX to get metadata
+    * =========================================================================
+
+    timer on 11
+
+    if "`verbose'" != "" {
+        di as text "Phase 1: Scanning XLSX file..."
+    }
+
+    capture noisily plugin call ctools_plugin, ///
+        "cimport scan `using' `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
+
+    local scan_rc = _rc
+    if `scan_rc' {
+        di as error "Error scanning XLSX file (rc=`scan_rc')"
+        exit `scan_rc'
+    }
+
+    * Retrieve metadata from global macros
+    local nobs = ${_cimport_nobs}
+    local nvar = ${_cimport_nvar}
+    local varnames ${_cimport_varnames}
+    local vartypes ${_cimport_vartypes}
+    local numtypes ${_cimport_numtypes}
+    local strlens ${_cimport_strlens}
+
+    * Clean up global macros
+    macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
+               _cimport_vartypes _cimport_numtypes _cimport_strlens
+
+    if "`verbose'" != "" {
+        di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
+    }
+
+    * Handle empty file
+    if `nvar' == 0 | `nobs' == 0 {
+        timer off 11
+        timer off 99
+        quietly timer list 99
+        local elapsed = r(t99)
+        if `nobs' == 0 & `nvar' == 0 {
+            di as text "(file is empty)"
+        }
+        else if `nobs' == 0 {
+            di as text "(no data rows found)"
+        }
+        timer clear
+        return scalar N = 0
+        return scalar k = 0
+        return scalar time = `elapsed'
+        return local filename `"`using'"'
+        exit 0
+    }
+    timer off 11
+
+    * =========================================================================
+    * PHASE 2: Create variables in Stata
+    * =========================================================================
+
+    timer on 12
+    if "`verbose'" != "" {
+        di as text "Phase 2: Creating variables..."
+    }
+
+    quietly set obs 1
+
+    * Create variables with appropriate types
+    local i = 1
+    foreach vname of local varnames {
+        local vtype : word `i' of `vartypes'
+        local ntype : word `i' of `numtypes'
+        local vlen : word `i' of `strlens'
+
+        * Apply case transformation
+        if "`case'" == "lower" {
+            local vname = lower("`vname'")
+        }
+        else if "`case'" == "upper" {
+            local vname = upper("`vname'")
+        }
+
+        * Make variable name unique if needed
+        capture confirm variable `vname'
+        if !_rc {
+            local suffix = 1
+            local newname `vname'`suffix'
+            while (1) {
+                capture confirm variable `newname'
+                if _rc {
+                    local vname `newname'
+                    continue, break
+                }
+                local suffix = `suffix' + 1
+                local newname `vname'`suffix'
+            }
+        }
+
+        if `vtype' == 1 {
+            * String variable
+            if `vlen' < 1 local vlen = 1
+            if `vlen' > 2045 local vlen = 2045
+            quietly gen str`vlen' `vname' = ""
+        }
+        else {
+            * Numeric variable
+            if `ntype' == 4 {
+                quietly gen byte `vname' = .
+            }
+            else if `ntype' == 3 {
+                quietly gen int `vname' = .
+            }
+            else if `ntype' == 2 {
+                quietly gen long `vname' = .
+            }
+            else if `ntype' == 1 {
+                quietly gen float `vname' = .
+            }
+            else {
+                quietly gen double `vname' = .
+            }
+        }
+
+        local i = `i' + 1
+    }
+
+    quietly set obs `nobs'
+
+    timer off 12
+
+    * =========================================================================
+    * PHASE 3: Load data into variables
+    * =========================================================================
+
+    timer on 13
+
+    if "`verbose'" != "" {
+        di as text "Phase 3: Loading data..."
+    }
+
+    unab allvars : *
+
+    capture noisily plugin call ctools_plugin `allvars', ///
+        "cimport load `using' `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
+
+    local load_rc = _rc
+    if `load_rc' {
+        di as error "Error loading XLSX data (rc=`load_rc')"
+        exit `load_rc'
+    }
+
+    timer off 13
+    timer off 99
+    quietly timer list 99
+    local elapsed = r(t99)
+
+    * Display summary
+    di as text "(" as result %12.0fc _N as text " observations read)"
+
+    if "`verbose'" != "" & `elapsed' > 0 {
+        di as text ""
+        di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
     }
 
     timer clear

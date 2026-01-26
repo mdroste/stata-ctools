@@ -1,18 +1,21 @@
 {smcl}
-{* *! version 1.0.0}{...}
+{* *! version 1.1.0}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
+{viewerjumpto "Options for excel" "cexport##exceloptions"}{...}
 {viewerjumpto "Examples" "cexport##examples"}{...}
 {viewerjumpto "Stored results" "cexport##results"}{...}
 {title:Title}
 
 {phang}
-{bf:cexport delimited} {hline 2} C-accelerated delimited text export
+{bf:cexport} {hline 2} C-accelerated data export (CSV and Excel)
 
 
 {marker syntax}{...}
 {title:Syntax}
+
+{pstd}Export to delimited text file (CSV, TSV, etc.):
 
 {p 8 17 2}
 {cmdab:cexport}
@@ -23,8 +26,19 @@
 {ifin}
 [{cmd:,} {it:options}]
 
+{pstd}Export to Excel (.xlsx) file:
+
+{p 8 17 2}
+{cmdab:cexport}
+{cmd:excel}
+[{varlist}]
+{cmd:using}
+{it:filename}
+{ifin}
+[{cmd:,} {it:excel_options}]
+
 {synoptset 24 tabbed}{...}
-{synopthdr}
+{synopthdr:delimited options}
 {synoptline}
 {syntab:Main}
 {synopt:{opt d:elimiter(char)}}field delimiter; default is comma{p_end}
@@ -34,7 +48,6 @@
 {synopt:{opt novarnames}}do not write variable names as header row{p_end}
 {synopt:{opt quote}}quote all string fields{p_end}
 {synopt:{opt noquoteif}}do not automatically quote strings containing delimiters{p_end}
-{synopt:{opt datafmt}}use display formats for numeric variables (not yet implemented){p_end}
 {synopt:{opt nolabel}}export values instead of value labels{p_end}
 
 {syntab:Reporting}
@@ -42,23 +55,40 @@
 {synopt:{opt timeit}}display timing breakdown{p_end}
 {synoptline}
 
+{synoptset 24 tabbed}{...}
+{synopthdr:excel options}
+{synoptline}
+{syntab:Main}
+{synopt:{opt sheet(name)}}worksheet name; default is "Sheet1"{p_end}
+{synopt:{opt replace}}overwrite existing file{p_end}
+
+{syntab:Formatting}
+{synopt:{opt firstrow(variables|nonames)}}first row contains variable names (default) or data{p_end}
+{synopt:{opt nolabel}}export values instead of value labels{p_end}
+
+{syntab:Reporting}
+{synopt:{opt verbose}}display progress information{p_end}
+{synoptline}
+
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:cexport delimited} is a high-performance replacement for
-{help export delimited:export delimited} that uses a C plugin with
-parallel data loading and chunked formatting.
+{cmd:cexport} provides high-performance data export using C plugins with parallel
+processing. It supports two formats:
 
-{pstd}
-The command exports data from Stata to a delimited text file (CSV, TSV, etc.).
-By default, variable names are written as the first row (header) and fields
-containing the delimiter are automatically quoted.
+{phang2}
+{cmd:cexport delimited} exports data to delimited text files (CSV, TSV, etc.).
+It is a high-performance replacement for {help export delimited:export delimited}.
+
+{phang2}
+{cmd:cexport excel} exports data to Excel (.xlsx) files. It is a high-performance
+replacement for {help export excel:export excel}.
 
 
 {marker options}{...}
-{title:Options}
+{title:Options for delimited}
 
 {dlgtab:Main}
 
@@ -85,10 +115,6 @@ quotes, regardless of content.
 contain the delimiter character.
 
 {phang}
-{opt datafmt} specifies that numeric variables should be formatted according
-to their display format. (Not yet implemented.)
-
-{phang}
 {opt nolabel} specifies that numeric values should be exported as raw values
 instead of their value labels.
 
@@ -102,8 +128,39 @@ instead of their value labels.
 time, and throughput.
 
 
+{marker exceloptions}{...}
+{title:Options for excel}
+
+{dlgtab:Main}
+
+{phang}
+{opt sheet(name)} specifies the worksheet name. The default is "Sheet1".
+The name is limited to 31 characters.
+
+{phang}
+{opt replace} specifies that {it:filename} be replaced if it already exists.
+
+{dlgtab:Formatting}
+
+{phang}
+{opt firstrow(variables|nonames)} specifies how to handle the first row.
+{cmd:firstrow(variables)} (the default) writes variable names as the first row.
+{cmd:firstrow(nonames)} writes data starting from the first row.
+
+{phang}
+{opt nolabel} specifies that numeric values should be exported as raw values
+instead of their value labels.
+
+{dlgtab:Reporting}
+
+{phang}
+{opt verbose} displays timing information during export.
+
+
 {marker examples}{...}
 {title:Examples}
+
+{pstd}{ul:Delimited export examples}
 
 {pstd}Export all variables to a CSV file:{p_end}
 {phang2}{cmd:. cexport delimited using output.csv, replace}{p_end}
@@ -123,12 +180,29 @@ time, and throughput.
 {pstd}Export subset of observations:{p_end}
 {phang2}{cmd:. cexport delimited using subset.csv if year > 2020, replace}{p_end}
 
+{pstd}{ul:Excel export examples}
+
+{pstd}Export all variables to an Excel file:{p_end}
+{phang2}{cmd:. cexport excel using output.xlsx, replace}{p_end}
+
+{pstd}Export with custom sheet name:{p_end}
+{phang2}{cmd:. cexport excel using output.xlsx, sheet("Data") replace}{p_end}
+
+{pstd}Export without variable names in first row:{p_end}
+{phang2}{cmd:. cexport excel using output.xlsx, firstrow(nonames) replace}{p_end}
+
+{pstd}Export selected variables:{p_end}
+{phang2}{cmd:. cexport excel id name value using output.xlsx, replace}{p_end}
+
+{pstd}Export subset of observations:{p_end}
+{phang2}{cmd:. cexport excel using subset.xlsx if year > 2020, replace}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
 
 {pstd}
-{cmd:cexport delimited} stores the following in {cmd:r()}:
+{cmd:cexport} stores the following in {cmd:r()}:
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
@@ -149,5 +223,5 @@ ctools package
 {title:Also see}
 
 {psee}
-{space 2}Help: {help export delimited}, {help ctools}, {help cimport}
+{space 2}Help: {help export delimited}, {help export excel}, {help ctools}, {help cimport}
 {p_end}

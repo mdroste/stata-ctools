@@ -174,7 +174,7 @@ void civreghdfe_compute_underid_test(
                 return;
             }
 
-            if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+            if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
                 /* Cluster-robust with small-sample correction G/(G-1) */
                 ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                 if (!cluster_Zv) {
@@ -310,8 +310,8 @@ void civreghdfe_compute_underid_test(
                             ST_int dof;
                             ST_double denom;
                             ST_double cluster_adj;
-                            if (vce_type == 2) {
-                                /* Cluster: dof excludes df_a, includes sdofminus=1 */
+                            if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) {
+                                /* Cluster/Driscoll-Kraay: dof excludes df_a, includes sdofminus=1 */
                                 dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
                                 denom = (ST_double)(N - 1);
                                 cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
@@ -337,7 +337,7 @@ void civreghdfe_compute_underid_test(
                 /* Compute KP LM using X_endog directly */
                 ST_double *shat0_lm = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
                 if (shat0_lm) {
-                    if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+                    if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
                         ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
                         if (cluster_Zy) {
                             for (i = 0; i < N; i++) {
@@ -641,7 +641,7 @@ void civreghdfe_compute_sargan_j(
             return;
         }
 
-        if (vce_type == 2 && cluster_ids && num_clusters > 0) {
+        if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
             ivvce_compute_ZOmegaZ_cluster(Z, resid, weights, weight_type,
                                           cluster_ids, N, K_iv, num_clusters, ZOmegaZ);
         } else {

@@ -1,4 +1,4 @@
-*! version 1.0.0 22Jan2026
+*! version 0.9.0 26Jan2026
 *! cdestring: C-accelerated string to numeric conversion for Stata
 *! Part of the ctools suite
 *!

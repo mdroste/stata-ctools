@@ -399,12 +399,24 @@ gen y = x1 + x2 + rnormal()
 capture noi benchmark_qreg y x1 x2, testname("near-collinear regressors")
 
 * Dummy trap scenario (but not exact)
+* NOTE: Near-collinear regressors can have multiple optimal solutions
+* (same objective value, different coefficients). Compare sum_adev instead.
 clear
 set obs 200
 gen d1 = runiform() > 0.5
 gen d2 = 1 - d1 + rnormal(0, 0.1)  // almost but not exactly complementary
 gen y = d1 + d2 + rnormal()
-capture noi benchmark_qreg y d1 d2, testname("near-dummy trap")
+quietly qreg y d1 d2
+local qreg_adev = e(sum_adev)
+quietly cqreg y d1 d2
+local cqreg_adev = e(sum_adev)
+local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+if `adev_diff' < 1e-7 {
+    noi test_pass "near-dummy trap (same objective, alternate solution OK)"
+}
+else {
+    noi test_fail "near-dummy trap" "sum_adev differs: `qreg_adev' vs `cqreg_adev'"
+}
 
 * High but not perfect correlation
 clear

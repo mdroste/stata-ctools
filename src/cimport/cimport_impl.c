@@ -30,8 +30,10 @@
     #include <windows.h>
     #include <io.h>
     #define CIMPORT_WINDOWS 1
+    #define strcasecmp _stricmp
 #else
     #include <unistd.h>
+    #include <strings.h>  /* For strcasecmp */
 #endif
 
 #include "stplugin.h"
@@ -43,6 +45,7 @@
 /* Helper modules (cimport_context.h includes arena, parse, and mmap headers) */
 #include "cimport_context.h"
 #include "cimport_mmap.h"
+#include "cimport_xlsx.h"
 
 /* High-resolution timing */
 /* Timer: use ctools_timer_ms() directly from ctools_timer.h */
@@ -1131,18 +1134,22 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
     int *cols = ctools_safe_malloc2(count, sizeof(int));
     if (!cols) return NULL;
 
-    /* Parse tokens */
+    /* Parse tokens - use strtol directly since ctools_safe_atoi expects null-terminated strings */
     p = buf;
     int idx = 0;
     while (*p && idx < count) {
         while (*p == ' ') p++;
         if (*p == '\0') break;
-        if (!ctools_safe_atoi(p, &cols[idx])) {
+        char *endptr;
+        errno = 0;
+        long val = strtol(p, &endptr, 10);
+        if (errno == ERANGE || endptr == p || val <= 0 || val > INT_MAX) {
             free(cols);
             return NULL;  /* Invalid column number */
         }
+        cols[idx] = (int)val;
         idx++;
-        while (*p && *p != ' ') p++;
+        p = endptr;  /* Move to character after the parsed number */
     }
 
     *out_count = idx;
@@ -1512,6 +1519,16 @@ ST_retcode cimport_main(const char *args) {
     if (opts.mode == NULL || opts.filename == NULL) {
         cimport_display_error("cimport: mode and filename required\n");
         return 198;
+    }
+
+    /* Check for XLSX file extension and dispatch to xlsx handler */
+    size_t fname_len = strlen(opts.filename);
+    if (fname_len >= 5) {
+        const char *ext = opts.filename + fname_len - 5;
+        if (strcasecmp(ext, ".xlsx") == 0) {
+            /* XLSX file - dispatch to xlsx_import_main with original args */
+            return xlsx_import_main(args);
+        }
     }
 
     /* Calculate skip_rows from header_row (header_row=1 means no skip, header_row=3 means skip 2) */

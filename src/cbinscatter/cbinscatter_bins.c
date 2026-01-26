@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include "stplugin.h"
 #include "cbinscatter_bins.h"
+#include "cbinscatter_binsreg.h"
 #include "../ctools_config.h"
 #include "../ctools_select.h"
 
@@ -788,4 +789,174 @@ void assign_bins(
             bin_ids[i] = lo;
         }
     }
+}
+
+/* ========================================================================
+ * Binsreg Method Bin Computation
+ *
+ * This function computes bins using the binsreg method:
+ * 1. Bins on raw X (not residualized)
+ * 2. Uses regression Y ~ bin_indicators + controls to get Y-means
+ *
+ * This matches binsreg.ado's approach: reg y ibn.xcat controls, nocon
+ * ======================================================================== */
+
+ST_retcode compute_bins_single_group_binsreg(
+    ST_double *y,
+    ST_double *x,
+    const ST_double *controls,
+    ST_double *weights,
+    ST_int N,
+    ST_int K,
+    const BinscatterConfig *config,
+    ByGroupResult *result
+) {
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int *sort_idx = NULL;
+    ST_int *bin_ids = NULL;
+    ST_int i, nq;
+
+    nq = config->nquantiles;
+    if (N < nq) nq = N;
+    if (N < 2) return CBINSCATTER_ERR_FEW_OBS;
+
+    /* Allocate sort indices and bin IDs */
+    sort_idx = (ST_int *)malloc(N * sizeof(ST_int));
+    bin_ids = (ST_int *)malloc(N * sizeof(ST_int));
+    if (!sort_idx || !bin_ids) {
+        free(sort_idx);
+        free(bin_ids);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
+    /* Initialize sort indices (8x unrolled) */
+    ST_int N8 = N - (N % 8);
+    for (i = 0; i < N8; i += 8) {
+        sort_idx[i]     = i;
+        sort_idx[i + 1] = i + 1;
+        sort_idx[i + 2] = i + 2;
+        sort_idx[i + 3] = i + 3;
+        sort_idx[i + 4] = i + 4;
+        sort_idx[i + 5] = i + 5;
+        sort_idx[i + 6] = i + 6;
+        sort_idx[i + 7] = i + 7;
+    }
+    for (; i < N; i++) {
+        sort_idx[i] = i;
+    }
+
+    /*
+     * For binsreg method, we always use the full sort approach
+     * to ensure we have bin_ids for the regression adjustment.
+     * This is O(N log N) but is needed for the regression step.
+     */
+
+    /* Argsort by x */
+    g_sort_values = x;
+    qsort(sort_idx, N, sizeof(ST_int), compare_indices);
+
+    /* Count valid (non-missing) observations */
+    ST_int N_valid = 0;
+    for (i = 0; i < N; i++) {
+        if (!SF_is_missing(x[sort_idx[i]])) {
+            N_valid++;
+        }
+    }
+
+    if (N_valid < nq) nq = N_valid;
+    if (N_valid < 2) {
+        free(sort_idx);
+        free(bin_ids);
+        return CBINSCATTER_ERR_FEW_OBS;
+    }
+
+    /* Assign bins based on quantiles of x */
+    if (weights == NULL) {
+        /* Unweighted: equal-count bins */
+        ST_int obs_per_bin = N_valid / nq;
+        ST_int extra = N_valid % nq;
+        ST_int valid_idx = 0;
+
+        for (i = 0; i < N; i++) {
+            ST_int orig_idx = sort_idx[i];
+            if (SF_is_missing(x[orig_idx])) {
+                bin_ids[orig_idx] = 0;
+            } else {
+                /* Compute bin for this valid observation */
+                ST_int bin;
+                if (extra > 0) {
+                    /* First 'extra' bins have (obs_per_bin + 1) observations */
+                    ST_int cutoff = extra * (obs_per_bin + 1);
+                    if (valid_idx < cutoff) {
+                        bin = valid_idx / (obs_per_bin + 1) + 1;
+                    } else {
+                        bin = extra + (valid_idx - cutoff) / obs_per_bin + 1;
+                    }
+                } else {
+                    bin = valid_idx / obs_per_bin + 1;
+                }
+                if (bin > nq) bin = nq;
+                bin_ids[orig_idx] = bin;
+                valid_idx++;
+            }
+        }
+    } else {
+        /* Weighted: bins based on cumulative weight */
+        ST_double total_weight = 0.0;
+        for (i = 0; i < N; i++) {
+            if (!SF_is_missing(x[sort_idx[i]])) {
+                total_weight += weights[sort_idx[i]];
+            }
+        }
+
+        ST_double weight_per_bin = total_weight / nq;
+        ST_double *cum_weight = (ST_double *)calloc(N, sizeof(ST_double));
+        if (!cum_weight) {
+            free(sort_idx);
+            free(bin_ids);
+            return CBINSCATTER_ERR_MEMORY;
+        }
+
+        ST_double cumw = 0.0;
+        for (i = 0; i < N; i++) {
+            ST_int orig_idx = sort_idx[i];
+            if (SF_is_missing(x[orig_idx])) {
+                cum_weight[i] = cumw;
+            } else {
+                cumw += weights[orig_idx];
+                cum_weight[i] = cumw;
+            }
+        }
+
+        for (i = 0; i < N; i++) {
+            ST_int orig_idx = sort_idx[i];
+            if (SF_is_missing(x[orig_idx])) {
+                bin_ids[orig_idx] = 0;
+            } else {
+                ST_int bin = (ST_int)(cum_weight[i] / weight_per_bin) + 1;
+                if (bin > nq) bin = nq;
+                if (bin < 1) bin = 1;
+                bin_ids[orig_idx] = bin;
+            }
+        }
+        free(cum_weight);
+    }
+
+    /* Compute initial bin statistics (raw means) */
+    rc = compute_bin_statistics(y, x, bin_ids, weights, N, nq,
+                                config->compute_se, result);
+    if (rc != CBINSCATTER_OK) {
+        free(sort_idx);
+        free(bin_ids);
+        return rc;
+    }
+
+    /* Apply binsreg adjustment if we have controls */
+    if (K > 0 && controls != NULL) {
+        rc = adjust_bins_binsreg(y, controls, bin_ids, weights, N, K, result);
+    }
+
+    free(sort_idx);
+    free(bin_ids);
+    return rc;
 }

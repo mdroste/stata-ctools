@@ -138,7 +138,18 @@ static int parse_options(const char *args, cdestring_options *opts)
         free(args_copy);
         return -1;
     }
-    if (!ctools_safe_atoi(nvars_ptr + 6, &opts->nvars)) {
+
+    /* Extract just the number part (until whitespace or end) */
+    const char *num_start = nvars_ptr + 6;
+    char nvars_buf[32];
+    int i = 0;
+    while (num_start[i] && num_start[i] != ' ' && num_start[i] != '\t' && i < 31) {
+        nvars_buf[i] = num_start[i];
+        i++;
+    }
+    nvars_buf[i] = '\0';
+
+    if (!ctools_safe_atoi(nvars_buf, &opts->nvars)) {
         free(args_copy);
         return -1;  /* Invalid nvars value */
     }

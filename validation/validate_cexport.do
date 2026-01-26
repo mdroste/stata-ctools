@@ -1409,6 +1409,307 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Excel Export Tests
+ ******************************************************************************/
+noi print_section "Excel Export Tests"
+
+/*******************************************************************************
+ * Helper: benchmark_export_excel - Export with both methods and compare
+ ******************************************************************************/
+capture program drop benchmark_export_excel
+program define benchmark_export_excel
+    syntax, testname(string) [EXPORTopts(string)]
+
+    * Export with Stata's export excel
+    capture export excel using "temp/stata_export.xlsx", `exportopts' replace
+    if _rc != 0 {
+        noi test_fail "`testname'" "Stata export excel failed with rc=`=_rc'"
+        exit
+    }
+    local stata_n = _N
+    local stata_k = c(k)
+
+    * Export with cexport excel
+    capture cexport excel using "temp/cexport_export.xlsx", `exportopts' replace
+    if _rc != 0 {
+        noi test_fail "`testname'" "cexport excel failed with rc=`=_rc'"
+        exit
+    }
+
+    * Re-import Stata output
+    clear
+    capture import excel using "temp/stata_export.xlsx", firstrow clear
+    if _rc != 0 {
+        noi test_fail "`testname'" "Failed to re-import Stata export"
+        exit
+    }
+    local reimport_stata_n = _N
+    local reimport_stata_k = c(k)
+    tempfile stata_reimport
+    quietly save `stata_reimport', replace
+
+    * Re-import cexport output
+    clear
+    capture import excel using "temp/cexport_export.xlsx", firstrow clear
+    if _rc != 0 {
+        noi test_fail "`testname'" "Failed to re-import cexport output"
+        exit
+    }
+    local reimport_cexport_n = _N
+    local reimport_cexport_k = c(k)
+
+    * Check dimensions match
+    if `reimport_stata_n' != `reimport_cexport_n' | `reimport_stata_k' != `reimport_cexport_k' {
+        noi test_fail "`testname'" "dimensions differ: Stata N=`reimport_stata_n' K=`reimport_stata_k', cexport N=`reimport_cexport_n' K=`reimport_cexport_k'"
+        exit
+    }
+
+    * Rename variables for positional comparison
+    quietly ds
+    local cexport_vars `r(varlist)'
+    local i = 1
+    foreach v of local cexport_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+    tempfile cexport_reimport
+    quietly save `cexport_reimport', replace
+
+    use `stata_reimport', clear
+    quietly ds
+    local stata_vars `r(varlist)'
+    local i = 1
+    foreach v of local stata_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+
+    * Compare data
+    capture cf _all using `cexport_reimport'
+    if _rc == 0 {
+        noi test_pass "`testname'"
+    }
+    else {
+        noi test_fail "`testname'" "cf _all comparison failed - data not identical"
+    }
+
+    * Clean up temp files
+    capture erase "temp/stata_export.xlsx"
+    capture erase "temp/cexport_export.xlsx"
+end
+
+/*******************************************************************************
+ * Helper: cexport_excel_test - Test cexport excel standalone
+ ******************************************************************************/
+capture program drop cexport_excel_test
+program define cexport_excel_test
+    syntax, testname(string) [EXPORTopts(string) expectn(integer 0) expectk(integer 0)]
+
+    capture cexport excel using "temp/test_export.xlsx", `exportopts' replace
+    if _rc != 0 {
+        noi test_fail "`testname'" "rc=`=_rc'"
+        exit
+    }
+
+    * Re-import and check
+    local orig_n = _N
+    local orig_k = c(k)
+
+    clear
+    capture import excel using "temp/test_export.xlsx", firstrow clear
+    if _rc != 0 {
+        noi test_fail "`testname'" "Failed to re-import"
+        exit
+    }
+
+    if `expectn' > 0 & _N != `expectn' {
+        noi test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
+        exit
+    }
+
+    if `expectk' > 0 & c(k) != `expectk' {
+        noi test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
+        exit
+    }
+
+    * Clean up
+    capture erase "temp/test_export.xlsx"
+
+    noi test_pass "`testname'"
+end
+
+* Create test data for Excel export
+clear
+set obs 5
+gen id = _n
+gen str10 name = ""
+replace name = "Alpha" in 1
+replace name = "Beta" in 2
+replace name = "Gamma" in 3
+replace name = "Delta" in 4
+replace name = "Epsilon" in 5
+gen double value = _n * 100.5
+gen byte category = mod(_n, 3) + 1
+tempfile excel_basic_data
+save `excel_basic_data', replace
+
+* Data with missing values
+clear
+set obs 5
+gen id = _n
+gen double x = _n * 10
+replace x = . in 2
+replace x = . in 4
+gen str10 y = ""
+replace y = "A" in 1
+replace y = "" in 2
+replace y = "C" in 3
+replace y = "" in 4
+replace y = "E" in 5
+tempfile excel_missing_data
+save `excel_missing_data', replace
+
+* Data with value labels
+clear
+set obs 4
+gen id = _n
+gen status = mod(_n, 2) + 1
+label define status_lbl 1 "Active" 2 "Inactive"
+label values status status_lbl
+tempfile excel_labeled_data
+save `excel_labeled_data', replace
+
+* Data with various numeric types
+clear
+set obs 3
+gen byte b = _n * 10
+gen int i = _n * 1000
+gen long l = _n * 100000
+gen float f = _n + 0.5
+gen double d = _n + 0.123456789
+tempfile excel_numeric_data
+save `excel_numeric_data', replace
+
+* Basic Excel export tests
+use `excel_basic_data', clear
+noi benchmark_export_excel, testname("Excel basic export") exportopts(firstrow(variables))
+
+* Export without firstrow
+use `excel_basic_data', clear
+cexport excel using "temp/excel_nofirstrow.xlsx", firstrow(nonames) replace
+clear
+import excel using "temp/excel_nofirstrow.xlsx", clear
+if _N == 5 {
+    noi test_pass "Excel export without firstrow"
+}
+else {
+    noi test_fail "Excel export without firstrow" "expected N=5, got N=`=_N'"
+}
+capture erase "temp/excel_nofirstrow.xlsx"
+
+* Export with sheet name
+use `excel_basic_data', clear
+noi cexport_excel_test, testname("Excel export with sheet name") exportopts(sheet("TestData")) expectn(5) expectk(4)
+
+* Variable selection
+use `excel_basic_data', clear
+cexport excel id name using "temp/excel_varsel.xlsx", replace
+clear
+import excel using "temp/excel_varsel.xlsx", firstrow clear
+if _N == 5 & c(k) == 2 {
+    noi test_pass "Excel export selected variables"
+}
+else {
+    noi test_fail "Excel export selected variables" "expected N=5 K=2, got N=`=_N' K=`=c(k)'"
+}
+capture erase "temp/excel_varsel.xlsx"
+
+* Type handling tests
+use `excel_numeric_data', clear
+noi benchmark_export_excel, testname("Excel numeric types export") exportopts(firstrow(variables))
+
+use `excel_missing_data', clear
+noi benchmark_export_excel, testname("Excel missing values export") exportopts(firstrow(variables))
+
+* Value label tests
+use `excel_labeled_data', clear
+cexport excel using "temp/excel_labeled.xlsx", replace
+clear
+import excel using "temp/excel_labeled.xlsx", firstrow clear
+capture confirm string variable status
+if _rc == 0 {
+    noi test_pass "Excel export with value labels"
+}
+else {
+    noi test_fail "Excel export with value labels" "status should be string with labels"
+}
+capture erase "temp/excel_labeled.xlsx"
+
+use `excel_labeled_data', clear
+cexport excel using "temp/excel_nolabel.xlsx", nolabel replace
+clear
+import excel using "temp/excel_nolabel.xlsx", firstrow clear
+capture confirm numeric variable status
+if _rc == 0 {
+    noi test_pass "Excel export with nolabel option"
+}
+else {
+    noi test_fail "Excel export with nolabel option" "status should be numeric with nolabel"
+}
+capture erase "temp/excel_nolabel.xlsx"
+
+* If/in tests
+use `excel_basic_data', clear
+cexport excel using "temp/excel_iftest.xlsx" if id <= 3, replace
+clear
+import excel using "temp/excel_iftest.xlsx", firstrow clear
+if _N == 3 {
+    noi test_pass "Excel export with if condition"
+}
+else {
+    noi test_fail "Excel export with if condition" "expected N=3, got N=`=_N'"
+}
+capture erase "temp/excel_iftest.xlsx"
+
+use `excel_basic_data', clear
+cexport excel using "temp/excel_intest.xlsx" in 2/4, replace
+clear
+import excel using "temp/excel_intest.xlsx", firstrow clear
+if _N == 3 {
+    noi test_pass "Excel export with in range"
+}
+else {
+    noi test_fail "Excel export with in range" "expected N=3, got N=`=_N'"
+}
+capture erase "temp/excel_intest.xlsx"
+
+* Error handling tests
+use `excel_basic_data', clear
+cexport excel using "temp/excel_exists_test.xlsx", replace
+capture cexport excel using "temp/excel_exists_test.xlsx"
+if _rc != 0 {
+    noi test_pass "Excel file exists error"
+}
+else {
+    noi test_fail "Excel file exists error" "should have returned error"
+}
+capture erase "temp/excel_exists_test.xlsx"
+
+use `excel_basic_data', clear
+capture cexport excel using "temp/wrong.csv", replace
+if _rc != 0 {
+    noi test_pass "Excel wrong extension error"
+}
+else {
+    noi test_fail "Excel wrong extension error" "should have returned error"
+}
+
+* Clean up Excel temp files
+capture erase "temp/stata_export.xlsx"
+capture erase "temp/cexport_export.xlsx"
+capture erase "temp/test_export.xlsx"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

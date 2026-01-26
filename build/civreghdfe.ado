@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 0.9.0 26Jan2026
 *! civreghdfe: C-accelerated instrumental variables regression with HDFE
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
@@ -357,6 +357,9 @@ program define civreghdfe, eclass
         else if `vce_type' == 3 {
             di as text "VCE:                   Two-way Cluster (`cluster_var' `cluster_var2')"
         }
+        else if `vce_type' == 4 {
+            di as text "VCE:                   Driscoll-Kraay (`cluster_var')"
+        }
         else {
             di as text "VCE:                   Unadjusted"
         }
@@ -479,6 +482,49 @@ program define civreghdfe, eclass
         local kernel_type = 1
     }
 
+    * Driscoll-Kraay standard errors: cluster by TIME, not by panel
+    * Requires tsset panel data
+    local dkraay_tvar ""
+    local dkraay_T = 0
+    if `dkraay_val' > 0 {
+        * Check that data is tsset
+        capture tsset
+        if _rc != 0 {
+            di as error "dkraay option requires tsset panel data"
+            exit 459
+        }
+        local dkraay_tvar = r(timevar)
+        local dkraay_ivar = r(panelvar)
+        if "`dkraay_tvar'" == "" | "`dkraay_ivar'" == "" {
+            di as error "dkraay option requires tsset panel data with both panel and time variables"
+            exit 459
+        }
+        * Driscoll-Kraay is incompatible with cluster options
+        if `vce_type' == 2 | `vce_type' == 3 {
+            di as error "dkraay and vce(cluster) are incompatible options"
+            exit 198
+        }
+        * Count number of unique time periods
+        tempvar _time_tag
+        qui egen `_time_tag' = tag(`dkraay_tvar') if `touse'
+        qui count if `_time_tag' == 1
+        local dkraay_T = r(N)
+        drop `_time_tag'
+        * Set up Driscoll-Kraay: cluster by TIME variable
+        * vce_type = 4 signals Driscoll-Kraay to C code
+        local vce_type = 4
+        local cluster_var "`dkraay_tvar'"
+        * Set bandwidth if not specified (default = dkraay lag value, matching ivreg2)
+        if `bw_val' == 0 {
+            local bw_val = `dkraay_val'
+        }
+        confirm variable `cluster_var'
+        markout `touse' `cluster_var'
+        if "`verbose'" != "" {
+            di as text "Driscoll-Kraay SEs: clustering on `dkraay_tvar' (T=`dkraay_T'), bw=`bw_val'"
+        }
+    }
+
     * Kiefer standard errors: within-panel HAC with full bandwidth
     * NOTE: civreghdfe's Kiefer implementation uses panel-aware HAC which
     * produces similar but not identical results to ivreghdfe's Kiefer.
@@ -539,9 +585,11 @@ program define civreghdfe, eclass
     scalar __civreghdfe_bw = `bw_val'
     scalar __civreghdfe_dkraay = `dkraay_val'
     scalar __civreghdfe_kiefer = `kiefer_val'
+    scalar __civreghdfe_dkraay_T = `dkraay_T'
 
-    * Update cluster scalars after Kiefer handling (Kiefer changes vce_type to 2)
-    scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3)
+    * Update cluster scalars after Kiefer/dkraay handling
+    * vce_type 4 = dkraay, which also uses cluster variable (time)
+    scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4)
     scalar __civreghdfe_vce_type = `vce_type'
 
     if "`verbose'" != "" & `kernel_type' > 0 {
@@ -715,7 +763,7 @@ program define civreghdfe, eclass
     * Order: depvar, endogvars, exogvars, all_instruments, absorb, [cluster], [cluster2], [weight]
     * Use expanded variables (factor variables converted to temp numeric vars)
     local plugin_vars `depvar' `endogvars_expanded' `exogvars_expanded' `all_instruments' `absorb'
-    if `vce_type' == 2 | `vce_type' == 3 {
+    if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         local plugin_vars `plugin_vars' `cluster_var'
     }
     if `vce_type' == 3 {
@@ -753,6 +801,13 @@ program define civreghdfe, eclass
     local rmse = __civreghdfe_rmse
     local F_model = __civreghdfe_F
 
+    * For Kiefer, df_r should be N - K - df_a (not num_clusters - 1)
+    * This matches ivreghdfe behavior
+    if `kiefer_val' {
+        local df_r = `N_used' - `K' - `df_a'
+        if `df_r' <= 0 local df_r = 1
+    }
+
     * Get number of levels for each FE (for absorbed DOF table)
     forval g = 1/`G' {
         capture confirm scalar __civreghdfe_num_levels_`g'
@@ -773,7 +828,7 @@ program define civreghdfe, eclass
         }
     }
 
-    if `vce_type' == 2 | `vce_type' == 3 {
+    if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         local N_clust = __civreghdfe_N_clust
     }
     if `vce_type' == 3 {
@@ -839,7 +894,7 @@ program define civreghdfe, eclass
     ereturn scalar df_r = `df_r'
     * Report df_a_for_vce when clustering (matches ivreghdfe behavior)
     * When FE is nested in cluster, df_a_for_vce = 0
-    if `vce_type' == 2 | `vce_type' == 3 {
+    if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         ereturn scalar df_a = `df_a_for_vce'
     }
     else {
@@ -852,7 +907,7 @@ program define civreghdfe, eclass
     ereturn scalar K_iv = `K_iv'
     ereturn scalar G = `G'
 
-    if `vce_type' == 2 | `vce_type' == 3 {
+    if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         ereturn scalar N_clust = `N_clust'
         ereturn scalar N_clust1 = `N_clust'
     }
@@ -920,6 +975,10 @@ program define civreghdfe, eclass
         ereturn local clustvar "`cluster_var'"
         ereturn local clustvar1 "`cluster_var'"
         ereturn local clustvar2 "`cluster_var2'"
+    }
+    else if `vce_type' == 4 {
+        ereturn local vcetype "Robust"
+        ereturn local clustvar "`cluster_var'"
     }
 
     * Store additional statistics

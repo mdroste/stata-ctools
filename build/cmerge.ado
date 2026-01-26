@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 0.9.0 26Jan2026
 *! cmerge: Optimized C-accelerated merge for Stata datasets
 *! Part of the ctools suite
 *!

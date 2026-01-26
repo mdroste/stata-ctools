@@ -749,7 +749,84 @@ void ivvce_compute_full(
         return;
     }
 
-    if (vce_type == CIVREGHDFE_VCE_CLUSTER && cluster_ids && num_clusters > 0) {
+    if (vce_type == CIVREGHDFE_VCE_DKRAAY && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
+        /*
+           Driscoll-Kraay VCE: Cross-sectional averaging + HAC on time series
+           1. Compute sum of moment contributions at each time cluster:
+              u_t = sum_{i in time t} (PzX_i * e_i)
+           2. Apply HAC kernel to the time series of sums
+        */
+        ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
+        if (!cluster_sums) {
+            free(PzX); free(meat);
+            return;
+        }
+
+        /* Sum (PzX_i * e_i) at each time period (cluster) */
+        for (i = 0; i < N; i++) {
+            ST_int t = cluster_ids[i] - 1;  /* time cluster index */
+            if (t < 0 || t >= num_clusters) continue;
+            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+            ST_double we = w * resid[i];
+            for (j = 0; j < K_total; j++) {
+                cluster_sums[t * K_total + j] += PzX[j * N + i] * we;
+            }
+        }
+
+        /* Apply HAC kernel to time series of cluster sums */
+        for (ST_int lag = 0; lag <= bw && lag < num_clusters; lag++) {
+            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+            if (kw < 1e-10) continue;
+
+            if (lag == 0) {
+                /* Diagonal: sum_t u_t * u_t' */
+                for (ST_int t = 0; t < num_clusters; t++) {
+                    for (j = 0; j < K_total; j++) {
+                        for (k = 0; k <= j; k++) {
+                            ST_double contrib = kw * cluster_sums[t * K_total + j] * cluster_sums[t * K_total + k];
+                            meat[j * K_total + k] += contrib;
+                            if (k != j) meat[k * K_total + j] += contrib;
+                        }
+                    }
+                }
+            } else {
+                /* Off-diagonal: sum_t u_t * u_{t+lag}' + u_{t+lag} * u_t' */
+                for (ST_int t = 0; t < num_clusters - lag; t++) {
+                    for (j = 0; j < K_total; j++) {
+                        for (k = 0; k < K_total; k++) {
+                            ST_double contrib = kw * (cluster_sums[t * K_total + j] * cluster_sums[(t + lag) * K_total + k] +
+                                                      cluster_sums[(t + lag) * K_total + j] * cluster_sums[t * K_total + k]);
+                            meat[k * K_total + j] += contrib;
+                        }
+                    }
+                }
+            }
+        }
+
+        free(cluster_sums);
+
+        /* Driscoll-Kraay DOF adjustment: (N-1)/(N-K-df_a) * T/(T-1)
+           This matches ivreg2's cluster-robust small-sample adjustment.
+           The (N-1)/(N-K-df_a) factor accounts for partialled-out fixed effects. */
+        ST_double T = (ST_double)num_clusters;
+        ST_int effective_df_a = df_a;
+        if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
+        ST_double denom = (ST_double)(N - K_total - effective_df_a);
+        if (denom <= 0) denom = 1.0;
+        ST_double dof_adj = ((ST_double)(N - 1) / denom) * (T / (T - 1.0));
+
+        /* V = XkX_inv * meat * XkX_inv * dof_adj */
+        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (temp_v) {
+            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            for (i = 0; i < K_total * K_total; i++) {
+                V[i] *= dof_adj;
+            }
+            free(temp_v);
+        }
+
+    } else if (vce_type == CIVREGHDFE_VCE_CLUSTER && cluster_ids && num_clusters > 0) {
         /* Clustered VCE */
         ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
         if (!cluster_sums) {

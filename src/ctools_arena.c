@@ -9,6 +9,24 @@
 #include <string.h>
 #include "ctools_arena.h"
 
+/* Atomic operations for thread-safe string arena */
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#define ARENA_ATOMIC_LOAD(ptr) (*(volatile size_t *)(ptr))
+#define ARENA_ATOMIC_CAS(ptr, expected, desired) \
+    (InterlockedCompareExchange64((volatile LONG64 *)(ptr), (LONG64)(desired), (LONG64)(expected)) == (LONG64)(expected))
+#elif defined(__GNUC__) || defined(__clang__)
+#define ARENA_ATOMIC_LOAD(ptr) __atomic_load_n((ptr), __ATOMIC_ACQUIRE)
+#define ARENA_ATOMIC_CAS(ptr, expected, desired) \
+    __sync_bool_compare_and_swap((ptr), (expected), (desired))
+#else
+/* Fallback: non-atomic (not thread-safe) */
+#define ARENA_ATOMIC_LOAD(ptr) (*(ptr))
+#define ARENA_ATOMIC_CAS(ptr, expected, desired) \
+    ((*(ptr) == (expected)) ? (*(ptr) = (desired), 1) : 0)
+#endif
+
 /* ============================================================================
  * Static empty string for STATIC_FALLBACK mode
  *
@@ -233,17 +251,31 @@ char *ctools_string_arena_strdup(ctools_string_arena *arena, const char *s)
 
     size_t len = strlen(s) + 1;
 
-    /* Try to allocate from arena (with overflow protection) */
-    if (arena != NULL &&
-        arena->used <= arena->capacity - len &&
-        len <= arena->capacity) {
-        char *ptr = arena->base + arena->used;
-        memcpy(ptr, s, len);
-        arena->used += len;
-        return ptr;
+    /* Try to allocate from arena using atomic CAS for thread safety */
+    if (arena != NULL && len <= arena->capacity) {
+        /* Atomic allocation loop - try until we succeed or arena is full */
+        for (;;) {
+            size_t current_used = ARENA_ATOMIC_LOAD(&arena->used);
+
+            /* Check if there's enough space (with overflow protection) */
+            if (current_used > arena->capacity - len) {
+                break;  /* Arena full, fall through to fallback */
+            }
+
+            size_t new_used = current_used + len;
+
+            /* Try to atomically reserve space */
+            if (ARENA_ATOMIC_CAS(&arena->used, current_used, new_used)) {
+                /* Successfully reserved space - copy string */
+                char *ptr = arena->base + current_used;
+                memcpy(ptr, s, len);
+                return ptr;
+            }
+            /* CAS failed - another thread got there first, retry */
+        }
     }
 
-    /* Arena full - handle based on mode */
+    /* Arena full or NULL - handle based on mode */
     if (arena == NULL) {
         /* No arena - just use strdup */
         return strdup(s);
@@ -256,20 +288,13 @@ char *ctools_string_arena_strdup(ctools_string_arena *arena, const char *s)
         case CTOOLS_STRING_ARENA_STRDUP_FALLBACK: {
             char *result = strdup(s);
             if (result != NULL) {
-                arena->has_fallback = 1;
+                arena->has_fallback = 1;  /* Race on flag is benign */
             }
             return result;
         }
 
         case CTOOLS_STRING_ARENA_STATIC_FALLBACK:
-            arena->has_fallback = 1;
-            /* Try to allocate empty string in arena first */
-            if (arena->used < arena->capacity) {
-                char *ptr = arena->base + arena->used;
-                ptr[0] = '\0';
-                arena->used += 1;
-                return ptr;
-            }
+            arena->has_fallback = 1;  /* Race on flag is benign */
             /* Last resort: return static empty string */
             return ctools_static_empty_string;
     }

@@ -1,4 +1,4 @@
-*! version 1.1.0 20Jan2026
+*! version 0.9.0 26Jan2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!
@@ -33,9 +33,16 @@ program define cexport, rclass
     * Parse the subcommand
     gettoken subcmd 0 : 0, parse(" ,")
 
-    if "`subcmd'" != "delimited" {
+    if "`subcmd'" == "excel" {
+        * Dispatch to Excel export handler
+        cexport_excel `0'
+        return add
+        exit
+    }
+    else if "`subcmd'" != "delimited" {
         di as error "cexport: unknown subcommand `subcmd'"
         di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
+        di as error "        cexport excel [varlist] [using] filename [, options]"
         exit 198
     }
 
@@ -382,6 +389,305 @@ program define cexport, rclass
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
         }
+    }
+
+    * Return results
+    return scalar N = `nobs'
+    return scalar k = `nvars'
+    return scalar time = `elapsed'
+    return local filename `"`using'"'
+
+    timer clear 99
+end
+
+/*******************************************************************************
+ * cexport_excel: Export to Excel (.xlsx) files
+ *
+ * Syntax: cexport excel [varlist] [using] filename [if] [in], [options]
+ *
+ * Options:
+ *   sheet(name)    - Worksheet name (default: "Sheet1")
+ *   firstrow(variables|nonames) - First row handling
+ *   replace        - Overwrite existing file
+ *   nolabel        - Export numeric values instead of value labels
+ *   verbose        - Display timing information
+ ******************************************************************************/
+program define cexport_excel, rclass
+    version 14.0
+
+    * Try with 'using' first, then without (allows both syntaxes)
+    capture syntax [varlist] using/ [if] [in], [SHEET(string) FIRSTrow(string) ///
+        REPLACE NOLabel Verbose]
+    if _rc {
+        * 'using' not found - parse filename from positional arguments
+        local rest `"`0'"'
+        local positional ""
+        local options_part ""
+
+        * Split on comma to separate positional args from options
+        gettoken chunk rest : rest, parse(",")
+        while `"`chunk'"' != "" & `"`chunk'"' != "," {
+            local positional `"`positional' `chunk'"'
+            gettoken chunk rest : rest, parse(",")
+        }
+        if `"`chunk'"' == "," {
+            local options_part `"`rest'"'
+        }
+        local positional = strtrim(`"`positional'"')
+
+        * Scan positional args to find filename (token with .xlsx extension)
+        local filename ""
+        local varlist_tokens ""
+        local tokens `"`positional'"'
+        local ntokens = 0
+
+        while `"`tokens'"' != "" {
+            gettoken tok tokens : tokens
+            if `"`tok'"' != "" {
+                local ntokens = `ntokens' + 1
+                local token`ntokens' `"`tok'"'
+            }
+        }
+
+        * Find filename: scan for token with .xlsx extension
+        local filename_idx = 0
+        forvalues i = 1/`ntokens' {
+            local tok `"`token`i''"'
+            * Skip if/in keywords
+            if lower(`"`tok'"') == "if" | lower(`"`tok'"') == "in" {
+                continue
+            }
+            * Check if token ends with .xlsx
+            if substr(lower(`"`tok'"'), -5, 5) == ".xlsx" {
+                local filename_idx = `i'
+            }
+        }
+
+        if `filename_idx' == 0 {
+            di as error "cexport excel: filename required (must have .xlsx extension)"
+            di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
+            exit 198
+        }
+
+        * Build varlist from tokens before filename
+        local varlist_tokens ""
+        forvalues i = 1/`=`filename_idx'-1' {
+            local varlist_tokens `"`varlist_tokens' `token`i''"'
+        }
+        local varlist_tokens = strtrim(`"`varlist_tokens'"')
+
+        * Get filename
+        local filename `"`token`filename_idx''"'
+
+        * Build if/in part from tokens after filename
+        local if_in_tokens ""
+        forvalues i = `=`filename_idx'+1'/`ntokens' {
+            local if_in_tokens `"`if_in_tokens' `token`i''"'
+        }
+        local if_in_tokens = strtrim(`"`if_in_tokens'"')
+
+        * Reconstruct 0 for syntax parsing
+        local 0 `"`varlist_tokens' `if_in_tokens'"'
+        if `"`options_part'"' != "" {
+            local 0 `"`0', `options_part'"'
+        }
+
+        local using `"`filename'"'
+        syntax [varlist] [if] [in], [SHEET(string) FIRSTrow(string) ///
+            REPLACE NOLabel Verbose]
+    }
+
+    * Mark sample
+    marksample touse, novarlist
+
+    * Validate file extension
+    local ext = substr(lower(`"`using'"'), -5, 5)
+    if "`ext'" != ".xlsx" {
+        di as error "cexport excel: file must have .xlsx extension"
+        exit 198
+    }
+
+    * Validate file
+    if "`replace'" == "" {
+        capture confirm file `"`using'"'
+        if !_rc {
+            di as error "file `using' already exists"
+            di as error "use the replace option to overwrite"
+            exit 602
+        }
+    }
+
+    * Parse firstrow option
+    local opt_firstrow = "firstrow"
+    if "`firstrow'" != "" {
+        if "`firstrow'" == "nonames" {
+            local opt_firstrow = "nofirstrow"
+        }
+        else if "`firstrow'" != "variables" {
+            di as error "cexport excel: firstrow() must be 'variables' or 'nonames'"
+            exit 198
+        }
+    }
+
+    * If no varlist specified, use all variables
+    if "`varlist'" == "" {
+        qui ds
+        local varlist `r(varlist)'
+    }
+
+    * Handle value labels
+    local export_varlist ""
+    local decoded_vars ""
+    if "`nolabel'" == "" {
+        foreach var of local varlist {
+            local vallbl : value label `var'
+            if "`vallbl'" != "" {
+                tempvar decoded_`var'
+                qui decode `var', gen(`decoded_`var'')
+                local export_varlist `export_varlist' `decoded_`var''
+                local decoded_vars `decoded_vars' `decoded_`var''
+            }
+            else {
+                local export_varlist `export_varlist' `var'
+            }
+        }
+    }
+    else {
+        local export_varlist `varlist'
+    }
+
+    * Count variables and observations
+    local nvars : word count `varlist'
+    qui count `if' `in'
+    local nobs = r(N)
+
+    if `nvars' == 0 {
+        di as error "cexport excel: no variables to export"
+        exit 198
+    }
+
+    * Load plugin
+    capture program list ctools_plugin
+    if _rc != 0 {
+        local __os = c(os)
+        local __machine = c(machine_type)
+        local __is_mac = 0
+        if "`__os'" == "MacOSX" {
+            local __is_mac = 1
+        }
+        else if strpos(lower("`__machine'"), "mac") > 0 {
+            local __is_mac = 1
+        }
+        local __plugin = ""
+        if "`__os'" == "Windows" {
+            local __plugin "ctools_windows.plugin"
+        }
+        else if `__is_mac' {
+            local __is_arm = 0
+            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
+                local __is_arm = 1
+            }
+            if `__is_arm' == 0 {
+                tempfile __archfile
+                quietly shell uname -m > "`__archfile'" 2>&1
+                tempname __fh
+                file open `__fh' using "`__archfile'", read text
+                file read `__fh' __archline
+                file close `__fh'
+                capture erase "`__archfile'"
+                if strpos("`__archline'", "arm64") > 0 {
+                    local __is_arm = 1
+                }
+            }
+            if `__is_arm' {
+                local __plugin "ctools_mac_arm.plugin"
+            }
+            else {
+                local __plugin "ctools_mac_x86.plugin"
+            }
+        }
+        else if "`__os'" == "Unix" {
+            local __plugin "ctools_linux.plugin"
+        }
+        else {
+            local __plugin "ctools.plugin"
+        }
+        capture program ctools_plugin, plugin using("`__plugin'")
+        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
+            capture program ctools_plugin, plugin using("ctools.plugin")
+        }
+        if _rc != 0 & _rc != 110 {
+            di as error "cexport excel: Could not load ctools plugin"
+            exit 601
+        }
+    }
+
+    * Build plugin arguments
+    local opt_sheet = cond("`sheet'" != "", "sheet=`sheet'", "")
+    local opt_replace = cond("`replace'" != "", "replace", "")
+    local opt_nolabel = cond("`nolabel'" != "", "nolabel", "")
+    local opt_verbose = cond("`verbose'" != "", "verbose", "")
+
+    * Pass variable names to plugin
+    global CEXPORT_VARNAMES `varlist'
+
+    * Pass variable types
+    local vartypes ""
+    foreach var of local export_varlist {
+        local vtype : type `var'
+        if "`vtype'" == "byte" {
+            local vartypes `vartypes' 1
+        }
+        else if "`vtype'" == "int" {
+            local vartypes `vartypes' 2
+        }
+        else if "`vtype'" == "long" {
+            local vartypes `vartypes' 3
+        }
+        else if "`vtype'" == "float" {
+            local vartypes `vartypes' 4
+        }
+        else if "`vtype'" == "double" {
+            local vartypes `vartypes' 5
+        }
+        else {
+            * String
+            local vartypes `vartypes' 0
+        }
+    }
+    global CEXPORT_VARTYPES `vartypes'
+
+    * Record start time
+    timer clear 99
+    timer on 99
+
+    * Call plugin - pass touse variable for if/in filtering
+    capture noisily plugin call ctools_plugin `touse' `export_varlist', ///
+        "cexport_xlsx `using' `opt_sheet' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose'"
+
+    local export_rc = _rc
+
+    * Clean up
+    macro drop CEXPORT_VARNAMES
+    macro drop CEXPORT_VARTYPES
+
+    if `export_rc' {
+        di as error "Error exporting XLSX data (rc=`export_rc')"
+        exit `export_rc'
+    }
+
+    timer off 99
+    quietly timer list 99
+    local elapsed = r(t99)
+
+    * Display summary
+    di as text ""
+    di as text "file " as result `"`using'"' as text " saved"
+    di as text "(" as result %12.0fc `nobs' as text " observations written)"
+
+    if "`verbose'" != "" {
+        di as text ""
+        di as text "Time: " as result %9.3f `elapsed' as text " seconds"
     }
 
     * Return results

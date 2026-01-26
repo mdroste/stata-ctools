@@ -97,13 +97,13 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
 
     /* HAC parameters */
-    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0;
+    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0, dkraay_T = 0;
     SF_scal_use("__civreghdfe_kernel", &dval); kernel_type = (ST_int)dval;
     SF_scal_use("__civreghdfe_bw", &dval); bw = (ST_int)dval;
     SF_scal_use("__civreghdfe_dkraay", &dval); dkraay = (ST_int)dval;
     SF_scal_use("__civreghdfe_kiefer", &dval); kiefer = (ST_int)dval;
-    (void)dkraay;  /* Reserved for Driscoll-Kraay panel HAC */
-    (void)kiefer;  /* Kiefer SEs are handled via kernel_type = 6 */
+    SF_scal_use("__civreghdfe_dkraay_T", &dval); dkraay_T = (ST_int)dval;
+    (void)kiefer;  /* Kiefer SEs are handled via vce_type == 2 with kernel */
 
     if (verbose) {
         char buf[512];
@@ -1199,10 +1199,14 @@ static ST_retcode do_iv_regression(void)
     ST_double r2 = (tss > 0) ? 1.0 - rss / tss : 0.0;
 
     /* Compute df_r:
-       - For clustered VCE: df_r = num_clusters - 1 (Stata convention)
+       - For Driscoll-Kraay (vce_type == 4): df_r = T - 1 (time periods minus 1)
+       - For clustered VCE (vce_type == 2, 3): df_r = num_clusters - 1 (Stata convention)
        - Otherwise: df_r = N - K - df_a */
     ST_int df_r_val;
-    if (has_cluster) {
+    if (vce_type == 4 && dkraay_T > 0) {
+        /* Driscoll-Kraay: df_r = T - 1 */
+        df_r_val = dkraay_T - 1;
+    } else if (has_cluster) {
         df_r_val = num_clusters - 1;
     } else {
         df_r_val = N - K_total - df_a;
@@ -1237,7 +1241,10 @@ static ST_retcode do_iv_regression(void)
     SF_scal_save("__civreghdfe_rmse", rmse);
     SF_scal_save("__civreghdfe_F", f_stat);
 
-    if (has_cluster) {
+    if (vce_type == 4 && dkraay_T > 0) {
+        /* Driscoll-Kraay: N_clust = number of time periods */
+        SF_scal_save("__civreghdfe_N_clust", (ST_double)dkraay_T);
+    } else if (has_cluster) {
         SF_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
     }
 

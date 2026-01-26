@@ -1,4 +1,4 @@
-*! version 2.0.1 22Jan2026
+*! version 0.9.0 26Jan2026
 *! cwinsor: C-accelerated winsorization for Stata
 *! Part of the ctools suite
 

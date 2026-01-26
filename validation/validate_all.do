@@ -15,6 +15,11 @@
  *   stata -b do validate_creghdfe.do
  *   stata -b do validate_cqreg.do
  *   stata -b do validate_civreghdfe.do
+ *   stata -b do validate_cdecode.do
+ *   stata -b do validate_cencode.do
+ *   stata -b do validate_cdestring.do
+ *   stata -b do validate_csample.do
+ *   stata -b do validate_cbsample.do
  ******************************************************************************/
 
 version 14.0
@@ -296,6 +301,216 @@ else {
 }
 
 /*******************************************************************************
+ * civreghdfe GMM/CUE Tests
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: civreghdfe GMM/CUE validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_civreghdfe_gmm_cue.do"
+local civreghdfe_gmm_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local civreghdfe_gmm_passed = $TESTS_PASSED
+local civreghdfe_gmm_failed = $TESTS_FAILED
+local civreghdfe_gmm_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [civreghdfe GMM/CUE] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `civreghdfe_gmm_rc' == 0 & `civreghdfe_gmm_failed' == 0 {
+    noi di as result "civreghdfe GMM/CUE: ALL TESTS PASSED (`civreghdfe_gmm_passed'/`civreghdfe_gmm_total')"
+}
+else {
+    noi di as error "civreghdfe GMM/CUE: FAILED (`civreghdfe_gmm_failed' of `civreghdfe_gmm_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CDECODE VALIDATION
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cdecode validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_cdecode.do"
+local cdecode_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local cdecode_passed = $TESTS_PASSED
+local cdecode_failed = $TESTS_FAILED
+local cdecode_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cdecode] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cdecode_rc' == 0 & `cdecode_failed' == 0 {
+    noi di as result "cdecode: ALL TESTS PASSED (`cdecode_passed'/`cdecode_total')"
+}
+else {
+    noi di as error "cdecode: FAILED (`cdecode_failed' of `cdecode_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CENCODE VALIDATION
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cencode validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_cencode.do"
+local cencode_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local cencode_passed = $TESTS_PASSED
+local cencode_failed = $TESTS_FAILED
+local cencode_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cencode] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cencode_rc' == 0 & `cencode_failed' == 0 {
+    noi di as result "cencode: ALL TESTS PASSED (`cencode_passed'/`cencode_total')"
+}
+else {
+    noi di as error "cencode: FAILED (`cencode_failed' of `cencode_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CDESTRING VALIDATION
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cdestring validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_cdestring.do"
+local cdestring_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local cdestring_passed = $TESTS_PASSED
+local cdestring_failed = $TESTS_FAILED
+local cdestring_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cdestring] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cdestring_rc' == 0 & `cdestring_failed' == 0 {
+    noi di as result "cdestring: ALL TESTS PASSED (`cdestring_passed'/`cdestring_total')"
+}
+else {
+    noi di as error "cdestring: FAILED (`cdestring_failed' of `cdestring_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CSAMPLE VALIDATION
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: csample validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_csample.do"
+local csample_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local csample_passed = $TESTS_PASSED
+local csample_failed = $TESTS_FAILED
+local csample_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [csample] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `csample_rc' == 0 & `csample_failed' == 0 {
+    noi di as result "csample: ALL TESTS PASSED (`csample_passed'/`csample_total')"
+}
+else {
+    noi di as error "csample: FAILED (`csample_failed' of `csample_total' tests failed)"
+}
+
+/*******************************************************************************
+ * RUN CBSAMPLE VALIDATION
+ ******************************************************************************/
+noi di as text ""
+noi di as text "======================================================================"
+noi di as text "  Running: cbsample validation tests"
+noi di as text "======================================================================"
+
+capture noisily do "validation/validate_cbsample.do"
+local cbsample_rc = _rc
+
+local total_passed = `total_passed' + $TESTS_PASSED
+local total_failed = `total_failed' + $TESTS_FAILED
+local total_tests = `total_tests' + $TESTS_TOTAL
+
+local cbsample_passed = $TESTS_PASSED
+local cbsample_failed = $TESTS_FAILED
+local cbsample_total = $TESTS_TOTAL
+
+* Collect failures
+if $FAILURE_COUNT > 0 {
+    forvalues i = 1/$FAILURE_COUNT {
+        if `i' <= 100 {
+            local all_failures = `"`all_failures'"' + char(10) + "  [cbsample] ${FAILURE_`i'}"
+        }
+    }
+}
+
+if `cbsample_rc' == 0 & `cbsample_failed' == 0 {
+    noi di as result "cbsample: ALL TESTS PASSED (`cbsample_passed'/`cbsample_total')"
+}
+else {
+    noi di as error "cbsample: FAILED (`cbsample_failed' of `cbsample_total' tests failed)"
+}
+
+/*******************************************************************************
  * FINAL SUMMARY
  ******************************************************************************/
 noi di as text ""
@@ -373,6 +588,54 @@ if `civreghdfe_failed' == 0 {
 }
 else {
     noi di as text "  civreghdfe " %8.0f `civreghdfe_passed' %8.0f `civreghdfe_failed' %8.0f `civreghdfe_total' "    " as error "FAIL"
+}
+
+* civreghdfe GMM/CUE
+if `civreghdfe_gmm_failed' == 0 {
+    noi di as text "  civreg-gmm " %8.0f `civreghdfe_gmm_passed' %8.0f `civreghdfe_gmm_failed' %8.0f `civreghdfe_gmm_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  civreg-gmm " %8.0f `civreghdfe_gmm_passed' %8.0f `civreghdfe_gmm_failed' %8.0f `civreghdfe_gmm_total' "    " as error "FAIL"
+}
+
+* cdecode
+if `cdecode_failed' == 0 {
+    noi di as text "  cdecode    " %8.0f `cdecode_passed' %8.0f `cdecode_failed' %8.0f `cdecode_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  cdecode    " %8.0f `cdecode_passed' %8.0f `cdecode_failed' %8.0f `cdecode_total' "    " as error "FAIL"
+}
+
+* cencode
+if `cencode_failed' == 0 {
+    noi di as text "  cencode    " %8.0f `cencode_passed' %8.0f `cencode_failed' %8.0f `cencode_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  cencode    " %8.0f `cencode_passed' %8.0f `cencode_failed' %8.0f `cencode_total' "    " as error "FAIL"
+}
+
+* cdestring
+if `cdestring_failed' == 0 {
+    noi di as text "  cdestring  " %8.0f `cdestring_passed' %8.0f `cdestring_failed' %8.0f `cdestring_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  cdestring  " %8.0f `cdestring_passed' %8.0f `cdestring_failed' %8.0f `cdestring_total' "    " as error "FAIL"
+}
+
+* csample
+if `csample_failed' == 0 {
+    noi di as text "  csample    " %8.0f `csample_passed' %8.0f `csample_failed' %8.0f `csample_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  csample    " %8.0f `csample_passed' %8.0f `csample_failed' %8.0f `csample_total' "    " as error "FAIL"
+}
+
+* cbsample
+if `cbsample_failed' == 0 {
+    noi di as text "  cbsample   " %8.0f `cbsample_passed' %8.0f `cbsample_failed' %8.0f `cbsample_total' "    " as result "PASS"
+}
+else {
+    noi di as text "  cbsample   " %8.0f `cbsample_passed' %8.0f `cbsample_failed' %8.0f `cbsample_total' "    " as error "FAIL"
 }
 
 noi di as text "{hline 55}"

@@ -86,13 +86,21 @@ CSORT_SRCS = $(SRC_DIR)/csort/csort_impl.c \
 CIMPORT_SRCS = $(SRC_DIR)/cimport/cimport_impl.c \
                $(SRC_DIR)/cimport/cimport_mmap.c \
                $(SRC_DIR)/cimport/cimport_parse.c \
-               $(SRC_DIR)/cimport/cimport_encoding.c
+               $(SRC_DIR)/cimport/cimport_encoding.c \
+               $(SRC_DIR)/cimport/cimport_xlsx.c \
+               $(SRC_DIR)/cimport/cimport_xlsx_zip.c \
+               $(SRC_DIR)/cimport/cimport_xlsx_xml.c \
+               $(SRC_DIR)/cimport/miniz/miniz.c \
+               $(SRC_DIR)/cimport/miniz/miniz_zip.c \
+               $(SRC_DIR)/cimport/miniz/miniz_tinfl.c \
+               $(SRC_DIR)/cimport/miniz/miniz_tdef.c
 
 # cexport module
 CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c \
                $(SRC_DIR)/cexport/cexport_io.c \
                $(SRC_DIR)/cexport/cexport_format.c \
-               $(SRC_DIR)/cexport/cexport_parse.c
+               $(SRC_DIR)/cexport/cexport_parse.c \
+               $(SRC_DIR)/cexport/cexport_xlsx.c
 
 # cmerge module
 CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
@@ -130,6 +138,7 @@ CQREG_SRCS = $(SRC_DIR)/cqreg/cqreg_types.c \
 # cbinscatter module
 CBINSCATTER_SRCS = $(SRC_DIR)/cbinscatter/cbinscatter_impl.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_bins.c \
+                   $(SRC_DIR)/cbinscatter/cbinscatter_binsreg.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_resid.c \
                    $(SRC_DIR)/cbinscatter/cbinscatter_fit.c
 
@@ -180,13 +189,23 @@ CIMPORT_HEADERS = $(SRC_DIR)/cimport/cimport_impl.h \
                   $(SRC_DIR)/cimport/cimport_context.h \
                   $(SRC_DIR)/cimport/cimport_mmap.h \
                   $(SRC_DIR)/cimport/cimport_parse.h \
-                  $(SRC_DIR)/cimport/cimport_encoding.h
+                  $(SRC_DIR)/cimport/cimport_encoding.h \
+                  $(SRC_DIR)/cimport/cimport_xlsx.h \
+                  $(SRC_DIR)/cimport/cimport_xlsx_zip.h \
+                  $(SRC_DIR)/cimport/cimport_xlsx_xml.h \
+                  $(SRC_DIR)/cimport/miniz/miniz.h \
+                  $(SRC_DIR)/cimport/miniz/miniz_zip.h \
+                  $(SRC_DIR)/cimport/miniz/miniz_tinfl.h \
+                  $(SRC_DIR)/cimport/miniz/miniz_tdef.h \
+                  $(SRC_DIR)/cimport/miniz/miniz_common.h \
+                  $(SRC_DIR)/cimport/miniz/miniz_export.h
 
 CEXPORT_HEADERS = $(SRC_DIR)/cexport/cexport_impl.h \
                   $(SRC_DIR)/cexport/cexport_io.h \
                   $(SRC_DIR)/cexport/cexport_context.h \
                   $(SRC_DIR)/cexport/cexport_format.h \
-                  $(SRC_DIR)/cexport/cexport_parse.h
+                  $(SRC_DIR)/cexport/cexport_parse.h \
+                  $(SRC_DIR)/cexport/cexport_xlsx.h
 
 CMERGE_HEADERS = $(SRC_DIR)/cmerge/cmerge_impl.h \
                  $(SRC_DIR)/cmerge/cmerge_memory.h \
@@ -241,7 +260,7 @@ CSAMPLE_HEADERS = $(SRC_DIR)/csample/csample_impl.h
 CBSAMPLE_HEADERS = $(SRC_DIR)/cbsample/cbsample_impl.h
 
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cimport/miniz -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample
 
 # ------------------------------------------------------------------------------
 # Output Configuration

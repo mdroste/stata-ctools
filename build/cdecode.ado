@@ -1,4 +1,4 @@
-*! version 1.0.0 22Jan2026
+*! version 0.9.0 26Jan2026
 *! cdecode: C-accelerated numeric to string decoding for Stata
 *! Part of the ctools suite
 *!

@@ -107,8 +107,11 @@ static int parse_threads_arg(char *cmd_args)
         return -1;  /* Missing closing paren */
     }
 
-    /* Parse the number */
-    if (!ctools_safe_atoi(paren_open + 1, &num_threads)) {
+    /* Parse the number - temporarily null-terminate at closing paren */
+    *paren_close = '\0';
+    int parse_ok = ctools_safe_atoi(paren_open + 1, &num_threads);
+    *paren_close = ')';  /* Restore for memmove below */
+    if (!parse_ok) {
         return -1;  /* Invalid number format */
     }
     if (num_threads <= 0) {
@@ -136,6 +139,7 @@ static int parse_threads_arg(char *cmd_args)
 #include "civreghdfe_impl.h"
 #include "cimport_impl.h"
 #include "cexport_impl.h"
+#include "cexport_xlsx.h"
 #include "cmerge_impl.h"
 #include "cqreg_impl.h"
 #include "cbinscatter_impl.h"
@@ -221,6 +225,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cexport") == 0) {
         rc = cexport_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cexport_xlsx") == 0) {
+        rc = cexport_xlsx_main(cmd_args);
     }
     else if (strcmp(cmd_name, "cmerge") == 0) {
         rc = cmerge_main(cmd_args);

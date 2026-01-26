@@ -113,6 +113,36 @@ ST_retcode compute_bins_single_group(
     ByGroupResult *result
 );
 
+/*
+ * Compute bins for a single by-group with binsreg method adjustment
+ *
+ * This function computes bins and then adjusts Y-means using the binsreg
+ * regression method when controls are present.
+ *
+ * Parameters:
+ *   y           - y values for this group (NOT residualized)
+ *   x           - x values for this group
+ *   controls    - control variables (column-major: K x N), can be NULL
+ *   weights     - weights for this group (NULL if unweighted)
+ *   N           - number of observations in group
+ *   K           - number of control variables (can be 0)
+ *   config      - binscatter configuration
+ *   result      - output: ByGroupResult to populate
+ *
+ * Returns:
+ *   0 on success, error code on failure
+ */
+ST_retcode compute_bins_single_group_binsreg(
+    ST_double *y,
+    ST_double *x,
+    const ST_double *controls,
+    ST_double *weights,
+    ST_int N,
+    ST_int K,
+    const BinscatterConfig *config,
+    ByGroupResult *result
+);
+
 /* ========================================================================
  * Discrete Mode
  * ======================================================================== */

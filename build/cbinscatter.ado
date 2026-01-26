@@ -1,4 +1,4 @@
-*! version 1.0.0 17Jan2026
+*! version 0.9.0 26Jan2026
 *! cbinscatter: C-accelerated binned scatter plots
 *! Part of the ctools suite
 *!
@@ -280,7 +280,7 @@ program define cbinscatter, eclass sortpreserve
     scalar __cbinscatter_reportreg = ("`reportreg'" != "")
     scalar __cbinscatter_method = `method_num'
     scalar __cbinscatter_maxiter = 10000
-    scalar __cbinscatter_tolerance = 1e-8
+    scalar __cbinscatter_tolerance = 1e-10
 
     * Display info if verbose
     if "`verbose'" != "" {

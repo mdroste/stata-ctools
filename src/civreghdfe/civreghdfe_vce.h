@@ -20,6 +20,7 @@
 #define CIVREGHDFE_VCE_ROBUST     1
 #define CIVREGHDFE_VCE_CLUSTER    2
 #define CIVREGHDFE_VCE_CLUSTER2   3  /* Two-way clustering */
+#define CIVREGHDFE_VCE_DKRAAY     4  /* Driscoll-Kraay (clustered by time with HAC) */
 
 /*
     HAC kernel types
