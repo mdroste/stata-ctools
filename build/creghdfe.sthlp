@@ -27,7 +27,9 @@
 {synopthdr}
 {synoptline}
 {syntab:Model}
-{synopt:{opt a:bsorb(varlist)}}categorical variables representing fixed effects to absorb; required{p_end}
+{synopt:{opt a:bsorb(varlist[, savefe])}}categorical variables representing fixed effects to absorb; required{p_end}
+{synopt:{opt dof:adjustments(doftype)}}degrees of freedom adjustment method{p_end}
+{synopt:{opt group:var(newvar)}}save mobility group identifier{p_end}
 
 {syntab:SE/Robust}
 {synopt:{opt vce(vcetype)}}variance estimator; {opt robust} or {opt cluster} {it:clustvar}{p_end}
@@ -40,6 +42,7 @@
 {syntab:Residuals}
 {synopt:{opt resid}}create residual variable named {cmd:_creghdfe_resid}{p_end}
 {synopt:{opt resid2(newvar)}}create residual variable with specified name{p_end}
+{synopt:{opt resid:uals(newvar)}}alias for {opt resid2()}{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
@@ -70,8 +73,24 @@ for models with many fixed effects or large datasets.
 {dlgtab:Model}
 
 {phang}
-{opt absorb(varlist)} specifies one or more categorical variables whose fixed
-effects are to be absorbed. This option is required.
+{opt absorb(varlist[, savefe])} specifies one or more categorical variables whose fixed
+effects are to be absorbed. This option is required. The optional {opt savefe}
+suboption creates variables {cmd:__hdfe1__}, {cmd:__hdfe2__}, etc. containing
+the estimated fixed effect for each observation. {bf:Note:} Variable value storage
+is currently a known limitation; the variables are created but may not contain values.
+
+{phang}
+{opt dofadjustments(doftype)} controls how degrees of freedom are calculated.
+{it:doftype} may be {opt all} (default), {opt none}, {opt firstpair}, or
+{opt pairwise}. With {opt none}, no adjustment for connected groups is made.
+With {opt firstpair}, only the first two FE variables are checked for
+connectivity. With {opt pairwise} or {opt all}, all FE pairs are checked.
+
+{phang}
+{opt groupvar(newvar)} creates a new variable containing the mobility group
+identifier for each observation. Mobility groups are connected components
+in the network of fixed effects. {bf:Note:} Variable value storage is currently
+a known limitation; the variable is created but may not contain values.
 
 {dlgtab:SE/Robust}
 
@@ -103,6 +122,10 @@ before the iterative algorithm. This may affect convergence speed.
 
 {phang}
 {opt resid2(newvar)} stores residuals in a new variable with the specified name.
+
+{phang}
+{opt residuals(newvar)} is an alias for {opt resid2(newvar)}, provided for
+compatibility with {help reghdfe:reghdfe}.
 
 {dlgtab:Reporting}
 

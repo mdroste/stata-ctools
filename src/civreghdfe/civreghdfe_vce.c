@@ -699,6 +699,8 @@ void ivvce_compute_full(
     ST_int nested_adj,
     ST_int kernel_type,
     ST_int bw,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels,
     ST_double *V
 )
 {
@@ -878,7 +880,7 @@ void ivvce_compute_full(
         }
 
     } else if (kernel_type > 0 && bw > 0) {
-        /* HAC VCE */
+        /* HAC VCE - Panel-aware if cluster info available */
         ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
         if (!u) {
             free(PzX); free(meat);
@@ -894,28 +896,116 @@ void ivvce_compute_full(
             }
         }
 
-        /* Sum over all lag pairs with kernel weights */
-        for (ST_int lag = 0; lag <= bw; lag++) {
-            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-            if (kw < 1e-10) continue;
+        if (hac_panel_ids && num_hac_panels > 0) {
+            /*
+               Panel-aware HAC: Only compute autocorrelation within panels.
+               For each panel, compute HAC using time position within panel.
 
-            if (lag == 0) {
-                for (i = 0; i < N; i++) {
-                    for (j = 0; j < K_total; j++) {
-                        for (k = 0; k <= j; k++) {
-                            ST_double contrib = kw * u[j * N + i] * u[k * N + i];
-                            meat[j * K_total + k] += contrib;
-                            if (k != j) meat[k * K_total + j] += contrib;
+               This matches ivreghdfe's behavior when kernel/bw is used with
+               panel fixed effects (absorb).
+
+               hac_panel_ids contains the panel ID for each observation.
+               Observations within the same panel are consecutive (sorted by time).
+            */
+
+            /* Build panel membership lists for efficient iteration */
+            ST_int *panel_counts = (ST_int *)calloc(num_hac_panels, sizeof(ST_int));
+            ST_int *panel_starts = (ST_int *)calloc(num_hac_panels + 1, sizeof(ST_int));
+            ST_int *obs_by_panel = (ST_int *)calloc(N, sizeof(ST_int));
+
+            if (!panel_counts || !panel_starts || !obs_by_panel) {
+                free(u);
+                if (panel_counts) free(panel_counts);
+                if (panel_starts) free(panel_starts);
+                if (obs_by_panel) free(obs_by_panel);
+                free(PzX); free(meat);
+                return;
+            }
+
+            /* Count observations per panel */
+            for (i = 0; i < N; i++) {
+                ST_int p = hac_panel_ids[i] - 1;
+                if (p >= 0 && p < num_hac_panels) {
+                    panel_counts[p]++;
+                }
+            }
+
+            /* Compute start indices */
+            panel_starts[0] = 0;
+            for (ST_int p = 0; p < num_hac_panels; p++) {
+                panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+            }
+
+            /* Reset counts to use as insertion indices */
+            memset(panel_counts, 0, num_hac_panels * sizeof(ST_int));
+
+            /* Fill obs_by_panel */
+            for (i = 0; i < N; i++) {
+                ST_int p = hac_panel_ids[i] - 1;
+                if (p >= 0 && p < num_hac_panels) {
+                    ST_int idx = panel_starts[p] + panel_counts[p];
+                    obs_by_panel[idx] = i;
+                    panel_counts[p]++;
+                }
+            }
+
+            /* Compute meat: for each panel, sum HAC contributions */
+            for (ST_int p = 0; p < num_hac_panels; p++) {
+                ST_int start = panel_starts[p];
+                ST_int end = panel_starts[p + 1];
+                ST_int T_p = end - start;
+
+                /* For each pair (t1, t2) within this panel, use time lag */
+                for (ST_int t1 = 0; t1 < T_p; t1++) {
+                    ST_int i1 = obs_by_panel[start + t1];
+                    for (ST_int t2 = 0; t2 < T_p; t2++) {
+                        ST_int i2 = obs_by_panel[start + t2];
+                        ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                        /* Apply kernel weight based on time lag within panel */
+                        ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                        if (kw < 1e-10) continue;
+
+                        /* Add u_i1 * u_i2' contribution */
+                        for (j = 0; j < K_total; j++) {
+                            for (k = 0; k <= j; k++) {
+                                ST_double contrib = kw * u[j * N + i1] * u[k * N + i2];
+                                meat[j * K_total + k] += contrib;
+                                if (k != j) meat[k * K_total + j] += contrib;
+                            }
                         }
                     }
                 }
-            } else {
-                for (i = 0; i < N - lag; i++) {
-                    for (j = 0; j < K_total; j++) {
-                        for (k = 0; k < K_total; k++) {
-                            ST_double contrib = kw * (u[j * N + i] * u[k * N + (i + lag)] +
-                                                      u[j * N + (i + lag)] * u[k * N + i]);
-                            meat[k * K_total + j] += contrib;
+            }
+
+            free(panel_counts);
+            free(panel_starts);
+            free(obs_by_panel);
+
+        } else {
+            /* Standard (non-panel) HAC: treat all observations as time series */
+            for (ST_int lag = 0; lag <= bw; lag++) {
+                ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                if (kw < 1e-10) continue;
+
+                if (lag == 0) {
+                    for (i = 0; i < N; i++) {
+                        for (j = 0; j < K_total; j++) {
+                            for (k = 0; k <= j; k++) {
+                                ST_double contrib = kw * u[j * N + i] * u[k * N + i];
+                                meat[j * K_total + k] += contrib;
+                                if (k != j) meat[k * K_total + j] += contrib;
+                            }
+                        }
+                    }
+                } else {
+                    for (i = 0; i < N - lag; i++) {
+                        for (j = 0; j < K_total; j++) {
+                            for (k = 0; k < K_total; k++) {
+                                ST_double contrib = kw * (u[j * N + i] * u[k * N + (i + lag)] +
+                                                          u[j * N + (i + lag)] * u[k * N + i]);
+                                meat[k * K_total + j] += contrib;
+                            }
                         }
                     }
                 }

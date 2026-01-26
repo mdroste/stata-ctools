@@ -89,6 +89,8 @@ void civreghdfe_compute_first_stage_F(
     - num_clusters: Number of clusters
     - kernel_type: HAC kernel type (0=none, 1=Bartlett, etc.)
     - bw: HAC bandwidth
+    - hac_panel_ids: Panel IDs for panel-aware HAC (NULL if not used)
+    - num_hac_panels: Number of panels for HAC
     - underid_stat: Output - underidentification test statistic
     - underid_df: Output - degrees of freedom
     - cd_f: Output - Cragg-Donald F statistic
@@ -113,6 +115,8 @@ void civreghdfe_compute_underid_test(
     ST_int num_clusters,
     ST_int kernel_type,
     ST_int bw,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,

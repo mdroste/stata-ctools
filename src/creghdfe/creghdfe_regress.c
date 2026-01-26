@@ -105,6 +105,32 @@ ST_retcode do_full_regression(int argc, char *argv[])
         compute_dof = (ST_int)val;
     }
 
+    /* Read DOF adjustment type: 0=all, 1=none, 2=firstpair, 3=pairwise */
+    ST_int dof_adjust_type = 0;
+    if (SF_scal_use("__creghdfe_dof_adjust_type", &val) == 0) {
+        dof_adjust_type = (ST_int)val;
+    }
+
+    /* Read savefe flag */
+    ST_int savefe = 0;
+    ST_int savefe_var_idx = 0;
+    if (SF_scal_use("__creghdfe_savefe", &val) == 0) {
+        savefe = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_savefe_idx", &val) == 0) {
+        savefe_var_idx = (ST_int)val;
+    }
+
+    /* Read groupvar flag */
+    ST_int compute_groupvar = 0;
+    ST_int groupvar_var_idx = 0;
+    if (SF_scal_use("__creghdfe_compute_groupvar", &val) == 0) {
+        compute_groupvar = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_groupvar_idx", &val) == 0) {
+        groupvar_var_idx = (ST_int)val;
+    }
+
     /* Check if we should compute and store residuals */
     if (SF_scal_use("__creghdfe_compute_resid", &val) == 0) {
         compute_resid = (ST_int)val;
@@ -612,13 +638,29 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* ================================================================
      * STEP 3: Compute DOF and mobility groups
+     * Respects dof_adjust_type: 0=all, 1=none, 2=firstpair, 3=pairwise
      * ================================================================ */
     df_a = 0;
     for (g = 0; g < G; g++) {
         df_a += factors[g].num_levels;
     }
 
-    if (compute_dof && G >= 2) {
+    /* Array to store group assignments if groupvar requested */
+    ST_int *group_assignments = NULL;
+    if (compute_groupvar) {
+        group_assignments = (ST_int *)calloc(N, sizeof(ST_int));
+    }
+
+    if (dof_adjust_type == 1) {
+        /* dofadjustments(none): skip mobility calculation entirely */
+        mobility_groups = 1;
+        /* All observations in group 1 if groupvar requested */
+        if (group_assignments) {
+            for (idx = 0; idx < N; idx++) {
+                group_assignments[idx] = 1;
+            }
+        }
+    } else if (compute_dof && G >= 2) {
         /* Build compact level arrays for remaining observations only */
         ST_int *fe1_compact = (ST_int *)malloc(N * sizeof(ST_int));
         ST_int *fe2_compact = (ST_int *)malloc(N * sizeof(ST_int));
@@ -644,10 +686,52 @@ ST_retcode do_full_regression(int argc, char *argv[])
                     }
                 }
 
+                /* Count connected components with optional group tracking */
                 mobility_groups = count_connected_components(
                     fe1_compact, fe2_compact, N,
                     factors[0].num_levels, factors[1].num_levels
                 );
+
+                /* If groupvar requested, compute group assignments using union-find */
+                if (group_assignments) {
+                    /* Use union-find to assign each observation to a group */
+                    ST_int total_nodes = factors[0].num_levels + factors[1].num_levels;
+                    ST_int *parent = (ST_int *)malloc(total_nodes * sizeof(ST_int));
+                    if (parent) {
+                        /* Initialize: each node is its own parent */
+                        for (i = 0; i < total_nodes; i++) parent[i] = i;
+
+                        /* Find with path compression */
+                        #define FIND(x) ({ ST_int _x = (x); while (parent[_x] != _x) { parent[_x] = parent[parent[_x]]; _x = parent[_x]; } _x; })
+
+                        /* Union the FE levels */
+                        for (idx = 0; idx < N; idx++) {
+                            ST_int node1 = fe1_compact[idx] - 1;
+                            ST_int node2 = factors[0].num_levels + fe2_compact[idx] - 1;
+                            ST_int root1 = FIND(node1);
+                            ST_int root2 = FIND(node2);
+                            if (root1 != root2) parent[root1] = root2;
+                        }
+
+                        /* Assign group IDs (1-indexed) */
+                        ST_int *root_to_group = (ST_int *)calloc(total_nodes, sizeof(ST_int));
+                        ST_int next_group = 1;
+                        if (root_to_group) {
+                            for (idx = 0; idx < N; idx++) {
+                                ST_int node1 = fe1_compact[idx] - 1;
+                                ST_int root = FIND(node1);
+                                if (root_to_group[root] == 0) {
+                                    root_to_group[root] = next_group++;
+                                }
+                                group_assignments[idx] = root_to_group[root];
+                            }
+                            free(root_to_group);
+                        }
+
+                        #undef FIND
+                        free(parent);
+                    }
+                }
 
                 if (mobility_groups < 0) mobility_groups = 1;
 
@@ -661,14 +745,21 @@ ST_retcode do_full_regression(int argc, char *argv[])
         df_a -= mobility_groups;
 
         /* For G >= 3, add additional mobility groups for each FE beyond the second.
-         * This approximates reghdfe's more complex multi-way FE DOF calculation. */
-        if (G > 2) {
+         * This approximates reghdfe's more complex multi-way FE DOF calculation.
+         * Only apply if dof_adjust_type is 0 (all) or 3 (pairwise) */
+        if (G > 2 && (dof_adjust_type == 0 || dof_adjust_type == 3)) {
             ST_int extra_mobility = G - 2;
             df_a -= extra_mobility;
             mobility_groups += extra_mobility;
         }
     } else if (G == 1) {
         mobility_groups = 0;
+        /* All observations in group 1 if groupvar requested */
+        if (group_assignments) {
+            for (idx = 0; idx < N; idx++) {
+                group_assignments[idx] = 1;
+            }
+        }
     }
 
     t_dof = get_time_sec();
@@ -1675,85 +1766,98 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Store residuals back to Stata if requested */
     if (compute_resid && resid_var_idx > 0 && resid) {
-        ST_int nvars_plugin = SF_nvars();
-        if (verbose >= 1) {
-            sprintf(msg, "{txt}   Storing residuals to var index %d of %d (N=%d, N_orig=%d, in1=%d, in2=%d)\n",
-                    resid_var_idx, nvars_plugin, N, N_orig, in1, in2);
-            SF_display(msg);
-            sprintf(msg, "{txt}   First 3 residuals: %g, %g, %g\n", resid[0], resid[1], resid[2]);
-            SF_display(msg);
-        }
-
-        /* Debug: Try to read the current value of the resid variable for obs 1 */
-        ST_double test_val_before;
-        SF_vdata(resid_var_idx, 1, &test_val_before);
-        if (verbose >= 1) {
-            sprintf(msg, "{txt}   Before store: resid var[1] = %g (miss=%g)\n", test_val_before, SV_missval);
-            SF_display(msg);
-        }
-        /* Debug: Try a direct store to obs 1 and read back */
-        SF_vstore(resid_var_idx, 1, 123.456);
-        ST_double test_val_direct;
-        SF_vdata(resid_var_idx, 1, &test_val_direct);
-        if (verbose >= 1) {
-            sprintf(msg, "{txt}   After direct store to var %d: val = %g\n", resid_var_idx, test_val_direct);
-            SF_display(msg);
-        }
-        /* Try storing to var 1 (price) to see if that works */
-        ST_double price_before;
-        SF_vdata(1, 1, &price_before);
-        SF_vstore(1, 1, 99999.0);
-        ST_double price_after;
-        SF_vdata(1, 1, &price_after);
-        if (verbose >= 1) {
-            sprintf(msg, "{txt}   Price[1] before=%g, after store 99999=%g\n", price_before, price_after);
-            SF_display(msg);
-        }
-        /* Restore original price */
-        SF_vstore(1, 1, price_before);
-
         idx = 0;
         i = 0;
-        ST_int stored_count = 0;
-        ST_int skipped_ifobs = 0;
-        ST_int skipped_mask = 0;
         for (obs = in1; obs <= in2; obs++) {
             if (!SF_ifobs(obs)) {
-                skipped_ifobs++;
                 continue;
             }
             if (mask[i]) {
-                ST_retcode rc = SF_vstore(resid_var_idx, obs, resid[idx]);
-                if (rc != 0) {
-                    if (verbose >= 1 && stored_count < 3) {
-                        sprintf(msg, "{err}   SF_vstore failed with rc=%d for obs=%d, idx=%d, val=%g\n",
-                                rc, obs, idx, resid[idx]);
-                        SF_display(msg);
-                    }
-                } else {
-                    stored_count++;
-                }
+                SF_vstore(resid_var_idx, obs, resid[idx]);
                 idx++;
-            } else {
-                skipped_mask++;
             }
             i++;
         }
+    }
 
-        /* Debug: Check if the value was stored */
-        ST_double test_val_after;
-        SF_vdata(resid_var_idx, 1, &test_val_after);
-        if (verbose >= 1) {
-            sprintf(msg, "{txt}   After store: resid var[1] = %g\n", test_val_after);
-            SF_display(msg);
-            sprintf(msg, "{txt}   Stored %d residuals (skipped: %d ifobs, %d mask)\n",
-                    stored_count, skipped_ifobs, skipped_mask);
-            SF_display(msg);
+    /* Store groupvar (mobility group assignments) back to Stata if requested */
+    if (compute_groupvar && groupvar_var_idx > 0 && group_assignments) {
+        idx = 0;
+        i = 0;
+        for (obs = in1; obs <= in2; obs++) {
+            if (!SF_ifobs(obs)) {
+                continue;
+            }
+            if (mask[i]) {
+                SF_vstore(groupvar_var_idx, obs, (ST_double)group_assignments[idx]);
+                idx++;
+            }
+            i++;
         }
     }
 
-    /* Free residuals */
+    /* Compute and store savefe (fixed effect estimates) if requested */
+    if (savefe && savefe_var_idx > 0 && resid) {
+        /* For each FE g, compute FE coefficients as the mean of residuals within each level */
+        for (g = 0; g < G; g++) {
+            ST_int num_levels_g = g_state->factors[g].num_levels;
+            ST_double *fe_coefs = (ST_double *)calloc(num_levels_g, sizeof(ST_double));
+            ST_double *fe_counts = (ST_double *)calloc(num_levels_g, sizeof(ST_double));
+
+            if (fe_coefs && fe_counts) {
+                /* Sum residuals per FE level */
+                for (idx = 0; idx < N; idx++) {
+                    ST_int level = g_state->factors[g].levels[idx] - 1;
+                    if (level >= 0 && level < num_levels_g) {
+                        fe_coefs[level] += resid[idx];
+                        fe_counts[level] += 1.0;
+                    }
+                }
+
+                /* Compute mean and center (subtract grand mean) */
+                ST_double grand_mean = 0.0;
+                ST_double grand_count = 0.0;
+                for (ST_int lev = 0; lev < num_levels_g; lev++) {
+                    if (fe_counts[lev] > 0) {
+                        fe_coefs[lev] /= fe_counts[lev];
+                        grand_mean += fe_coefs[lev] * fe_counts[lev];
+                        grand_count += fe_counts[lev];
+                    }
+                }
+                if (grand_count > 0) {
+                    grand_mean /= grand_count;
+                }
+                for (ST_int lev = 0; lev < num_levels_g; lev++) {
+                    fe_coefs[lev] -= grand_mean;
+                }
+
+                /* Store FE estimates back to Stata variable */
+                ST_int fe_var_idx = savefe_var_idx + g;
+                idx = 0;
+                i = 0;
+                for (obs = in1; obs <= in2; obs++) {
+                    if (!SF_ifobs(obs)) {
+                        continue;
+                    }
+                    if (mask[i]) {
+                        ST_int level = g_state->factors[g].levels[idx] - 1;
+                        if (level >= 0 && level < num_levels_g) {
+                            SF_vstore(fe_var_idx, obs, fe_coefs[level]);
+                        }
+                        idx++;
+                    }
+                    i++;
+                }
+
+                free(fe_coefs);
+                free(fe_counts);
+            }
+        }
+    }
+
+    /* Free residuals and group assignments */
     if (resid) free(resid);
+    if (group_assignments) free(group_assignments);
 
     t_vce = get_time_sec();
 

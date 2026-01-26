@@ -1940,6 +1940,176 @@ capture erase "temp/cexport_export.xlsx"
 capture erase "temp/test_export.xlsx"
 
 /*******************************************************************************
+ * SECTION: Excel Export - New Options (cell, missing, keepcellfmt)
+ ******************************************************************************/
+noi print_section "Excel Export - New Options"
+
+* Test cell() option - starting cell offset
+use `excel_basic_data', clear
+cexport excel using "temp/excel_cell_b5.xlsx", cell(B5) replace
+clear
+import excel using "temp/excel_cell_b5.xlsx", clear
+* When imported, data should be in columns B-E starting at row 5
+* Check that column A is empty and row 1-4 are empty
+capture confirm variable A
+if _rc != 0 {
+    noi test_pass "Excel cell(B5) - column A empty"
+}
+else {
+    * Column A exists - check if it's all missing
+    count if !missing(A)
+    if r(N) == 0 {
+        noi test_pass "Excel cell(B5) - column A all missing"
+    }
+    else {
+        noi test_fail "Excel cell(B5)" "column A should be empty"
+    }
+}
+capture erase "temp/excel_cell_b5.xlsx"
+
+* Test cell() with various references
+use `excel_basic_data', clear
+foreach cellref in A1 Z1 AA1 C10 {
+    capture cexport excel id name using "temp/excel_cell_`cellref'.xlsx", cell(`cellref') replace
+    if _rc == 0 {
+        noi test_pass "Excel cell(`cellref') accepted"
+    }
+    else {
+        noi test_fail "Excel cell(`cellref')" "rc=`=_rc'"
+    }
+    capture erase "temp/excel_cell_`cellref'.xlsx"
+}
+
+* Test missing() option - replacement value for missing data
+use `excel_missing_data', clear
+cexport excel using "temp/excel_missing_na.xlsx", missing("NA") replace
+clear
+import excel using "temp/excel_missing_na.xlsx", firstrow clear
+* Check that missing values are now "NA" strings
+capture confirm string variable x
+if _rc == 0 {
+    count if x == "NA"
+    if r(N) == 2 {
+        noi test_pass "Excel missing(NA) - numeric missing replaced"
+    }
+    else {
+        noi test_fail "Excel missing(NA)" "expected 2 NA values, got `r(N)'"
+    }
+}
+else {
+    noi test_fail "Excel missing(NA)" "x should be string with NA values"
+}
+capture erase "temp/excel_missing_na.xlsx"
+
+* Test missing(".") option
+use `excel_missing_data', clear
+cexport excel using "temp/excel_missing_dot.xlsx", missing(".") replace
+clear
+import excel using "temp/excel_missing_dot.xlsx", firstrow clear
+capture confirm string variable x
+if _rc == 0 {
+    count if x == "."
+    if r(N) == 2 {
+        noi test_pass "Excel missing(.) - periods for missing"
+    }
+    else {
+        noi test_fail "Excel missing(.)" "expected 2 period values, got `r(N)'"
+    }
+}
+else {
+    noi test_fail "Excel missing(.)" "x should be string with . values"
+}
+capture erase "temp/excel_missing_dot.xlsx"
+
+* Test missing("") option - explicit empty string
+use `excel_missing_data', clear
+cexport excel using "temp/excel_missing_empty.xlsx", missing("") replace
+clear
+import excel using "temp/excel_missing_empty.xlsx", firstrow clear
+* Empty string missing values - should result in empty cells
+if _N == 5 {
+    noi test_pass "Excel missing('') - empty string replacement"
+}
+else {
+    noi test_fail "Excel missing('')" "expected N=5, got N=`=_N'"
+}
+capture erase "temp/excel_missing_empty.xlsx"
+
+* Test keepcellfmt option - preserves styles from existing file
+use `excel_basic_data', clear
+* First create a file
+cexport excel using "temp/excel_keepfmt.xlsx", replace
+* Then update it with keepcellfmt
+cexport excel id name value using "temp/excel_keepfmt.xlsx", keepcellfmt replace
+clear
+import excel using "temp/excel_keepfmt.xlsx", firstrow clear
+if _N == 5 & c(k) == 3 {
+    noi test_pass "Excel keepcellfmt - file updated"
+}
+else {
+    noi test_fail "Excel keepcellfmt" "expected N=5 K=3, got N=`=_N' K=`=c(k)'"
+}
+capture erase "temp/excel_keepfmt.xlsx"
+
+* Test combination: cell() + missing()
+use `excel_missing_data', clear
+cexport excel using "temp/excel_combo.xlsx", cell(C3) missing("N/A") replace
+clear
+import excel using "temp/excel_combo.xlsx", clear
+* Data should start at C3, with N/A for missing values
+if _N > 0 {
+    noi test_pass "Excel cell() + missing() combination"
+}
+else {
+    noi test_fail "Excel cell() + missing() combination" "no data imported"
+}
+capture erase "temp/excel_combo.xlsx"
+
+* Test combination: cell() + keepcellfmt
+use `excel_basic_data', clear
+cexport excel using "temp/excel_combo2.xlsx", replace
+use `excel_missing_data', clear
+cexport excel using "temp/excel_combo2.xlsx", cell(F1) keepcellfmt replace
+clear
+import excel using "temp/excel_combo2.xlsx", firstrow clear
+if _N > 0 {
+    noi test_pass "Excel cell() + keepcellfmt combination"
+}
+else {
+    noi test_fail "Excel cell() + keepcellfmt combination" "no data imported"
+}
+capture erase "temp/excel_combo2.xlsx"
+
+* Test all three options together
+use `excel_missing_data', clear
+cexport excel using "temp/excel_allopts.xlsx", replace
+cexport excel using "temp/excel_allopts.xlsx", cell(B2) missing("--") keepcellfmt replace
+clear
+import excel using "temp/excel_allopts.xlsx", clear
+if _N > 0 {
+    noi test_pass "Excel cell() + missing() + keepcellfmt all together"
+}
+else {
+    noi test_fail "Excel all options" "no data imported"
+}
+capture erase "temp/excel_allopts.xlsx"
+
+* Test with real dataset (auto) and new options
+sysuse auto, clear
+replace price = . in 1/5
+cexport excel make price mpg using "temp/excel_auto_opts.xlsx", cell(B2) missing("N/A") replace
+clear
+import excel using "temp/excel_auto_opts.xlsx", clear
+* Import starts at B2, so first row (row 1) should be empty or headers start at row 2
+if _N > 0 {
+    noi test_pass "Excel auto dataset with new options"
+}
+else {
+    noi test_fail "Excel auto dataset with new options" "no data imported"
+}
+capture erase "temp/excel_auto_opts.xlsx"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

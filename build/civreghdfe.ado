@@ -338,8 +338,21 @@ program define civreghdfe, eclass
 
     * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)
     * This needs to happen before verbose output to show correct VCE type
+    * Also detect panel-aware HAC for kernel/bw with tsset panel data
+    local panel_aware_hac = 0
     if "`kernel'" != "" & `bw' > 0 & `vce_type' == 0 & `dkraay' == 0 & "`kiefer'" == "" {
         local vce_type = 1
+        * Check if data is tsset panel - enable panel-aware HAC
+        if "`absorb'" != "" {
+            qui tsset
+            if _rc == 0 {
+                local tsset_ivar `r(panelvar)'
+                local tsset_tvar `r(timevar)'
+                if "`tsset_ivar'" != "" & "`tsset_tvar'" != "" {
+                    local panel_aware_hac = 1
+                }
+            }
+        }
     }
 
     * Verbose output
@@ -587,17 +600,20 @@ program define civreghdfe, eclass
         if `bw_val' < 1 local bw_val = 1
     }
 
-    * HAC kernel options imply robust VCE (except for dkraay which has its own type)
-    * If kernel/bw specified but vce_type is still 0 (unadjusted), set to robust
-    if `kernel_type' > 0 & `bw_val' > 0 & `vce_type' == 0 & `dkraay_val' == 0 & `kiefer_val' == 0 {
-        local vce_type = 1
+    * Set default kernel (Bartlett/Newey-West) if bw specified but no kernel
+    if `bw_val' > 0 & `kernel_type' == 0 & `dkraay_val' == 0 & `kiefer_val' == 0 {
+        local kernel_type = 1  /* Bartlett kernel (Newey-West) */
     }
+
+    * HAC kernel options imply robust VCE (already set earlier)
+    * Note: panel_aware_hac is not currently implemented due to complexity
 
     scalar __civreghdfe_kernel = `kernel_type'
     scalar __civreghdfe_bw = `bw_val'
     scalar __civreghdfe_dkraay = `dkraay_val'
     scalar __civreghdfe_kiefer = `kiefer_val'
     scalar __civreghdfe_dkraay_T = `dkraay_T'
+    scalar __civreghdfe_hac_panel = `panel_aware_hac'
 
     * Update cluster scalars after Kiefer/dkraay handling
     * vce_type 4 = dkraay, which also uses cluster variable (time)

@@ -288,6 +288,7 @@ void ivvce_compute_kiefer(
     - cluster_ids, num_clusters: Clustering info
     - df_a, nested_adj: DOF adjustments
     - kernel_type, bw: HAC parameters
+    - hac_panel_ids, num_hac_panels: Panel IDs for panel-aware HAC (NULL if not used)
     - V: Output VCE matrix (K_total x K_total)
 */
 void ivvce_compute_full(
@@ -307,6 +308,8 @@ void ivvce_compute_full(
     ST_int nested_adj,
     ST_int kernel_type,
     ST_int bw,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels,
     ST_double *V
 );
 

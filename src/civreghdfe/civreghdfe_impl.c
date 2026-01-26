@@ -97,12 +97,13 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
 
     /* HAC parameters */
-    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0, dkraay_T = 0;
+    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0, dkraay_T = 0, hac_panel = 0;
     SF_scal_use("__civreghdfe_kernel", &dval); kernel_type = (ST_int)dval;
     SF_scal_use("__civreghdfe_bw", &dval); bw = (ST_int)dval;
     SF_scal_use("__civreghdfe_dkraay", &dval); dkraay = (ST_int)dval;
     SF_scal_use("__civreghdfe_kiefer", &dval); kiefer = (ST_int)dval;
     SF_scal_use("__civreghdfe_dkraay_T", &dval); dkraay_T = (ST_int)dval;
+    SF_scal_use("__civreghdfe_hac_panel", &dval); hac_panel = (ST_int)dval;
     (void)kiefer;  /* Kiefer SEs are handled via vce_type == 2 with kernel */
 
     if (verbose) {
@@ -1111,6 +1112,14 @@ static ST_retcode do_iv_regression(void)
 
     /* Compute k-class IV estimation (2SLS, LIML, Fuller, etc.) */
     /* For cluster VCE, pass df_a_for_vce (excluding nested FE levels) and nested_adj */
+    /* For panel-aware HAC, pass first FE variable as panel IDs */
+    ST_int *hac_panel_ids = NULL;
+    ST_int num_hac_panels = 0;
+    if (hac_panel && G > 0) {
+        hac_panel_ids = fe_levels_c[0];  /* First absorb variable is panel ID */
+        num_hac_panels = state->factors[0].num_levels;
+    }
+
     ST_double lambda = 1.0;
     ST_retcode rc = ivest_compute_2sls(
         y_dem, X_exog_dem, X_endog_dem, Z_dem,
@@ -1121,7 +1130,8 @@ static ST_retcode do_iv_regression(void)
         cluster2_ids_c, num_clusters2,
         df_a_for_vce, nested_adj, verbose,
         est_method, kclass_user, fuller_alpha, &lambda,
-        kernel_type, bw, kiefer
+        kernel_type, bw, kiefer,
+        hac_panel_ids, num_hac_panels
     );
 
     if (rc != STATA_OK) {

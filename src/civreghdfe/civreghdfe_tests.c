@@ -107,6 +107,8 @@ void civreghdfe_compute_underid_test(
     ST_int num_clusters,
     ST_int kernel_type,
     ST_int bw,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,
@@ -397,106 +399,279 @@ void civreghdfe_compute_underid_test(
                     free(ZtZ_excl);
                 }
 
-                /* Compute KP LM using X_endog directly */
-                ST_double *shat0_lm = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-                if (shat0_lm) {
-                    if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
-                        ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
-                        if (cluster_Zy) {
-                            /* Sum Z * X_endog within each cluster */
-                            for (i = 0; i < N; i++) {
-                                ST_int c = cluster_ids[i] - 1;
-                                if (c < 0 || c >= num_clusters) continue;
-                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                                for (k = 0; k < K_iv; k++) {
-                                    cluster_Zy[c * K_iv + k] += w * Z[k * N + i] * X_endog[i];
+                /* Compute KP LM using excluded instruments and residualized X_endog
+                   The correct formula uses:
+                   1. Only excluded instruments (Z_excl, L columns)
+                   2. X_endog residualized by exogenous instruments (not raw X_endog)
+
+                   This matches ranktest's partial correlation approach. */
+
+                /* First, compute X_endog residualized by exogenous instruments:
+                   y_resid = X_endog - Z_exog * (Z_exog'Z_exog)^-1 * Z_exog'X_endog */
+                ST_double *y_resid = (ST_double *)calloc(N, sizeof(ST_double));
+                if (y_resid) {
+                    if (K_exog > 0) {
+                        /* Compute Z_exog'Z_exog and Z_exog'X_endog */
+                        ST_double *ZeZe = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                        ST_double *ZeY = (ST_double *)calloc(K_exog, sizeof(ST_double));
+
+                        if (ZeZe && ZeY) {
+                            /* Z_exog is first K_exog columns of Z */
+                            for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                                for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                    ST_double sum = 0.0;
+                                    for (i = 0; i < N; i++) {
+                                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                        sum += w * Z[l1 * N + i] * Z[l2 * N + i];
+                                    }
+                                    ZeZe[l2 * K_exog + l1] = sum;
                                 }
+                                ST_double sum = 0.0;
+                                for (i = 0; i < N; i++) {
+                                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                    sum += w * Z[l1 * N + i] * X_endog[i];
+                                }
+                                ZeY[l1] = sum;
                             }
 
-                            /* Check if HAC kernel should be applied */
-                            if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
-                                /* HAC with kernel weights */
-                                for (ST_int t = 0; t < num_clusters; t++) {
-                                    for (ST_int s = 0; s < num_clusters; s++) {
-                                        ST_int lag = (t > s) ? (t - s) : (s - t);
-                                        ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                                        if (kw == 0.0) continue;
+                            /* Solve for gamma = (Z_exog'Z_exog)^-1 * Z_exog'X_endog */
+                            ST_double *gamma = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                            if (gamma && cholesky(ZeZe, K_exog) == 0) {
+                                /* Forward substitution */
+                                for (ST_int l = 0; l < K_exog; l++) {
+                                    ST_double sum = ZeY[l];
+                                    for (ST_int m = 0; m < l; m++) {
+                                        sum -= ZeZe[l * K_exog + m] * gamma[m];
+                                    }
+                                    gamma[l] = sum / ZeZe[l * K_exog + l];
+                                }
+                                /* Backward substitution */
+                                ST_double *gamma_temp = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                                if (gamma_temp) {
+                                    memcpy(gamma_temp, gamma, K_exog * sizeof(ST_double));
+                                    for (ST_int l = K_exog - 1; l >= 0; l--) {
+                                        ST_double sum = gamma_temp[l];
+                                        for (ST_int m = l + 1; m < K_exog; m++) {
+                                            sum -= ZeZe[m * K_exog + l] * gamma[m];
+                                        }
+                                        gamma[l] = sum / ZeZe[l * K_exog + l];
+                                    }
+                                    free(gamma_temp);
+                                }
 
-                                        for (ST_int ki = 0; ki < K_iv; ki++) {
-                                            for (ST_int kj = 0; kj < K_iv; kj++) {
-                                                shat0_lm[kj * K_iv + ki] += kw *
-                                                    cluster_Zy[t * K_iv + ki] * cluster_Zy[s * K_iv + kj];
+                                /* Compute y_resid = X_endog - Z_exog * gamma */
+                                for (i = 0; i < N; i++) {
+                                    ST_double pred = 0.0;
+                                    for (ST_int l = 0; l < K_exog; l++) {
+                                        pred += Z[l * N + i] * gamma[l];
+                                    }
+                                    y_resid[i] = X_endog[i] - pred;
+                                }
+                            } else {
+                                /* If Cholesky fails, use raw X_endog */
+                                memcpy(y_resid, X_endog, N * sizeof(ST_double));
+                            }
+                            if (gamma) free(gamma);
+                        }
+                        if (ZeZe) free(ZeZe);
+                        if (ZeY) free(ZeY);
+                    } else {
+                        /* No exogenous regressors, use raw X_endog */
+                        memcpy(y_resid, X_endog, N * sizeof(ST_double));
+                    }
+
+                    /* Now compute KP LM using Z_excl and y_resid */
+                    ST_double *shat0_lm = (ST_double *)calloc(L * L, sizeof(ST_double));
+                    if (shat0_lm) {
+                        if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
+                            ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
+                            if (cluster_Zy) {
+                                /* Sum Z_excl * y_resid within each cluster */
+                                for (i = 0; i < N; i++) {
+                                    ST_int c = cluster_ids[i] - 1;
+                                    if (c < 0 || c >= num_clusters) continue;
+                                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                    for (k = 0; k < L; k++) {
+                                        cluster_Zy[c * L + k] += w * Z_excl[k * N + i] * y_resid[i];
+                                    }
+                                }
+
+                                /* Check if HAC kernel should be applied */
+                                if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
+                                    /* HAC with kernel weights */
+                                    for (ST_int t = 0; t < num_clusters; t++) {
+                                        for (ST_int s = 0; s < num_clusters; s++) {
+                                            ST_int lag = (t > s) ? (t - s) : (s - t);
+                                            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                                            if (kw == 0.0) continue;
+
+                                            for (ST_int ki = 0; ki < L; ki++) {
+                                                for (ST_int kj = 0; kj < L; kj++) {
+                                                    shat0_lm[kj * L + ki] += kw *
+                                                        cluster_Zy[t * L + ki] * cluster_Zy[s * L + kj];
+                                                }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    /* Standard cluster-robust */
+                                    for (ST_int c = 0; c < num_clusters; c++) {
+                                        for (ST_int ki = 0; ki < L; ki++) {
+                                            for (ST_int kj = 0; kj < L; kj++) {
+                                                shat0_lm[kj * L + ki] +=
+                                                    cluster_Zy[c * L + ki] * cluster_Zy[c * L + kj];
                                             }
                                         }
                                     }
                                 }
-                            } else {
-                                /* Standard cluster-robust */
-                                for (ST_int c = 0; c < num_clusters; c++) {
-                                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                                        for (ST_int kj = 0; kj < K_iv; kj++) {
-                                            shat0_lm[kj * K_iv + ki] +=
-                                                cluster_Zy[c * K_iv + ki] * cluster_Zy[c * K_iv + kj];
+                                free(cluster_Zy);
+                            }
+                        } else if (hac_panel_ids && num_hac_panels > 0 && kernel_type > 0 && bw > 0) {
+                            /* Panel-aware HAC: hac_panel_ids contains panel IDs
+                               Apply kernel weights only within panels */
+                            ST_int *panel_counts = (ST_int *)calloc(num_hac_panels, sizeof(ST_int));
+                            ST_int *panel_starts = (ST_int *)calloc(num_hac_panels + 1, sizeof(ST_int));
+                            ST_int *obs_by_panel = (ST_int *)calloc(N, sizeof(ST_int));
+
+                            if (panel_counts && panel_starts && obs_by_panel) {
+                                /* Count observations per panel */
+                                for (i = 0; i < N; i++) {
+                                    ST_int p = hac_panel_ids[i] - 1;
+                                    if (p >= 0 && p < num_hac_panels) {
+                                        panel_counts[p]++;
+                                    }
+                                }
+
+                                /* Compute start indices */
+                                panel_starts[0] = 0;
+                                for (ST_int p = 0; p < num_hac_panels; p++) {
+                                    panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                                }
+
+                                /* Reset counts */
+                                memset(panel_counts, 0, num_hac_panels * sizeof(ST_int));
+
+                                /* Fill obs_by_panel */
+                                for (i = 0; i < N; i++) {
+                                    ST_int p = hac_panel_ids[i] - 1;
+                                    if (p >= 0 && p < num_hac_panels) {
+                                        ST_int idx = panel_starts[p] + panel_counts[p];
+                                        obs_by_panel[idx] = i;
+                                        panel_counts[p]++;
+                                    }
+                                }
+
+                                /* Compute HAC within each panel */
+                                for (ST_int p = 0; p < num_hac_panels; p++) {
+                                    ST_int start = panel_starts[p];
+                                    ST_int end = panel_starts[p + 1];
+                                    ST_int T_p = end - start;
+
+                                    for (ST_int t1 = 0; t1 < T_p; t1++) {
+                                        ST_int i1 = obs_by_panel[start + t1];
+                                        for (ST_int t2 = 0; t2 < T_p; t2++) {
+                                            ST_int i2 = obs_by_panel[start + t2];
+                                            ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                                            ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                                            if (kw == 0.0) continue;
+
+                                            ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                                            ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                                            ST_double y_prod = w1 * y_resid[i1] * w2 * y_resid[i2];
+
+                                            for (ST_int ki = 0; ki < L; ki++) {
+                                                for (ST_int kj = 0; kj < L; kj++) {
+                                                    shat0_lm[kj * L + ki] += kw * y_prod *
+                                                        Z_excl[ki * N + i1] * Z_excl[kj * N + i2];
+                                                }
+                                            }
                                         }
                                     }
                                 }
                             }
-                            free(cluster_Zy);
-                        }
-                    } else {
-                        for (i = 0; i < N; i++) {
-                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                            ST_double y2w = w * X_endog[i] * X_endog[i];
-                            for (ST_int ki = 0; ki < K_iv; ki++) {
-                                for (ST_int kj = 0; kj < K_iv; kj++) {
-                                    shat0_lm[kj * K_iv + ki] += y2w * Z[ki * N + i] * Z[kj * N + i];
+
+                            if (panel_counts) free(panel_counts);
+                            if (panel_starts) free(panel_starts);
+                            if (obs_by_panel) free(obs_by_panel);
+                        } else if (vce_type == CIVREGHDFE_VCE_ROBUST && kernel_type > 0 && bw > 0) {
+                            /* Standard HAC (kernel + bw without panel info)
+                               Apply kernel weights at observation level */
+                            for (ST_int t = 0; t < N; t++) {
+                                for (ST_int s = 0; s < N; s++) {
+                                    ST_int lag = (t > s) ? (t - s) : (s - t);
+                                    ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                                    if (kw == 0.0) continue;
+
+                                    ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
+                                    ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
+                                    ST_double y_prod = wt * y_resid[t] * ws * y_resid[s];
+
+                                    for (ST_int ki = 0; ki < L; ki++) {
+                                        for (ST_int kj = 0; kj < L; kj++) {
+                                            shat0_lm[kj * L + ki] += kw * y_prod *
+                                                Z_excl[ki * N + t] * Z_excl[kj * N + s];
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            /* HC robust (no kernel) */
+                            for (i = 0; i < N; i++) {
+                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                ST_double y2w = w * y_resid[i] * y_resid[i];
+                                for (ST_int ki = 0; ki < L; ki++) {
+                                    for (ST_int kj = 0; kj < L; kj++) {
+                                        shat0_lm[kj * L + ki] += y2w * Z_excl[ki * N + i] * Z_excl[kj * N + i];
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    ST_double *shat0_lm_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-                    if (shat0_lm_inv) {
-                        memcpy(shat0_lm_inv, shat0_lm, K_iv * K_iv * sizeof(ST_double));
-                        if (cholesky(shat0_lm_inv, K_iv) == 0 &&
-                            invert_from_cholesky(shat0_lm_inv, K_iv, shat0_lm_inv) == 0) {
+                        ST_double *shat0_lm_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
+                        if (shat0_lm_inv) {
+                            memcpy(shat0_lm_inv, shat0_lm, L * L * sizeof(ST_double));
+                            if (cholesky(shat0_lm_inv, L) == 0 &&
+                                invert_from_cholesky(shat0_lm_inv, L, shat0_lm_inv) == 0) {
 
-                            /* Compute Z'X_endog */
-                            ST_double *ZtY = (ST_double *)calloc(K_iv, sizeof(ST_double));
-                            if (ZtY) {
-                                for (k = 0; k < K_iv; k++) {
-                                    ST_double sum = 0.0;
-                                    for (i = 0; i < N; i++) {
-                                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-                                        sum += w * Z[k * N + i] * X_endog[i];
-                                    }
-                                    ZtY[k] = sum;
-                                }
-
-                                ST_double *shat0_lm_inv_ZtY = (ST_double *)calloc(K_iv, sizeof(ST_double));
-                                if (shat0_lm_inv_ZtY) {
-                                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                                /* Compute Z_excl'y_resid */
+                                ST_double *ZtY = (ST_double *)calloc(L, sizeof(ST_double));
+                                if (ZtY) {
+                                    for (k = 0; k < L; k++) {
                                         ST_double sum = 0.0;
-                                        for (ST_int kj = 0; kj < K_iv; kj++) {
-                                            sum += shat0_lm_inv[kj * K_iv + ki] * ZtY[kj];
+                                        for (i = 0; i < N; i++) {
+                                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                            sum += w * Z_excl[k * N + i] * y_resid[i];
                                         }
-                                        shat0_lm_inv_ZtY[ki] = sum;
+                                        ZtY[k] = sum;
                                     }
 
-                                    ST_double quad_lm = 0.0;
-                                    for (ST_int ki = 0; ki < K_iv; ki++) {
-                                        quad_lm += ZtY[ki] * shat0_lm_inv_ZtY[ki];
-                                    }
+                                    ST_double *shat0_lm_inv_ZtY = (ST_double *)calloc(L, sizeof(ST_double));
+                                    if (shat0_lm_inv_ZtY) {
+                                        for (ST_int ki = 0; ki < L; ki++) {
+                                            ST_double sum = 0.0;
+                                            for (ST_int kj = 0; kj < L; kj++) {
+                                                sum += shat0_lm_inv[kj * L + ki] * ZtY[kj];
+                                            }
+                                            shat0_lm_inv_ZtY[ki] = sum;
+                                        }
 
-                                    *underid_stat = quad_lm;
-                                    free(shat0_lm_inv_ZtY);
+                                        ST_double quad_lm = 0.0;
+                                        for (ST_int ki = 0; ki < L; ki++) {
+                                            quad_lm += ZtY[ki] * shat0_lm_inv_ZtY[ki];
+                                        }
+
+                                        *underid_stat = quad_lm;
+                                        free(shat0_lm_inv_ZtY);
+                                    }
+                                    free(ZtY);
                                 }
-                                free(ZtY);
                             }
+                            free(shat0_lm_inv);
                         }
-                        free(shat0_lm_inv);
+                        free(shat0_lm);
                     }
-                    free(shat0_lm);
+                    free(y_resid);
                 }
             }
 

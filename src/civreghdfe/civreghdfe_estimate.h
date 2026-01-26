@@ -238,6 +238,7 @@ ST_retcode ivest_first_stage_f(
     - lambda_out: Output LIML lambda (may be NULL)
     - kernel_type, bw: HAC kernel parameters
     - kiefer: Use Kiefer (1980) homoskedastic within-panel VCE
+    - hac_panel_ids, num_hac_panels: Panel IDs for panel-aware HAC (NULL if not used)
 
     Returns STATA_OK on success.
 */
@@ -269,7 +270,9 @@ ST_retcode ivest_compute_2sls(
     ST_double *lambda_out,
     ST_int kernel_type,
     ST_int bw,
-    ST_int kiefer
+    ST_int kiefer,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

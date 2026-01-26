@@ -1059,7 +1059,9 @@ ST_retcode ivest_compute_2sls(
     ST_double *lambda_out,
     ST_int kernel_type,
     ST_int bw,
-    ST_int kiefer
+    ST_int kiefer,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
@@ -1614,6 +1616,7 @@ ST_retcode ivest_compute_2sls(
             N, K_total, K_iv,
             vce_type, cluster_ids, num_clusters,
             df_a, nested_adj, kernel_type, bw,
+            hac_panel_ids, num_hac_panels,
             V
         );
     }
@@ -1747,6 +1750,7 @@ ST_retcode ivest_compute_2sls(
         weights, weight_type, N, K_exog, K_endog, K_iv, df_a,
         vce_type, cluster_ids, num_clusters,
         kernel_type, bw,
+        hac_panel_ids, num_hac_panels,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
 

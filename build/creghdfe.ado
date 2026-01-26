@@ -22,10 +22,50 @@ program define creghdfe, eclass
     timer clear 98
     timer on 98
 
-    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [VCE(string) Verbose TIMEit ///
-        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name) THReads(integer 0)]
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(string) [VCE(string) Verbose TIMEit ///
+        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
+        DOFadjustments(string) GROUPvar(name) THReads(integer 0)]
 
     local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
+
+    * Handle residuals() as alias for resid2()
+    if "`residuals'" != "" & "`resid2'" == "" {
+        local resid2 "`residuals'"
+    }
+
+    * Parse absorb option for suboptions (savefe)
+    local savefe = 0
+    local absorb_vars ""
+    if strpos(`"`absorb'"', ",") > 0 {
+        gettoken absorb_vars absorb_opts : absorb, parse(",")
+        local absorb_opts = subinstr("`absorb_opts'", ",", "", 1)
+        local absorb_opts = trim("`absorb_opts'")
+        if strpos(lower("`absorb_opts'"), "savefe") > 0 {
+            local savefe = 1
+        }
+        local absorb_vars = trim("`absorb_vars'")
+    }
+    else {
+        local absorb_vars "`absorb'"
+    }
+    * Reassign absorb to the varlist portion only
+    local absorb "`absorb_vars'"
+
+    * Parse dofadjustments option
+    * 0=all (default), 1=none, 2=firstpair, 3=pairwise
+    local dof_adjust_type = 0
+    if "`dofadjustments'" != "" {
+        local dof_lower = lower("`dofadjustments'")
+        if "`dof_lower'" == "none" {
+            local dof_adjust_type = 1
+        }
+        else if strpos("`dof_lower'", "first") > 0 {
+            local dof_adjust_type = 2
+        }
+        else if strpos("`dof_lower'", "pair") > 0 {
+            local dof_adjust_type = 3
+        }
+    }
 
     * Mark sample - include absorb and cluster variables
     marksample touse
@@ -264,6 +304,9 @@ program define creghdfe, eclass
     scalar __creghdfe_compute_resid = `compute_resid'
     scalar __creghdfe_has_weights = (`weight_type' > 0)
     scalar __creghdfe_weight_type = `weight_type'
+    scalar __creghdfe_dof_adjust_type = `dof_adjust_type'
+    scalar __creghdfe_savefe = `savefe'
+    scalar __creghdfe_compute_groupvar = ("`groupvar'" != "")
 
     * Build threads option string
     local threads_code ""
@@ -299,6 +342,34 @@ program define creghdfe, eclass
         scalar __creghdfe_resid_var_idx = 0
     }
 
+    * Handle groupvar - create variable and add to plugin varlist
+    local groupvar_var_pos = 0
+    if "`groupvar'" != "" {
+        capture drop `groupvar'
+        quietly gen long `groupvar' = .
+        local groupvar_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + (`weight_type' > 0) + `compute_resid' + 1
+        local plugin_varlist `plugin_varlist' `groupvar'
+        scalar __creghdfe_groupvar_idx = `groupvar_var_pos'
+    }
+    else {
+        scalar __creghdfe_groupvar_idx = 0
+    }
+
+    * Handle savefe - create FE variables and add to plugin varlist
+    if `savefe' {
+        forval g = 1/`nfe' {
+            capture drop __hdfe`g'__
+            quietly gen double __hdfe`g'__ = .
+            local plugin_varlist `plugin_varlist' __hdfe`g'__
+        }
+        * First savefe var position
+        local savefe_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + (`weight_type' > 0) + `compute_resid' + ("`groupvar'" != "") + 1
+        scalar __creghdfe_savefe_idx = `savefe_var_pos'
+    }
+    else {
+        scalar __creghdfe_savefe_idx = 0
+    }
+
     * Create matrix to store results (plugin will fill __creghdfe_V)
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
     matrix __creghdfe_V = J(`K_x' + 1, `K_x' + 1, 0)
@@ -316,6 +387,8 @@ program define creghdfe, eclass
         capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
         capture scalar drop __creghdfe_resid_var_idx
         capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
+        capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
+        capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
         capture matrix drop __creghdfe_V
         di as error "Error in regression (rc=`reg_rc')"
         exit `reg_rc'
@@ -471,6 +544,19 @@ program define creghdfe, eclass
     * Label the residual variable (already filled by C plugin)
     if "`resid_varname'" != "" {
         label var `resid_varname' "Residuals"
+    }
+
+    * Label the groupvar variable (mobility group identifier)
+    if "`groupvar'" != "" {
+        label var `groupvar' "Mobility group"
+    }
+
+    * Label the savefe variables (fixed effect estimates)
+    if `savefe' {
+        forval g = 1/`nfe' {
+            local fevar : word `g' of `absorb'
+            label var __hdfe`g'__ "FE for `fevar'"
+        }
     }
 
     * Build column names - include omitted vars with o. prefix
@@ -640,6 +726,8 @@ program define creghdfe, eclass
     capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
     capture scalar drop __creghdfe_resid_var_idx
     capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
+    capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
+    capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
     capture scalar drop __creghdfe_N __creghdfe_num_singletons __creghdfe_K_keep
     capture scalar drop __creghdfe_df_a __creghdfe_mobility_groups
     capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within
