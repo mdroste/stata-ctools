@@ -4,7 +4,7 @@
 
 Fast drop-in replacements for a variety of Stata commands.
 
-**This is an initial release. This software has not been widely tested. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
+**This is an initial release. This software has not been widely tested, and there are probably bugs. It is being posted to allow me to test it with a small audience outside myself. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
