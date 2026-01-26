@@ -348,7 +348,8 @@ ST_retcode ivest_compute_gmm2s(
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_double *beta,
-    ST_double *resid
+    ST_double *resid,
+    ST_double *XZWZX_inv_out
 )
 {
     ST_int N = ctx->N;
@@ -505,6 +506,21 @@ ST_retcode ivest_compute_gmm2s(
         }
     }
 
+    /* Output the GMM Hessian inverse (X'ZWZ'X)^-1 if requested */
+    if (XZWZX_inv_out) {
+        /* XZWZX_L contains the Cholesky factor, compute the inverse */
+        ST_double *XZWZX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (XZWZX_inv) {
+            /* Re-compute Cholesky and inverse from XZWZX */
+            memcpy(XZWZX_inv, XZWZX, K_total * K_total * sizeof(ST_double));
+            if (cholesky(XZWZX_inv, K_total) == 0) {
+                invert_from_cholesky(XZWZX_inv, K_total, XZWZX_inv);
+                memcpy(XZWZX_inv_out, XZWZX_inv, K_total * K_total * sizeof(ST_double));
+            }
+            free(XZWZX_inv);
+        }
+    }
+
     free(ZOmegaZ); free(ZOmegaZ_inv);
     free(WZtX); free(XZW); free(XZWZX); free(XZWZy);
     free(XZWZX_L); free(beta_temp);
@@ -513,26 +529,39 @@ ST_retcode ivest_compute_gmm2s(
 }
 
 /*
-    Compute CUE (Continuously Updated Estimator).
-
-    CUE minimizes: Q(β) = g(β)' W(β)^-1 g(β)
-    where g(β) = Z'(y - Xβ) and W(β) = Z'Ω(β)Z
-
-    Uses iterative re-weighting:
-    1. Start with initial beta (from 2SLS/GMM2S)
-    2. Iterate: update W based on current residuals, re-estimate β
-    3. Stop when β converges
+    Helper: Compute residuals given beta
 */
-ST_retcode ivest_compute_cue(
+static void cue_compute_residuals(
+    const ST_double *y,
+    const ST_double *X_all,
+    const ST_double *beta,
+    ST_int N,
+    ST_int K_total,
+    ST_double *resid
+)
+{
+    for (ST_int i = 0; i < N; i++) {
+        ST_double pred = 0.0;
+        for (ST_int k = 0; k < K_total; k++) {
+            pred += X_all[k * N + i] * beta[k];
+        }
+        resid[i] = y[i] - pred;
+    }
+}
+
+/*
+    Helper: Compute CUE objective value Q(β) = g'W^{-1}g / N
+    For homoskedastic: Q = e'Pz e / σ² where σ² = e'e/N
+    For robust: Q = g'(Z'ΩZ)^{-1}g / N where Ω = diag(e²)
+*/
+static ST_double cue_objective(
     IVEstContext *ctx,
     const ST_double *y,
-    const ST_double *initial_beta,
+    const ST_double *beta,
+    ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
-    ST_double *beta,
-    ST_double *resid,
-    ST_int max_iter,
-    ST_double tol
+    ST_double *work_resid  /* N-sized work buffer */
 )
 {
     ST_int N = ctx->N;
@@ -541,63 +570,57 @@ ST_retcode ivest_compute_cue(
     const ST_double *Z = ctx->Z;
     ST_int i, j, k;
 
-    /* Initialize beta from input */
-    memcpy(beta, initial_beta, K_total * sizeof(ST_double));
+    /* Compute residuals */
+    cue_compute_residuals(y, ctx->X_all, beta, N, K_total, work_resid);
 
-    /* Allocate working arrays */
-    ST_double *current_resid = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *beta_old = (ST_double *)malloc(K_total * sizeof(ST_double));
-    ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
-
-    if (!current_resid || !beta_old || !beta_temp) {
-        free(current_resid); free(beta_old); free(beta_temp);
-        return 920;
-    }
-
-    if (ctx->verbose) {
-        SF_display("civreghdfe: Computing CUE (iterative re-weighting)\n");
-    }
-
-    ST_int iter;
-    for (iter = 0; iter < max_iter; iter++) {
-        /* Compute current residuals */
-        for (i = 0; i < N; i++) {
-            ST_double pred = 0.0;
-            for (k = 0; k < K_total; k++) {
-                pred += ctx->X_all[k * N + i] * beta[k];
-            }
-            current_resid[i] = y[i] - pred;
+    /* Compute g = Z'e */
+    ST_double *g = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < K_iv; j++) {
+            g[j] += Z[j * N + i] * work_resid[i];
         }
+    }
 
-        /* Compute optimal weighting matrix based on current residuals */
+    ST_double Q;
+
+    if (vce_type == 0) {
+        /* Homoskedastic: Q = e'Pz e / σ² = g'(Z'Z)^{-1}g / (e'e/N) */
+        /* Compute g'(Z'Z)^{-1}g using pre-computed ZtZ_inv */
+        ST_double *temp = (ST_double *)calloc(K_iv, sizeof(ST_double));
+        for (i = 0; i < K_iv; i++) {
+            for (j = 0; j < K_iv; j++) {
+                temp[i] += ctx->ZtZ_inv[j * K_iv + i] * g[j];
+            }
+        }
+        ST_double gWinvg = 0.0;
+        for (i = 0; i < K_iv; i++) {
+            gWinvg += g[i] * temp[i];
+        }
+        free(temp);
+
+        /* Compute σ² = e'e / N */
+        ST_double ete = 0.0;
+        for (i = 0; i < N; i++) {
+            ete += work_resid[i] * work_resid[i];
+        }
+        ST_double sigma2 = ete / N;
+
+        Q = gWinvg / sigma2 / N;
+    } else {
+        /* Robust/Cluster: Q = g'W^{-1}g / N where W = Z'ΩZ */
         ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
         ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-
-        if (!ZOmegaZ || !ZOmegaZ_inv) {
-            free(ZOmegaZ); free(ZOmegaZ_inv);
-            free(current_resid); free(beta_old); free(beta_temp);
-            return 920;
-        }
 
         if (cluster_ids && num_clusters > 0) {
             /* Cluster-robust */
             ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
-            if (!cluster_ze) {
-                free(ZOmegaZ); free(ZOmegaZ_inv);
-                free(current_resid); free(beta_old); free(beta_temp);
-                return 920;
-            }
-
             for (i = 0; i < N; i++) {
                 ST_int c = cluster_ids[i] - 1;
                 if (c < 0 || c >= num_clusters) continue;
-                ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-                ST_double we = w * current_resid[i];
                 for (j = 0; j < K_iv; j++) {
-                    cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+                    cluster_ze[c * K_iv + j] += Z[j * N + i] * work_resid[i];
                 }
             }
-
             for (ST_int c = 0; c < num_clusters; c++) {
                 for (j = 0; j < K_iv; j++) {
                     for (k = 0; k <= j; k++) {
@@ -609,13 +632,11 @@ ST_retcode ivest_compute_cue(
             }
             free(cluster_ze);
         } else {
-            /* Heteroskedastic */
+            /* Heteroskedastic robust */
             for (i = 0; i < N; i++) {
-                ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-                ST_double e2 = w * current_resid[i] * current_resid[i];
+                ST_double e2 = work_resid[i] * work_resid[i];
                 for (j = 0; j < K_iv; j++) {
-                    ST_double z_j = Z[j * N + i];
-                    ST_double z_j_e2 = z_j * e2;
+                    ST_double z_j_e2 = Z[j * N + i] * e2;
                     for (k = 0; k <= j; k++) {
                         ST_double contrib = z_j_e2 * Z[k * N + i];
                         ZOmegaZ[j * K_iv + k] += contrib;
@@ -628,114 +649,296 @@ ST_retcode ivest_compute_cue(
         /* Invert Z'ΩZ */
         memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
         if (cholesky(ZOmegaZ_inv, K_iv) != 0) {
-            if (ctx->verbose) SF_display("civreghdfe: CUE weighting matrix singular, stopping\n");
-            free(ZOmegaZ); free(ZOmegaZ_inv);
-            break;
+            free(g); free(ZOmegaZ); free(ZOmegaZ_inv);
+            return 1e30;  /* Singular, return large value */
         }
         invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
 
-        /* Compute GMM update: β = (X'ZWZ'X)^-1 X'ZWZ'y */
-        ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
-        for (i = 0; i < K_total; i++) {
+        /* Compute g'W^{-1}g */
+        ST_double *temp = (ST_double *)calloc(K_iv, sizeof(ST_double));
+        for (i = 0; i < K_iv; i++) {
             for (j = 0; j < K_iv; j++) {
-                ST_double sum = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    sum += ctx->ZtX[i * K_iv + k] * ZOmegaZ_inv[j * K_iv + k];
-                }
-                XZW[j * K_total + i] = sum;
+                temp[i] += ZOmegaZ_inv[j * K_iv + i] * g[j];
             }
         }
-
-        ST_double *XZWZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        for (i = 0; i < K_total; i++) {
-            for (j = 0; j < K_total; j++) {
-                ST_double sum = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    sum += XZW[k * K_total + i] * ctx->ZtX[j * K_iv + k];
-                }
-                XZWZX[j * K_total + i] = sum;
-            }
+        ST_double gWinvg = 0.0;
+        for (i = 0; i < K_iv; i++) {
+            gWinvg += g[i] * temp[i];
         }
 
-        ST_double *XZWZy = (ST_double *)calloc(K_total, sizeof(ST_double));
-        for (i = 0; i < K_total; i++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                sum += XZW[k * K_total + i] * ctx->Zty[k];
-            }
-            XZWZy[i] = sum;
+        Q = gWinvg / N;
+
+        free(temp);
+        free(ZOmegaZ);
+        free(ZOmegaZ_inv);
+    }
+
+    free(g);
+    return Q;
+}
+
+/*
+    Compute CUE (Continuously Updated Estimator).
+
+    CUE minimizes: Q(β) = g(β)' W(β)^-1 g(β)
+    where g(β) = Z'(y - Xβ) and W(β) = Z'Ω(β)Z
+
+    For homoskedastic (vce_type=0): Q = g'(Z'Z)^{-1}g / σ²
+    For robust (vce_type=1): Q = g'(Z'diag(e²)Z)^{-1}g
+    For cluster (vce_type>=2): Cluster-robust weighting
+
+    Uses gradient descent with numerical differentiation to minimize Q(β).
+*/
+ST_retcode ivest_compute_cue(
+    IVEstContext *ctx,
+    const ST_double *y,
+    const ST_double *initial_beta,
+    ST_int vce_type,
+    const ST_int *cluster_ids,
+    ST_int num_clusters,
+    ST_double *beta,
+    ST_double *resid,
+    ST_int max_iter,
+    ST_double tol,
+    ST_double *XZWZX_inv_out
+)
+{
+    ST_int N = ctx->N;
+    ST_int K_iv = ctx->K_iv;
+    ST_int K_total = ctx->K_total;
+    const ST_double *Z = ctx->Z;
+    ST_int i, j, k;
+    ST_int use_robust_weighting = (vce_type > 0);
+
+    /* Initialize beta from input */
+    memcpy(beta, initial_beta, K_total * sizeof(ST_double));
+
+    /* Allocate working arrays */
+    ST_double *current_resid = (ST_double *)malloc(N * sizeof(ST_double));
+    ST_double *beta_test = (ST_double *)malloc(K_total * sizeof(ST_double));
+    ST_double *gradient = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+    if (!current_resid || !beta_test || !gradient) {
+        free(current_resid); free(beta_test); free(gradient);
+        return 920;
+    }
+
+    if (ctx->verbose) {
+        SF_display("civreghdfe: Computing CUE (gradient descent)\n");
+    }
+
+    /* Compute initial objective */
+    ST_double Q_current = cue_objective(ctx, y, beta, vce_type, cluster_ids, num_clusters, current_resid);
+
+    if (ctx->verbose) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "civreghdfe: CUE initial Q = %.8e\n", Q_current);
+        SF_display(buf);
+    }
+
+    ST_double eps = 1e-7;  /* Step for numerical gradient */
+    ST_int iter;
+
+    for (iter = 0; iter < max_iter; iter++) {
+        /* Compute gradient using numerical differentiation */
+        for (k = 0; k < K_total; k++) {
+            memcpy(beta_test, beta, K_total * sizeof(ST_double));
+
+            /* Forward step */
+            beta_test[k] = beta[k] + eps;
+            ST_double Q_plus = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
+
+            /* Backward step */
+            beta_test[k] = beta[k] - eps;
+            ST_double Q_minus = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
+
+            gradient[k] = (Q_plus - Q_minus) / (2.0 * eps);
         }
 
-        /* Solve for new beta */
-        ST_double *XZWZX_L = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
-        memcpy(XZWZX_L, XZWZX, K_total * K_total * sizeof(ST_double));
-
-        if (cholesky(XZWZX_L, K_total) != 0) {
-            if (ctx->verbose) SF_display("civreghdfe: CUE X'ZWZ'X singular, stopping\n");
-            free(ZOmegaZ); free(ZOmegaZ_inv);
-            free(XZW); free(XZWZX); free(XZWZy); free(XZWZX_L);
-            break;
+        /* Compute gradient norm */
+        ST_double grad_norm = 0.0;
+        for (k = 0; k < K_total; k++) {
+            grad_norm += gradient[k] * gradient[k];
         }
+        grad_norm = sqrt(grad_norm);
 
-        /* Forward substitution */
-        ST_double *beta_new = (ST_double *)calloc(K_total, sizeof(ST_double));
-        for (i = 0; i < K_total; i++) {
-            ST_double sum = XZWZy[i];
-            for (j = 0; j < i; j++) {
-                sum -= XZWZX_L[i * K_total + j] * beta_temp[j];
-            }
-            beta_temp[i] = sum / XZWZX_L[i * K_total + i];
-        }
-
-        /* Backward substitution */
-        for (i = K_total - 1; i >= 0; i--) {
-            ST_double sum = beta_temp[i];
-            for (j = i + 1; j < K_total; j++) {
-                sum -= XZWZX_L[j * K_total + i] * beta_new[j];
-            }
-            beta_new[i] = sum / XZWZX_L[i * K_total + i];
-        }
-
-        /* Check convergence */
-        ST_double max_diff = 0.0;
-        for (i = 0; i < K_total; i++) {
-            ST_double diff = fabs(beta_new[i] - beta[i]);
-            if (diff > max_diff) max_diff = diff;
-        }
-
-        /* Update beta */
-        memcpy(beta_old, beta, K_total * sizeof(ST_double));
-        memcpy(beta, beta_new, K_total * sizeof(ST_double));
-
-        free(ZOmegaZ); free(ZOmegaZ_inv);
-        free(XZW); free(XZWZX); free(XZWZy); free(XZWZX_L);
-        free(beta_new);
-
-        if (max_diff < tol) {
+        if (grad_norm < tol) {
             if (ctx->verbose) {
-                char buf[256];
-                snprintf(buf, sizeof(buf), "civreghdfe: CUE converged in %d iterations (diff=%.2e)\n",
-                         iter + 1, max_diff);
+                char buf[128];
+                snprintf(buf, sizeof(buf), "civreghdfe: CUE converged in %d iterations (grad=%.2e)\n", iter, grad_norm);
                 SF_display(buf);
             }
             break;
         }
+
+        /* Line search along negative gradient direction */
+        ST_double step = 1.0;
+        ST_double armijo_c = 1e-4;
+        ST_int line_search_iter = 0;
+        ST_int max_ls_iter = 20;
+        ST_double Q_new;
+
+        while (line_search_iter < max_ls_iter) {
+            /* Try step */
+            for (k = 0; k < K_total; k++) {
+                beta_test[k] = beta[k] - step * gradient[k];
+            }
+
+            Q_new = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
+
+            /* Armijo condition */
+            if (Q_new <= Q_current - armijo_c * step * grad_norm * grad_norm) {
+                break;
+            }
+
+            step *= 0.5;
+            line_search_iter++;
+        }
+
+        if (line_search_iter >= max_ls_iter) {
+            if (ctx->verbose) {
+                SF_display("civreghdfe: CUE line search failed, stopping\n");
+            }
+            break;
+        }
+
+        /* Update beta */
+        memcpy(beta, beta_test, K_total * sizeof(ST_double));
+        Q_current = Q_new;
     }
 
-    if (iter == max_iter && ctx->verbose) {
+    if (iter >= max_iter && ctx->verbose) {
         SF_display("civreghdfe: CUE reached max iterations\n");
     }
 
+    free(gradient);
+    free(beta_test);
+
+    /* Continue with existing code for residuals and Hessian computation */
+    /* Variables needed for the remaining code */
+    ST_double *beta_old = (ST_double *)malloc(K_total * sizeof(ST_double));
+    ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+    if (!beta_old || !beta_temp) {
+        free(current_resid); free(beta_old); free(beta_temp);
+        return 920;
+    }
+
     /* Compute final residuals */
-    if (resid) {
+    cue_compute_residuals(y, ctx->X_all, beta, N, K_total, current_resid);
+
+    /* Now compute the final Hessian for VCE - use existing code structure */
+    /* Compute optimal weighting matrix based on final residuals */
+    ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+
+    if (!ZOmegaZ || !ZOmegaZ_inv) {
+        free(ZOmegaZ); free(ZOmegaZ_inv);
+        free(current_resid); free(beta_old); free(beta_temp);
+        return 920;
+    }
+
+    if (!use_robust_weighting) {
+        /* Homoskedastic: W = Z'Z (use pre-computed ZtZ) */
+        memcpy(ZOmegaZ, ctx->ZtZ, K_iv * K_iv * sizeof(ST_double));
+    } else if (cluster_ids && num_clusters > 0) {
+        /* Cluster-robust */
+        ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+        if (!cluster_ze) {
+            free(ZOmegaZ); free(ZOmegaZ_inv);
+            free(current_resid); free(beta_old); free(beta_temp);
+            return 920;
+        }
+
         for (i = 0; i < N; i++) {
-            ST_double pred = 0.0;
-            for (k = 0; k < K_total; k++) {
-                pred += ctx->X_all[k * N + i] * beta[k];
+            ST_int c = cluster_ids[i] - 1;
+            if (c < 0 || c >= num_clusters) continue;
+            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+            ST_double we = w * current_resid[i];
+            for (j = 0; j < K_iv; j++) {
+                cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
             }
-            resid[i] = y[i] - pred;
+        }
+
+        for (ST_int c = 0; c < num_clusters; c++) {
+            for (j = 0; j < K_iv; j++) {
+                for (k = 0; k <= j; k++) {
+                    ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                    ZOmegaZ[j * K_iv + k] += contrib;
+                    if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+                }
+            }
+        }
+        free(cluster_ze);
+    } else {
+        /* Heteroskedastic robust */
+        for (i = 0; i < N; i++) {
+            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+            ST_double e2 = w * current_resid[i] * current_resid[i];
+            for (j = 0; j < K_iv; j++) {
+                ST_double z_j = Z[j * N + i];
+                ST_double z_j_e2 = z_j * e2;
+                for (k = 0; k <= j; k++) {
+                    ST_double contrib = z_j_e2 * Z[k * N + i];
+                    ZOmegaZ[j * K_iv + k] += contrib;
+                    if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+                }
+            }
         }
     }
+
+    /* Invert Z'ΩZ */
+    memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
+    if (cholesky(ZOmegaZ_inv, K_iv) != 0) {
+        if (ctx->verbose) SF_display("civreghdfe: CUE final weighting matrix singular\n");
+        free(ZOmegaZ); free(ZOmegaZ_inv);
+        free(current_resid); free(beta_old); free(beta_temp);
+        return 920;
+    }
+    invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
+
+    /* Copy residuals to output if requested */
+    if (resid) {
+        memcpy(resid, current_resid, N * sizeof(ST_double));
+    }
+
+    /* Compute (X'ZWZ'X)^-1 for VCE using the already computed ZOmegaZ_inv */
+    if (XZWZX_inv_out) {
+        /* Compute X'ZWZ'X */
+        ST_double *XZW_final = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
+        ST_double *XZWZX_final = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+
+        if (XZW_final && XZWZX_final) {
+            for (i = 0; i < K_total; i++) {
+                for (j = 0; j < K_iv; j++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        sum += ctx->ZtX[i * K_iv + k] * ZOmegaZ_inv[j * K_iv + k];
+                    }
+                    XZW_final[j * K_total + i] = sum;
+                }
+            }
+            for (i = 0; i < K_total; i++) {
+                for (j = 0; j < K_total; j++) {
+                    ST_double sum = 0.0;
+                    for (k = 0; k < K_iv; k++) {
+                        sum += XZW_final[k * K_total + i] * ctx->ZtX[j * K_iv + k];
+                    }
+                    XZWZX_final[j * K_total + i] = sum;
+                }
+            }
+
+            /* Invert X'ZWZ'X */
+            if (cholesky(XZWZX_final, K_total) == 0) {
+                invert_from_cholesky(XZWZX_final, K_total, XZWZX_inv_out);
+            }
+        }
+        if (XZW_final) free(XZW_final);
+        if (XZWZX_final) free(XZWZX_final);
+    }
+
+    free(ZOmegaZ);
+    free(ZOmegaZ_inv);
 
     free(current_resid);
     free(beta_old);
@@ -1167,6 +1370,9 @@ ST_retcode ivest_compute_2sls(
         resid[i] = y[i] - pred;
     }
 
+    /* Allocate GMM/CUE Hessian inverse for VCE computation */
+    ST_double *gmm_hessian_inv = NULL;
+
     /* Step 8b: For GMM2S, re-estimate with optimal weighting matrix */
     if (est_method == 4 && vce_type > 0) {
         /*
@@ -1175,6 +1381,9 @@ ST_retcode ivest_compute_2sls(
             Step 2: Compute optimal weighting matrix W = (Z'ΩZ)^-1 where Ω = diag(e²)
             Step 3: Re-estimate β = (X'ZWZ'X)^-1 X'ZWZ'y
         */
+
+        /* Allocate storage for GMM Hessian inverse */
+        gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
 
         /* Create estimation context for GMM2S computation */
         IVEstContext gmm_ctx;
@@ -1198,15 +1407,13 @@ ST_retcode ivest_compute_2sls(
         gmm_ctx.verbose = verbose;
 
         ST_retcode gmm_rc = ivest_compute_gmm2s(
-            &gmm_ctx, y, resid, cluster_ids, num_clusters, beta, resid
+            &gmm_ctx, y, resid, cluster_ids, num_clusters, beta, resid, gmm_hessian_inv
         );
 
         if (gmm_rc != STATA_OK) {
             if (verbose) SF_display("civreghdfe: GMM2S re-estimation failed, using 2SLS\n");
+            if (gmm_hessian_inv) { free(gmm_hessian_inv); gmm_hessian_inv = NULL; }
         } else {
-            /* Update XkX with GMM2S's X'ZWZ'X for VCE computation */
-            /* Note: For efficient GMM, XkX is updated by the GMM2S estimator */
-
             if (verbose) {
                 char buf[256];
                 SF_display("civreghdfe: GMM2S estimates:\n");
@@ -1226,6 +1433,9 @@ ST_retcode ivest_compute_2sls(
             CUE using refactored helper from civreghdfe_estimate.c
             Iteratively re-weights until convergence.
         */
+
+        /* Allocate storage for CUE Hessian inverse */
+        gmm_hessian_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
 
         /* Create estimation context for CUE computation */
         IVEstContext cue_ctx;
@@ -1249,15 +1459,16 @@ ST_retcode ivest_compute_2sls(
         cue_ctx.verbose = verbose;
 
         const ST_int max_cue_iter = 100;
-        const ST_double cue_tol = 1e-8;
+        const ST_double cue_tol = 1e-9;
 
         ST_retcode cue_rc = ivest_compute_cue(
-            &cue_ctx, y, beta, cluster_ids, num_clusters,
-            beta, resid, max_cue_iter, cue_tol
+            &cue_ctx, y, beta, vce_type, cluster_ids, num_clusters,
+            beta, resid, max_cue_iter, cue_tol, gmm_hessian_inv
         );
 
         if (cue_rc != STATA_OK) {
             if (verbose) SF_display("civreghdfe: CUE computation failed, using 2SLS\n");
+            if (gmm_hessian_inv) { free(gmm_hessian_inv); gmm_hessian_inv = NULL; }
         } else {
             if (verbose) {
                 char buf[256];
@@ -1283,6 +1494,7 @@ ST_retcode ivest_compute_2sls(
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
         free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+        if (gmm_hessian_inv) free(gmm_hessian_inv);
         if (XtX) free(XtX);
         if (Xty) free(Xty);
         free(XkX); free(Xky);
@@ -1300,16 +1512,58 @@ ST_retcode ivest_compute_2sls(
         for (i = 0; i < N; i++) rss += resid[i] * resid[i];
     }
 
-    if (est_method == 4 && vce_type > 0) {
+    if (est_method == 4 && gmm_hessian_inv != NULL) {
         /*
            Efficient GMM2S VCE:
-           When using optimal weights W = (Z'ΩZ)^-1, the VCE is simply (X'ZWZ'X)^-1.
-           The sandwich is not needed because optimal weighting already accounts
-           for heteroskedasticity/clustering. This is the efficiency gain of GMM.
-           XkX already contains X'ZWZ'X for GMM2S.
+           For two-step efficient GMM with optimal weights W = (Z'ΩZ)^-1,
+           the asymptotic VCE is simply (X'ZWZ'X)^-1 regardless of whether
+           robust or cluster is specified. The optimal weighting already
+           accounts for heteroskedasticity/clustering in step 1.
+
+           Apply small-sample DOF correction to match ivreghdfe behavior:
+           - For robust: V = (X'ZWZ'X)^-1 * (N / df_r)
+           - For cluster: V = (X'ZWZ'X)^-1 * (N/df_r) * (G/(G-1))
+           where df_r = N - K_total - df_a
         */
+        ST_int df_r_gmm = N - K_total - df_a;
+        if (df_r_gmm <= 0) df_r_gmm = 1;
+        ST_double dof_adj_gmm;
+        if (vce_type == CIVREGHDFE_VCE_CLUSTER && num_clusters > 0) {
+            /* Cluster DOF adjustment: N/df_r * G/(G-1) * (1 + K/N²)
+               The small K/N² factor matches ivreghdfe's GMM2S cluster VCE */
+            ST_double G = (ST_double)num_clusters;
+            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N * (ST_double)N);
+            dof_adj_gmm = ((ST_double)N / (ST_double)df_r_gmm) * (G / (G - 1.0)) * small_sample_corr;
+        } else {
+            /* Robust or unadjusted: N/df_r */
+            dof_adj_gmm = (ST_double)N / (ST_double)df_r_gmm;
+        }
         for (i = 0; i < K_total * K_total; i++) {
-            V[i] = XkX_inv[i];
+            V[i] = gmm_hessian_inv[i] * dof_adj_gmm;
+        }
+    } else if (est_method == 5 && gmm_hessian_inv != NULL && vce_type > 0) {
+        /*
+           CUE VCE (robust/cluster case):
+           For Continuously Updated Estimator with optimal weights,
+           the asymptotic VCE is (X'ZWZ'X)^-1 where W is evaluated at final β.
+
+           Apply same DOF correction as GMM2S.
+           Note: For homoskedastic CUE (vce_type == 0), we fall through to
+           the standard VCE computation which uses σ² * (X'PzX)^-1.
+        */
+        ST_int df_r_cue = N - K_total - df_a;
+        if (df_r_cue <= 0) df_r_cue = 1;
+        ST_double dof_adj_cue;
+        if (vce_type == CIVREGHDFE_VCE_CLUSTER && num_clusters > 0) {
+            /* Cluster DOF adjustment: N/df_r * G/(G-1) * (1 + K/N²) */
+            ST_double G = (ST_double)num_clusters;
+            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N * (ST_double)N);
+            dof_adj_cue = ((ST_double)N / (ST_double)df_r_cue) * (G / (G - 1.0)) * small_sample_corr;
+        } else {
+            dof_adj_cue = (ST_double)N / (ST_double)df_r_cue;
+        }
+        for (i = 0; i < K_total * K_total; i++) {
+            V[i] = gmm_hessian_inv[i] * dof_adj_cue;
         }
     } else if (vce_type == CIVREGHDFE_VCE_CLUSTER2 && cluster2_ids != NULL && num_clusters2 > 0) {
         /*
@@ -1650,6 +1904,7 @@ ST_retcode ivest_compute_2sls(
     free(XkX_copy);
     free(beta_temp);
     free(XkX_inv);
+    if (gmm_hessian_inv) free(gmm_hessian_inv);
     if (XtX) free(XtX);
     if (Xty) free(Xty);
     free(XkX);

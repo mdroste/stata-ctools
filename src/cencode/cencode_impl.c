@@ -112,8 +112,17 @@ static int cencode_hash_resize(cencode_hash_table *ht, size_t new_capacity)
         if (old_entries[i].key) {
             uint32_t hash = old_entries[i].hash;
             size_t idx = hash % new_capacity;
-            while (ht->entries[idx].key) {
+            size_t probes = 0;
+            while (ht->entries[idx].key && probes < new_capacity) {
                 idx = (idx + 1) % new_capacity;
+                probes++;
+            }
+            if (probes >= new_capacity) {
+                /* Table full - should never happen with proper load factor */
+                free(ht->entries);
+                ht->entries = old_entries;
+                ht->capacity = old_capacity;
+                return -1;
             }
             ht->entries[idx] = old_entries[i];
         }
@@ -132,13 +141,19 @@ static int cencode_hash_insert(cencode_hash_table *ht, const char *key, uint32_t
     }
 
     size_t idx = precomputed_hash % ht->capacity;
+    size_t probes = 0;
 
-    while (ht->entries[idx].key) {
+    while (ht->entries[idx].key && probes < ht->capacity) {
         if (ht->entries[idx].hash == precomputed_hash &&
             strcmp(ht->entries[idx].key, key) == 0) {
             return ht->entries[idx].value;
         }
         idx = (idx + 1) % ht->capacity;
+        probes++;
+    }
+
+    if (probes >= ht->capacity) {
+        return -1;  /* Table full - should never happen with proper load factor */
     }
 
     char *key_copy = ctools_string_arena_strdup(ht->arena, key);
@@ -163,13 +178,19 @@ static int cencode_hash_insert_value(cencode_hash_table *ht, const char *key, in
 
     uint32_t hash = cencode_hash_string(key);
     size_t idx = hash % ht->capacity;
+    size_t probes = 0;
 
-    while (ht->entries[idx].key) {
+    while (ht->entries[idx].key && probes < ht->capacity) {
         if (ht->entries[idx].hash == hash &&
             strcmp(ht->entries[idx].key, key) == 0) {
             return ht->entries[idx].value;  /* Already exists */
         }
         idx = (idx + 1) % ht->capacity;
+        probes++;
+    }
+
+    if (probes >= ht->capacity) {
+        return -1;  /* Table full - should never happen with proper load factor */
     }
 
     char *key_copy = ctools_string_arena_strdup(ht->arena, key);
@@ -188,13 +209,15 @@ static int cencode_hash_lookup(cencode_hash_table *ht, const char *key)
 {
     uint32_t hash = cencode_hash_string(key);
     size_t idx = hash % ht->capacity;
+    size_t probes = 0;
 
-    while (ht->entries[idx].key) {
+    while (ht->entries[idx].key && probes < ht->capacity) {
         if (ht->entries[idx].hash == hash &&
             strcmp(ht->entries[idx].key, key) == 0) {
             return ht->entries[idx].value;
         }
         idx = (idx + 1) % ht->capacity;
+        probes++;
     }
     return 0;  /* Not found */
 }
@@ -204,9 +227,10 @@ static int cencode_parse_existing_labels(cencode_hash_table *ht, const char *exi
 {
     if (!existing_str || *existing_str == '\0') return 0;
 
-    char *buf = malloc(strlen(existing_str) + 1);
+    size_t len = strlen(existing_str);
+    char *buf = malloc(len + 1);
     if (!buf) return -1;
-    strcpy(buf, existing_str);
+    memcpy(buf, existing_str, len + 1);  /* Include null terminator */
 
     char *pos = buf;
     while (*pos) {
@@ -214,7 +238,11 @@ static int cencode_parse_existing_labels(cencode_hash_table *ht, const char *exi
         char *pipe = strchr(pos, '|');
         if (!pipe) break;
         *pipe = '\0';
-        int value = atoi(pos);
+        int value;
+        if (!ctools_safe_atoi(pos, &value)) {
+            free(buf);
+            return -1;  /* Invalid value in existing labels */
+        }
         pos = pipe + 1;
 
         /* Find end of string (|| or end of buffer) */
@@ -306,16 +334,24 @@ ST_retcode cencode_main(const char *args)
         SF_error("cencode: memory allocation failed\n");
         return 920;
     }
-    strcpy(args_copy, args);
+    memcpy(args_copy, args, args_len + 1);  /* Include null terminator */
 
     /* Parse arguments: first two numbers are var_idx and gen_idx */
     char *token = strtok(args_copy, " ");
     if (token && (token[0] >= '0' && token[0] <= '9')) {
-        var_idx = atoi(token);
+        if (!ctools_safe_atoi(token, &var_idx)) {
+            free(args_copy);
+            SF_error("cencode: invalid var_idx value\n");
+            return 198;
+        }
         token = strtok(NULL, " ");
     }
     if (token && (token[0] >= '0' && token[0] <= '9')) {
-        gen_idx = atoi(token);
+        if (!ctools_safe_atoi(token, &gen_idx)) {
+            free(args_copy);
+            SF_error("cencode: invalid gen_idx value\n");
+            return 198;
+        }
         token = strtok(NULL, " ");
     }
 

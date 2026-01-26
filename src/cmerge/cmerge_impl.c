@@ -38,6 +38,14 @@
 #include <omp.h>
 #endif
 
+/* C11 atomics for platforms without GCC/Clang/MSVC intrinsics */
+#if !defined(_WIN32) && !defined(__GNUC__) && !defined(__clang__)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(__STDC_NO_ATOMICS__)
+#define CMERGE_USE_C11_ATOMICS 1
+#include <stdatomic.h>
+#endif
+#endif
+
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_timer.h"
@@ -85,8 +93,20 @@ static void cache_lock_acquire(void)
     while (__sync_lock_test_and_set(&g_cache_lock, 1)) {
         /* Spin */
     }
+#elif defined(CMERGE_USE_C11_ATOMICS)
+    /* C11 atomics fallback */
+    int expected = 0;
+    while (!atomic_compare_exchange_weak((atomic_int *)&g_cache_lock, &expected, 1)) {
+        expected = 0;
+        /* Spin */
+    }
 #else
-    /* Fallback: no locking */
+    /* Last resort fallback: volatile spinlock. Not perfectly atomic but provides
+     * basic protection. The race window is small (between read and write). */
+    while (g_cache_lock) {
+        /* Spin */
+    }
+    g_cache_lock = 1;
 #endif
 }
 
@@ -96,15 +116,26 @@ static void cache_lock_release(void)
     InterlockedExchange((volatile long *)&g_cache_lock, 0);
 #elif defined(__GNUC__) || defined(__clang__)
     __sync_lock_release(&g_cache_lock);
+#elif defined(CMERGE_USE_C11_ATOMICS)
+    /* C11 atomics fallback */
+    atomic_store((atomic_int *)&g_cache_lock, 0);
 #else
+    /* Last resort fallback */
     g_cache_lock = 0;
 #endif
 }
 
-/* Helper to safely clear the cache in-use flag on error paths */
-static void cache_clear_in_use(void)
+/* Helper to cleanup cache and clear in-use flag on error paths.
+ * This frees the cached using data since the merge operation failed
+ * and the cache is no longer useful. Prevents memory leaks in OOM conditions. */
+static void cache_cleanup_on_error(void)
 {
     cache_lock_acquire();
+    if (g_using_cache.loaded) {
+        stata_data_free(&g_using_cache.keys);
+        stata_data_free(&g_using_cache.keepusing);
+        g_using_cache.loaded = 0;
+    }
     g_cache_in_use = 0;
     cache_lock_release();
 }
@@ -138,18 +169,32 @@ static ST_retcode cmerge_load_using(const char *args)
 
     while (token != NULL) {
         if (arg_idx == 0) {
-            nkeys = atoi(token);
-            if (nkeys > CMERGE_MAX_KEYVARS) nkeys = CMERGE_MAX_KEYVARS;
+            if (!ctools_safe_atoi(token, &nkeys)) {
+                SF_error("cmerge: invalid nkeys value\n");
+                return 198;
+            }
+            if (nkeys > CMERGE_MAX_KEYVARS) {
+                SF_error("cmerge: too many key variables (max 32)\n");
+                return 198;
+            }
         }
         else if (arg_idx <= nkeys) {
-            key_indices[arg_idx - 1] = atoi(token);
+            if (!ctools_safe_atoi(token, &key_indices[arg_idx - 1])) {
+                SF_error("cmerge: invalid key index value\n");
+                return 198;
+            }
         }
         else if (strcmp(token, "n_keepusing") == 0) {
             token = strtok(NULL, " ");
             if (token) {
-                n_keepusing = atoi(token);
-                /* Clamp to prevent buffer overflow */
-                if (n_keepusing > CMERGE_MAX_VARS) n_keepusing = CMERGE_MAX_VARS;
+                if (!ctools_safe_atoi(token, &n_keepusing)) {
+                    SF_error("cmerge: invalid n_keepusing value\n");
+                    return 198;
+                }
+                if (n_keepusing > CMERGE_MAX_VARS) {
+                    SF_error("cmerge: too many keepusing variables (max 1024)\n");
+                    return 198;
+                }
             }
         }
         else if (strcmp(token, "keepusing_indices") == 0) {
@@ -157,7 +202,11 @@ static ST_retcode cmerge_load_using(const char *args)
             keepusing_idx = 0;
         }
         else if (in_keepusing_indices && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
-            keepusing_indices[keepusing_idx++] = atoi(token);
+            if (!ctools_safe_atoi(token, &keepusing_indices[keepusing_idx])) {
+                SF_error("cmerge: invalid keepusing index value\n");
+                return 198;
+            }
+            keepusing_idx++;
         }
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
@@ -448,35 +497,78 @@ static ST_retcode cmerge_execute(const char *args)
     int keepusing_idx = 0;
 
     char *token = strtok(args_copy, " ");
+    int parse_tmp;  /* Temporary for safe parsing */
     while (token != NULL) {
         if (arg_idx == 0) {
-            merge_type = (cmerge_type_t)atoi(token);
+            if (!ctools_safe_atoi(token, &parse_tmp)) {
+                cache_cleanup_on_error();
+                SF_error("cmerge: invalid merge_type value\n");
+                return 198;
+            }
+            merge_type = (cmerge_type_t)parse_tmp;
         }
         else if (arg_idx == 1) {
-            nkeys = atoi(token);
-            if (nkeys > CMERGE_MAX_KEYVARS) nkeys = CMERGE_MAX_KEYVARS;
+            if (!ctools_safe_atoi(token, &nkeys)) {
+                cache_cleanup_on_error();
+                SF_error("cmerge: invalid nkeys value\n");
+                return 198;
+            }
+            if (nkeys > CMERGE_MAX_KEYVARS) {
+                cache_cleanup_on_error();
+                SF_error("cmerge: too many key variables (max 32)\n");
+                return 198;
+            }
         }
         else if (arg_idx >= 2 && arg_idx < 2 + nkeys) {
-            master_key_indices[arg_idx - 2] = atoi(token);
+            if (!ctools_safe_atoi(token, &master_key_indices[arg_idx - 2])) {
+                cache_cleanup_on_error();
+                SF_error("cmerge: invalid master key index value\n");
+                return 198;
+            }
         }
         else if (strcmp(token, "orig_row_idx") == 0) {
             token = strtok(NULL, " ");
-            if (token) orig_row_idx = atoi(token);
+            if (token) {
+                if (!ctools_safe_atoi(token, &orig_row_idx)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid orig_row_idx value\n");
+                    return 198;
+                }
+            }
         }
         else if (strcmp(token, "master_nobs") == 0) {
             token = strtok(NULL, " ");
-            if (token) master_nobs = (size_t)atol(token);
+            if (token) {
+                if (!ctools_safe_atozu(token, &master_nobs)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid master_nobs value\n");
+                    return 198;
+                }
+            }
         }
         else if (strcmp(token, "master_nvars") == 0) {
             token = strtok(NULL, " ");
-            if (token) master_nvars = (size_t)atol(token);
+            if (token) {
+                if (!ctools_safe_atozu(token, &master_nvars)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid master_nvars value\n");
+                    return 198;
+                }
+            }
         }
         else if (strcmp(token, "n_keepusing") == 0) {
             token = strtok(NULL, " ");
             if (token) {
-                n_keepusing = atoi(token);
-                /* Clamp to prevent buffer overflow */
-                if (n_keepusing > CMERGE_MAX_VARS) n_keepusing = CMERGE_MAX_VARS;
+                if (!ctools_safe_atoi(token, &n_keepusing)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid n_keepusing value\n");
+                    return 198;
+                }
+                if (n_keepusing > CMERGE_MAX_VARS) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: too many keepusing variables (max 1024)\n");
+                    return 198;
+                }
             }
         }
         else if (strcmp(token, "keepusing_placeholders") == 0) {
@@ -484,16 +576,33 @@ static ST_retcode cmerge_execute(const char *args)
             keepusing_idx = 0;
         }
         else if (in_keepusing_placeholders && keepusing_idx < n_keepusing && keepusing_idx < CMERGE_MAX_VARS) {
-            keepusing_placeholder_indices[keepusing_idx++] = atoi(token);
+            if (!ctools_safe_atoi(token, &keepusing_placeholder_indices[keepusing_idx])) {
+                cache_cleanup_on_error();
+                SF_error("cmerge: invalid keepusing placeholder index\n");
+                return 198;
+            }
+            keepusing_idx++;
         }
         else if (strcmp(token, "merge_var_idx") == 0) {
             token = strtok(NULL, " ");
-            if (token) merge_var_idx = atoi(token);
+            if (token) {
+                if (!ctools_safe_atoi(token, &merge_var_idx)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid merge_var_idx value\n");
+                    return 198;
+                }
+            }
             in_keepusing_placeholders = 0;
         }
         else if (strcmp(token, "preserve_order") == 0) {
             token = strtok(NULL, " ");
-            if (token) preserve_order = atoi(token);
+            if (token) {
+                if (!ctools_safe_atoi(token, &preserve_order)) {
+                    cache_cleanup_on_error();
+                    SF_error("cmerge: invalid preserve_order value\n");
+                    return 198;
+                }
+            }
         }
         else if (strcmp(token, "verbose") == 0) {
             verbose = 1;
@@ -510,7 +619,15 @@ static ST_retcode cmerge_execute(const char *args)
         else if (strcmp(token, "shared_flags") == 0) {
             for (int i = 0; i < n_keepusing && i < CMERGE_MAX_VARS; i++) {
                 token = strtok(NULL, " ");
-                shared_flags[i] = token ? atoi(token) : 0;
+                if (token) {
+                    if (!ctools_safe_atoi(token, &shared_flags[i])) {
+                        cache_cleanup_on_error();
+                        SF_error("cmerge: invalid shared_flags value\n");
+                        return 198;
+                    }
+                } else {
+                    shared_flags[i] = 0;
+                }
             }
         }
         else if (strcmp(token, "merge_by_n") == 0) {
@@ -534,7 +651,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* Build array of all variable indices to load */
     int *all_var_indices = malloc(master_nvars * sizeof(int));
     if (!all_var_indices) {
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         SF_error("cmerge: Failed to allocate var indices\n");
         return 920;
     }
@@ -547,7 +664,7 @@ static ST_retcode cmerge_execute(const char *args)
     rc = ctools_data_load_selective(&master_data, all_var_indices, master_nvars, 1, master_nobs);
     if (rc != STATA_OK) {
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         SF_error("cmerge: Failed to load master data\n");
         return rc;
     }
@@ -555,7 +672,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* Critical null check - prevents crash if load failed silently */
     if (master_data.vars == NULL) {
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         SF_error("cmerge: FATAL - master_data.vars is NULL after load!\n");
         return 920;
     }
@@ -576,7 +693,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (!sort_vars) {
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             SF_error("cmerge: Failed to allocate sort_vars\n");
             return 920;
         }
@@ -591,7 +708,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(sort_vars);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return 920;
         }
 
@@ -602,7 +719,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return rc;
         }
 
@@ -631,7 +748,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return 920;
         }
 
@@ -666,7 +783,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return 920;
         }
 
@@ -681,7 +798,7 @@ static ST_retcode cmerge_execute(const char *args)
                 if (sort_perm) free(sort_perm);
                 stata_data_free(&master_data);
                 free(all_var_indices);
-                cache_clear_in_use();
+                cache_cleanup_on_error();
                 return 459;
             }
 
@@ -699,7 +816,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             SF_error("cmerge: Merge join failed\n");
             return 920;
         }
@@ -709,7 +826,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             SF_error("cmerge: Merge result exceeds Stata observation limit\n");
             return 920;
         }
@@ -729,7 +846,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         return 920;
     }
 
@@ -741,7 +858,7 @@ static ST_retcode cmerge_execute(const char *args)
         stata_data_free(&master_data);
         free(all_var_indices);
         free(master_orig_rows);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         SF_error("cmerge: orig_row_idx out of bounds\n");
         return 459;
     }
@@ -772,7 +889,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return 920;
         }
 
@@ -799,7 +916,7 @@ static ST_retcode cmerge_execute(const char *args)
             if (sort_perm) free(sort_perm);
             stata_data_free(&master_data);
             free(all_var_indices);
-            cache_clear_in_use();
+            cache_cleanup_on_error();
             return 920;
         }
 
@@ -866,7 +983,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         return 920;
     }
 
@@ -917,7 +1034,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         return 920;
     }
     output_data.vars = (stata_variable *)ctools_cacheline_alloc(vars_alloc_size);
@@ -931,7 +1048,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         return 920;
     }
     memset(output_data.vars, 0, n_output_vars * sizeof(stata_variable));
@@ -1093,7 +1210,7 @@ static ST_retcode cmerge_execute(const char *args)
                 /* Only free strings not owned by arena */
                 for (size_t i = 0; i < output_nobs; i++) {
                     if (output_data.vars[vi].data.str[i] &&
-                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                        (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
                         free(output_data.vars[vi].data.str[i]);
                     }
                 }
@@ -1113,7 +1230,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         return 920;
     }
 
@@ -1137,7 +1254,7 @@ static ST_retcode cmerge_execute(const char *args)
                 /* Only free strings not owned by arena */
                 for (size_t i = 0; i < output_nobs; i++) {
                     if (output_data.vars[vi].data.str[i] &&
-                        !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                        (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
                         free(output_data.vars[vi].data.str[i]);
                     }
                 }
@@ -1157,7 +1274,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (sort_perm) free(sort_perm);
         stata_data_free(&master_data);
         free(all_var_indices);
-        cache_clear_in_use();
+        cache_cleanup_on_error();
         SF_error("cmerge: Failed to store output data\n");
         return rc;
     }
@@ -1166,6 +1283,8 @@ static ST_retcode cmerge_execute(const char *args)
 
     /* ===================================================================
      * Step 8: Write _merge variable
+     * Note: SF_vstore is the only Stata API for writing values.
+     * The loop is sequential but cache-friendly (linear access pattern).
      * =================================================================== */
 
     t_start = ctools_timer_ms();
@@ -1242,7 +1361,7 @@ static ST_retcode cmerge_execute(const char *args)
             /* Only free strings that fell back to strdup (not owned by arena) */
             for (size_t i = 0; i < output_nobs; i++) {
                 if (output_data.vars[vi].data.str[i] &&
-                    !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i])) {
+                    (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
                     free(output_data.vars[vi].data.str[i]);
                 }
             }

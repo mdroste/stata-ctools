@@ -108,7 +108,9 @@ static int parse_threads_arg(char *cmd_args)
     }
 
     /* Parse the number */
-    num_threads = atoi(paren_open + 1);
+    if (!ctools_safe_atoi(paren_open + 1, &num_threads)) {
+        return -1;  /* Invalid number format */
+    }
     if (num_threads <= 0) {
         return -1;  /* Invalid number */
     }
@@ -141,6 +143,8 @@ static int parse_threads_arg(char *cmd_args)
 #include "cwinsor_impl.h"
 #include "cdestring_impl.h"
 #include "cdecode_impl.h"
+#include "csample_impl.h"
+#include "cbsample_impl.h"
 
 /*
     Main plugin entry point.
@@ -241,6 +245,12 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cdecode") == 0) {
         rc = cdecode_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "csample") == 0) {
+        rc = csample_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cbsample") == 0) {
+        rc = cbsample_main(cmd_args);
     }
     else {
         char msg[256];

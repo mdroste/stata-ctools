@@ -107,8 +107,17 @@ static int cdecode_hash_resize(cdecode_hash_table *ht, size_t new_capacity)
             hash = (hash >> 16) ^ hash;
 
             size_t idx = hash % new_capacity;
-            while (ht->entries[idx].occupied) {
+            size_t probes = 0;
+            while (ht->entries[idx].occupied && probes < new_capacity) {
                 idx = (idx + 1) % new_capacity;
+                probes++;
+            }
+            if (probes >= new_capacity) {
+                /* Table full - should never happen with proper load factor */
+                free(ht->entries);
+                ht->entries = old_entries;
+                ht->capacity = old_capacity;
+                return -1;
             }
             ht->entries[idx] = old_entries[i];
         }
@@ -133,13 +142,19 @@ static int cdecode_hash_insert(cdecode_hash_table *ht, int key, const char *valu
     hash = (hash >> 16) ^ hash;
 
     size_t idx = hash % ht->capacity;
+    size_t probes = 0;
 
-    while (ht->entries[idx].occupied) {
+    while (ht->entries[idx].occupied && probes < ht->capacity) {
         if (ht->entries[idx].key == key) {
             /* Update existing entry */
             return 0;
         }
         idx = (idx + 1) % ht->capacity;
+        probes++;
+    }
+
+    if (probes >= ht->capacity) {
+        return -1;  /* Table full - should never happen with proper load factor */
     }
 
     char *value_copy = ctools_string_arena_strdup(ht->arena, value);
@@ -237,7 +252,11 @@ static int parse_labels_from_file(const char *filepath, cdecode_hash_table *ht, 
         if (!pipe) continue;
 
         *pipe = '\0';
-        int value = atoi(line);
+        int value;
+        if (!ctools_safe_atoi(line, &value)) {
+            fclose(fp);
+            return -1;  /* Invalid value in labels file */
+        }
         char *label = pipe + 1;
 
         /* Unescape the label */
@@ -300,7 +319,7 @@ ST_retcode cdecode_main(const char *args)
         SF_error("cdecode: memory allocation failed\n");
         return 920;
     }
-    strcpy(args_copy, args);
+    memcpy(args_copy, args, args_len + 1);  /* Include null terminator */
 
     /* Find labelsfile= parameter */
     char *labelsfile_ptr = strstr(args_copy, "labelsfile=");
@@ -320,7 +339,11 @@ ST_retcode cdecode_main(const char *args)
     char *token = strtok(args_copy, " \t");
     while (token != NULL) {
         if (strncmp(token, "maxlen=", 7) == 0) {
-            maxlen = atoi(token + 7);
+            if (!ctools_safe_atoi(token + 7, &maxlen)) {
+                free(args_copy);
+                SF_error("cdecode: invalid maxlen value\n");
+                return 198;
+            }
         }
         token = strtok(NULL, " \t");
     }

@@ -143,6 +143,7 @@ ST_retcode ivest_compute_kclass(
     - num_clusters: Number of clusters
     - beta: Output coefficients
     - resid: Output residuals
+    - XZWZX_inv_out: Output GMM Hessian inverse (K_total x K_total), may be NULL
 
     Returns STATA_OK on success.
 */
@@ -153,7 +154,8 @@ ST_retcode ivest_compute_gmm2s(
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_double *beta,
-    ST_double *resid
+    ST_double *resid,
+    ST_double *XZWZX_inv_out
 );
 
 /*
@@ -165,12 +167,14 @@ ST_retcode ivest_compute_gmm2s(
     - ctx: Initialized estimation context
     - y: Dependent variable
     - initial_beta: Starting point from 2SLS/GMM2S
-    - cluster_ids: Cluster IDs (NULL for heteroskedastic)
+    - vce_type: 0=homoskedastic, 1=robust, 2=cluster, 3=twoway cluster
+    - cluster_ids: Cluster IDs (NULL for non-cluster)
     - num_clusters: Number of clusters
     - beta: Output coefficients
     - resid: Output residuals
     - max_iter: Maximum iterations
     - tol: Convergence tolerance
+    - XZWZX_inv_out: Output final CUE Hessian inverse (K_total x K_total), may be NULL
 
     Returns STATA_OK on success.
 */
@@ -178,12 +182,14 @@ ST_retcode ivest_compute_cue(
     IVEstContext *ctx,
     const ST_double *y,
     const ST_double *initial_beta,
+    ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_double *beta,
     ST_double *resid,
     ST_int max_iter,
-    ST_double tol
+    ST_double tol,
+    ST_double *XZWZX_inv_out
 );
 
 /*

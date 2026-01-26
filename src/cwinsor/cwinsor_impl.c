@@ -182,7 +182,11 @@ static double parse_double_option(const char *args, const char *key, double def)
     snprintf(pat, sizeof(pat), "%s=", key);
     const char *p = strstr(args, pat);
     if (!p) return def;
-    return atof(p + strlen(pat));
+    double result;
+    if (!ctools_safe_atof(p + strlen(pat), &result)) {
+        return def;  /* Invalid value - use default */
+    }
+    return result;
 }
 
 static int parse_int_array(int *arr, size_t count, const char **start)

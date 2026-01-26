@@ -226,18 +226,24 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
     var->nobs = nobs;
 
-    /* Edge case: if no observations, still allocate minimal buffer to avoid NULL pointer.
-     * This prevents crashes when code assumes data.dbl is non-NULL after successful load. */
+    /* Edge case: if no observations, allocate minimal buffer to avoid NULL pointer issues.
+     * This prevents crashes when downstream code assumes data.dbl/data.str is non-NULL
+     * after successful load. Allocating 1 element is minimal overhead for safety. */
     if (nobs == 0) {
         if (is_string) {
             var->type = STATA_TYPE_STRING;
             var->str_maxlen = 0;
             var->_arena = NULL;
-            var->data.str = NULL;  /* OK for 0 observations */
+            /* Allocate minimal buffer to avoid NULL - calloc ensures it's zeroed */
+            var->data.str = (char **)calloc(1, sizeof(char *));
+            if (!var->data.str) return -1;
         } else {
             var->type = STATA_TYPE_DOUBLE;
             var->_arena = NULL;
-            var->data.dbl = NULL;  /* OK for 0 observations */
+            /* Allocate minimal buffer to avoid NULL */
+            var->data.dbl = (double *)ctools_cacheline_alloc(sizeof(double));
+            if (!var->data.dbl) return -1;
+            var->data.dbl[0] = SV_missval;  /* Initialize to missing */
         }
         return 0;  /* Success with empty data */
     }

@@ -66,12 +66,13 @@ typedef struct {
     pthread_cond_t work_available;      /* Signaled when work is added */
     pthread_cond_t work_complete;       /* Signaled when all work is done */
 
-    /* State */
+    /* State - all fields below protected by queue_mutex */
     size_t active_workers;              /* Number of workers currently executing */
     size_t pending_items;               /* Items submitted but not yet complete */
-    int shutdown;                       /* Set to 1 to terminate workers */
+    volatile int shutdown;              /* Set to 1 to terminate workers */
     int initialized;                    /* 1 if pool is initialized */
-    int has_error;                      /* Set to 1 if any work item failed */
+    volatile int has_error;             /* Error flag - set by workers, read/cleared by wait().
+                                         * Must hold queue_mutex when accessing. */
 } ctools_persistent_pool;
 
 /*

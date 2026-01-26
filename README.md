@@ -19,6 +19,7 @@ Fast drop-in replacements for a variety of Stata commands.
 | `encode`/`decode` | `cencode`/`cdecode` | Recast encoded string as labeled numeric type | **10-20x** |
 | `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
 | `gstats winsor` | `cwinsor` | Winsorization | **2-10x** |
+| `bsample`/`sample` | `cbsample`/`csample` | Resampling with/without replacement | **2-5x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-20x** |
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with multi-way fixed effects | **10-20x** |

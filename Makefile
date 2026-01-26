@@ -152,8 +152,14 @@ CDESTRING_SRCS = $(SRC_DIR)/cdestring/cdestring_impl.c
 # cdecode module
 CDECODE_SRCS = $(SRC_DIR)/cdecode/cdecode_impl.c
 
+# csample module
+CSAMPLE_SRCS = $(SRC_DIR)/csample/csample_impl.c
+
+# cbsample module
+CBSAMPLE_SRCS = $(SRC_DIR)/cbsample/cbsample_impl.c
+
 # All sources
-SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS)
+SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS) $(CSAMPLE_SRCS) $(CBSAMPLE_SRCS)
 
 # Headers (for dependency tracking)
 CORE_HEADERS = $(SRC_DIR)/stplugin.h \
@@ -230,8 +236,12 @@ CDESTRING_HEADERS = $(SRC_DIR)/cdestring/cdestring_impl.h
 
 CDECODE_HEADERS = $(SRC_DIR)/cdecode/cdecode_impl.h
 
+CSAMPLE_HEADERS = $(SRC_DIR)/csample/csample_impl.h
+
+CBSAMPLE_HEADERS = $(SRC_DIR)/cbsample/cbsample_impl.h
+
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample
 
 # ------------------------------------------------------------------------------
 # Output Configuration

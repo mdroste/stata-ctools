@@ -138,7 +138,10 @@ static int parse_options(const char *args, cdestring_options *opts)
         free(args_copy);
         return -1;
     }
-    opts->nvars = atoi(nvars_ptr + 6);
+    if (!ctools_safe_atoi(nvars_ptr + 6, &opts->nvars)) {
+        free(args_copy);
+        return -1;  /* Invalid nvars value */
+    }
     if (opts->nvars <= 0 || opts->nvars > CDESTRING_MAX_VARS) {
         free(args_copy);
         return -1;
@@ -170,7 +173,12 @@ static int parse_options(const char *args, cdestring_options *opts)
             break;
         }
 
-        int val = atoi(token);
+        int val;
+        if (!ctools_safe_atoi(token, &val)) {
+            /* Invalid number - skip this token */
+            token = strtok_r(NULL, " \t", &saveptr);
+            continue;
+        }
         if (val > 0) {
             if (idx % 2 == 0) {
                 opts->src_indices[idx / 2] = val;

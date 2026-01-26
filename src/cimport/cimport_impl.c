@@ -141,7 +141,7 @@ static void cimport_sanitize_varname(const char *input, int len, char *output) {
     }
 
     if (j == 0) {
-        strcpy(output, "v");
+        output[0] = 'v';
         j = 1;
     }
 
@@ -193,7 +193,7 @@ static int cimport_parse_header(CImportContext *ctx) {
                                                fields, CTOOLS_MAX_COLUMNS, ctx->file_data);
 
     if (ctx->num_columns <= 0) {
-        strcpy(ctx->error_message, "No columns found in header");
+        snprintf(ctx->error_message, sizeof(ctx->error_message), "No columns found in header");
         return -1;
     }
 
@@ -1137,7 +1137,11 @@ static int *cimport_parse_col_list(const char *macro_name, int *out_count) {
     while (*p && idx < count) {
         while (*p == ' ') p++;
         if (*p == '\0') break;
-        cols[idx++] = atoi(p);
+        if (!ctools_safe_atoi(p, &cols[idx])) {
+            free(cols);
+            return NULL;  /* Invalid column number */
+        }
+        idx++;
         while (*p && *p != ' ') p++;
     }
 
@@ -1463,7 +1467,10 @@ ST_retcode cimport_main(const char *args) {
                 opts.has_header = false;
                 opts.header_row = 0;
             } else if (strncmp(token, "headerrow=", 10) == 0) {
-                opts.header_row = atoi(token + 10);
+                if (!ctools_safe_atoi(token + 10, &opts.header_row)) {
+                    cimport_display_error("cimport: invalid headerrow value\n");
+                    return 198;
+                }
                 opts.has_header = (opts.header_row > 0);
             } else if (strcmp(token, "verbose") == 0) {
                 opts.verbose = true;
@@ -1486,7 +1493,10 @@ ST_retcode cimport_main(const char *args) {
             } else if (strcmp(token, "emptylines=fill") == 0) {
                 opts.emptylines_mode = CIMPORT_EMPTYLINES_FILL;
             } else if (strncmp(token, "maxquotedrows=", 14) == 0) {
-                opts.max_quoted_rows = atoi(token + 14);
+                if (!ctools_safe_atoi(token + 14, &opts.max_quoted_rows)) {
+                    cimport_display_error("cimport: invalid maxquotedrows value\n");
+                    return 198;
+                }
             } else if (strncmp(token, "encoding=", 9) == 0) {
                 opts.encoding = cimport_parse_encoding_name(token + 9);
             } else if (strlen(token) == 1) {

@@ -117,7 +117,7 @@ static void *persistent_worker_thread(void *arg)
             pool->active_workers--;
             pool->pending_items--;
             if (result != NULL) {
-                pool->has_error = 1;  /* Track failure */
+                pool->has_error = 1;  /* Track failure (mutex held) */
             }
             if (pool->pending_items == 0) {
                 pthread_cond_broadcast(&pool->work_complete);
@@ -273,7 +273,9 @@ int ctools_persistent_pool_wait(ctools_persistent_pool *pool)
         pthread_cond_wait(&pool->work_complete, &pool->queue_mutex);
     }
 
-    /* Check and clear error flag */
+    /* Check and clear error flag (mutex held).
+     * Error flag is set by workers when work fails, and cleared here after reading.
+     * This ensures errors are reported exactly once per batch of work. */
     had_error = pool->has_error;
     pool->has_error = 0;
 

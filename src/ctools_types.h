@@ -385,4 +385,164 @@ extern const double ctools_pow10_table[23];
 */
 extern const char CTOOLS_DIGIT_PAIRS[200];
 
+/* ---------------------------------------------------------------------------
+   Safe String-to-Number Parsing
+
+   These functions replace unsafe atoi()/atof() which return 0 on parse failure,
+   making it impossible to distinguish "0" from invalid input like "abc".
+   --------------------------------------------------------------------------- */
+
+#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
+
+/*
+    Safe string to int conversion.
+    Uses strtol internally with full error checking.
+
+    @param str     Input string to parse
+    @param result  Output: parsed integer value (unchanged on failure)
+    @return        true if successfully parsed, false if:
+                   - str is NULL or empty
+                   - contains non-numeric characters
+                   - value overflows int range
+*/
+static inline bool ctools_safe_atoi(const char *str, int *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    long val = strtol(str, &endptr, 10);
+
+    /* Check for conversion errors */
+    if (errno == ERANGE || val > INT_MAX || val < INT_MIN) {
+        return false;  /* Overflow */
+    }
+    if (endptr == str) {
+        return false;  /* No digits found */
+    }
+    /* Allow trailing whitespace but not other characters */
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;  /* Trailing non-whitespace characters */
+    }
+
+    *result = (int)val;
+    return true;
+}
+
+/*
+    Safe string to long conversion.
+
+    @param str     Input string to parse
+    @param result  Output: parsed long value (unchanged on failure)
+    @return        true if successfully parsed, false on error
+*/
+static inline bool ctools_safe_atol(const char *str, long *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    long val = strtol(str, &endptr, 10);
+
+    if (errno == ERANGE) {
+        return false;
+    }
+    if (endptr == str) {
+        return false;
+    }
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;
+    }
+
+    *result = val;
+    return true;
+}
+
+/*
+    Safe string to size_t conversion.
+
+    @param str     Input string to parse
+    @param result  Output: parsed size_t value (unchanged on failure)
+    @return        true if successfully parsed, false on error or negative value
+*/
+static inline bool ctools_safe_atozu(const char *str, size_t *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    /* Reject negative numbers for size_t */
+    const char *p = str;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '-') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    unsigned long long val = strtoull(str, &endptr, 10);
+
+    if (errno == ERANGE || val > SIZE_MAX) {
+        return false;
+    }
+    if (endptr == str) {
+        return false;
+    }
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;
+    }
+
+    *result = (size_t)val;
+    return true;
+}
+
+/*
+    Safe string to double conversion.
+
+    @param str     Input string to parse
+    @param result  Output: parsed double value (unchanged on failure)
+    @return        true if successfully parsed, false on error
+*/
+static inline bool ctools_safe_atof(const char *str, double *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    double val = strtod(str, &endptr);
+
+    if (errno == ERANGE) {
+        return false;
+    }
+    if (endptr == str) {
+        return false;
+    }
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;
+    }
+
+    *result = val;
+    return true;
+}
+
 #endif /* CTOOLS_TYPES_H */

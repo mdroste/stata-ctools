@@ -212,6 +212,8 @@ static inline ctools_prefetch_distances ctools_compute_prefetch_distances(void)
 static ctools_prefetch_distances _ctools_prefetch_dist = {0, 0, 0, 0};
 #if defined(__GNUC__) || defined(__clang__)
 static volatile int _ctools_prefetch_initialized = 0;
+#elif defined(_WIN32) && defined(_MSC_VER)
+static volatile long _ctools_prefetch_initialized = 0;  /* LONG for Interlocked* */
 #else
 static int _ctools_prefetch_initialized = 0;
 #endif
@@ -228,8 +230,9 @@ static inline ctools_prefetch_distances ctools_get_prefetch_distances(void)
         return _ctools_prefetch_dist;
     }
 #elif defined(_WIN32) && defined(_MSC_VER)
-    if (_ctools_prefetch_initialized) {
-        MemoryBarrier();
+    /* Use InterlockedOr for atomic read with acquire semantics.
+     * Prevents torn reads on ARM64 Windows. */
+    if (InterlockedOr(&_ctools_prefetch_initialized, 0)) {
         return _ctools_prefetch_dist;
     }
 #else
@@ -249,8 +252,8 @@ static inline ctools_prefetch_distances ctools_get_prefetch_distances(void)
 #if defined(__GNUC__) || defined(__clang__)
     __atomic_store_n(&_ctools_prefetch_initialized, 1, __ATOMIC_RELEASE);
 #elif defined(_WIN32) && defined(_MSC_VER)
-    MemoryBarrier();
-    _ctools_prefetch_initialized = 1;
+    /* InterlockedExchange provides release semantics on all Windows architectures */
+    InterlockedExchange(&_ctools_prefetch_initialized, 1);
 #else
     _ctools_prefetch_initialized = 1;
 #endif

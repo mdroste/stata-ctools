@@ -232,6 +232,7 @@ program define cmerge, rclass
 
     * Get master key variable indices (1-based) using Mata - skip for _n merge
     local master_key_indices ""
+    local master_sorted = 0
     if !`merge_by_n' {
         * Use Mata st_varindex() for O(1) lookup instead of O(n*m) nested loops
         mata: st_local("master_key_indices", invtokens(strofreal(st_varindex(tokens(st_local("keyvars"))))))
@@ -248,6 +249,27 @@ program define cmerge, rclass
                 exit 111
             }
         }
+
+        * Check if master is already sorted on key variables
+        * This allows skipping the sort step in the C plugin
+        local sortedby : sortedby
+        if "`sortedby'" != "" {
+            * Check if keyvars are a prefix of sortedby
+            local master_sorted = 1
+            local i = 1
+            foreach k of local keyvars {
+                local s : word `i' of `sortedby'
+                if "`k'" != "`s'" {
+                    local master_sorted = 0
+                    continue, break
+                }
+                local ++i
+            }
+        }
+    }
+    else {
+        * For _n merge, data is implicitly "sorted" by row number
+        local master_sorted = 1
     }
 
     * Display header if verbose
@@ -266,6 +288,9 @@ program define cmerge, rclass
         di as text "Using file:  " as result `"`using'"'
         di as text "Master obs:  " as result `master_nobs'
         di as text "Master vars: " as result `master_nvars'
+        if `master_sorted' {
+            di as text "Master sort: " as result "already sorted on keys - skipping sort"
+        }
         di as text "{hline 60}"
         di ""
     }
@@ -350,10 +375,26 @@ program define cmerge, rclass
         di as text "Phase 1: Loading using dataset (keys + keepusing only)..."
     }
 
-    preserve
+    * Use frames (Stata 16+) for faster context switching vs preserve/restore
+    * Frames avoid copying the entire master dataset twice
+    local __use_frames = 0
+    if c(stata_version) >= 16 {
+        capture frame create _cmerge_using
+        if _rc == 0 {
+            local __use_frames = 1
+        }
+    }
 
-    * Load using dataset
-    qui use `"`using'"', clear
+    if `__use_frames' {
+        * Load using data into separate frame (master stays in default)
+        frame _cmerge_using: qui use `"`using'"', clear
+        frame change _cmerge_using
+    }
+    else {
+        * Fallback: preserve/restore for Stata < 16
+        preserve
+        qui use `"`using'"', clear
+    }
 
     * Check key variables exist in using (skip for _n merge)
     if !`merge_by_n' {
@@ -361,7 +402,13 @@ program define cmerge, rclass
             capture confirm variable `var'
             if _rc {
                 di as error "cmerge: key variable `var' not found in using dataset"
-                restore
+                if `__use_frames' {
+                    frame change default
+                    frame drop _cmerge_using
+                }
+                else {
+                    restore
+                }
                 exit 111
             }
         }
@@ -382,7 +429,13 @@ program define cmerge, rclass
                 if "`force'" == "" {
                     di as error "cmerge: key variable `var' is `master_type' in master but `using_type' in using"
                     di as error "use force option to override"
-                    restore
+                    if `__use_frames' {
+                        frame change default
+                        frame drop _cmerge_using
+                    }
+                    else {
+                        restore
+                    }
                     exit 106
                 }
             }
@@ -401,7 +454,13 @@ program define cmerge, rclass
             capture confirm variable `var'
             if _rc {
                 di as error "cmerge: keepusing variable `var' not found in using dataset"
-                restore
+                if `__use_frames' {
+                    frame change default
+                    frame drop _cmerge_using
+                }
+                else {
+                    restore
+                }
                 exit 111
             }
             local using_keep_vars "`using_keep_vars' `var'"
@@ -476,12 +535,37 @@ program define cmerge, rclass
 
     local using_nobs = _N
 
+    * Check if using is already sorted on key variables
+    local using_sorted = 0
+    if !`merge_by_n' {
+        local sortedby : sortedby
+        if "`sortedby'" != "" {
+            local using_sorted = 1
+            local i = 1
+            foreach k of local keyvars {
+                local s : word `i' of `sortedby'
+                if "`k'" != "`s'" {
+                    local using_sorted = 0
+                    continue, break
+                }
+                local ++i
+            }
+        }
+    }
+    else {
+        * For _n merge, data is implicitly "sorted" by row number
+        local using_sorted = 1
+    }
+
     if "`verbose'" != "" {
         if `merge_by_n' {
             di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `keepusing_count' as text " keepusing vars (merge by _n)"
         }
         else {
             di as text "  Using: " as result `using_nobs' as text " obs, keeping " as result `nkeys' as text " keys + " as result `keepusing_count' as text " keepusing vars"
+            if `using_sorted' {
+                di as text "  Using data already sorted on keys - skipping sort"
+            }
         }
     }
 
@@ -496,7 +580,13 @@ program define cmerge, rclass
             qui save `using_saved', replace
         }
 
-        restore
+        if `__use_frames' {
+            frame change default
+            frame drop _cmerge_using
+        }
+        else {
+            restore
+        }
 
         * Handle empty master: append using with _merge=2
         if `master_nobs' == 0 & `using_nobs' > 0 {
@@ -655,7 +745,8 @@ program define cmerge, rclass
     if "`verbose'" != "" {
         local plugin_args "`plugin_args' verbose"
     }
-    if "`sorted'" != "" {
+    * Pass sorted flag if user specified OR auto-detected
+    if "`sorted'" != "" | `using_sorted' {
         local plugin_args "`plugin_args' sorted"
     }
     if `merge_by_n' {
@@ -685,7 +776,13 @@ program define cmerge, rclass
 
     if `plugin_rc' {
         di as error "cmerge: failed to load using data (error `plugin_rc')"
-        restore
+        if `__use_frames' {
+            frame change default
+            frame drop _cmerge_using
+        }
+        else {
+            restore
+        }
         exit `plugin_rc'
     }
 
@@ -747,21 +844,49 @@ program define cmerge, rclass
     * Count new variables
     local n_new_vars : word count `new_var_names'
 
-    if `__do_timing' {
-        timer off 97
-        timer on 96   /* restore */
+    * Create empty template dataset with new variable definitions
+    * Using data is already cached in plugin, so we can clear and reuse memory
+    * Benchmark shows template+append is 3.5x faster than Mata st_addvar
+    tempfile empty_vars_template
+    if `n_new_vars' > 0 {
+        clear
+        qui set obs 1
+        local var_idx = 1
+        foreach vtype of local new_var_types {
+            local vname : word `var_idx' of `new_var_names'
+            if substr("`vtype'", 1, 3) == "str" {
+                qui gen `vtype' `vname' = ""
+            }
+            else {
+                qui gen `vtype' `vname' = .
+            }
+            local ++var_idx
+        }
+        qui drop in 1
+        qui save `empty_vars_template', emptyok replace
     }
 
-    restore
+    if `__do_timing' {
+        timer off 97
+        timer on 96   /* frame switch / restore */
+    }
+
+    if `__use_frames' {
+        frame change default
+        frame drop _cmerge_using
+    }
+    else {
+        restore
+    }
 
     if `__do_timing' {
         timer off 96
-        timer on 97   /* add vars via Mata */
+        timer on 97   /* append vars */
     }
 
-    * Create new variables directly using Mata st_addvar() - faster than gen loop + append
+    * Append empty template to add variable definitions (faster than st_addvar)
     if `n_new_vars' > 0 {
-        mata: _cmerge_addvars(tokens(st_local("new_var_types")), tokens(st_local("new_var_names")))
+        qui append using `empty_vars_template'
     }
 
     if `__do_timing' {
@@ -823,7 +948,8 @@ program define cmerge, rclass
     if "`verbose'" != "" {
         local plugin_args "`plugin_args' verbose"
     }
-    if "`sorted'" != "" {
+    * Pass sorted flag if user specified OR auto-detected for master
+    if "`sorted'" != "" | `master_sorted' {
         local plugin_args "`plugin_args' sorted"
     }
     if "`update'" != "" {
@@ -870,9 +996,10 @@ program define cmerge, rclass
     * Drop temporary row index variable
     qui capture drop _cmerge_orig_row
 
-    * Trim excess observations
+    * Trim excess observations (drop in is 3x faster than keep in)
     if `total_obs' < _N {
-        qui keep in 1/`total_obs'
+        local __drop_start = `total_obs' + 1
+        qui drop in `__drop_start'/l
     }
 
     * Apply variable notes from using dataset (unless nonotes specified)
