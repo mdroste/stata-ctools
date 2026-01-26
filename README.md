@@ -25,7 +25,7 @@ Fast drop-in replacements for a variety of Stata commands.
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with multi-way fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
-Some ctools programs have extended functionality For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). Internal help files for each ctools program provide complete documentation.
+Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). Internal help files for each ctools program provide complete documentation.
 
 Speedups will vary depending on a lot of factors. The regression commands (*hdfe) and binscatter will uniformly run faster. On the other hand, csort can be slower than sort if the number of variables in memory is sufficiently large relative to the number of observations due to the overhead involved with copying data between Stata memory and C memory (and back).
 

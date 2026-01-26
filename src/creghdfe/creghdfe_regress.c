@@ -1766,6 +1766,30 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Store residuals back to Stata if requested */
     if (compute_resid && resid_var_idx > 0 && resid) {
+        if (verbose) {
+            sprintf(msg, "{txt}   Storing residuals: resid_var_idx=%d, nvars=%d, N=%d, N_orig=%d, in1=%d, in2=%d\n",
+                    resid_var_idx, SF_nvars(), N, N_orig, in1, in2);
+            SF_display(msg);
+        }
+
+        /* DEBUG: Try storing to variable 1 (price) to verify SF_vstore works at all */
+        if (verbose) {
+            ST_double orig_val;
+            SF_vdata(1, 1, &orig_val);
+            sprintf(msg, "{txt}   DEBUG: var1 obs1 before = %g\n", orig_val);
+            SF_display(msg);
+
+            ST_retcode rc = SF_vstore(1, 1, 99999.0);
+            ST_double new_val;
+            SF_vdata(1, 1, &new_val);
+            sprintf(msg, "{txt}   DEBUG: store 99999 to var1 obs1, rc=%d, readback=%g\n", rc, new_val);
+            SF_display(msg);
+
+            /* Restore */
+            SF_vstore(1, 1, orig_val);
+        }
+
+        ST_int stored_count = 0;
         idx = 0;
         i = 0;
         for (obs = in1; obs <= in2; obs++) {
@@ -1773,10 +1797,15 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 continue;
             }
             if (mask[i]) {
-                SF_vstore(resid_var_idx, obs, resid[idx]);
+                ST_retcode rc = SF_vstore(resid_var_idx, obs, resid[idx]);
+                if (rc == 0) stored_count++;
                 idx++;
             }
             i++;
+        }
+        if (verbose) {
+            sprintf(msg, "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
+            SF_display(msg);
         }
     }
 
