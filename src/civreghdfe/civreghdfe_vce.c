@@ -924,7 +924,9 @@ void ivvce_compute_full(
 
         free(u);
 
-        /* HC1 adjustment and sandwich */
+        /* HAC VCE sandwich: V = XkX_inv * meat * XkX_inv
+           Standard HAC (Newey-West) does not use DOF adjustment,
+           but ivreghdfe applies N/(N-K) for consistency with robust. */
         ST_double dof_adj = (ST_double)N / (ST_double)df_r;
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {

@@ -320,6 +320,150 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: locale and parselocale Options
+ ******************************************************************************/
+noi print_section "locale and parselocale Options"
+
+* Test German locale (comma decimal, period grouping)
+file open fh using "temp/german_numbers.csv", write replace
+file write fh "id;betrag" _n
+file write fh "1;1.234,56" _n
+file write fh "2;2.345,67" _n
+file close fh
+
+capture cimport delimited using "temp/german_numbers.csv", delimiters(";") locale(de_DE) parselocale clear
+if _rc == 0 & abs(betrag[1] - 1234.56) < 0.01 {
+    noi test_pass "German locale (de_DE)"
+}
+else {
+    noi test_fail "German locale" "expected 1234.56, got `=betrag[1]' (rc=`=_rc')"
+}
+
+* Test French locale (comma decimal, space grouping)
+file open fh using "temp/french_numbers.csv", write replace
+file write fh "id;montant" _n
+file write fh "1;1 234,56" _n
+file write fh "2;2 345,67" _n
+file close fh
+
+capture cimport delimited using "temp/french_numbers.csv", delimiters(";") locale(fr_FR) parselocale clear
+if _rc == 0 & abs(montant[1] - 1234.56) < 0.01 {
+    noi test_pass "French locale (fr_FR)"
+}
+else {
+    noi test_fail "French locale" "expected 1234.56, got `=montant[1]' (rc=`=_rc')"
+}
+
+* Test Swiss locale (period decimal, apostrophe grouping)
+file open fh using "temp/swiss_numbers.csv", write replace
+file write fh "id,amount" _n
+file write fh "1,1'234.56" _n
+file write fh "2,2'345.67" _n
+file close fh
+
+capture cimport delimited using "temp/swiss_numbers.csv", locale(de_CH) parselocale clear
+if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+    noi test_pass "Swiss locale (de_CH)"
+}
+else {
+    noi test_fail "Swiss locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+}
+
+* Test US locale (period decimal, comma grouping)
+file open fh using "temp/us_numbers.csv", write replace
+file write fh "id,amount" _n
+file write fh "1,1234.56" _n
+file write fh "2,2345.67" _n
+file close fh
+
+capture cimport delimited using "temp/us_numbers.csv", locale(en_US) parselocale clear
+if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+    noi test_pass "US locale (en_US)"
+}
+else {
+    noi test_fail "US locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+}
+
+* Test parselocale without explicit locale (uses default)
+capture cimport delimited using "temp/us_numbers.csv", parselocale clear
+if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+    noi test_pass "parselocale without locale (default)"
+}
+else {
+    noi test_fail "parselocale default" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+}
+
+* Test locale option alone (without parselocale) - should not affect parsing
+capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) clear
+if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+    noi test_pass "locale without parselocale (no effect)"
+}
+else {
+    noi test_fail "locale alone" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+}
+
+* Test Italian locale
+file open fh using "temp/italian_numbers.csv", write replace
+file write fh "id;prezzo" _n
+file write fh "1;1.234,56" _n
+file write fh "2;9.876,54" _n
+file close fh
+
+capture cimport delimited using "temp/italian_numbers.csv", delimiters(";") locale(it_IT) parselocale clear
+if _rc == 0 & abs(prezzo[1] - 1234.56) < 0.01 {
+    noi test_pass "Italian locale (it_IT)"
+}
+else {
+    noi test_fail "Italian locale" "expected 1234.56, got `=prezzo[1]' (rc=`=_rc')"
+}
+
+* Test unknown locale (should warn but continue)
+capture cimport delimited using "temp/us_numbers.csv", locale(xx_XX) parselocale clear
+if _rc == 0 {
+    noi test_pass "unknown locale handled gracefully"
+}
+else {
+    noi test_fail "unknown locale" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: colrange Option (additional tests)
+ ******************************************************************************/
+noi print_section "colrange Option - Additional Tests"
+
+* Test colrange with start only
+noi benchmark_import using "temp/range_test.csv", testname("colrange(3:) from col 3 to end") ///
+    importopts(colrange(3:))
+
+* Test colrange with end only
+noi benchmark_import using "temp/range_test.csv", testname("colrange(:3) first 3 cols") ///
+    importopts(colrange(:3))
+
+* Test single column (colrange(3:3) means column 3 only)
+file open fh using "temp/wide_cols.csv", write replace
+file write fh "a,b,c,d,e" _n
+file write fh "1,2,3,4,5" _n
+file write fh "6,7,8,9,10" _n
+file close fh
+
+capture cimport delimited using "temp/wide_cols.csv", colrange(3:3) clear
+if _rc == 0 & c(k) == 1 {
+    noi test_pass "colrange single column (3:3)"
+}
+else {
+    noi test_fail "colrange single (3:3)" "expected 1 col, got `=c(k)' (rc=`=_rc')"
+}
+
+* Test colrange(N) = columns N to end (same as N:)
+capture cimport delimited using "temp/wide_cols.csv", colrange(3) clear
+if _rc == 0 & c(k) == 3 {
+    noi test_pass "colrange(3) = cols 3 to end"
+}
+else {
+    noi test_fail "colrange(3)" "expected 3 cols, got `=c(k)' (rc=`=_rc')"
+}
+
+/*******************************************************************************
  * SECTION: threads Option
  ******************************************************************************/
 noi print_section "threads Option"

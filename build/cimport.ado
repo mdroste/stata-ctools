@@ -53,7 +53,8 @@ program define cimport, rclass
         STRIPQuotes ROWRange(string) COLRange(string) Verbose THReads(integer 0) ///
         ASFloat ASDOUBle NUMERICcols(numlist) STRINGcols(numlist) ///
         DECIMALSEParator(string) GROUPSEParator(string) ///
-        MAXQUOTEDrows(integer 20) EMPTYlines(string)]
+        MAXQUOTEDrows(integer 20) EMPTYlines(string) ///
+        LOCale(string) PARSElocale]
 
     * Handle filename - can come from using/ or as first positional argument
     if `"`using'"' == "" & `"`anything'"' != "" {
@@ -281,6 +282,70 @@ program define cimport, rclass
         local emptylines "skip"
     }
 
+    * Parse locale and parselocale options
+    * parselocale enables locale-aware parsing of numbers
+    * locale() specifies which locale to use; if not specified, uses system default
+    * Common locale mappings:
+    *   en_US, en_GB, en_AU, etc.: decimal=".", group=","
+    *   de_DE, de_AT, nl_NL, etc.: decimal=",", group="."
+    *   de_CH, fr_CH: decimal=".", group="'"
+    *   fr_FR, it_IT, es_ES, pt_BR, etc.: decimal=",", group=" " or "."
+    if "`parselocale'" != "" {
+        * parselocale is specified - enable locale-aware parsing
+        local locale_lower = lower("`locale'")
+
+        * Map locale to decimal/group separators
+        * If decimalseparator/groupseparator already specified, don't override
+        if `"`decimalseparator'"' == "" {
+            * Locales that use comma as decimal separator
+            if inlist("`locale_lower'", "de_de", "de_at", "nl_nl", "nl_be", "fr_fr", "fr_be") | ///
+               inlist("`locale_lower'", "it_it", "es_es", "pt_br", "pt_pt", "ru_ru", "pl_pl") | ///
+               inlist("`locale_lower'", "cs_cz", "da_dk", "fi_fi", "el_gr", "hu_hu", "id_id") | ///
+               inlist("`locale_lower'", "no_no", "ro_ro", "sk_sk", "sl_si", "sv_se", "tr_tr") | ///
+               inlist("`locale_lower'", "uk_ua", "vi_vn", "bg_bg", "ca_es", "hr_hr", "et_ee") {
+                local decimalsep ","
+                * Most of these use period or space as group separator
+                if `"`groupseparator'"' == "" {
+                    * French and some others use space, most use period
+                    if inlist("`locale_lower'", "fr_fr", "fr_be", "ru_ru", "pl_pl", "cs_cz") | ///
+                       inlist("`locale_lower'", "fi_fi", "no_no", "sk_sk", "sv_se", "uk_ua") {
+                        local groupsep " "
+                    }
+                    else {
+                        local groupsep "."
+                    }
+                }
+            }
+            * Swiss locales use period decimal but apostrophe grouping
+            else if inlist("`locale_lower'", "de_ch", "fr_ch", "it_ch") {
+                local decimalsep "."
+                if `"`groupseparator'"' == "" {
+                    local groupsep "'"
+                }
+            }
+            * English and similar locales use period decimal, comma grouping
+            else if inlist("`locale_lower'", "en_us", "en_gb", "en_au", "en_ca", "en_nz") | ///
+                    inlist("`locale_lower'", "en_ie", "en_za", "ja_jp", "ko_kr", "zh_cn") | ///
+                    inlist("`locale_lower'", "zh_tw", "th_th", "ms_my", "en_in", "en_sg") | ///
+                    "`locale_lower'" == "" {
+                * Default: period decimal (already set above)
+                if `"`groupseparator'"' == "" {
+                    local groupsep ","
+                }
+            }
+            * If locale not recognized, try to get system locale info
+            else if "`locale_lower'" == "" {
+                * No locale specified - try to detect system locale
+                * Use period decimal as safe default
+                local decimalsep "."
+            }
+            * Unrecognized locale - warn but continue with defaults
+            else {
+                di as text "Note: Unrecognized locale '`locale'', using default number format"
+            }
+        }
+    }
+
     * Validate maxquotedrows
     if `maxquotedrows' < 0 {
         di as error "cimport: maxquotedrows() must be non-negative"
@@ -379,7 +444,13 @@ program define cimport, rclass
     local opt_asfloat = cond("`asfloat'" != "", "asfloat", "")
     local opt_asdouble = cond("`asdouble'" != "", "asdouble", "")
     local opt_decimalsep = cond("`decimalsep'" != ".", "decimalsep=`decimalsep'", "")
-    local opt_groupsep = cond("`groupsep'" != "", "groupsep=`groupsep'", "")
+    * Handle space groupsep specially (can't pass space character in space-delimited args)
+    if "`groupsep'" == " " {
+        local opt_groupsep "groupsep=space"
+    }
+    else {
+        local opt_groupsep = cond("`groupsep'" != "", "groupsep=`groupsep'", "")
+    }
     local opt_emptylines = cond("`emptylines'" != "skip", "emptylines=`emptylines'", "")
     local opt_maxquotedrows = cond(`maxquotedrows' != 20, "maxquotedrows=`maxquotedrows'", "")
 

@@ -105,6 +105,8 @@ void civreghdfe_compute_underid_test(
     ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
+    ST_int kernel_type,
+    ST_int bw,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,
@@ -175,13 +177,14 @@ void civreghdfe_compute_underid_test(
             }
 
             if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
-                /* Cluster-robust with small-sample correction G/(G-1) */
+                /* Cluster-robust or HAC (Driscoll-Kraay) */
                 ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                 if (!cluster_Zv) {
                     free(v); free(shat0); free(shat0_inv);
                     return;
                 }
 
+                /* Sum Z_excl * v within each cluster (time period for dkraay) */
                 for (i = 0; i < N; i++) {
                     ST_int c = cluster_ids[i] - 1;
                     if (c < 0 || c >= num_clusters) continue;
@@ -191,11 +194,32 @@ void civreghdfe_compute_underid_test(
                     }
                 }
 
-                for (ST_int c = 0; c < num_clusters; c++) {
-                    for (ST_int ki = 0; ki < L; ki++) {
-                        for (ST_int kj = 0; kj < L; kj++) {
-                            shat0[kj * L + ki] +=
-                                cluster_Zv[c * L + ki] * cluster_Zv[c * L + kj];
+                /* Check if HAC kernel should be applied (dkraay with kernel) */
+                if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
+                    /* HAC: shat0 = sum_t sum_s kernel_weight(|t-s|) * cluster_Zv_t' * cluster_Zv_s
+                       For dkraay, clusters are time periods (1, 2, 3, ..., T) */
+                    for (ST_int t = 0; t < num_clusters; t++) {
+                        for (ST_int s = 0; s < num_clusters; s++) {
+                            ST_int lag = (t > s) ? (t - s) : (s - t);
+                            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                            if (kw == 0.0) continue;  /* Skip if no weight */
+
+                            for (ST_int ki = 0; ki < L; ki++) {
+                                for (ST_int kj = 0; kj < L; kj++) {
+                                    shat0[kj * L + ki] += kw *
+                                        cluster_Zv[t * L + ki] * cluster_Zv[s * L + kj];
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    /* Standard cluster-robust: sum of outer products */
+                    for (ST_int c = 0; c < num_clusters; c++) {
+                        for (ST_int ki = 0; ki < L; ki++) {
+                            for (ST_int kj = 0; kj < L; kj++) {
+                                shat0[kj * L + ki] +=
+                                    cluster_Zv[c * L + ki] * cluster_Zv[c * L + kj];
+                            }
                         }
                     }
                 }
@@ -221,6 +245,39 @@ void civreghdfe_compute_underid_test(
             ST_int shat_ok = (cholesky(shat0_inv, L) == 0);
             if (shat_ok) {
                 shat_ok = (invert_from_cholesky(shat0_inv, L, shat0_inv) == 0);
+            }
+
+            /* Handle standard HAC (kernel+bw without cluster/dkraay) */
+            if (shat_ok && vce_type == CIVREGHDFE_VCE_ROBUST && kernel_type > 0 && bw > 0) {
+                /* Recompute shat0 with HAC kernel weights */
+                memset(shat0, 0, L * L * sizeof(ST_double));
+
+                /* HAC: shat0 = sum_{t,s} kernel_weight(|t-s|) * Z_excl_t * v_t * v_s * Z_excl_s' */
+                for (ST_int t = 0; t < N; t++) {
+                    for (ST_int s = 0; s < N; s++) {
+                        ST_int lag = (t > s) ? (t - s) : (s - t);
+                        ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                        if (kw == 0.0) continue;
+
+                        ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
+                        ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
+                        ST_double v_prod = wt * v[t] * ws * v[s];
+
+                        for (ST_int ki = 0; ki < L; ki++) {
+                            for (ST_int kj = 0; kj < L; kj++) {
+                                shat0[kj * L + ki] += kw * v_prod *
+                                    Z_excl[ki * N + t] * Z_excl[kj * N + s];
+                            }
+                        }
+                    }
+                }
+
+                /* Re-invert shat0 */
+                memcpy(shat0_inv, shat0, L * L * sizeof(ST_double));
+                shat_ok = (cholesky(shat0_inv, L) == 0);
+                if (shat_ok) {
+                    shat_ok = (invert_from_cholesky(shat0_inv, L, shat0_inv) == 0);
+                }
             }
 
             if (shat_ok) {
@@ -304,14 +361,20 @@ void civreghdfe_compute_underid_test(
                                - Cluster: F = chi2/(N-1) * (N - K_iv - sdofminus) * (G-1)/G / L
                                See ivreghdfe.ado lines 1829 and 1832-1835.
 
-                               For robust, the original formula with denom=N worked,
-                               suggesting kp_wald_raw is already scaled appropriately.
-                               For cluster, we need (N-1) in denominator plus (G-1)/G. */
+                               For HAC (dkraay), the HAC S matrix computation differs from
+                               ranktest's m_omega, requiring an extra (G-1)/G factor. */
                             ST_int dof;
                             ST_double denom;
                             ST_double cluster_adj;
-                            if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) {
-                                /* Cluster/Driscoll-Kraay: dof excludes df_a, includes sdofminus=1 */
+                            if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
+                                /* Driscoll-Kraay with HAC kernel: needs extra adjustment */
+                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
+                                denom = (ST_double)(N - 1);
+                                /* HAC requires ((G-1)/G)^2 to match ivreghdfe's ranktest-based widstat */
+                                cluster_adj = ((ST_double)(num_clusters - 1) / (ST_double)num_clusters) *
+                                              ((ST_double)(num_clusters - 1) / (ST_double)num_clusters);
+                            } else if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) {
+                                /* Regular cluster: single (G-1)/G adjustment */
                                 dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
                                 denom = (ST_double)(N - 1);
                                 cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
@@ -340,6 +403,7 @@ void civreghdfe_compute_underid_test(
                     if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
                         ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
                         if (cluster_Zy) {
+                            /* Sum Z * X_endog within each cluster */
                             for (i = 0; i < N; i++) {
                                 ST_int c = cluster_ids[i] - 1;
                                 if (c < 0 || c >= num_clusters) continue;
@@ -348,11 +412,32 @@ void civreghdfe_compute_underid_test(
                                     cluster_Zy[c * K_iv + k] += w * Z[k * N + i] * X_endog[i];
                                 }
                             }
-                            for (ST_int c = 0; c < num_clusters; c++) {
-                                for (ST_int ki = 0; ki < K_iv; ki++) {
-                                    for (ST_int kj = 0; kj < K_iv; kj++) {
-                                        shat0_lm[kj * K_iv + ki] +=
-                                            cluster_Zy[c * K_iv + ki] * cluster_Zy[c * K_iv + kj];
+
+                            /* Check if HAC kernel should be applied */
+                            if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
+                                /* HAC with kernel weights */
+                                for (ST_int t = 0; t < num_clusters; t++) {
+                                    for (ST_int s = 0; s < num_clusters; s++) {
+                                        ST_int lag = (t > s) ? (t - s) : (s - t);
+                                        ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                                        if (kw == 0.0) continue;
+
+                                        for (ST_int ki = 0; ki < K_iv; ki++) {
+                                            for (ST_int kj = 0; kj < K_iv; kj++) {
+                                                shat0_lm[kj * K_iv + ki] += kw *
+                                                    cluster_Zy[t * K_iv + ki] * cluster_Zy[s * K_iv + kj];
+                                            }
+                                        }
+                                    }
+                                }
+                            } else {
+                                /* Standard cluster-robust */
+                                for (ST_int c = 0; c < num_clusters; c++) {
+                                    for (ST_int ki = 0; ki < K_iv; ki++) {
+                                        for (ST_int kj = 0; kj < K_iv; kj++) {
+                                            shat0_lm[kj * K_iv + ki] +=
+                                                cluster_Zy[c * K_iv + ki] * cluster_Zy[c * K_iv + kj];
+                                        }
                                     }
                                 }
                             }
@@ -582,12 +667,14 @@ void civreghdfe_compute_sargan_j(
     ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
+    ST_int kernel_type,
+    ST_int bw,
     ST_double *sargan_stat,
     ST_int *overid_df
 )
 {
     ST_int K_total = K_exog + K_endog;
-    ST_int i, k;
+    ST_int i, j, k;
 
     *overid_df = K_iv - K_total;
     *sargan_stat = 0.0;
@@ -642,9 +729,64 @@ void civreghdfe_compute_sargan_j(
         }
 
         if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
-            ivvce_compute_ZOmegaZ_cluster(Z, resid, weights, weight_type,
-                                          cluster_ids, N, K_iv, num_clusters, ZOmegaZ);
+            /* Cluster-robust or Driscoll-Kraay Z'ΩZ */
+            if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
+                /* HAC with kernel weights for dkraay */
+                ST_double *cluster_Zr = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                if (cluster_Zr) {
+                    /* Sum Z * resid within each time period */
+                    for (i = 0; i < N; i++) {
+                        ST_int c = cluster_ids[i] - 1;
+                        if (c < 0 || c >= num_clusters) continue;
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        for (k = 0; k < K_iv; k++) {
+                            cluster_Zr[c * K_iv + k] += w * Z[k * N + i] * resid[i];
+                        }
+                    }
+
+                    /* HAC: sum_t sum_s kernel_weight(|t-s|) * Zr_t * Zr_s' */
+                    for (ST_int t = 0; t < num_clusters; t++) {
+                        for (ST_int s = 0; s < num_clusters; s++) {
+                            ST_int lag = (t > s) ? (t - s) : (s - t);
+                            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                            if (kw == 0.0) continue;
+
+                            for (ST_int ki = 0; ki < K_iv; ki++) {
+                                for (ST_int kj = 0; kj < K_iv; kj++) {
+                                    ZOmegaZ[kj * K_iv + ki] += kw *
+                                        cluster_Zr[t * K_iv + ki] * cluster_Zr[s * K_iv + kj];
+                                }
+                            }
+                        }
+                    }
+                    free(cluster_Zr);
+                }
+            } else {
+                /* Standard cluster-robust */
+                ivvce_compute_ZOmegaZ_cluster(Z, resid, weights, weight_type,
+                                              cluster_ids, N, K_iv, num_clusters, ZOmegaZ);
+            }
+        } else if (vce_type == CIVREGHDFE_VCE_ROBUST && kernel_type > 0 && bw > 0) {
+            /* HAC (bw + robust without cluster) - apply kernel weights observation by observation */
+            for (ST_int t = 0; t < N; t++) {
+                for (ST_int s = 0; s < N; s++) {
+                    ST_int lag = (t > s) ? (t - s) : (s - t);
+                    ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                    if (kw == 0.0) continue;
+
+                    ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
+                    ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
+                    ST_double r_prod = wt * resid[t] * ws * resid[s];
+
+                    for (j = 0; j < K_iv; j++) {
+                        for (k = 0; k < K_iv; k++) {
+                            ZOmegaZ[k * K_iv + j] += kw * r_prod * Z[j * N + t] * Z[k * N + s];
+                        }
+                    }
+                }
+            }
         } else {
+            /* HC robust (no kernel) */
             ivvce_compute_ZOmegaZ_robust(Z, resid, weights, weight_type, N, K_iv, ZOmegaZ);
         }
 

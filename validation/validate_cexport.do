@@ -870,6 +870,236 @@ sysuse auto, clear
 benchmark_export make price mpg, testname("varlist + if + quote + nolabel") ifcond(price > 5000) exportopts(quote nolabel)
 
 /*******************************************************************************
+ * SECTION: Date Formatting (datafmt and datestring)
+ ******************************************************************************/
+noi print_section "Date Formatting (datafmt/datestring)"
+
+* Create test data with various date formats
+clear
+set obs 10
+gen id = _n
+
+* Daily date (%td)
+gen daily_date = mdy(1, _n, 2024)
+format daily_date %td
+
+* Datetime (%tc)
+gen datetime = clock("2024-01-0" + string(_n) + " 12:30:45", "YMDhms")
+format datetime %tc
+
+* Weekly date (%tw)
+gen weekly_date = yw(2024, _n)
+format weekly_date %tw
+
+* Monthly date (%tm)
+gen monthly_date = ym(2024, _n)
+format monthly_date %tm
+
+* Quarterly date (%tq)
+gen quarterly_date = yq(2024, mod(_n-1, 4) + 1)
+format quarterly_date %tq
+
+* Yearly date (%ty)
+gen yearly_date = 2020 + _n
+format yearly_date %ty
+
+* Non-date numeric (should not be affected by datafmt)
+gen value = _n * 100.5
+
+* String variable (should not be affected)
+gen str20 label = "item" + string(_n)
+
+tempfile date_testdata
+save `date_testdata', replace
+
+* Test 1: datafmt option - basic daily date
+use `date_testdata', clear
+benchmark_export id daily_date value, testname("datafmt: daily date") exportopts(datafmt)
+
+* Test 2: datafmt option - datetime
+use `date_testdata', clear
+benchmark_export id datetime value, testname("datafmt: datetime") exportopts(datafmt)
+
+* Test 3: datafmt option - weekly date
+use `date_testdata', clear
+benchmark_export id weekly_date value, testname("datafmt: weekly date") exportopts(datafmt)
+
+* Test 4: datafmt option - monthly date
+use `date_testdata', clear
+benchmark_export id monthly_date value, testname("datafmt: monthly date") exportopts(datafmt)
+
+* Test 5: datafmt option - quarterly date
+use `date_testdata', clear
+benchmark_export id quarterly_date value, testname("datafmt: quarterly date") exportopts(datafmt)
+
+* Test 6: datafmt option - yearly date
+use `date_testdata', clear
+benchmark_export id yearly_date value, testname("datafmt: yearly date") exportopts(datafmt)
+
+* Test 7: datafmt option - all date types together
+use `date_testdata', clear
+benchmark_export, testname("datafmt: all date types") exportopts(datafmt)
+
+* Test 8: datestring with custom format (ISO 8601) - cexport-specific option
+* Note: Stata's export delimited doesn't have datestring(), so we test cexport alone
+use `date_testdata', clear
+capture cexport delimited id daily_date value using "temp/datestring_iso.csv", datestring("%tdCCYY-NN-DD") replace
+if _rc == 0 {
+    * Verify the output contains ISO-formatted dates
+    import delimited using "temp/datestring_iso.csv", clear
+    capture confirm string variable daily_date
+    if _rc == 0 {
+        * Check if first date looks like ISO format (starts with year)
+        local firstval = daily_date[1]
+        if substr("`firstval'", 1, 4) == "2024" {
+            noi test_pass "datestring: ISO format"
+        }
+        else {
+            noi test_fail "datestring: ISO format" "date not in ISO format: `firstval'"
+        }
+    }
+    else {
+        noi test_fail "datestring: ISO format" "daily_date should be string"
+    }
+}
+else {
+    noi test_fail "datestring: ISO format" "cexport failed with rc=`=_rc'"
+}
+
+* Test 9: datestring with different format (US format)
+use `date_testdata', clear
+capture cexport delimited id daily_date value using "temp/datestring_us.csv", datestring("%tdNN/DD/CCYY") replace
+if _rc == 0 {
+    import delimited using "temp/datestring_us.csv", clear
+    capture confirm string variable daily_date
+    if _rc == 0 {
+        local firstval = daily_date[1]
+        if strpos("`firstval'", "/") > 0 {
+            noi test_pass "datestring: US format"
+        }
+        else {
+            noi test_fail "datestring: US format" "date not in US format: `firstval'"
+        }
+    }
+    else {
+        noi test_fail "datestring: US format" "daily_date should be string"
+    }
+}
+else {
+    noi test_fail "datestring: US format" "cexport failed with rc=`=_rc'"
+}
+
+* Test 10: datestring with datetime
+use `date_testdata', clear
+capture cexport delimited id datetime value using "temp/datestring_datetime.csv", datestring("%tcCCYY-NN-DD!THH:MM:SS") replace
+if _rc == 0 {
+    import delimited using "temp/datestring_datetime.csv", clear
+    capture confirm string variable datetime
+    if _rc == 0 {
+        local firstval = datetime[1]
+        if strpos("`firstval'", "T") > 0 {
+            noi test_pass "datestring: datetime ISO"
+        }
+        else {
+            noi test_fail "datestring: datetime ISO" "datetime not in ISO format: `firstval'"
+        }
+    }
+    else {
+        noi test_fail "datestring: datetime ISO" "datetime should be string"
+    }
+}
+else {
+    noi test_fail "datestring: datetime ISO" "cexport failed with rc=`=_rc'"
+}
+
+* Test 11: datafmt combined with value labels
+clear
+set obs 5
+gen id = _n
+gen daily_date = mdy(6, _n, 2024)
+format daily_date %td
+gen category = mod(_n, 2) + 1
+label define cat_lbl 1 "Type A" 2 "Type B"
+label values category cat_lbl
+benchmark_export, testname("datafmt with value labels") exportopts(datafmt)
+
+* Test 12: datafmt combined with if condition
+use `date_testdata', clear
+benchmark_export, testname("datafmt with if condition") exportopts(datafmt) ifcond(id <= 5)
+
+* Test 13: datafmt combined with in condition
+use `date_testdata', clear
+benchmark_export, testname("datafmt with in range") exportopts(datafmt) incond(3/8)
+
+* Test 14: datafmt combined with quote option
+use `date_testdata', clear
+benchmark_export, testname("datafmt with quote") exportopts(datafmt quote)
+
+* Test 15: datafmt combined with tab delimiter
+use `date_testdata', clear
+benchmark_export, testname("datafmt with tab delimiter") exportopts(datafmt delimiter(tab)) importopts(delimiters(tab))
+
+* Test 16: datestring with missing dates (cexport-specific)
+clear
+set obs 10
+gen id = _n
+gen daily_date = mdy(1, _n, 2024)
+replace daily_date = . if mod(_n, 3) == 0
+format daily_date %td
+gen value = _n * 10
+capture cexport delimited using "temp/datestring_missing.csv", datestring("%tdCCYY-NN-DD") replace
+if _rc == 0 {
+    import delimited using "temp/datestring_missing.csv", clear
+    * Check that missing dates are exported as empty strings
+    * import delimited may import empty strings as missing or as empty string
+    capture confirm string variable daily_date
+    if _rc == 0 {
+        * daily_date is string - check for empty strings
+        count if daily_date == "" | missing(daily_date)
+        if r(N) == 3 {
+            noi test_pass "datestring with missing dates"
+        }
+        else {
+            noi test_fail "datestring with missing dates" "expected 3 empty/missing, got `r(N)'"
+        }
+    }
+    else {
+        * daily_date was imported as numeric (all empty -> all missing)
+        count if missing(daily_date)
+        if r(N) == 3 {
+            noi test_pass "datestring with missing dates"
+        }
+        else {
+            noi test_fail "datestring with missing dates" "expected 3 missing, got `r(N)'"
+        }
+    }
+}
+else {
+    noi test_fail "datestring with missing dates" "cexport failed with rc=`=_rc'"
+}
+
+* Test 17: Negative format prefix (%-t)
+clear
+set obs 5
+gen id = _n
+gen daily_date = mdy(1, _n, 2024)
+format daily_date %-td
+benchmark_export, testname("datafmt: negative format (%-td)") exportopts(datafmt)
+
+* Test 18: Real-world dataset with dates (nlswork)
+* Note: We only test the date variable since datafmt affects all numeric formatting
+* and cexport doesn't implement full numeric display format support (only dates)
+capture webuse nlswork, clear
+if _rc == 0 {
+    keep in 1/1000
+    keep idcode year
+    * Create a date variable from year
+    gen interview_date = mdy(6, 15, year)
+    format interview_date %td
+    benchmark_export, testname("datafmt: nlswork with dates") exportopts(datafmt)
+}
+
+/*******************************************************************************
  * SECTION 18: Missing values
  ******************************************************************************/
 noi print_section "Missing Values"

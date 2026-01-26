@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.1.0}{...}
+{* *! version 0.9.1 26Jan2026}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
@@ -49,6 +49,8 @@
 {synopt:{opt quote}}quote all string fields{p_end}
 {synopt:{opt noquoteif}}do not automatically quote strings containing delimiters{p_end}
 {synopt:{opt nolabel}}export values instead of value labels{p_end}
+{synopt:{opt datafmt}}export date/time variables using their display formats{p_end}
+{synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -60,11 +62,16 @@
 {synoptline}
 {syntab:Main}
 {synopt:{opt sheet(name)}}worksheet name; default is "Sheet1"{p_end}
+{synopt:{opt cell(start)}}starting cell for export; default is "A1"{p_end}
 {synopt:{opt replace}}overwrite existing file{p_end}
 
 {syntab:Formatting}
 {synopt:{opt firstrow(variables|nonames)}}first row contains variable names (default) or data{p_end}
 {synopt:{opt nolabel}}export values instead of value labels{p_end}
+{synopt:{opt datafmt}}export date/time variables using their display formats{p_end}
+{synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
+{synopt:{opt missing(string)}}replacement value for missing data; default is empty cell{p_end}
+{synopt:{opt keepcellfmt}}preserve cell formatting from existing file{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -118,6 +125,21 @@ contain the delimiter character.
 {opt nolabel} specifies that numeric values should be exported as raw values
 instead of their value labels.
 
+{phang}
+{opt datafmt} specifies that date/time variables should be exported using their
+display formats (e.g., {cmd:%td}, {cmd:%tc}, {cmd:%tw}). Without this option,
+date/time variables are exported as raw numeric values (days since 1960-01-01
+for daily dates, milliseconds since 1960-01-01 for datetimes, etc.).
+
+{phang}
+{opt datestring(fmt)} specifies a custom format to use for all date/time
+variables. This overrides the variables' display formats. Common formats include:
+
+{p 12 16 2}{cmd:datestring("%tdCCYY-NN-DD")} for ISO 8601 dates (2024-01-15){p_end}
+{p 12 16 2}{cmd:datestring("%tdNN/DD/CCYY")} for US format (01/15/2024){p_end}
+{p 12 16 2}{cmd:datestring("%tdDD-Mon-CCYY")} for European format (15-Jan-2024){p_end}
+{p 12 16 2}{cmd:datestring("%tcCCYY-NN-DD!THH:MM:SS")} for ISO 8601 datetime{p_end}
+
 {dlgtab:Reporting}
 
 {phang}
@@ -138,6 +160,11 @@ time, and throughput.
 The name is limited to 31 characters.
 
 {phang}
+{opt cell(start)} specifies the starting cell for the data export. The default
+is "A1". For example, {cmd:cell(B5)} starts the export at column B, row 5.
+This allows you to write data to a specific region of a worksheet.
+
+{phang}
 {opt replace} specifies that {it:filename} be replaced if it already exists.
 
 {dlgtab:Formatting}
@@ -150,6 +177,18 @@ The name is limited to 31 characters.
 {phang}
 {opt nolabel} specifies that numeric values should be exported as raw values
 instead of their value labels.
+
+{phang}
+{opt missing(string)} specifies a string value to use for missing data.
+By default, missing values are exported as empty cells. For example,
+{cmd:missing("NA")} exports all missing values as "NA", and {cmd:missing(".")}
+exports them as periods.
+
+{phang}
+{opt keepcellfmt} preserves cell formatting (fonts, colors, borders, number
+formats) from an existing Excel file when replacing it. This allows you to
+update data in a formatted template without losing the formatting. The option
+has no effect when creating a new file. Requires the {cmd:replace} option.
 
 {dlgtab:Reporting}
 
@@ -180,6 +219,15 @@ instead of their value labels.
 {pstd}Export subset of observations:{p_end}
 {phang2}{cmd:. cexport delimited using subset.csv if year > 2020, replace}{p_end}
 
+{pstd}Export with date formatting (using variable display formats):{p_end}
+{phang2}{cmd:. cexport delimited using output.csv, datafmt replace}{p_end}
+
+{pstd}Export dates in ISO 8601 format:{p_end}
+{phang2}{cmd:. cexport delimited using output.csv, datestring("%tdCCYY-NN-DD") replace}{p_end}
+
+{pstd}Export datetimes in ISO 8601 format:{p_end}
+{phang2}{cmd:. cexport delimited using output.csv, datestring("%tcCCYY-NN-DD!THH:MM:SS") replace}{p_end}
+
 {pstd}{ul:Excel export examples}
 
 {pstd}Export all variables to an Excel file:{p_end}
@@ -196,6 +244,15 @@ instead of their value labels.
 
 {pstd}Export subset of observations:{p_end}
 {phang2}{cmd:. cexport excel using subset.xlsx if year > 2020, replace}{p_end}
+
+{pstd}Export starting at cell B5:{p_end}
+{phang2}{cmd:. cexport excel using output.xlsx, cell(B5) replace}{p_end}
+
+{pstd}Export with custom missing value:{p_end}
+{phang2}{cmd:. cexport excel using output.xlsx, missing("NA") replace}{p_end}
+
+{pstd}Update data in formatted template (preserving formatting):{p_end}
+{phang2}{cmd:. cexport excel using template.xlsx, cell(B2) keepcellfmt replace}{p_end}
 
 
 {marker results}{...}

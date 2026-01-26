@@ -336,6 +336,12 @@ program define civreghdfe, eclass
         exit 2000
     }
 
+    * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)
+    * This needs to happen before verbose output to show correct VCE type
+    if "`kernel'" != "" & `bw' > 0 & `vce_type' == 0 & `dkraay' == 0 & "`kiefer'" == "" {
+        local vce_type = 1
+    }
+
     * Verbose output
     if "`verbose'" != "" {
         di as text ""
@@ -579,6 +585,12 @@ program define civreghdfe, eclass
         * Default: Newey-West optimal bandwidth = floor(4*(N/100)^(2/9))
         local bw_val = floor(4 * (`N'/100)^(2/9))
         if `bw_val' < 1 local bw_val = 1
+    }
+
+    * HAC kernel options imply robust VCE (except for dkraay which has its own type)
+    * If kernel/bw specified but vce_type is still 0 (unadjusted), set to robust
+    if `kernel_type' > 0 & `bw_val' > 0 & `vce_type' == 0 & `dkraay_val' == 0 & `kiefer_val' == 0 {
+        local vce_type = 1
     }
 
     scalar __civreghdfe_kernel = `kernel_type'

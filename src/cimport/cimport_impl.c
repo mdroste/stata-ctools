@@ -1496,7 +1496,12 @@ ST_retcode cimport_main(const char *args) {
             } else if (strncmp(token, "decimalsep=", 11) == 0) {
                 opts.decimal_separator = token[11];
             } else if (strncmp(token, "groupsep=", 9) == 0) {
-                opts.group_separator = token[9];
+                /* Handle "space" keyword for space character */
+                if (strcmp(token + 9, "space") == 0) {
+                    opts.group_separator = ' ';
+                } else {
+                    opts.group_separator = token[9];
+                }
             } else if (strcmp(token, "emptylines=fill") == 0) {
                 opts.emptylines_mode = CIMPORT_EMPTYLINES_FILL;
             } else if (strncmp(token, "maxquotedrows=", 14) == 0) {

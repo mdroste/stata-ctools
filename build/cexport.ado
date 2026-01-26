@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 26Jan2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!
@@ -16,7 +16,8 @@
 *!   noquoteif           - Don't automatically quote strings containing delimiters
 *!   replace             - Overwrite existing file
 *!   nolabel             - Export numeric values instead of value labels
-*!   datafmt             - Use display formats for numeric variables (not yet implemented)
+*!   datafmt             - Use display formats for date/time variables
+*!   datestring(string)  - Custom date format for date/time variables (e.g., "%tdCCYY-NN-DD")
 *!   verbose             - Display progress information
 *!
 *! Performance options:
@@ -49,7 +50,7 @@ program define cexport, rclass
     * Parse the rest with export delimited-style syntax
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-        NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit ///
+        NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose TIMEit ///
         MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
     if _rc {
         * 'using' not found - parse filename from positional arguments
@@ -138,7 +139,7 @@ program define cexport, rclass
 
         local using `"`filename'"'
         syntax [varlist] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-            NOQUOTEif REPLACE DATAfmt NOLabel Verbose TIMEit ///
+            NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose TIMEit ///
             MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
     }
 
@@ -206,6 +207,49 @@ program define cexport, rclass
     else {
         * nolabel specified: export raw numeric values
         local export_varlist `varlist'
+    }
+
+    * Handle datafmt and datestring(): format date/time variables as strings
+    * This is done after value label handling (which may have created temp vars)
+    if "`datafmt'" != "" | `"`datestring'"' != "" {
+        local new_export_varlist ""
+        local formatted_vars ""
+        local export_idx = 0
+        foreach var of local export_varlist {
+            local export_idx = `export_idx' + 1
+            * Get original variable name for format lookup
+            * (export_varlist may contain temp vars from value label decoding)
+            local origvar : word `export_idx' of `varlist'
+
+            * Check if this is a date/time variable by looking at its format
+            local fmt : format `origvar'
+            local is_date_fmt = 0
+            if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
+                local is_date_fmt = 1
+            }
+
+            if `is_date_fmt' {
+                * This is a date/time variable - convert to formatted string
+                tempvar fmtvar_`export_idx'
+
+                * Use datestring format if specified, otherwise use variable's display format
+                * Note: missing values should become empty strings (like Stata's behavior)
+                if `"`datestring'"' != "" {
+                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', `"`datestring'"'))
+                }
+                else {
+                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', "`fmt'"))
+                }
+
+                local new_export_varlist `new_export_varlist' `fmtvar_`export_idx''
+                local formatted_vars `formatted_vars' `fmtvar_`export_idx''
+            }
+            else {
+                * Not a date variable - keep as is
+                local new_export_varlist `new_export_varlist' `var'
+            }
+        }
+        local export_varlist `new_export_varlist'
     }
 
     * Count variables and observations
@@ -417,7 +461,8 @@ program define cexport_excel, rclass
 
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [SHEET(string) FIRSTrow(string) ///
-        REPLACE NOLabel Verbose]
+        REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
+        CELL(string) MISSING(string) KEEPCELLfmt]
     if _rc {
         * 'using' not found - parse filename from positional arguments
         local rest `"`0'"'
@@ -494,11 +539,23 @@ program define cexport_excel, rclass
 
         local using `"`filename'"'
         syntax [varlist] [if] [in], [SHEET(string) FIRSTrow(string) ///
-            REPLACE NOLabel Verbose]
+            REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
+            CELL(string) MISSING(string) KEEPCELLfmt]
     }
 
     * Mark sample
     marksample touse, novarlist
+
+    * Validate cell option format (e.g., A1, B5, AA10)
+    if `"`cell'"' != "" {
+        local cell_upper = upper(`"`cell'"')
+        * Check format: 1-3 letters followed by 1 or more digits
+        if !regexm("`cell_upper'", "^[A-Z]+[0-9]+$") {
+            di as error "cexport excel: cell() must be a valid cell reference (e.g., A1, B5)"
+            exit 198
+        }
+        local cell `"`cell_upper'"'
+    }
 
     * Validate file extension
     local ext = substr(lower(`"`using'"'), -5, 5)
@@ -554,6 +611,47 @@ program define cexport_excel, rclass
     }
     else {
         local export_varlist `varlist'
+    }
+
+    * Handle datafmt and datestring(): format date/time variables as strings
+    if "`datafmt'" != "" | `"`datestring'"' != "" {
+        local new_export_varlist ""
+        local formatted_vars ""
+        local export_idx = 0
+        foreach var of local export_varlist {
+            local export_idx = `export_idx' + 1
+            * Get original variable name for format lookup
+            local origvar : word `export_idx' of `varlist'
+
+            * Check if this is a date/time variable by looking at its format
+            local fmt : format `origvar'
+            local is_date_fmt = 0
+            if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
+                local is_date_fmt = 1
+            }
+
+            if `is_date_fmt' {
+                * This is a date/time variable - convert to formatted string
+                tempvar fmtvar_`export_idx'
+
+                * Use datestring format if specified, otherwise use variable's display format
+                * Note: missing values should become empty strings (like Stata's behavior)
+                if `"`datestring'"' != "" {
+                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', `"`datestring'"'))
+                }
+                else {
+                    qui gen str `fmtvar_`export_idx'' = cond(missing(`origvar'), "", string(`origvar', "`fmt'"))
+                }
+
+                local new_export_varlist `new_export_varlist' `fmtvar_`export_idx''
+                local formatted_vars `formatted_vars' `fmtvar_`export_idx''
+            }
+            else {
+                * Not a date variable - keep as is
+                local new_export_varlist `new_export_varlist' `var'
+            }
+        }
+        local export_varlist `new_export_varlist'
     }
 
     * Count variables and observations
@@ -627,6 +725,9 @@ program define cexport_excel, rclass
     local opt_replace = cond("`replace'" != "", "replace", "")
     local opt_nolabel = cond("`nolabel'" != "", "nolabel", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
+    local opt_cell = cond(`"`cell'"' != "", `"cell=`cell'"', "")
+    local opt_missing = cond(`"`missing'"' != "", `"missing=`missing'"', "")
+    local opt_keepcellfmt = cond("`keepcellfmt'" != "", "keepcellfmt", "")
 
     * Pass variable names to plugin
     global CEXPORT_VARNAMES `varlist'
@@ -663,7 +764,7 @@ program define cexport_excel, rclass
 
     * Call plugin - pass touse variable for if/in filtering
     capture noisily plugin call ctools_plugin `touse' `export_varlist', ///
-        "cexport_xlsx `using' `opt_sheet' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose'"
+        "cexport_xlsx `using' `opt_sheet' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose' `opt_cell' `opt_missing' `opt_keepcellfmt'"
 
     local export_rc = _rc
 

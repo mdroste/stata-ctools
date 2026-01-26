@@ -84,9 +84,11 @@ void civreghdfe_compute_first_stage_F(
     - temp1: First-stage coefficients (K_iv x K_total)
     - first_stage_F: First-stage F statistics (K_endog)
     - weights, weight_type, N, K_exog, K_endog, K_iv, df_a: Parameters
-    - vce_type: 0=unadjusted, 1=robust, 2=cluster
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster, 3=dkraay
     - cluster_ids: Cluster identifiers (may be NULL)
     - num_clusters: Number of clusters
+    - kernel_type: HAC kernel type (0=none, 1=Bartlett, etc.)
+    - bw: HAC bandwidth
     - underid_stat: Output - underidentification test statistic
     - underid_df: Output - degrees of freedom
     - cd_f: Output - Cragg-Donald F statistic
@@ -109,6 +111,8 @@ void civreghdfe_compute_underid_test(
     ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
+    ST_int kernel_type,
+    ST_int bw,
     ST_double *underid_stat,
     ST_int *underid_df,
     ST_double *cd_f,
@@ -127,9 +131,11 @@ void civreghdfe_compute_underid_test(
     - ZtZ_inv: Precomputed (Z'Z)^-1 (K_iv x K_iv)
     - sigma2: Residual variance
     - weights, weight_type, N, K_exog, K_endog, K_iv: Parameters
-    - vce_type: 0=unadjusted, 1=robust, 2=cluster
+    - vce_type: 0=unadjusted, 1=robust, 2=cluster, 4=dkraay
     - cluster_ids: Cluster identifiers (may be NULL)
     - num_clusters: Number of clusters
+    - kernel_type: HAC kernel type (0=none, 1=Bartlett, etc.)
+    - bw: HAC bandwidth
     - sargan_stat: Output - overidentification test statistic
     - overid_df: Output - degrees of freedom (L - K_endog)
 */
@@ -147,6 +153,8 @@ void civreghdfe_compute_sargan_j(
     ST_int vce_type,
     const ST_int *cluster_ids,
     ST_int num_clusters,
+    ST_int kernel_type,
+    ST_int bw,
     ST_double *sargan_stat,
     ST_int *overid_df
 );
