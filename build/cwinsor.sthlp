@@ -192,8 +192,9 @@ observations in each group. Groups with fewer observations are left unchanged.
 {pstd}Winsorize with verbose timing output:{p_end}
 {phang2}{cmd:. cwinsor price mpg weight, verbose}{p_end}
 
-{pstd}Winsorize by industry at 2.5th and 97.5th percentiles:{p_end}
-{phang2}{cmd:. cwinsor returns, by(industry) cuts(2.5 97.5)}{p_end}
+{pstd}Winsorize by groups at 2.5th and 97.5th percentiles:{p_end}
+{phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. cwinsor ln_wage, by(race) cuts(2.5 97.5)}{p_end}
 
 {pstd}Limit parallelism to 4 threads:{p_end}
 {phang2}{cmd:. cwinsor price, threads(4)}{p_end}

@@ -218,38 +218,35 @@ use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Import a CSV file:{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear}{p_end}
+{pstd}Setup: create a CSV file to import:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. export delimited using auto.csv, replace}{p_end}
 
-{pstd}Import a tab-delimited file:{p_end}
-{phang2}{cmd:. cimport delimited using data.tsv, clear delimiters(tab)}{p_end}
+{pstd}Import the CSV file:{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear}{p_end}
 
 {pstd}Import with verbose output and lowercase variable names:{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear case(lower) verbose}{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear case(lower) verbose}{p_end}
 
-{pstd}Import only rows 1000-2000:{p_end}
-{phang2}{cmd:. cimport delimited using bigdata.csv, clear rowrange(1000:2000)}{p_end}
+{pstd}Import only the first 20 rows:{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear rowrange(1:20)}{p_end}
 
-{pstd}Import European-format file (comma decimal, period grouping):{p_end}
-{phang2}{cmd:. cimport delimited using european.csv, clear decimalseparator(,) groupseparator(.)}{p_end}
-
-{pstd}Import German-format file using locale:{p_end}
-{phang2}{cmd:. cimport delimited using german.csv, clear locale(de_DE) parselocale}{p_end}
-
-{pstd}Import only columns 2-4:{p_end}
-{phang2}{cmd:. cimport delimited using wide.csv, clear colrange(2:4)}{p_end}
+{pstd}Import only columns 1-3:{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear colrange(1:3)}{p_end}
 
 {pstd}Force all numerics to double precision:{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear asdouble}{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear asdouble}{p_end}
 
-{pstd}Force column 3 to be string (e.g., ZIP codes with leading zeros):{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear stringcols(3)}{p_end}
+{pstd}Force column 1 to be string (make is already string, but demonstrates syntax):{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear stringcols(1)}{p_end}
 
-{pstd}Force columns 2 and 4 to be numeric:{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear numericcols(2 4)}{p_end}
+{pstd}Create and import a tab-delimited file:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. export delimited using auto.tsv, delimiter(tab) replace}{p_end}
+{phang2}{cmd:. cimport delimited using auto.tsv, clear delimiters(tab)}{p_end}
 
-{pstd}Include empty lines as missing observations:{p_end}
-{phang2}{cmd:. cimport delimited using data.csv, clear emptylines(fill)}{p_end}
+{pstd}Import with multi-threading:{p_end}
+{phang2}{cmd:. cimport delimited using auto.csv, clear threads(4)}{p_end}
 
 
 {marker results}{...}

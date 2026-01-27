@@ -25,15 +25,15 @@ Fast drop-in replacements for a variety of Stata commands.
 | `ivreghdfe` | `civreghdfe` | IV, GMM, etc. with multi-way fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
-Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). Internal help files for each ctools program provide complete documentation.
+Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576); `csort` allows the user to select one of several different implemented parallelized sorting algorithms. Internal help files for each ctools program provide complete documentation.
 
-Speedups will vary depending on a lot of factors. The regression commands (*hdfe) and binscatter will uniformly run faster. On the other hand, csort can be slower than sort if the number of variables in memory is sufficiently large relative to the number of observations due to the overhead involved with copying data between Stata memory and C memory (and back).
+Speedups will vary depending on a lot of factors. Most commands will run appreciably on pretty much any dataset. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back), and these commands can actualy be *slower* than built-in `sort`/`merge` if the datset is sufficiently wide (many variables). If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably speed things up.
 
 
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 16.0+. It does not require any dependencies. Precompiled plugins for Windows, Mac OSX, and Linux are automatically included with installation, and ctools will automatically load the correct platform-specific plugin for your machine.
+ctools is compatible with Stata 16.0+. It does not require any dependencies.
 
 
 ## Installation
@@ -49,13 +49,13 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 1. Download or clone this repository
 2. Copy the contents of the `build/` directory to a location on Stata's adopath (e.g., your personal ado directory)
 
-The package automatically detects your operating system and architecture, loading the appropriate precompiled plugin.
+These installations will download all of the Stata program and documentation files (.ado and .sthlp) and compiled plugins for Linux, Windows, and Mac. The appropriate (operating system and architecture-dependent) compiled plugin is automatically invoked by ctools.
 
 
 ## Building from Source Files
 
 
-You probably do not need to compile the ctools C plugin yourself; GitHub automatically builds plugins for Windows, Mac (Intel and ARM/M-series), and Linux platforms. The installation instructions above will automatically include these plugins, and ctools chooses the appropriate plugin for your operating system/architecture automatically. If you want to build from source, you should make sure OpenMP is available on your system.
+You probably do not need to compile the ctools plugin syourself; GitHub automatically builds plugins for Windows, Mac (Intel and ARM/M-series), and Linux. If you want to build plugins from source, make sure OpenMP is available on your system.
 
 ```bash
 make              # Build for current platform
@@ -72,12 +72,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 ## Usage Notes and Limitations
 
 - All ctools programs follow a basic structure: (1) copy Stata's data in memory into C structures; (2) operate on those structures; (3) return data from Stata to C. *This means that ctools programs require more memory than the programs they replace.* In addition, some of these commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance, the runtime of `csort` is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
-- ctools only works with datasets smaller than 2^31-1 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed with an update to the Stata Plugin Interface. 
-
-
-## Compatibility
-
-- Stata 16.0+ for full compatibility; Stata 14.0+ probably works (untested).
+- ctools does not work with datasets exceeding 2^31 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed with an update to the Stata Plugin Interface. 
 
 
 ## Authorship
