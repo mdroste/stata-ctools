@@ -106,6 +106,13 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_hac_panel", &dval); hac_panel = (ST_int)dval;
     (void)kiefer;  /* Kiefer SEs are handled via vce_type == 2 with kernel */
 
+    /* DOF adjustment parameters */
+    ST_int dofminus = 0, sdofminus_opt = 0, nopartialsmall = 0, center = 0;
+    SF_scal_use("__civreghdfe_dofminus", &dval); dofminus = (ST_int)dval;
+    SF_scal_use("__civreghdfe_sdofminus", &dval); sdofminus_opt = (ST_int)dval;
+    SF_scal_use("__civreghdfe_nopartialsmall", &dval); nopartialsmall = (ST_int)dval;
+    SF_scal_use("__civreghdfe_center", &dval); center = (ST_int)dval;
+
     if (verbose) {
         char buf[512];
         snprintf(buf, sizeof(buf),
@@ -1131,7 +1138,8 @@ static ST_retcode do_iv_regression(void)
         df_a_for_vce, nested_adj, verbose,
         est_method, kclass_user, fuller_alpha, &lambda,
         kernel_type, bw, kiefer,
-        hac_panel_ids, num_hac_panels
+        hac_panel_ids, num_hac_panels,
+        sdofminus_opt, center
     );
 
     if (rc != STATA_OK) {
@@ -1211,7 +1219,9 @@ static ST_retcode do_iv_regression(void)
     /* Compute df_r:
        - For Driscoll-Kraay (vce_type == 4): df_r = T - 1 (time periods minus 1)
        - For clustered VCE (vce_type == 2, 3): df_r = num_clusters - 1 (Stata convention)
-       - Otherwise: df_r = N - K - df_a */
+       - Otherwise: df_r = N - K - df_a - dofminus
+       - nopartialsmall: exclude partialled variables from K for DOF calc */
+    ST_int K_for_dof = nopartialsmall ? (K_total - n_partial) : K_total;
     ST_int df_r_val;
     if (vce_type == 4 && dkraay_T > 0) {
         /* Driscoll-Kraay: df_r = T - 1 */
@@ -1219,7 +1229,7 @@ static ST_retcode do_iv_regression(void)
     } else if (has_cluster) {
         df_r_val = num_clusters - 1;
     } else {
-        df_r_val = N - K_total - df_a;
+        df_r_val = N - K_for_dof - df_a - dofminus;
     }
     if (df_r_val <= 0) df_r_val = 1;
     /* For rmse, use sdofminus = max(1, df_a_for_vce) when nested, df_a otherwise

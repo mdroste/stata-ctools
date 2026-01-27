@@ -10,6 +10,8 @@ program define civreghdfe, eclass
     syntax anything(name=0 equalok) [if] [in] [aw fw pw/], ///
         Absorb(varlist) ///
         [vce(string) ///
+        Robust ///
+        CLuster(varlist) ///
         TOLerance(real 1e-8) ///
         MAXiter(integer 500) ///
         Verbose TIMEit ///
@@ -27,20 +29,35 @@ program define civreghdfe, eclass
         KERNEL(string) ///
         DKRAAY(integer 0) ///
         KIEFER ///
+        CENTer ///
         B0(string) ///
         RESiduals(name) ///
+        RESiduals2 ///
         NOConstant ///
         Level(cilevel) ///
         noHEADer ///
         noFOOTer ///
         noOUTput ///
         TItle(string) ///
+        SUBtitle(string) ///
         DEPname(string) ///
         noid ///
         ORThog(varlist) ///
         ENDOGtest(varlist) ///
         REDundant(varlist) ///
         PARTial(varlist) ///
+        FWL(varlist) ///
+        DOFminus(integer 0) ///
+        SDOFminus(integer 0) ///
+        NOPARTIALsmall ///
+        EForm(string) ///
+        PLUS ///
+        NOOMIT:ted ///
+        OMIT:ted ///
+        VSQuish ///
+        NOEMPtycells ///
+        BASElevels ///
+        ALLBASElevels ///
         SAVEFirst ///
         SAVEFPrefix(string) ///
         SAVERF ///
@@ -51,10 +68,49 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_n_orthog
     capture scalar drop __civreghdfe_n_endogtest
     capture scalar drop __civreghdfe_n_partial
+    capture scalar drop __civreghdfe_dofminus
+    capture scalar drop __civreghdfe_sdofminus
+    capture scalar drop __civreghdfe_nopartialsmall
+    capture scalar drop __civreghdfe_center
     forval i = 1/10 {
         capture scalar drop __civreghdfe_orthog_`i'
         capture scalar drop __civreghdfe_endogtest_`i'
         capture scalar drop __civreghdfe_partial_`i'
+    }
+
+    * Handle standalone robust/cluster as aliases for vce()
+    if "`robust'" != "" & `"`vce'"' == "" {
+        local vce "robust"
+    }
+    if "`cluster'" != "" & `"`vce'"' == "" {
+        local vce "cluster `cluster'"
+    }
+    if "`robust'" != "" & "`cluster'" != "" {
+        di as error "cannot specify both robust and cluster()"
+        exit 198
+    }
+    if "`robust'" != "" & `"`vce'"' != "" & `"`vce'"' != "robust" {
+        di as error "cannot specify both robust and vce()"
+        exit 198
+    }
+    if "`cluster'" != "" & `"`vce'"' != "" & !regexm(`"`vce'"', "^cluster") {
+        di as error "cannot specify both cluster() and vce()"
+        exit 198
+    }
+
+    * Handle fwl() as alias for partial()
+    if "`fwl'" != "" & "`partial'" == "" {
+        local partial "`fwl'"
+    }
+    else if "`fwl'" != "" & "`partial'" != "" {
+        di as error "cannot specify both fwl() and partial()"
+        exit 198
+    }
+
+    * Handle residuals2 - auto-named residuals
+    if "`residuals2'" != "" {
+        capture drop _civreghdfe_resid
+        local residuals "_civreghdfe_resid"
     }
 
     * Parse the varlist with parentheses for endogenous vars and instruments
@@ -615,6 +671,12 @@ program define civreghdfe, eclass
     scalar __civreghdfe_dkraay_T = `dkraay_T'
     scalar __civreghdfe_hac_panel = `panel_aware_hac'
 
+    * DOF adjustment options
+    scalar __civreghdfe_dofminus = `dofminus'
+    scalar __civreghdfe_sdofminus = `sdofminus'
+    scalar __civreghdfe_nopartialsmall = ("`nopartialsmall'" != "")
+    scalar __civreghdfe_center = ("`center'" != "")
+
     * Update cluster scalars after Kiefer/dkraay handling
     * vce_type 4 = dkraay, which also uses cluster variable (time)
     scalar __civreghdfe_has_cluster = (`vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4)
@@ -1023,6 +1085,14 @@ program define civreghdfe, eclass
     * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
     ereturn scalar N_hdfe = `G'
 
+    * DOF adjustment options
+    if `dofminus' != 0 {
+        ereturn scalar dofminus = `dofminus'
+    }
+    if `sdofminus' != 0 {
+        ereturn scalar sdofminus_opt = `sdofminus'
+    }
+
     * Adjusted R-squared (matching ivreghdfe formula)
     * With absorb: noconstant is set, so constant not added to sdofminus
     * sdofminus = absorb_ct = max(1, HDFE.df_a)
@@ -1048,6 +1118,9 @@ program define civreghdfe, eclass
         }
         else {
             di as text "IV (2SLS) estimation"
+        }
+        if "`subtitle'" != "" {
+            di as text "`subtitle'"
         }
         di as text "{hline 20}"
         di as text ""
@@ -1112,7 +1185,18 @@ program define civreghdfe, eclass
 
     * Display coefficient table (if output not suppressed)
     if "`output'" == "" {
-        ereturn display, level(`level')
+        * Build display options string
+        local dispopt ""
+        if "`noomitted'" != "" local dispopt "`dispopt' noomitted"
+        if "`omitted'" != "" local dispopt "`dispopt' omitted"
+        if "`vsquish'" != "" local dispopt "`dispopt' vsquish"
+        if "`noemptycells'" != "" local dispopt "`dispopt' noemptycells"
+        if "`baselevels'" != "" local dispopt "`dispopt' baselevels"
+        if "`allbaselevels'" != "" local dispopt "`dispopt' allbaselevels"
+        if "`plus'" != "" local dispopt "`dispopt' plus"
+        if "`eform'" != "" local dispopt "`dispopt' eform(`eform')"
+
+        ereturn display, level(`level') `dispopt'
     }
 
     * Display full first-stage results (if ffirst specified)
@@ -1622,6 +1706,10 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_bw
     capture scalar drop __civreghdfe_dkraay
     capture scalar drop __civreghdfe_kiefer
+    capture scalar drop __civreghdfe_dofminus
+    capture scalar drop __civreghdfe_sdofminus
+    capture scalar drop __civreghdfe_nopartialsmall
+    capture scalar drop __civreghdfe_center
     capture scalar drop __civreghdfe_has_b0
     capture matrix drop __civreghdfe_b0
     capture scalar drop __civreghdfe_sargan

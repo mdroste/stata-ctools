@@ -272,7 +272,9 @@ ST_retcode ivest_compute_2sls(
     ST_int bw,
     ST_int kiefer,
     const ST_int *hac_panel_ids,
-    ST_int num_hac_panels
+    ST_int num_hac_panels,
+    ST_int sdofminus,
+    ST_int center
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

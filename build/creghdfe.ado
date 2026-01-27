@@ -23,7 +23,7 @@ program define creghdfe, eclass
     timer on 98
 
     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(string) [VCE(string) Verbose TIMEit ///
-        TOLerance(real 1e-8) MAXiter(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
+        TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
         DOFadjustments(string) GROUPvar(name) THReads(integer 0)]
 
     local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
@@ -295,7 +295,7 @@ program define creghdfe, eclass
     scalar __creghdfe_G = `nfe'             // number of FE groups
     scalar __creghdfe_drop_singletons = 1   // always drop singletons
     scalar __creghdfe_verbose = ("`verbose'" != "")
-    scalar __creghdfe_maxiter = `maxiter'
+    scalar __creghdfe_maxiter = `iterate'
     scalar __creghdfe_tolerance = `tolerance'
     scalar __creghdfe_standardize = ("`nostandardize'" == "")
     scalar __creghdfe_vce_type = `vcetype'

@@ -1541,3 +1541,30 @@ benchmark_destring x, testname("vs destring: float precision") generate(x) float
  ******************************************************************************/
 * End of cdestring validation
 }
+
+* Print summary when run standalone
+noisily {
+    di as text ""
+    di as text "{hline 55}"
+    di as text "cdestring Validation Summary"
+    di as text "{hline 55}"
+    di as text "  Passed:  " as result %5.0f $TESTS_PASSED
+    di as text "  Failed:  " as result %5.0f $TESTS_FAILED
+    di as text "  Total:   " as result %5.0f $TESTS_TOTAL
+    di as text "{hline 55}"
+
+    if $TESTS_FAILED > 0 {
+        di as error ""
+        di as error "Failed Tests:"
+        print_failures
+        di as text ""
+    }
+
+    if $TESTS_FAILED == 0 {
+        di as result "ALL TESTS PASSED"
+    }
+    else {
+        di as error "VALIDATION FAILED"
+    }
+    di as text ""
+}

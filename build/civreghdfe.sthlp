@@ -45,12 +45,18 @@ The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} 
 
 {syntab:VCE/SE}
 {synopt:{opt vce(vcetype)}}variance-covariance estimation: {opt un:adjusted}, {opt r:obust}, {opt cl:uster} {it:clustvar} [{it:clustvar2}]{p_end}
+{synopt:{opt r:obust}}heteroskedasticity-robust SEs (alias for vce(robust)){p_end}
+{synopt:{opt cl:uster(varlist)}}cluster-robust SEs (alias for vce(cluster varlist)){p_end}
 {synopt:{opt small}}use small-sample adjustments (df corrections){p_end}
+{synopt:{opt dofminus(#)}}subtract {it:#} from residual degrees of freedom{p_end}
+{synopt:{opt sdofminus(#)}}additional DOF adjustment for small-sample VCE correction{p_end}
+{synopt:{opt nopartialsmall}}exclude partialled variables from K in small-sample adjustment{p_end}
 
 {syntab:HAC Standard Errors}
 {synopt:{opt bw(#)}}bandwidth for kernel-based HAC estimation{p_end}
 {synopt:{opt kernel(string)}}kernel type for HAC: {opt bartlett}, {opt parzen}, {opt quadraticspectral}, {opt truncated}, {opt tukey}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with {it:#} lags (for panel data){p_end}
+{synopt:{opt center}}center score vectors before HAC outer product computation{p_end}
 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
@@ -72,8 +78,17 @@ The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} 
 {synopt:{opt nofoot:er}}suppress output footer (diagnostic tests){p_end}
 {synopt:{opt noout:put}}suppress coefficient table{p_end}
 {synopt:{opt ti:tle(string)}}custom title for output{p_end}
+{synopt:{opt sub:title(string)}}subtitle displayed below title{p_end}
 {synopt:{opt depn:ame(string)}}custom label for dependent variable in output{p_end}
 {synopt:{opt noid}}suppress underidentification test display{p_end}
+{synopt:{opt eform(string)}}report exponentiated coefficients with label {it:string}{p_end}
+{synopt:{opt plus}}draw plus sign on coefficient table{p_end}
+{synopt:{opt noomit:ted}}do not display omitted reference categories{p_end}
+{synopt:{opt omit:ted}}display omitted reference categories{p_end}
+{synopt:{opt vsquish}}suppress blank space in output{p_end}
+{synopt:{opt noemptycells}}do not display empty cells for interactions{p_end}
+{synopt:{opt baselev:els}}display base levels of factor variables{p_end}
+{synopt:{opt allbaselev:els}}display all base levels{p_end}
 
 {syntab:Diagnostic Tests}
 {synopt:{opt orth:og(varlist)}}test orthogonality/exogeneity of specified excluded instruments (C-statistic){p_end}
@@ -82,9 +97,11 @@ The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} 
 
 {syntab:Estimation}
 {synopt:{opt part:ial(varlist)}}partial out specified exogenous regressors via FWL{p_end}
+{synopt:{opt fwl(varlist)}}alias for {opt partial()} (Frisch-Waugh-Lovell){p_end}
 
 {syntab:Save Results}
 {synopt:{opt res:iduals(newvar)}}save residuals to new variable{p_end}
+{synopt:{opt res:iduals2}}save residuals to auto-named variable _civreghdfe_resid{p_end}
 {synopt:{opt savef:irst}}store estimation results using {cmd:estimates store}{p_end}
 {synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}

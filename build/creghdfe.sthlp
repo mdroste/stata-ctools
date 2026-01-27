@@ -40,7 +40,7 @@ by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe":sergiocorr
 
 {syntab:Convergence}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:1e-8}{p_end}
-{synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:10000}{p_end}
+{synopt:{opt iter:ate(#)}}maximum iterations; default is {cmd:10000}{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 
@@ -113,7 +113,7 @@ on the specified variable.
 demeaning algorithm. The default is {cmd:1e-8}.
 
 {phang}
-{opt maxiter(#)} specifies the maximum number of iterations for the
+{opt iterate(#)} specifies the maximum number of iterations for the
 demeaning algorithm. The default is {cmd:10000}.
 
 {phang}

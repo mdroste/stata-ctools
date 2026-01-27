@@ -1061,11 +1061,19 @@ ST_retcode ivest_compute_2sls(
     ST_int bw,
     ST_int kiefer,
     const ST_int *hac_panel_ids,
-    ST_int num_hac_panels
+    ST_int num_hac_panels,
+    ST_int sdofminus,
+    ST_int center
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
     ST_int i, j, k;
+
+    /* Suppress unused variable warnings for not-yet-implemented features */
+    /* TODO: sdofminus is for additional small-sample DOF adjustment in VCE */
+    /* TODO: center is for centering HAC score vectors before outer product */
+    (void)sdofminus;
+    (void)center;
 
     /* Determine k value based on estimation method */
     ST_double kclass = 1.0;  /* Default: 2SLS */
