@@ -166,17 +166,39 @@ the data transfer overhead may reduce the relative performance advantage.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Simple one-to-one merge:{p_end}
-{phang2}{cmd:. cmerge 1:1 id using data2.dta}{p_end}
+{pstd}Create example datasets for merging:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. keep make price mpg}{p_end}
+{phang2}{cmd:. save auto_master, replace}{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. keep make weight length foreign}{p_end}
+{phang2}{cmd:. save auto_using, replace}{p_end}
 
-{pstd}Many-to-one merge keeping only matched observations:{p_end}
-{phang2}{cmd:. cmerge m:1 state year using statedata.dta, keep(match)}{p_end}
+{pstd}Simple one-to-one merge on make:{p_end}
+{phang2}{cmd:. use auto_master, clear}{p_end}
+{phang2}{cmd:. cmerge 1:1 make using auto_using}{p_end}
+
+{pstd}Keep only matched observations:{p_end}
+{phang2}{cmd:. use auto_master, clear}{p_end}
+{phang2}{cmd:. cmerge 1:1 make using auto_using, keep(match)}{p_end}
 
 {pstd}Merge with verbose output and no merge variable:{p_end}
-{phang2}{cmd:. cmerge m:1 id using lookup.dta, nogenerate verbose}{p_end}
+{phang2}{cmd:. use auto_master, clear}{p_end}
+{phang2}{cmd:. cmerge 1:1 make using auto_using, nogenerate verbose}{p_end}
 
 {pstd}Keep only selected variables from using dataset:{p_end}
-{phang2}{cmd:. cmerge 1:1 id using fulldata.dta, keepusing(var1 var2)}{p_end}
+{phang2}{cmd:. use auto_master, clear}{p_end}
+{phang2}{cmd:. cmerge 1:1 make using auto_using, keepusing(weight foreign)}{p_end}
+
+{pstd}Many-to-one merge example with panel data:{p_end}
+{phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. keep idcode year ln_wage}{p_end}
+{phang2}{cmd:. save nlswork_wages, replace}{p_end}
+{phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. collapse (first) race, by(idcode)}{p_end}
+{phang2}{cmd:. save nlswork_person, replace}{p_end}
+{phang2}{cmd:. use nlswork_wages, clear}{p_end}
+{phang2}{cmd:. cmerge m:1 idcode using nlswork_person}{p_end}
 
 
 {marker results}{...}

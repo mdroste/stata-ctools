@@ -240,28 +240,30 @@ lexicographic (ASCII) order.
 {phang2}{cmd:. csort make, algorithm(msd)}{p_end}
 
 {pstd}Use sample sort for large datasets with many cores:{p_end}
-{phang2}{cmd:. csort id, algorithm(sample)}{p_end}
+{phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. csort idcode, algorithm(sample)}{p_end}
 
 {pstd}Use counting sort for integer data (e.g., year):{p_end}
 {phang2}{cmd:. csort year, algorithm(counting)}{p_end}
 
 {pstd}Use parallel merge sort for stable sorting:{p_end}
-{phang2}{cmd:. csort id, algorithm(merge)}{p_end}
+{phang2}{cmd:. csort idcode, algorithm(merge)}{p_end}
 
 {pstd}Use IPS4o for large datasets with memory efficiency:{p_end}
-{phang2}{cmd:. csort id, algorithm(ips4o)}{p_end}
+{phang2}{cmd:. csort idcode, algorithm(ips4o)}{p_end}
 
 {pstd}Sort with detailed progress information:{p_end}
 {phang2}{cmd:. csort price mpg, verbose}{p_end}
 
 {pstd}Use streaming mode for wide datasets with limited memory:{p_end}
-{phang2}{cmd:. csort id, stream}{p_end}
+{phang2}{cmd:. csort idcode, stream}{p_end}
 
 {pstd}Limit parallelism to 4 threads:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csort price, threads(4)}{p_end}
 
 {pstd}Sort without setting Stata's sortedby attribute (faster for intermediate ops):{p_end}
-{phang2}{cmd:. csort id, nosortedby}{p_end}
+{phang2}{cmd:. csort price, nosortedby}{p_end}
 
 
 {marker results}{...}

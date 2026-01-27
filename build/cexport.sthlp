@@ -204,60 +204,54 @@ has no effect when creating a new file. Requires the {cmd:replace} option.
 {marker examples}{...}
 {title:Examples}
 
+{pstd}Setup:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+
 {pstd}{ul:Delimited export examples}
 
 {pstd}Export all variables to a CSV file:{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, replace}{p_end}
+{phang2}{cmd:. cexport delimited using auto.csv, replace}{p_end}
 
 {pstd}Export selected variables:{p_end}
-{phang2}{cmd:. cexport delimited id name value using output.csv, replace}{p_end}
+{phang2}{cmd:. cexport delimited make price mpg using auto_subset.csv, replace}{p_end}
 
 {pstd}Export to tab-delimited file:{p_end}
-{phang2}{cmd:. cexport delimited using output.tsv, delimiter(tab) replace}{p_end}
+{phang2}{cmd:. cexport delimited using auto.tsv, delimiter(tab) replace}{p_end}
 
 {pstd}Export without header row:{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, novarnames replace}{p_end}
+{phang2}{cmd:. cexport delimited using auto_noheader.csv, novarnames replace}{p_end}
 
 {pstd}Export with verbose timing output:{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, replace verbose timeit}{p_end}
+{phang2}{cmd:. cexport delimited using auto.csv, replace verbose timeit}{p_end}
 
 {pstd}Export subset of observations:{p_end}
-{phang2}{cmd:. cexport delimited using subset.csv if year > 2020, replace}{p_end}
+{phang2}{cmd:. cexport delimited using foreign_cars.csv if foreign == 1, replace}{p_end}
 
 {pstd}Export with date formatting (using variable display formats):{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, datafmt replace}{p_end}
-
-{pstd}Export dates in ISO 8601 format:{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, datestring("%tdCCYY-NN-DD") replace}{p_end}
-
-{pstd}Export datetimes in ISO 8601 format:{p_end}
-{phang2}{cmd:. cexport delimited using output.csv, datestring("%tcCCYY-NN-DD!THH:MM:SS") replace}{p_end}
+{phang2}{cmd:. cexport delimited using auto.csv, datafmt replace}{p_end}
 
 {pstd}{ul:Excel export examples}
 
 {pstd}Export all variables to an Excel file:{p_end}
-{phang2}{cmd:. cexport excel using output.xlsx, replace}{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, replace}{p_end}
 
 {pstd}Export with custom sheet name:{p_end}
-{phang2}{cmd:. cexport excel using output.xlsx, sheet("Data") replace}{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, sheet("AutoData") replace}{p_end}
 
 {pstd}Export without variable names in first row:{p_end}
-{phang2}{cmd:. cexport excel using output.xlsx, firstrow(nonames) replace}{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, firstrow(nonames) replace}{p_end}
 
 {pstd}Export selected variables:{p_end}
-{phang2}{cmd:. cexport excel id name value using output.xlsx, replace}{p_end}
+{phang2}{cmd:. cexport excel make price mpg weight using auto_subset.xlsx, replace}{p_end}
 
 {pstd}Export subset of observations:{p_end}
-{phang2}{cmd:. cexport excel using subset.xlsx if year > 2020, replace}{p_end}
+{phang2}{cmd:. cexport excel using domestic.xlsx if foreign == 0, replace}{p_end}
 
 {pstd}Export starting at cell B5:{p_end}
-{phang2}{cmd:. cexport excel using output.xlsx, cell(B5) replace}{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, cell(B5) replace}{p_end}
 
 {pstd}Export with custom missing value:{p_end}
-{phang2}{cmd:. cexport excel using output.xlsx, missing("NA") replace}{p_end}
-
-{pstd}Update data in formatted template (preserving formatting):{p_end}
-{phang2}{cmd:. cexport excel using template.xlsx, cell(B2) keepcellfmt replace}{p_end}
+{phang2}{cmd:. cexport excel using auto.xlsx, missing("NA") replace}{p_end}
 
 
 {marker results}{...}

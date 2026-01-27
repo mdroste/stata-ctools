@@ -144,14 +144,27 @@ including timing for each stage of the computation.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Basic regression with firm and year fixed effects:{p_end}
-{phang2}{cmd:. creghdfe y x1 x2, absorb(firm year)}{p_end}
+{pstd}Setup:{p_end}
+{phang2}{cmd:. sysuse auto, clear}{p_end}
+
+{pstd}Basic regression with a single fixed effect:{p_end}
+{phang2}{cmd:. creghdfe price mpg weight, absorb(foreign)}{p_end}
+
+{pstd}With robust standard errors:{p_end}
+{phang2}{cmd:. creghdfe price mpg weight, absorb(foreign) vce(robust)}{p_end}
+
+{pstd}Using panel data with two-way fixed effects:{p_end}
+{phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. creghdfe ln_wage age ttl_exp tenure, absorb(idcode year)}{p_end}
 
 {pstd}With clustered standard errors:{p_end}
-{phang2}{cmd:. creghdfe y x1 x2, absorb(firm year) vce(cluster firm)}{p_end}
+{phang2}{cmd:. creghdfe ln_wage age ttl_exp tenure, absorb(idcode year) vce(cluster idcode)}{p_end}
 
-{pstd}With verbose output:{p_end}
-{phang2}{cmd:. creghdfe y x1 x2, absorb(firm year) verbose}{p_end}
+{pstd}Save residuals:{p_end}
+{phang2}{cmd:. creghdfe ln_wage age ttl_exp, absorb(idcode) resid2(myresid)}{p_end}
+
+{pstd}With verbose output showing timing:{p_end}
+{phang2}{cmd:. creghdfe ln_wage age ttl_exp tenure, absorb(idcode year) verbose}{p_end}
 
 
 {marker results}{...}
