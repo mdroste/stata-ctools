@@ -12,17 +12,19 @@ Extremely fast drop-in replacements for a variety of Stata commands.
 
 | Stata command | Replaced with | Description | Typical speedup |
 | --- | --- | --- | ---: |
-| `import delimited` | `cimport delimited` | Import text-delimited files | **30x** |
-| `export delimited` | `cexport delimited` | Export text-delimited files | **25x** |
+| `import` | `cimport` | Import text-delimited and Excel data | **30x** |
+| `export` | `cexport` | Export text-delimited and Excel data | **25x** |
 | `sort` | `csort` | Sort dataset | **1-5x** |
 | `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
-| `encode`/`decode` | `cencode`/`cdecode` | Recast encoded string as labeled numeric type | **10-20x** |
+| `encode` | `cencode` | Recast string as labeled numeric | **10-20x** |
+| `decode` | `cdecode` | Recast labeled numeric as string | **10-20x** |
 | `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
-| `gstats winsor` | `cwinsor` | Winsorization | **2-10x** |
-| `bsample`/`sample` | `cbsample`/`csample` | Resampling with/without replacement | **2-5x** |
+| `gstats winsor` | `cwinsor` | Winsorize variables | **2-10x** |
+| `sample` | `csample` | Resampling without replacement | **2-5x** |
+| `bsample` | `cbsample` | Resampling with replacement | **2-5x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-20x** |
-| `ivreghdfe` | `civreghdfe` | 2SLS, GMM, etc. with multi-way fixed effects | **10-20x** |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-20x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
 Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576); `csort` allows the user to select one of several different implemented parallelized sorting algorithms. Internal help files for each ctools program provide complete documentation.
