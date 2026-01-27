@@ -16,12 +16,12 @@ Extremely fast drop-in replacements for a variety of Stata commands.
 | `export` | `cexport` | Export text-delimited and Excel data | **25x** |
 | `sort` | `csort` | Sort dataset | **1-5x** |
 | `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
+| `sample` | `csample` | Resampling without replacement | **2-5x** |
+| `bsample` | `cbsample` | Resampling with replacement | **2-5x** |
 | `encode` | `cencode` | Recast string as labeled numeric | **10-20x** |
 | `decode` | `cdecode` | Recast labeled numeric as string | **10-20x** |
 | `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
 | `gstats winsor` | `cwinsor` | Winsorize variables | **2-10x** |
-| `sample` | `csample` | Resampling without replacement | **2-5x** |
-| `bsample` | `cbsample` | Resampling with replacement | **2-5x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
