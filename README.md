@@ -23,8 +23,8 @@ Extremely fast drop-in replacements for a variety of Stata commands.
 | `sample` | `csample` | Resampling without replacement | **2-5x** |
 | `bsample` | `cbsample` | Resampling with replacement | **2-5x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-20x** |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-20x** |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
 Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576); `csort` allows the user to select one of several different implemented parallelized sorting algorithms. Internal help files for each ctools program provide complete documentation.
