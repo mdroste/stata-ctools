@@ -11,6 +11,10 @@
 {phang}
 {bf:csample} {hline 2} C-accelerated random sampling without replacement
 
+{pstd}
+{cmd:csample} is a high-performance drop-in replacement for Stata's {help sample:sample}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -142,12 +146,16 @@ Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
 {title:Author}
 
 {pstd}
-Part of the {browse "https://github.com/mdroste/stata-ctools":ctools} package.
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {marker seealso}{...}
 {title:Also see}
 
 {psee}
-{space 2}Help:  {help sample:sample}, {help bsample:bsample}, {help cbsample:cbsample}
+Manual: {bf:[D] sample}
+
+{psee}
+Online: {help sample}, {help bsample}, {help cbsample}, {help ctools}
 {p_end}

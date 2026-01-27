@@ -11,6 +11,10 @@
 {phang}
 {bf:cbsample} {hline 2} C-accelerated bootstrap sampling with replacement
 
+{pstd}
+{cmd:cbsample} is a high-performance drop-in replacement for Stata's {help bsample:bsample}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -162,12 +166,16 @@ structure of the original data.
 {title:Author}
 
 {pstd}
-Part of the {browse "https://github.com/mdroste/stata-ctools":ctools} package.
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {marker seealso}{...}
 {title:Also see}
 
 {psee}
-{space 2}Help:  {help bsample:bsample}, {help bootstrap:bootstrap}, {help csample:csample}
+Manual: {bf:[R] bsample}
+
+{psee}
+Online: {help bsample}, {help bootstrap}, {help csample}, {help ctools}
 {p_end}

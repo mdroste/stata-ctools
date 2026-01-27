@@ -30,9 +30,14 @@
 {title:Description}
 
 {pstd}
-{cmd:ctools} is a collection of high-performance C-based tools for Stata.
-These tools leverage optimized C code to provide significant speed improvements
-over native Stata commands for common data operations.
+{cmd:ctools} is a suite of high-performance C-accelerated Stata commands.
+These commands use optimized C plugins with OpenMP parallelization to provide
+significant speed improvements over native Stata commands and popular user-written
+packages for common data operations and statistical estimation.
+
+{pstd}
+All commands are designed as drop-in replacements with syntax that closely
+matches the original commands they replace.
 
 
 {marker options}{...}
@@ -48,25 +53,41 @@ over native Stata commands for common data operations.
 {marker commands}{...}
 {title:Available Commands}
 
-{phang}
-{help csort} {hline 2} High-performance radix sort. Significantly faster than
-Stata's native {cmd:sort} command for large datasets.
+{pstd}
+{ul:Data Management}
 
-{phang}
-{help cmerge} {hline 2} C-accelerated merge. Drop-in replacement for Stata's
-{cmd:merge} command with parallel data loading and optimized sorting.
+{p2colset 5 20 22 2}{...}
+{p2col:{help csort}}High-performance parallel sorting (replaces {help sort}){p_end}
+{p2col:{help cmerge}}C-accelerated merge (replaces {help merge}){p_end}
+{p2col:{help cimport}}Multi-threaded CSV import (replaces {help import delimited}){p_end}
+{p2col:{help cexport}}Parallel data export to CSV/Excel (replaces {help export delimited}/{help export excel}){p_end}
+{p2col:{help cencode}}Parallel string encoding (replaces {help encode}){p_end}
+{p2col:{help cdecode}}Parallel numeric decoding (replaces {help decode}){p_end}
+{p2col:{help cdestring}}Parallel string-to-numeric conversion (replaces {help destring}){p_end}
 
-{phang}
-{help cimport} {hline 2} C-accelerated CSV import. High-performance replacement
-for {cmd:import delimited} with multi-threaded parallel parsing.
+{pstd}
+{ul:Sampling}
 
-{phang}
-{help cexport} {hline 2} C-accelerated CSV export. High-performance replacement
-for {cmd:export delimited} with parallel data loading.
+{p2col:{help csample}}Random sampling without replacement (replaces {help sample}){p_end}
+{p2col:{help cbsample}}Bootstrap sampling with replacement (replaces {help bsample}){p_end}
 
-{phang}
-{help creghdfe} {hline 2} C-accelerated high-dimensional fixed effects regression.
-High-performance replacement for {cmd:reghdfe} with optimized fixed effects absorption.
+{pstd}
+{ul:Data Transformation}
+
+{p2col:{help cwinsor}}Parallel winsorization (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}){p_end}
+
+{pstd}
+{ul:Statistical Estimation}
+
+{p2col:{help creghdfe}}HDFE linear regression (replaces {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}){p_end}
+{p2col:{help civreghdfe}}IV/2SLS with HDFE (replaces {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}){p_end}
+{p2col:{help cqreg}}Quantile regression with HDFE (replaces {help qreg}){p_end}
+
+{pstd}
+{ul:Visualization}
+
+{p2col:{help cbinscatter}}Binned scatter plots (replaces {browse "https://github.com/michaelstepner/binscatter":binscatter}){p_end}
+{p2colreset}{...}
 
 
 {marker examples}{...}
@@ -85,11 +106,26 @@ High-performance replacement for {cmd:reghdfe} with optimized fixed effects abso
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
+
+
+{title:Acknowledgments}
+
+{pstd}
+Several commands in this package are inspired by excellent user-written packages.
+We gratefully acknowledge:
+
+{p 8 12 2}- Sergio Correia for {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} and
+{browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}{p_end}
+{p 8 12 2}- Michael Stepner for {browse "https://github.com/michaelstepner/binscatter":binscatter}{p_end}
+{p 8 12 2}- Yujun Lian for {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}{p_end}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help csort}, {help cmerge}, {help cimport}, {help cexport}, {help creghdfe}
+Online: {help csort}, {help cmerge}, {help cimport}, {help cexport}, {help creghdfe},
+{help civreghdfe}, {help cqreg}, {help cbinscatter}, {help cencode}, {help cdecode},
+{help cdestring}, {help cwinsor}, {help csample}, {help cbsample}
 {p_end}

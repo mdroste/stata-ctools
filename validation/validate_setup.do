@@ -2,13 +2,7 @@
  * validate_setup.do
  *
  * Core validation framework for ctools test suite
- * Provides helper programs and consistent PASS/FAIL output formatting
- *
- * Output format:
- *   [PASS] test description
- *   [FAIL] test description: detailed error message
- *
- * Failed tests are collected and displayed in a summary report at the end.
+ * Minimal output: only summary table and failures are displayed
  ******************************************************************************/
 
 version 14.0
@@ -26,7 +20,8 @@ global TESTS_PASSED = 0
 global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
 
-* Default tolerance
+* Default tolerance - do NOT change this value except by human decision.
+* This tolerance ensures numerical precision of ctools implementations.
 global DEFAULT_TOL = 1e-7
 
 * Initialize failure tracking (up to 100 failures)
@@ -36,18 +31,18 @@ forvalues i = 1/100 {
 }
 
 /*******************************************************************************
- * test_pass - Record a passing test
+ * test_pass - Record a passing test (silent)
  ******************************************************************************/
 capture program drop test_pass
 program define test_pass
     args testname
     global TESTS_PASSED = $TESTS_PASSED + 1
     global TESTS_TOTAL = $TESTS_TOTAL + 1
-    di as result "[PASS] `testname'"
+    * Silent - no output
 end
 
 /*******************************************************************************
- * test_fail - Record a failing test with description
+ * test_fail - Record a failing test with description (silent, stores for later)
  ******************************************************************************/
 capture program drop test_fail
 program define test_fail
@@ -55,22 +50,17 @@ program define test_fail
     global TESTS_FAILED = $TESTS_FAILED + 1
     global TESTS_TOTAL = $TESTS_TOTAL + 1
 
-    * Store failure details
+    * Store failure details (silently)
     global FAILURE_COUNT = $FAILURE_COUNT + 1
     local idx = $FAILURE_COUNT
     if `idx' <= 100 {
         global FAILURE_`idx' = "`testname': `reason'"
     }
-
-    * Print failure immediately (with emphasis)
-    di as error ""
-    di as error ">>> [FAIL] `testname'"
-    di as error ">>>        `reason'"
-    di as error ""
+    * No immediate output - failures shown in summary
 end
 
 /*******************************************************************************
- * print_failures - Print all recorded failures
+ * print_failures - Print all recorded failures (called by validate_all.do)
  ******************************************************************************/
 capture program drop print_failures
 program define print_failures
@@ -78,14 +68,9 @@ program define print_failures
         exit
     }
 
-    di as error ""
-    di as error "{hline 70}"
-    di as error "FAILED TESTS DETAIL:"
-    di as error "{hline 70}"
-
     local max_to_show = min($FAILURE_COUNT, 100)
     forvalues i = 1/`max_to_show' {
-        di as error "  `i'. ${FAILURE_`i'}"
+        di as error "  ${FAILURE_`i'}"
     }
 
     if $FAILURE_COUNT > 100 {
@@ -93,9 +78,25 @@ program define print_failures
         di as error ""
         di as error "  ... and `more' more failures not shown"
     }
+end
 
-    di as error "{hline 70}"
-    di as error ""
+/*******************************************************************************
+ * print_section - No-op for backwards compatibility (silent)
+ ******************************************************************************/
+capture program drop print_section
+program define print_section
+    args title
+    * Silent - no output
+end
+
+/*******************************************************************************
+ * print_summary - No-op for backwards compatibility (silent)
+ * Summary is now printed only by validate_all.do
+ ******************************************************************************/
+capture program drop print_summary
+program define print_summary
+    args component
+    * Silent - no output (validate_all.do handles summary)
 end
 
 /*******************************************************************************
@@ -227,44 +228,6 @@ program define assert_data_equal
     else {
         test_fail "`testname'" "datasets differ"
     }
-end
-
-/*******************************************************************************
- * print_section - Print section header
- ******************************************************************************/
-capture program drop print_section
-program define print_section
-    args title
-    di as text ""
-    di as text "{hline 70}"
-    di as text "`title'"
-    di as text "{hline 70}"
-end
-
-/*******************************************************************************
- * print_summary - Print final test summary with failure details
- ******************************************************************************/
-capture program drop print_summary
-program define print_summary
-    args component
-
-    * Print detailed failure report first
-    print_failures
-
-    di as text ""
-    di as text "{hline 70}"
-    di as text "SUMMARY: `component'"
-    di as text "{hline 70}"
-    di as text "Tests passed: " as result $TESTS_PASSED as text " / " as result $TESTS_TOTAL
-    di as text "Tests failed: " as result $TESTS_FAILED
-    di as text "{hline 70}"
-    if $TESTS_FAILED > 0 {
-        di as error "VALIDATION FAILED - See failed tests above"
-    }
-    else {
-        di as result "ALL TESTS PASSED"
-    }
-    di as text "{hline 70}"
 end
 
 /*******************************************************************************

@@ -17,11 +17,6 @@ if _rc != 0 {
 
 quietly {
 
-noi di as text ""
-noi di as text "======================================================================"
-noi di as text "              CDESTRING VALIDATION TEST SUITE"
-noi di as text "======================================================================"
-
 /*******************************************************************************
  * Helper: Compare cdestring vs destring
  ******************************************************************************/
@@ -60,7 +55,7 @@ program define benchmark_destring
         local opts_s "replace `common_opts'"
     }
     else {
-        noi test_fail "`testname'" "must specify generate or replace"
+        test_fail "`testname'" "must specify generate or replace"
         exit
     }
 
@@ -93,12 +88,12 @@ program define benchmark_destring
 
         * Check both succeeded or both failed
         if `rc_c' != `rc_s' {
-            noi test_fail "`testname'" "cdestring rc=`rc_c', destring rc=`rc_s'"
+            test_fail "`testname'" "cdestring rc=`rc_c', destring rc=`rc_s'"
             exit
         }
 
         if `rc_c' != 0 {
-            noi test_pass "`testname' (both error as expected)"
+            test_pass "`testname' (both error as expected)"
             exit
         }
 
@@ -113,10 +108,10 @@ program define benchmark_destring
         }
 
         if `ndiff_total' > 0 {
-            noi test_fail "`testname'" "`ndiff_total' values differ"
+            test_fail "`testname'" "`ndiff_total' values differ"
         }
         else {
-            noi test_pass "`testname'"
+            test_pass "`testname'"
         }
 
         * Cleanup
@@ -145,7 +140,7 @@ program define benchmark_destring
 
         * Check both succeeded or both failed
         if `rc_c' != `rc_s' {
-            noi test_fail "`testname'" "cdestring rc=`rc_c', destring rc=`rc_s'"
+            test_fail "`testname'" "cdestring rc=`rc_c', destring rc=`rc_s'"
             * Cleanup
             foreach v of local gen_c {
                 capture drop `v'
@@ -157,7 +152,7 @@ program define benchmark_destring
         }
 
         if `rc_c' != 0 {
-            noi test_pass "`testname' (both error as expected)"
+            test_pass "`testname' (both error as expected)"
             exit
         }
 
@@ -177,10 +172,10 @@ program define benchmark_destring
         }
 
         if `ndiff_total' > 0 {
-            noi test_fail "`testname'" "`ndiff_total' values differ"
+            test_fail "`testname'" "`ndiff_total' values differ"
         }
         else {
-            noi test_pass "`testname'"
+            test_pass "`testname'"
         }
 
         * Cleanup
@@ -196,24 +191,24 @@ end
 /*******************************************************************************
  * SECTION 1: Plugin functionality check
  ******************************************************************************/
-noi print_section "Plugin Check"
+print_section "Plugin Check"
 
 clear
 set obs 10
 gen str10 numstr = string(_n)
 capture noisily cdestring numstr, generate(numval)
 if _rc != 0 {
-    noi test_fail "cdestring plugin load" "plugin returned error `=_rc'"
-    noi print_summary "cdestring"
+    test_fail "cdestring plugin load" "plugin returned error `=_rc'"
+    print_summary "cdestring"
     exit 1
 }
-noi test_pass "cdestring plugin loads and runs"
+test_pass "cdestring plugin loads and runs"
 drop numval
 
 /*******************************************************************************
  * SECTION 2: Basic functionality (10 tests)
  ******************************************************************************/
-noi print_section "Basic Functionality"
+print_section "Basic Functionality"
 
 * Test 2.1: Basic conversion creates numeric variable
 clear
@@ -222,17 +217,17 @@ gen str10 x = string(_n)
 cdestring x, generate(x_num)
 capture confirm numeric variable x_num
 if _rc == 0 {
-    noi test_pass "basic conversion creates numeric variable"
+    test_pass "basic conversion creates numeric variable"
 }
 else {
-    noi test_fail "basic conversion" "variable not numeric"
+    test_fail "basic conversion" "variable not numeric"
 }
 
 * Test 2.2: Compare with destring - simple integers
 clear
 set obs 100
 gen str10 x = string(_n)
-noi benchmark_destring x, testname("vs destring: simple integers") generate(x)
+benchmark_destring x, testname("vs destring: simple integers") generate(x)
 
 * Test 2.3: Values correctly converted
 clear
@@ -248,10 +243,10 @@ forvalues i = 1/5 {
     }
 }
 if `pass' {
-    noi test_pass "values correctly converted"
+    test_pass "values correctly converted"
 }
 else {
-    noi test_fail "values converted" "mismatch found"
+    test_fail "values converted" "mismatch found"
 }
 
 * Test 2.4: Single observation
@@ -260,10 +255,10 @@ set obs 1
 gen str10 x = "42"
 cdestring x, generate(x_num)
 if x_num[1] == 42 {
-    noi test_pass "single observation"
+    test_pass "single observation"
 }
 else {
-    noi test_fail "single observation" "got `=x_num[1]'"
+    test_fail "single observation" "got `=x_num[1]'"
 }
 
 * Test 2.5: verbose option
@@ -272,10 +267,10 @@ set obs 10
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num) verbose
 if _rc == 0 {
-    noi test_pass "verbose option"
+    test_pass "verbose option"
 }
 else {
-    noi test_fail "verbose option" "rc=`=_rc'"
+    test_fail "verbose option" "rc=`=_rc'"
 }
 
 * Test 2.6: threads option
@@ -284,10 +279,10 @@ set obs 100
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num) threads(2)
 if _rc == 0 {
-    noi test_pass "threads(2) option"
+    test_pass "threads(2) option"
 }
 else {
-    noi test_fail "threads option" "rc=`=_rc'"
+    test_fail "threads option" "rc=`=_rc'"
 }
 
 * Test 2.7: Negative numbers
@@ -296,17 +291,17 @@ set obs 10
 gen str10 x = string(_n - 5)
 cdestring x, generate(x_num)
 if x_num[1] == -4 & x_num[5] == 0 & x_num[10] == 5 {
-    noi test_pass "negative numbers"
+    test_pass "negative numbers"
 }
 else {
-    noi test_fail "negative numbers" "wrong values"
+    test_fail "negative numbers" "wrong values"
 }
 
 * Test 2.8: Compare negative numbers with destring
 clear
 set obs 50
 gen str10 x = string(_n - 25)
-noi benchmark_destring x, testname("vs destring: negative integers") generate(x)
+benchmark_destring x, testname("vs destring: negative integers") generate(x)
 
 * Test 2.9: Decimals
 clear
@@ -320,22 +315,22 @@ replace x = "-99.99" in 5
 cdestring x, generate(x_num)
 local pass = (abs(x_num[1] - 1.5) < 1e-10) & (abs(x_num[3] - 3.125) < 1e-10)
 if `pass' {
-    noi test_pass "decimal numbers"
+    test_pass "decimal numbers"
 }
 else {
-    noi test_fail "decimal numbers" "wrong values"
+    test_fail "decimal numbers" "wrong values"
 }
 
 * Test 2.10: Compare decimals with destring
 clear
 set obs 100
 gen str20 x = string(_n / 7, "%20.10f")
-noi benchmark_destring x, testname("vs destring: decimal numbers") generate(x)
+benchmark_destring x, testname("vs destring: decimal numbers") generate(x)
 
 /*******************************************************************************
  * SECTION 3: Replace option (10 tests)
  ******************************************************************************/
-noi print_section "Replace Option"
+print_section "Replace Option"
 
 * Test 3.1: Replace converts in place
 clear
@@ -344,10 +339,10 @@ gen str10 x = string(_n)
 cdestring x, replace
 capture confirm numeric variable x
 if _rc == 0 {
-    noi test_pass "replace converts in place"
+    test_pass "replace converts in place"
 }
 else {
-    noi test_fail "replace option" "variable still string"
+    test_fail "replace option" "variable still string"
 }
 
 * Test 3.2: Replace preserves values
@@ -357,29 +352,29 @@ gen str10 x = string(_n * 100)
 cdestring x, replace
 local pass = (x[1] == 100) & (x[3] == 300) & (x[5] == 500)
 if `pass' {
-    noi test_pass "replace preserves values"
+    test_pass "replace preserves values"
 }
 else {
-    noi test_fail "replace values" "wrong conversion"
+    test_fail "replace values" "wrong conversion"
 }
 
 * Test 3.3: Compare replace with destring
 clear
 set obs 50
 gen str10 x = string(_n)
-noi benchmark_destring x, testname("vs destring: replace option") replace
+benchmark_destring x, testname("vs destring: replace option") replace
 
 * Test 3.4: Replace with negative numbers
 clear
 set obs 20
 gen str10 x = string(_n - 10)
-noi benchmark_destring x, testname("vs destring: replace negative") replace
+benchmark_destring x, testname("vs destring: replace negative") replace
 
 * Test 3.5: Replace with decimals
 clear
 set obs 30
 gen str20 x = string(_n / 3, "%10.6f")
-noi benchmark_destring x, testname("vs destring: replace decimals") replace
+benchmark_destring x, testname("vs destring: replace decimals") replace
 
 * Test 3.6: Replace multiple variables
 clear
@@ -387,7 +382,7 @@ set obs 20
 gen str10 a = string(_n)
 gen str10 b = string(_n * 2)
 gen str10 c = string(_n * 3)
-noi benchmark_destring a b c, testname("vs destring: replace multi") replace
+benchmark_destring a b c, testname("vs destring: replace multi") replace
 
 * Test 3.7: Replace with if condition
 clear
@@ -402,10 +397,10 @@ local n_missing = r(N)
 count if !missing(x) & flag == 1
 local n_converted = r(N)
 if `n_missing' == 25 & `n_converted' == 25 {
-    noi test_pass "replace with if condition"
+    test_pass "replace with if condition"
 }
 else {
-    noi test_fail "replace if" "missing=`n_missing' converted=`n_converted'"
+    test_fail "replace if" "missing=`n_missing' converted=`n_converted'"
 }
 
 * Test 3.8: Replace with in range
@@ -418,14 +413,14 @@ capture confirm numeric variable x
 if _rc == 0 {
     count if !missing(x) in 1/50
     if r(N) == 50 {
-        noi test_pass "replace with in range"
+        test_pass "replace with in range"
     }
     else {
-        noi test_fail "replace in" "wrong count"
+        test_fail "replace in" "wrong count"
     }
 }
 else {
-    noi test_fail "replace in" "not converted"
+    test_fail "replace in" "not converted"
 }
 
 * Test 3.9: Replace float option
@@ -435,22 +430,22 @@ gen str20 x = string(_n + 0.5)
 cdestring x, replace float
 local vtype : type x
 if "`vtype'" == "float" {
-    noi test_pass "replace with float option"
+    test_pass "replace with float option"
 }
 else {
-    noi test_fail "replace float" "type is `vtype'"
+    test_fail "replace float" "type is `vtype'"
 }
 
 * Test 3.10: Compare replace float with destring
 clear
 set obs 50
 gen str20 x = string(_n / 2)
-noi benchmark_destring x, testname("vs destring: replace float") replace float
+benchmark_destring x, testname("vs destring: replace float") replace float
 
 /*******************************************************************************
  * SECTION 4: Ignore option (10 tests)
  ******************************************************************************/
-noi print_section "Ignore Option"
+print_section "Ignore Option"
 
 * Test 4.1: Ignore single character
 clear
@@ -458,17 +453,17 @@ set obs 5
 gen str20 x = "$" + string(_n * 100)
 cdestring x, generate(x_num) ignore("$")
 if x_num[1] == 100 & x_num[5] == 500 {
-    noi test_pass "ignore single character ($)"
+    test_pass "ignore single character ($)"
 }
 else {
-    noi test_fail "ignore single" "wrong values"
+    test_fail "ignore single" "wrong values"
 }
 
 * Test 4.2: Compare ignore with destring
 clear
 set obs 50
 gen str20 x = "$" + string(_n)
-noi benchmark_destring x, testname("vs destring: ignore $") generate(x) ignore("$")
+benchmark_destring x, testname("vs destring: ignore $") generate(x) ignore("$")
 
 * Test 4.3: Ignore multiple characters
 clear
@@ -483,10 +478,10 @@ cdestring x, generate(x_num) ignore("$,")
 * Should strip $ and , to get numeric values
 local pass = (x_num[1] == 1000) & (x_num[2] == 2500) & (x_num[3] == 10000)
 if `pass' {
-    noi test_pass "ignore multiple characters"
+    test_pass "ignore multiple characters"
 }
 else {
-    noi test_fail "ignore multiple" "wrong values"
+    test_fail "ignore multiple" "wrong values"
 }
 
 * Test 4.4: Ignore comma in numbers
@@ -498,7 +493,7 @@ replace x = "2,500" in 2
 replace x = "10,000" in 3
 replace x = "100,000" in 4
 replace x = "1,234,567" in 5
-noi benchmark_destring x, testname("vs destring: ignore comma") generate(x) ignore(",")
+benchmark_destring x, testname("vs destring: ignore comma") generate(x) ignore(",")
 
 * Test 4.5: Ignore space
 clear
@@ -509,7 +504,7 @@ replace x = "2 500" in 2
 replace x = "10 000" in 3
 replace x = "100 000" in 4
 replace x = "1 234 567" in 5
-noi benchmark_destring x, testname("vs destring: ignore space") generate(x) ignore(" ")
+benchmark_destring x, testname("vs destring: ignore space") generate(x) ignore(" ")
 
 * Test 4.6: Ignore letters (force may be needed)
 clear
@@ -520,19 +515,19 @@ replace x = "200kg" in 2
 replace x = "300kg" in 3
 replace x = "400kg" in 4
 replace x = "500kg" in 5
-noi benchmark_destring x, testname("vs destring: ignore kg") generate(x) ignore("kg")
+benchmark_destring x, testname("vs destring: ignore kg") generate(x) ignore("kg")
 
 * Test 4.7: Ignore percent sign
 clear
 set obs 5
 gen str10 x = string(_n * 10) + "%"
-noi benchmark_destring x, testname("vs destring: ignore %") generate(x) ignore("%")
+benchmark_destring x, testname("vs destring: ignore %") generate(x) ignore("%")
 
 * Test 4.8: Ignore with replace
 clear
 set obs 50
 gen str20 x = "$" + string(_n * 100)
-noi benchmark_destring x, testname("vs destring: ignore $ replace") replace ignore("$")
+benchmark_destring x, testname("vs destring: ignore $ replace") replace ignore("$")
 
 * Test 4.9: Ignore parentheses (negative numbers)
 clear
@@ -544,18 +539,18 @@ replace x = "300" in 3
 replace x = "(400)" in 4
 replace x = "500" in 5
 * Note: destring doesn't interpret () as negative, just strips them
-noi benchmark_destring x, testname("vs destring: ignore parens") generate(x) ignore("()")
+benchmark_destring x, testname("vs destring: ignore parens") generate(x) ignore("()")
 
 * Test 4.10: Empty ignore string (no effect)
 clear
 set obs 20
 gen str10 x = string(_n)
-noi benchmark_destring x, testname("vs destring: empty ignore") generate(x) ignore("")
+benchmark_destring x, testname("vs destring: empty ignore") generate(x) ignore("")
 
 /*******************************************************************************
  * SECTION 5: Force option (10 tests)
  ******************************************************************************/
-noi print_section "Force Option"
+print_section "Force Option"
 
 * Test 5.1: Force converts non-numeric to missing
 clear
@@ -569,17 +564,17 @@ replace x = "500" in 5
 cdestring x, generate(x_num) force
 local pass = (x_num[1] == 100) & missing(x_num[2]) & (x_num[3] == 300) & missing(x_num[4])
 if `pass' {
-    noi test_pass "force converts non-numeric to missing"
+    test_pass "force converts non-numeric to missing"
 }
 else {
-    noi test_fail "force option" "wrong values"
+    test_fail "force option" "wrong values"
 }
 
 * Test 5.2: Compare force with destring
 clear
 set obs 50
 gen str20 x = cond(mod(_n, 3) == 0, "abc", string(_n))
-noi benchmark_destring x, testname("vs destring: force option") generate(x) force
+benchmark_destring x, testname("vs destring: force option") generate(x) force
 
 * Test 5.3: Force with all non-numeric
 clear
@@ -588,10 +583,10 @@ gen str10 x = char(64 + _n)  // A, B, C, ...
 cdestring x, generate(x_num) force
 count if missing(x_num)
 if r(N) == 10 {
-    noi test_pass "force with all non-numeric"
+    test_pass "force with all non-numeric"
 }
 else {
-    noi test_fail "force all non-numeric" "expected 10 missing"
+    test_fail "force all non-numeric" "expected 10 missing"
 }
 
 * Test 5.4: Force with mixed content
@@ -600,7 +595,7 @@ set obs 20
 gen str20 x = ""
 replace x = string(_n) if mod(_n, 2) == 1
 replace x = "text" + string(_n) if mod(_n, 2) == 0
-noi benchmark_destring x, testname("vs destring: force mixed") generate(x) force
+benchmark_destring x, testname("vs destring: force mixed") generate(x) force
 
 * Test 5.5: Force with leading/trailing spaces
 clear
@@ -611,19 +606,19 @@ replace x = "200 " in 2
 replace x = " 300 " in 3
 replace x = "  400  " in 4
 replace x = "500" in 5
-noi benchmark_destring x, testname("vs destring: force spaces") generate(x) force
+benchmark_destring x, testname("vs destring: force spaces") generate(x) force
 
 * Test 5.6: Force with replace
 clear
 set obs 30
 gen str20 x = cond(mod(_n, 4) == 0, "NA", string(_n))
-noi benchmark_destring x, testname("vs destring: force replace") replace force
+benchmark_destring x, testname("vs destring: force replace") replace force
 
 * Test 5.7: Force with ignore
 clear
 set obs 20
 gen str20 x = "$" + cond(mod(_n, 5) == 0, "NA", string(_n))
-noi benchmark_destring x, testname("vs destring: force + ignore") generate(x) force ignore("$")
+benchmark_destring x, testname("vs destring: force + ignore") generate(x) force ignore("$")
 
 * Test 5.8: Force preserves valid numbers
 clear
@@ -632,17 +627,17 @@ gen str10 x = string(_n)
 cdestring x, generate(x_num) force
 count if x_num == real(x)
 if r(N) == 100 {
-    noi test_pass "force preserves valid numbers"
+    test_pass "force preserves valid numbers"
 }
 else {
-    noi test_fail "force valid" "some values changed"
+    test_fail "force valid" "some values changed"
 }
 
 * Test 5.9: Force with empty strings
 clear
 set obs 10
 gen str10 x = cond(mod(_n, 2) == 0, "", string(_n))
-noi benchmark_destring x, testname("vs destring: force empty") generate(x) force
+benchmark_destring x, testname("vs destring: force empty") generate(x) force
 
 * Test 5.10: Force with special characters
 clear
@@ -658,12 +653,12 @@ replace x = "700" in 7
 replace x = "800*" in 8
 replace x = "900" in 9
 replace x = "1000" in 10
-noi benchmark_destring x, testname("vs destring: force special chars") generate(x) force
+benchmark_destring x, testname("vs destring: force special chars") generate(x) force
 
 /*******************************************************************************
  * SECTION 6: Percent option (10 tests)
  ******************************************************************************/
-noi print_section "Percent Option"
+print_section "Percent Option"
 
 * Test 6.1: Percent strips % and divides by 100
 clear
@@ -672,17 +667,17 @@ gen str10 x = string(_n * 10) + "%"
 cdestring x, generate(x_num) percent
 local pass = (abs(x_num[1] - 0.1) < 1e-10) & (abs(x_num[5] - 0.5) < 1e-10)
 if `pass' {
-    noi test_pass "percent option basic"
+    test_pass "percent option basic"
 }
 else {
-    noi test_fail "percent option" "wrong values"
+    test_fail "percent option" "wrong values"
 }
 
 * Test 6.2: Compare percent with destring
 clear
 set obs 50
 gen str10 x = string(_n) + "%"
-noi benchmark_destring x, testname("vs destring: percent option") generate(x) percent
+benchmark_destring x, testname("vs destring: percent option") generate(x) percent
 
 * Test 6.3: Percent with decimals
 clear
@@ -693,13 +688,13 @@ replace x = "25.25%" in 2
 replace x = "50.125%" in 3
 replace x = "75.0%" in 4
 replace x = "99.99%" in 5
-noi benchmark_destring x, testname("vs destring: percent decimal") generate(x) percent
+benchmark_destring x, testname("vs destring: percent decimal") generate(x) percent
 
 * Test 6.4: Percent with replace
 clear
 set obs 30
 gen str10 x = string(_n * 3) + "%"
-noi benchmark_destring x, testname("vs destring: percent replace") replace percent
+benchmark_destring x, testname("vs destring: percent replace") replace percent
 
 * Test 6.5: Percent without % sign (no transformation)
 clear
@@ -708,17 +703,17 @@ gen str10 x = string(_n * 10)
 cdestring x, generate(x_num) percent
 * Values without % should not be divided by 100
 if x_num[1] == 10 & x_num[10] == 100 {
-    noi test_pass "percent without % sign"
+    test_pass "percent without % sign"
 }
 else {
-    noi test_fail "percent no %" "values changed unexpectedly"
+    test_fail "percent no %" "values changed unexpectedly"
 }
 
 * Test 6.6: Compare percent without % with destring
 clear
 set obs 50
 gen str10 x = string(_n)
-noi benchmark_destring x, testname("vs destring: percent no %") generate(x) percent
+benchmark_destring x, testname("vs destring: percent no %") generate(x) percent
 
 * Test 6.7: Percent with negative values
 clear
@@ -729,13 +724,13 @@ replace x = "-25%" in 2
 replace x = "0%" in 3
 replace x = "50%" in 4
 replace x = "-100%" in 5
-noi benchmark_destring x, testname("vs destring: percent negative") generate(x) percent
+benchmark_destring x, testname("vs destring: percent negative") generate(x) percent
 
 * Test 6.8: Percent with force
 clear
 set obs 10
 gen str10 x = cond(mod(_n, 3) == 0, "NA%", string(_n * 10) + "%")
-noi benchmark_destring x, testname("vs destring: percent force") generate(x) percent force
+benchmark_destring x, testname("vs destring: percent force") generate(x) percent force
 
 * Test 6.9: 100% value
 clear
@@ -743,10 +738,10 @@ set obs 5
 gen str10 x = "100%"
 cdestring x, generate(x_num) percent
 if abs(x_num[1] - 1.0) < 1e-10 {
-    noi test_pass "100% converts to 1.0"
+    test_pass "100% converts to 1.0"
 }
 else {
-    noi test_fail "100% value" "got `=x_num[1]'"
+    test_fail "100% value" "got `=x_num[1]'"
 }
 
 * Test 6.10: Percent with small values
@@ -758,12 +753,12 @@ replace x = "0.01%" in 2
 replace x = "0.001%" in 3
 replace x = "1%" in 4
 replace x = "0.5%" in 5
-noi benchmark_destring x, testname("vs destring: percent small") generate(x) percent
+benchmark_destring x, testname("vs destring: percent small") generate(x) percent
 
 /*******************************************************************************
  * SECTION 7: dpcomma option (10 tests)
  ******************************************************************************/
-noi print_section "dpcomma Option"
+print_section "dpcomma Option"
 
 * Test 7.1: dpcomma uses comma as decimal point
 clear
@@ -777,17 +772,17 @@ replace x = "0,5" in 5
 cdestring x, generate(x_num) dpcomma
 local pass = (abs(x_num[1] - 1.5) < 1e-10) & (abs(x_num[3] - 3.125) < 1e-10)
 if `pass' {
-    noi test_pass "dpcomma basic"
+    test_pass "dpcomma basic"
 }
 else {
-    noi test_fail "dpcomma option" "wrong values"
+    test_fail "dpcomma option" "wrong values"
 }
 
 * Test 7.2: Compare dpcomma with destring
 clear
 set obs 50
 gen str20 x = subinstr(string(_n / 3, "%10.3f"), ".", ",", 1)
-noi benchmark_destring x, testname("vs destring: dpcomma option") generate(x) dpcomma
+benchmark_destring x, testname("vs destring: dpcomma option") generate(x) dpcomma
 
 * Test 7.3: dpcomma with negative numbers
 clear
@@ -798,13 +793,13 @@ replace x = "-2,25" in 2
 replace x = "0,0" in 3
 replace x = "1,5" in 4
 replace x = "-0,5" in 5
-noi benchmark_destring x, testname("vs destring: dpcomma negative") generate(x) dpcomma
+benchmark_destring x, testname("vs destring: dpcomma negative") generate(x) dpcomma
 
 * Test 7.4: dpcomma with replace
 clear
 set obs 30
 gen str20 x = subinstr(string(_n / 7, "%10.4f"), ".", ",", 1)
-noi benchmark_destring x, testname("vs destring: dpcomma replace") replace dpcomma
+benchmark_destring x, testname("vs destring: dpcomma replace") replace dpcomma
 
 * Test 7.5: dpcomma with integers (no comma)
 clear
@@ -812,17 +807,17 @@ set obs 20
 gen str10 x = string(_n)
 cdestring x, generate(x_num) dpcomma
 if x_num[1] == 1 & x_num[20] == 20 {
-    noi test_pass "dpcomma with integers"
+    test_pass "dpcomma with integers"
 }
 else {
-    noi test_fail "dpcomma int" "wrong values"
+    test_fail "dpcomma int" "wrong values"
 }
 
 * Test 7.6: dpcomma with force
 clear
 set obs 10
 gen str20 x = cond(mod(_n, 3) == 0, "abc", subinstr(string(_n / 2, "%10.2f"), ".", ",", 1))
-noi benchmark_destring x, testname("vs destring: dpcomma force") generate(x) dpcomma force
+benchmark_destring x, testname("vs destring: dpcomma force") generate(x) dpcomma force
 
 * Test 7.7: dpcomma with ignore (period as thousand separator)
 clear
@@ -833,7 +828,7 @@ replace x = "2.500,25" in 2
 replace x = "10.000,00" in 3
 replace x = "100.000,99" in 4
 replace x = "1.234.567,89" in 5
-noi benchmark_destring x, testname("vs destring: dpcomma + ignore .") generate(x) dpcomma ignore(".")
+benchmark_destring x, testname("vs destring: dpcomma + ignore .") generate(x) dpcomma ignore(".")
 
 * Test 7.8: dpcomma zero
 clear
@@ -844,10 +839,10 @@ replace x = "0,00" in 2
 replace x = "0,000" in 3
 cdestring x, generate(x_num) dpcomma
 if x_num[1] == 0 & x_num[2] == 0 & x_num[3] == 0 {
-    noi test_pass "dpcomma zero values"
+    test_pass "dpcomma zero values"
 }
 else {
-    noi test_fail "dpcomma zero" "not zero"
+    test_fail "dpcomma zero" "not zero"
 }
 
 * Test 7.9: dpcomma with percent
@@ -859,7 +854,7 @@ replace x = "25,25%" in 2
 replace x = "50,0%" in 3
 replace x = "75,75%" in 4
 replace x = "99,99%" in 5
-noi benchmark_destring x, testname("vs destring: dpcomma percent") generate(x) dpcomma percent
+benchmark_destring x, testname("vs destring: dpcomma percent") generate(x) dpcomma percent
 
 * Test 7.10: Compare standard decimal with dpcomma
 clear
@@ -872,16 +867,16 @@ destring x_dot, generate(x_dot_num)
 cdestring x_comma, generate(x_comma_num) dpcomma
 count if abs(x_dot_num - x_comma_num) > 1e-10
 if r(N) == 0 {
-    noi test_pass "dpcomma equals standard decimal"
+    test_pass "dpcomma equals standard decimal"
 }
 else {
-    noi test_fail "dpcomma vs dot" "values differ"
+    test_fail "dpcomma vs dot" "values differ"
 }
 
 /*******************************************************************************
  * SECTION 8: if/in conditions (10 tests)
  ******************************************************************************/
-noi print_section "if/in Conditions"
+print_section "if/in Conditions"
 
 * Test 8.1: if condition subset
 clear
@@ -894,10 +889,10 @@ local n_conv = r(N)
 count if missing(x_num) & flag == 0
 local n_miss = r(N)
 if `n_conv' == 50 & `n_miss' == 50 {
-    noi test_pass "if condition subset"
+    test_pass "if condition subset"
 }
 else {
-    noi test_fail "if condition" "wrong pattern"
+    test_fail "if condition" "wrong pattern"
 }
 
 * Test 8.2: in range
@@ -910,10 +905,10 @@ local in_range = r(N)
 count if missing(x_num) in 31/100
 local out_range = r(N)
 if `in_range' == 30 & `out_range' == 70 {
-    noi test_pass "in range"
+    test_pass "in range"
 }
 else {
-    noi test_fail "in range" "wrong counts"
+    test_fail "in range" "wrong counts"
 }
 
 * Test 8.3: if condition works correctly (destring doesn't support if/in)
@@ -929,10 +924,10 @@ local n_expected = r(N)
 count if !missing(x_num)
 local n_converted = r(N)
 if `n_converted' == `n_expected' {
-    noi test_pass "if condition filters observations"
+    test_pass "if condition filters observations"
 }
 else {
-    noi test_fail "if condition" "expected `n_expected' converted, got `n_converted'"
+    test_fail "if condition" "expected `n_expected' converted, got `n_converted'"
 }
 
 * Test 8.4: in range works correctly
@@ -947,10 +942,10 @@ local miss_before = r(N)
 count if missing(x_num) in 81/100
 local miss_after = r(N)
 if `in_range' == 61 & `miss_before' == 19 & `miss_after' == 20 {
-    noi test_pass "in range works correctly"
+    test_pass "in range works correctly"
 }
 else {
-    noi test_fail "in range" "in=`in_range' miss_before=`miss_before' miss_after=`miss_after'"
+    test_fail "in range" "in=`in_range' miss_before=`miss_before' miss_after=`miss_after'"
 }
 
 * Test 8.5: Combined if and in
@@ -963,10 +958,10 @@ cdestring x if flag == 1 in 1/50, generate(x_num)
 count if !missing(x_num)
 local n_converted = r(N)
 if `n_converted' == 16 {
-    noi test_pass "combined if and in"
+    test_pass "combined if and in"
 }
 else {
-    noi test_fail "if+in" "expected 16, got `n_converted'"
+    test_fail "if+in" "expected 16, got `n_converted'"
 }
 
 * Test 8.6: Single observation in
@@ -976,10 +971,10 @@ gen str10 x = string(_n)
 cdestring x in 50/50, generate(x_num)
 count if !missing(x_num)
 if r(N) == 1 & x_num[50] == 50 {
-    noi test_pass "single observation in"
+    test_pass "single observation in"
 }
 else {
-    noi test_fail "single in" "wrong result"
+    test_fail "single in" "wrong result"
 }
 
 * Test 8.7: if that matches no observations
@@ -990,10 +985,10 @@ gen value = _n
 cdestring x if value > 1000, generate(x_num)
 count if !missing(x_num)
 if r(N) == 0 {
-    noi test_pass "if matches no observations"
+    test_pass "if matches no observations"
 }
 else {
-    noi test_fail "if none" "some values converted"
+    test_fail "if none" "some values converted"
 }
 
 * Test 8.8: if with string comparison on another variable
@@ -1004,10 +999,10 @@ gen str10 group = cond(mod(_n, 2) == 0, "even", "odd")
 cdestring x if group == "even", generate(x_num)
 count if !missing(x_num)
 if r(N) == 25 {
-    noi test_pass "if with string comparison"
+    test_pass "if with string comparison"
 }
 else {
-    noi test_fail "if string" "wrong count"
+    test_fail "if string" "wrong count"
 }
 
 * Test 8.9: in first observations
@@ -1017,10 +1012,10 @@ gen str10 x = string(_n)
 cdestring x in 1/10, generate(x_num)
 count if !missing(x_num)
 if r(N) == 10 {
-    noi test_pass "in first 10"
+    test_pass "in first 10"
 }
 else {
-    noi test_fail "in first" "wrong count"
+    test_fail "in first" "wrong count"
 }
 
 * Test 8.10: in last observations
@@ -1030,16 +1025,16 @@ gen str10 x = string(_n)
 cdestring x in 91/100, generate(x_num)
 count if !missing(x_num) in 91/100
 if r(N) == 10 {
-    noi test_pass "in last 10"
+    test_pass "in last 10"
 }
 else {
-    noi test_fail "in last" "wrong count"
+    test_fail "in last" "wrong count"
 }
 
 /*******************************************************************************
  * SECTION 9: Multiple variables (10 tests)
  ******************************************************************************/
-noi print_section "Multiple Variables"
+print_section "Multiple Variables"
 
 * Test 9.1: Two variables with generate
 clear
@@ -1049,10 +1044,10 @@ gen str10 b = string(_n * 2)
 cdestring a b, generate(a_num b_num)
 local pass = (a_num[1] == 1) & (b_num[1] == 2) & (a_num[50] == 50) & (b_num[50] == 100)
 if `pass' {
-    noi test_pass "two variables with generate"
+    test_pass "two variables with generate"
 }
 else {
-    noi test_fail "two vars gen" "wrong values"
+    test_fail "two vars gen" "wrong values"
 }
 
 * Test 9.2: Compare two variables with destring
@@ -1060,7 +1055,7 @@ clear
 set obs 50
 gen str10 a = string(_n)
 gen str10 b = string(_n * 3)
-noi benchmark_destring a b, testname("vs destring: two vars") generate(a b)
+benchmark_destring a b, testname("vs destring: two vars") generate(a b)
 
 * Test 9.3: Three variables
 clear
@@ -1068,7 +1063,7 @@ set obs 30
 gen str10 x = string(_n)
 gen str10 y = string(_n * 2)
 gen str10 z = string(_n * 3)
-noi benchmark_destring x y z, testname("vs destring: three vars") generate(x y z)
+benchmark_destring x y z, testname("vs destring: three vars") generate(x y z)
 
 * Test 9.4: Multiple variables with replace
 clear
@@ -1076,35 +1071,35 @@ set obs 40
 gen str10 a = string(_n)
 gen str10 b = string(_n + 100)
 gen str10 c = string(_n + 200)
-noi benchmark_destring a b c, testname("vs destring: multi replace") replace
+benchmark_destring a b c, testname("vs destring: multi replace") replace
 
 * Test 9.5: Multiple variables with force
 clear
 set obs 30
 gen str20 a = cond(mod(_n, 3) == 0, "NA", string(_n))
 gen str20 b = cond(mod(_n, 4) == 0, "NA", string(_n * 2))
-noi benchmark_destring a b, testname("vs destring: multi force") generate(a b) force
+benchmark_destring a b, testname("vs destring: multi force") generate(a b) force
 
 * Test 9.6: Multiple variables with ignore
 clear
 set obs 30
 gen str20 a = "$" + string(_n)
 gen str20 b = "$" + string(_n * 2)
-noi benchmark_destring a b, testname("vs destring: multi ignore") generate(a b) ignore("$")
+benchmark_destring a b, testname("vs destring: multi ignore") generate(a b) ignore("$")
 
 * Test 9.7: Multiple variables with percent
 clear
 set obs 30
 gen str10 a = string(_n) + "%"
 gen str10 b = string(_n * 2) + "%"
-noi benchmark_destring a b, testname("vs destring: multi percent") generate(a b) percent
+benchmark_destring a b, testname("vs destring: multi percent") generate(a b) percent
 
 * Test 9.8: Multiple variables with dpcomma
 clear
 set obs 30
 gen str20 a = subinstr(string(_n / 3, "%10.2f"), ".", ",", 1)
 gen str20 b = subinstr(string(_n / 7, "%10.2f"), ".", ",", 1)
-noi benchmark_destring a b, testname("vs destring: multi dpcomma") generate(a b) dpcomma
+benchmark_destring a b, testname("vs destring: multi dpcomma") generate(a b) dpcomma
 
 * Test 9.9: Five variables
 clear
@@ -1112,7 +1107,7 @@ set obs 20
 forvalues i = 1/5 {
     gen str10 v`i' = string(_n * `i')
 }
-noi benchmark_destring v1 v2 v3 v4 v5, testname("vs destring: five vars") generate(v1 v2 v3 v4 v5)
+benchmark_destring v1 v2 v3 v4 v5, testname("vs destring: five vars") generate(v1 v2 v3 v4 v5)
 
 * Test 9.10: Multiple variables with if condition (destring doesn't support if/in)
 clear
@@ -1127,16 +1122,16 @@ count if !missing(b_num)
 local n_b = r(N)
 * Should convert 25 observations (where flag==1)
 if `n_a' == 25 & `n_b' == 25 {
-    noi test_pass "multiple vars with if condition"
+    test_pass "multiple vars with if condition"
 }
 else {
-    noi test_fail "multi if" "expected 25 each, got a=`n_a' b=`n_b'"
+    test_fail "multi if" "expected 25 each, got a=`n_a' b=`n_b'"
 }
 
 /*******************************************************************************
  * SECTION 10: Large datasets (10 tests)
  ******************************************************************************/
-noi print_section "Large Datasets"
+print_section "Large Datasets"
 
 * Test 10.1: 10K observations
 clear
@@ -1146,14 +1141,14 @@ capture cdestring x, generate(x_num)
 if _rc == 0 {
     count if x_num == _n
     if r(N) == 10000 {
-        noi test_pass "10K observations"
+        test_pass "10K observations"
     }
     else {
-        noi test_fail "10K obs" "wrong count"
+        test_fail "10K obs" "wrong count"
     }
 }
 else {
-    noi test_fail "10K obs" "rc=`=_rc'"
+    test_fail "10K obs" "rc=`=_rc'"
 }
 
 * Test 10.2: 50K observations
@@ -1164,14 +1159,14 @@ capture cdestring x, generate(x_num)
 if _rc == 0 {
     count if x_num == _n
     if r(N) == 50000 {
-        noi test_pass "50K observations"
+        test_pass "50K observations"
     }
     else {
-        noi test_fail "50K obs" "only `r(N)' correct"
+        test_fail "50K obs" "only `r(N)' correct"
     }
 }
 else {
-    noi test_fail "50K obs" "rc=`=_rc'"
+    test_fail "50K obs" "rc=`=_rc'"
 }
 
 * Test 10.3: 100K observations
@@ -1182,14 +1177,14 @@ capture cdestring x, generate(x_num)
 if _rc == 0 {
     count if x_num == _n
     if r(N) == 100000 {
-        noi test_pass "100K observations"
+        test_pass "100K observations"
     }
     else {
-        noi test_fail "100K obs" "only `r(N)' correct"
+        test_fail "100K obs" "only `r(N)' correct"
     }
 }
 else {
-    noi test_fail "100K obs" "rc=`=_rc'"
+    test_fail "100K obs" "rc=`=_rc'"
 }
 
 * Test 10.4: Large with decimals
@@ -1198,10 +1193,10 @@ set obs 50000
 gen str20 x = string(_n / 7, "%15.8f")
 capture cdestring x, generate(x_num)
 if _rc == 0 {
-    noi test_pass "50K with decimals"
+    test_pass "50K with decimals"
 }
 else {
-    noi test_fail "50K decimals" "rc=`=_rc'"
+    test_fail "50K decimals" "rc=`=_rc'"
 }
 
 * Test 10.5: Large with force
@@ -1212,14 +1207,14 @@ capture cdestring x, generate(x_num) force
 if _rc == 0 {
     count if missing(x_num)
     if r(N) == 500 {
-        noi test_pass "50K with force"
+        test_pass "50K with force"
     }
     else {
-        noi test_fail "50K force" "wrong missing count"
+        test_fail "50K force" "wrong missing count"
     }
 }
 else {
-    noi test_fail "50K force" "rc=`=_rc'"
+    test_fail "50K force" "rc=`=_rc'"
 }
 
 * Test 10.6: Large with ignore
@@ -1230,14 +1225,14 @@ capture cdestring x, generate(x_num) ignore("$")
 if _rc == 0 {
     count if x_num == _n
     if r(N) == 50000 {
-        noi test_pass "50K with ignore"
+        test_pass "50K with ignore"
     }
     else {
-        noi test_fail "50K ignore" "only `r(N)' correct"
+        test_fail "50K ignore" "only `r(N)' correct"
     }
 }
 else {
-    noi test_fail "50K ignore" "rc=`=_rc'"
+    test_fail "50K ignore" "rc=`=_rc'"
 }
 
 * Test 10.7: Large with percent
@@ -1249,14 +1244,14 @@ if _rc == 0 {
     * Values should be _n / 100
     count if abs(x_num - _n/100) < 1e-10
     if r(N) == 50000 {
-        noi test_pass "50K with percent"
+        test_pass "50K with percent"
     }
     else {
-        noi test_fail "50K percent" "only `r(N)' correct"
+        test_fail "50K percent" "only `r(N)' correct"
     }
 }
 else {
-    noi test_fail "50K percent" "rc=`=_rc'"
+    test_fail "50K percent" "rc=`=_rc'"
 }
 
 * Test 10.8: Large with threads
@@ -1265,17 +1260,17 @@ set obs 100000
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num) threads(4)
 if _rc == 0 {
-    noi test_pass "100K with threads(4)"
+    test_pass "100K with threads(4)"
 }
 else {
-    noi test_fail "100K threads" "rc=`=_rc'"
+    test_fail "100K threads" "rc=`=_rc'"
 }
 
 * Test 10.9: Large dataset comparison with destring
 clear
 set obs 10000
 gen str10 x = string(_n)
-noi benchmark_destring x, testname("vs destring: 10K obs") generate(x)
+benchmark_destring x, testname("vs destring: 10K obs") generate(x)
 
 * Test 10.10: Large with multiple variables
 clear
@@ -1285,16 +1280,16 @@ gen str10 b = string(_n * 2)
 gen str10 c = string(_n * 3)
 capture cdestring a b c, generate(a_num b_num c_num)
 if _rc == 0 {
-    noi test_pass "20K with 3 variables"
+    test_pass "20K with 3 variables"
 }
 else {
-    noi test_fail "20K 3 vars" "rc=`=_rc'"
+    test_fail "20K 3 vars" "rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 11: Edge cases and special values (10 tests)
  ******************************************************************************/
-noi print_section "Edge Cases"
+print_section "Edge Cases"
 
 * Test 11.1: Scientific notation
 clear
@@ -1305,7 +1300,7 @@ replace x = "1E5" in 2
 replace x = "1.5e3" in 3
 replace x = "2.5E-2" in 4
 replace x = "-1e10" in 5
-noi benchmark_destring x, testname("vs destring: scientific notation") generate(x)
+benchmark_destring x, testname("vs destring: scientific notation") generate(x)
 
 * Test 11.2: Leading zeros
 clear
@@ -1316,7 +1311,7 @@ replace x = "010" in 2
 replace x = "0123" in 3
 replace x = "00001" in 4
 replace x = "000" in 5
-noi benchmark_destring x, testname("vs destring: leading zeros") generate(x)
+benchmark_destring x, testname("vs destring: leading zeros") generate(x)
 
 * Test 11.3: Trailing zeros after decimal
 clear
@@ -1327,7 +1322,7 @@ replace x = "2.00" in 2
 replace x = "3.000" in 3
 replace x = "4.0000" in 4
 replace x = "0.10" in 5
-noi benchmark_destring x, testname("vs destring: trailing zeros") generate(x)
+benchmark_destring x, testname("vs destring: trailing zeros") generate(x)
 
 * Test 11.4: Just decimal point
 clear
@@ -1338,7 +1333,7 @@ replace x = ".25" in 2
 replace x = ".125" in 3
 replace x = ".0" in 4
 replace x = "-.5" in 5
-noi benchmark_destring x, testname("vs destring: leading decimal") generate(x)
+benchmark_destring x, testname("vs destring: leading decimal") generate(x)
 
 * Test 11.5: Very large numbers
 clear
@@ -1349,7 +1344,7 @@ replace x = "1234567890123" in 2
 replace x = "9999999999999999" in 3
 replace x = "-999999999999" in 4
 replace x = "123456789012345678" in 5
-noi benchmark_destring x, testname("vs destring: large numbers") generate(x)
+benchmark_destring x, testname("vs destring: large numbers") generate(x)
 
 * Test 11.6: Very small decimals
 clear
@@ -1360,7 +1355,7 @@ replace x = "0.0000001" in 2
 replace x = "0.00000001" in 3
 replace x = "1.23e-10" in 4
 replace x = "-0.000001" in 5
-noi benchmark_destring x, testname("vs destring: small decimals") generate(x)
+benchmark_destring x, testname("vs destring: small decimals") generate(x)
 
 * Test 11.7: Plus sign prefix
 clear
@@ -1371,7 +1366,7 @@ replace x = "+100" in 2
 replace x = "+0.5" in 3
 replace x = "+1e5" in 4
 replace x = "5" in 5
-noi benchmark_destring x, testname("vs destring: plus prefix") generate(x)
+benchmark_destring x, testname("vs destring: plus prefix") generate(x)
 
 * Test 11.8: Zero variations
 clear
@@ -1386,10 +1381,10 @@ replace x = "0.00" in 6
 cdestring x, generate(x_num)
 count if x_num == 0
 if r(N) == 6 {
-    noi test_pass "zero variations"
+    test_pass "zero variations"
 }
 else {
-    noi test_fail "zeros" "not all zero"
+    test_fail "zeros" "not all zero"
 }
 
 * Test 11.9: Empty strings
@@ -1399,10 +1394,10 @@ gen str10 x = cond(mod(_n, 2) == 0, "", string(_n))
 cdestring x, generate(x_num) force
 count if missing(x_num) & mod(_n, 2) == 0
 if r(N) == 5 {
-    noi test_pass "empty strings -> missing"
+    test_pass "empty strings -> missing"
 }
 else {
-    noi test_fail "empty strings" "wrong missing count"
+    test_fail "empty strings" "wrong missing count"
 }
 
 * Test 11.10: Whitespace only strings
@@ -1414,12 +1409,12 @@ replace x = "  " in 2
 replace x = "   " in 3
 replace x = " 1 " in 4
 replace x = "2" in 5
-noi benchmark_destring x, testname("vs destring: whitespace") generate(x) force
+benchmark_destring x, testname("vs destring: whitespace") generate(x) force
 
 /*******************************************************************************
  * SECTION 12: Error handling (5 tests)
  ******************************************************************************/
-noi print_section "Error Handling"
+print_section "Error Handling"
 
 * Test 12.1: Generate var exists
 clear
@@ -1428,10 +1423,10 @@ gen str10 x = string(_n)
 gen x_num = 1
 capture cdestring x, generate(x_num)
 if _rc == 110 {
-    noi test_pass "error: generate var exists"
+    test_pass "error: generate var exists"
 }
 else {
-    noi test_fail "var exists" "expected rc=110, got `=_rc'"
+    test_fail "var exists" "expected rc=110, got `=_rc'"
 }
 
 * Test 12.2: Source is numeric (not string)
@@ -1440,10 +1435,10 @@ set obs 10
 gen x = _n
 capture cdestring x, generate(x_num)
 if _rc != 0 {
-    noi test_pass "error: numeric source"
+    test_pass "error: numeric source"
 }
 else {
-    noi test_fail "numeric source" "should error"
+    test_fail "numeric source" "should error"
 }
 
 * Test 12.3: Missing generate and replace
@@ -1452,10 +1447,10 @@ set obs 10
 gen str10 x = string(_n)
 capture cdestring x
 if _rc != 0 {
-    noi test_pass "error: missing generate/replace"
+    test_pass "error: missing generate/replace"
 }
 else {
-    noi test_fail "missing option" "should error"
+    test_fail "missing option" "should error"
 }
 
 * Test 12.4: Both generate and replace
@@ -1464,10 +1459,10 @@ set obs 10
 gen str10 x = string(_n)
 capture cdestring x, generate(x_num) replace
 if _rc != 0 {
-    noi test_pass "error: both generate and replace"
+    test_pass "error: both generate and replace"
 }
 else {
-    noi test_fail "both options" "should error"
+    test_fail "both options" "should error"
 }
 
 * Test 12.5: Generate count mismatch
@@ -1477,16 +1472,16 @@ gen str10 a = string(_n)
 gen str10 b = string(_n * 2)
 capture cdestring a b, generate(x_num)
 if _rc != 0 {
-    noi test_pass "error: generate count mismatch"
+    test_pass "error: generate count mismatch"
 }
 else {
-    noi test_fail "count mismatch" "should error"
+    test_fail "count mismatch" "should error"
 }
 
 /*******************************************************************************
  * SECTION 13: Float option (5 tests)
  ******************************************************************************/
-noi print_section "Float Option"
+print_section "Float Option"
 
 * Test 13.1: Float creates float variable
 clear
@@ -1495,23 +1490,23 @@ gen str20 x = string(_n + 0.5)
 cdestring x, generate(x_num) float
 local vtype : type x_num
 if "`vtype'" == "float" {
-    noi test_pass "float creates float variable"
+    test_pass "float creates float variable"
 }
 else {
-    noi test_fail "float type" "type is `vtype'"
+    test_fail "float type" "type is `vtype'"
 }
 
 * Test 13.2: Compare float with destring
 clear
 set obs 50
 gen str20 x = string(_n / 3)
-noi benchmark_destring x, testname("vs destring: float option") generate(x) float
+benchmark_destring x, testname("vs destring: float option") generate(x) float
 
 * Test 13.3: Float with replace
 clear
 set obs 30
 gen str20 x = string(_n / 7)
-noi benchmark_destring x, testname("vs destring: float replace") replace float
+benchmark_destring x, testname("vs destring: float replace") replace float
 
 * Test 13.4: Float with integers (note: compress converts to byte)
 clear
@@ -1524,10 +1519,10 @@ local vtype_c : type x_c
 local vtype_s : type x_s
 * Test passes if cdestring matches destring behavior
 if "`vtype_c'" == "`vtype_s'" {
-    noi test_pass "float with integers (matches destring)"
+    test_pass "float with integers (matches destring)"
 }
 else {
-    noi test_fail "float int" "cdestring type `vtype_c' != destring type `vtype_s'"
+    test_fail "float int" "cdestring type `vtype_c' != destring type `vtype_s'"
 }
 
 * Test 13.5: Float precision
@@ -1539,15 +1534,10 @@ replace x = "9.87654321" in 2
 replace x = "0.123456789" in 3
 replace x = "123.456789" in 4
 replace x = "0.000123456789" in 5
-noi benchmark_destring x, testname("vs destring: float precision") generate(x) float
+benchmark_destring x, testname("vs destring: float precision") generate(x) float
 
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/
-noi print_summary "cdestring"
-
-if $TESTS_FAILED > 0 {
-    exit 1
-}
-
+* End of cdestring validation
 }

@@ -13,32 +13,22 @@ if _rc != 0 {
 
 quietly {
 
-noi di as text ""
-noi di as text "======================================================================"
-noi di as text "              CBSAMPLE VALIDATION TEST SUITE"
-noi di as text "======================================================================"
-
-/*******************************************************************************
- * SECTION 1: Plugin functionality check
- ******************************************************************************/
-noi print_section "Plugin Check"
-
+* Plugin functionality check
 clear
 set obs 100
 gen id = _n
 set seed 12345
-capture noisily cbsample
+capture cbsample
 if _rc != 0 {
-    noi test_fail "cbsample plugin load" "plugin returned error `=_rc'"
-    noi print_summary "cbsample"
+    test_fail "cbsample plugin load" "plugin returned error `=_rc'"
     exit 1
 }
-noi test_pass "cbsample plugin loads and runs"
+test_pass "cbsample plugin loads and runs"
 
 /*******************************************************************************
  * SECTION 2: Basic bootstrap sample
  ******************************************************************************/
-noi print_section "Basic Bootstrap Sample"
+print_section "Basic Bootstrap Sample"
 
 * Default n (same as original)
 clear
@@ -51,10 +41,10 @@ local N_after = _N
 
 * With bootstrap, some obs get dropped (sampled 0 times)
 if `N_after' > 0 & `N_after' <= `N_before' {
-    noi test_pass "basic bootstrap sample (N=`N_after' from `N_before')"
+    test_pass "basic bootstrap sample (N=`N_after' from `N_before')"
 }
 else {
-    noi test_fail "basic bootstrap sample" "unexpected N=`N_after'"
+    test_fail "basic bootstrap sample" "unexpected N=`N_after'"
 }
 
 * Explicit n (positional argument, like bsample)
@@ -64,16 +54,16 @@ gen id = _n
 set seed 12345
 cbsample 50
 if _N > 0 & _N <= 100 {
-    noi test_pass "bootstrap with n=50"
+    test_pass "bootstrap with n=50"
 }
 else {
-    noi test_fail "bootstrap with n=50" "N=`=_N'"
+    test_fail "bootstrap with n=50" "N=`=_N'"
 }
 
 /*******************************************************************************
  * SECTION 3: Weight variable (matches bsample syntax: requires existing var)
  ******************************************************************************/
-noi print_section "Weight Variable"
+print_section "Weight Variable"
 
 clear
 set obs 100
@@ -84,35 +74,35 @@ cbsample, weight(bsweight)
 
 * Should keep all obs and have weight variable populated
 if _N == 100 {
-    noi test_pass "weight option keeps all obs"
+    test_pass "weight option keeps all obs"
 }
 else {
-    noi test_fail "weight option keeps all obs" "N=`=_N'"
+    test_fail "weight option keeps all obs" "N=`=_N'"
 }
 
 * Check weight variable was populated (not all missing)
 count if bsweight != .
 if r(N) > 0 {
-    noi test_pass "weight variable populated"
+    test_pass "weight variable populated"
 }
 else {
-    noi test_fail "weight variable populated" "all values missing"
+    test_fail "weight variable populated" "all values missing"
 }
 
 * Check total weight sums to ~100
 summarize bsweight, meanonly
 local total_weight = r(sum)
 if abs(`total_weight' - 100) < 10 {
-    noi test_pass "total weight ~100 (got `total_weight')"
+    test_pass "total weight ~100 (got `total_weight')"
 }
 else {
-    noi test_fail "total weight ~100" "got `total_weight'"
+    test_fail "total weight ~100" "got `total_weight'"
 }
 
 /*******************************************************************************
  * SECTION 4: Stratified bootstrap
  ******************************************************************************/
-noi print_section "Stratified Bootstrap"
+print_section "Stratified Bootstrap"
 
 clear
 set obs 1000
@@ -131,16 +121,16 @@ forvalues s = 0/9 {
     }
 }
 if `all_ok' {
-    noi test_pass "stratified bootstrap has weight in all strata"
+    test_pass "stratified bootstrap has weight in all strata"
 }
 else {
-    noi test_fail "stratified bootstrap" "some strata have zero weight"
+    test_fail "stratified bootstrap" "some strata have zero weight"
 }
 
 /*******************************************************************************
  * SECTION 5: Cluster bootstrap
  ******************************************************************************/
-noi print_section "Cluster Bootstrap"
+print_section "Cluster Bootstrap"
 
 clear
 set obs 1000
@@ -160,16 +150,16 @@ foreach cl of local clusters {
     }
 }
 if `all_ok' {
-    noi test_pass "cluster bootstrap: uniform weights within clusters"
+    test_pass "cluster bootstrap: uniform weights within clusters"
 }
 else {
-    noi test_fail "cluster bootstrap" "weights vary within some clusters"
+    test_fail "cluster bootstrap" "weights vary within some clusters"
 }
 
 /*******************************************************************************
  * SECTION 6: Reproducibility with set seed
  ******************************************************************************/
-noi print_section "Reproducibility"
+print_section "Reproducibility"
 
 clear
 set obs 100
@@ -194,16 +184,16 @@ count if abs(w1 - w2) > 0.001
 local n_diff = r(N)
 
 if `n_diff' == 0 {
-    noi test_pass "same seed yields identical weights"
+    test_pass "same seed yields identical weights"
 }
 else {
-    noi test_fail "same seed yields identical weights" "`n_diff' weights differ"
+    test_fail "same seed yields identical weights" "`n_diff' weights differ"
 }
 
 /*******************************************************************************
  * SECTION 7: Edge cases
  ******************************************************************************/
-noi print_section "Edge Cases"
+print_section "Edge Cases"
 
 * Small dataset
 clear
@@ -215,10 +205,10 @@ cbsample, weight(bsweight)
 summarize bsweight, meanonly
 local total = r(sum)
 if abs(`total' - 10) < 3 {
-    noi test_pass "small dataset bootstrap (total weight ~10)"
+    test_pass "small dataset bootstrap (total weight ~10)"
 }
 else {
-    noi test_fail "small dataset bootstrap" "total weight=`total'"
+    test_fail "small dataset bootstrap" "total weight=`total'"
 }
 
 * Large n (positional argument, like bsample)
@@ -231,19 +221,11 @@ cbsample 200, weight(bsweight)
 summarize bsweight, meanonly
 local total = r(sum)
 if abs(`total' - 200) < 20 {
-    noi test_pass "n > nobs bootstrap (total weight ~200)"
+    test_pass "n > nobs bootstrap (total weight ~200)"
 }
 else {
-    noi test_fail "n > nobs bootstrap" "total weight=`total'"
+    test_fail "n > nobs bootstrap" "total weight=`total'"
 }
 
-} /* end quietly */
-
-/*******************************************************************************
- * Summary
- ******************************************************************************/
-print_summary "cbsample"
-
-if $TESTS_FAILED > 0 {
-    exit 1
+* End of cbsample validation
 }

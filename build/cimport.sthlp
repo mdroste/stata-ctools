@@ -11,6 +11,10 @@
 {phang}
 {bf:cimport delimited} {hline 2} C-accelerated CSV/delimited text import
 
+{pstd}
+{cmd:cimport delimited} is a high-performance replacement for Stata's
+{help import delimited:import delimited} command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -267,11 +271,15 @@ use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help import delimited}, {help ctools}, {help cexport}
+Manual: {bf:[D] import delimited}
+
+{psee}
+Online: {help import delimited}, {help insheet}, {help cexport}, {help ctools}
 {p_end}

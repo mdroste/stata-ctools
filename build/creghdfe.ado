@@ -374,6 +374,12 @@ program define creghdfe, eclass
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
     matrix __creghdfe_V = J(`K_x' + 1, `K_x' + 1, 0)
 
+    * Debug: Print plugin varlist and indices
+    di "DEBUG: plugin_varlist = `plugin_varlist'"
+    di "DEBUG: resid_var_idx = " __creghdfe_resid_var_idx
+    local nvars_plugin : word count `plugin_varlist'
+    di "DEBUG: nvars_plugin = `nvars_plugin'"
+
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
         "creghdfe `threads_code' full_regression"

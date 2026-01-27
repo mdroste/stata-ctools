@@ -10,6 +10,10 @@
 {phang}
 {bf:cbinscatter} {hline 2} C-accelerated binned scatter plots
 
+{pstd}
+{cmd:cbinscatter} is a high-performance replacement for {cmd:binscatter} by
+Michael Stepner ({browse "https://github.com/michaelstepner/binscatter":michaelstepner/binscatter}).
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -298,11 +302,22 @@ conditional expectation function is nonlinear.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
+
+
+{title:Acknowledgments}
+
+{pstd}
+This command is inspired by and provides similar functionality to {cmd:binscatter}
+by Michael Stepner. The original {cmd:binscatter} package is available at
+{browse "https://github.com/michaelstepner/binscatter"}. We thank Michael Stepner
+for his pioneering work on binned scatter plot visualization in Stata.
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help binscatter} (if installed), {help ctools}, {help creghdfe}, {help twoway}
+Online: {browse "https://github.com/michaelstepner/binscatter":binscatter} (if installed),
+{help ctools}, {help creghdfe}, {help twoway}
 {p_end}

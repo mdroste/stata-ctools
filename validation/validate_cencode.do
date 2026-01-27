@@ -16,11 +16,6 @@ if _rc != 0 {
 
 quietly {
 
-noi di as text ""
-noi di as text "======================================================================"
-noi di as text "              CENCODE VALIDATION TEST SUITE"
-noi di as text "======================================================================"
-
 /*******************************************************************************
  * Helper: Compare cencode vs encode
  ******************************************************************************/
@@ -61,12 +56,12 @@ program define benchmark_encode
 
     * Check both succeeded or both failed
     if `rc_c' != `rc_s' {
-        noi test_fail "`testname'" "cencode rc=`rc_c', encode rc=`rc_s'"
+        test_fail "`testname'" "cencode rc=`rc_c', encode rc=`rc_s'"
         exit
     }
 
     if `rc_c' != 0 {
-        noi test_pass "`testname' (both error as expected)"
+        test_pass "`testname' (both error as expected)"
         exit
     }
 
@@ -79,7 +74,7 @@ program define benchmark_encode
     local nmiss_diff = r(N)
 
     if `ndiff' > 0 | `nmiss_diff' > 0 {
-        noi test_fail "`testname'" "`ndiff' value diffs, `nmiss_diff' missing diffs"
+        test_fail "`testname'" "`ndiff' value diffs, `nmiss_diff' missing diffs"
     }
     else {
         * Also verify labels match
@@ -93,10 +88,10 @@ program define benchmark_encode
             }
         }
         if `all_match' {
-            noi test_pass "`testname'"
+            test_pass "`testname'"
         }
         else {
-            noi test_fail "`testname'" "label text mismatch"
+            test_fail "`testname'" "label text mismatch"
         }
     }
 
@@ -111,22 +106,22 @@ end
 /*******************************************************************************
  * SECTION 1: Plugin functionality check
  ******************************************************************************/
-noi print_section "Plugin Check"
+print_section "Plugin Check"
 
 sysuse auto, clear
 capture noisily cencode make, generate(make_code)
 if _rc != 0 {
-    noi test_fail "cencode plugin load" "plugin returned error `=_rc'"
-    noi print_summary "cencode"
+    test_fail "cencode plugin load" "plugin returned error `=_rc'"
+    print_summary "cencode"
     exit 1
 }
-noi test_pass "cencode plugin loads and runs"
+test_pass "cencode plugin loads and runs"
 drop make_code
 
 /*******************************************************************************
  * SECTION 2: Basic functionality (10 tests)
  ******************************************************************************/
-noi print_section "Basic Functionality"
+print_section "Basic Functionality"
 
 * Test 2.1: Basic encoding creates variable
 sysuse auto, clear
@@ -134,10 +129,10 @@ capture drop make_code
 cencode make, generate(make_code)
 capture confirm numeric variable make_code
 if _rc == 0 {
-    noi test_pass "basic encoding creates numeric variable"
+    test_pass "basic encoding creates numeric variable"
 }
 else {
-    noi test_fail "basic encoding" "variable not numeric"
+    test_fail "basic encoding" "variable not numeric"
 }
 
 * Test 2.2: Values start at 1
@@ -146,10 +141,10 @@ capture drop make_code
 cencode make, generate(make_code)
 quietly sum make_code
 if r(min) == 1 {
-    noi test_pass "values start at 1"
+    test_pass "values start at 1"
 }
 else {
-    noi test_fail "values start at 1" "min=`=r(min)'"
+    test_fail "values start at 1" "min=`=r(min)'"
 }
 
 * Test 2.3: Max equals unique count
@@ -160,15 +155,15 @@ quietly tab make_code
 local n_unique = r(r)
 quietly sum make_code
 if r(max) == `n_unique' {
-    noi test_pass "max value equals unique count"
+    test_pass "max value equals unique count"
 }
 else {
-    noi test_fail "max value" "max=`=r(max)', unique=`n_unique'"
+    test_fail "max value" "max=`=r(max)', unique=`n_unique'"
 }
 
 * Test 2.4: Compare with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: auto make")
+benchmark_encode make, testname("vs encode: auto make")
 
 * Test 2.5: Value labels applied
 sysuse auto, clear
@@ -176,10 +171,10 @@ capture drop make_code
 cencode make, generate(make_code)
 local lblname : value label make_code
 if "`lblname'" != "" {
-    noi test_pass "value labels applied"
+    test_pass "value labels applied"
 }
 else {
-    noi test_fail "value labels" "no label attached"
+    test_fail "value labels" "no label attached"
 }
 
 * Test 2.6: Labels match original strings
@@ -196,10 +191,10 @@ forvalues i = 1/10 {
     }
 }
 if `pass' {
-    noi test_pass "labels match original strings"
+    test_pass "labels match original strings"
 }
 else {
-    noi test_fail "labels match" "mismatch found"
+    test_fail "labels match" "mismatch found"
 }
 drop make_code
 
@@ -210,10 +205,10 @@ gen str20 name = "only_one"
 capture drop name_code
 cencode name, generate(name_code)
 if name_code[1] == 1 {
-    noi test_pass "single observation"
+    test_pass "single observation"
 }
 else {
-    noi test_fail "single observation" "value=`=name_code[1]'"
+    test_fail "single observation" "value=`=name_code[1]'"
 }
 
 * Test 2.8: Two observations
@@ -222,20 +217,20 @@ set obs 2
 gen str10 x = cond(_n == 1, "apple", "banana")
 cencode x, generate(x_code)
 if x_code[1] == 1 & x_code[2] == 2 {
-    noi test_pass "two observations alphabetical"
+    test_pass "two observations alphabetical"
 }
 else {
-    noi test_fail "two observations" "order wrong"
+    test_fail "two observations" "order wrong"
 }
 
 * Test 2.9: verbose option
 sysuse auto, clear
 capture cencode make, generate(make_code) verbose
 if _rc == 0 {
-    noi test_pass "verbose option"
+    test_pass "verbose option"
 }
 else {
-    noi test_fail "verbose option" "rc=`=_rc'"
+    test_fail "verbose option" "rc=`=_rc'"
 }
 capture drop make_code
 
@@ -243,17 +238,17 @@ capture drop make_code
 sysuse auto, clear
 capture cencode make, generate(make_code) threads(2)
 if _rc == 0 {
-    noi test_pass "threads(2) option"
+    test_pass "threads(2) option"
 }
 else {
-    noi test_fail "threads option" "rc=`=_rc'"
+    test_fail "threads option" "rc=`=_rc'"
 }
 capture drop make_code
 
 /*******************************************************************************
  * SECTION 3: Missing values (10 tests)
  ******************************************************************************/
-noi print_section "Missing Values"
+print_section "Missing Values"
 
 * Test 3.1: Empty strings become missing
 clear
@@ -263,10 +258,10 @@ replace name = "" in 1/5
 cencode name, generate(name_code)
 count if missing(name_code) & name == ""
 if r(N) == 5 {
-    noi test_pass "empty strings become missing"
+    test_pass "empty strings become missing"
 }
 else {
-    noi test_fail "empty strings" "expected 5, got `=r(N)'"
+    test_fail "empty strings" "expected 5, got `=r(N)'"
 }
 
 * Test 3.2: Non-empty strings encoded
@@ -277,10 +272,10 @@ replace name = "" in 1/5
 cencode name, generate(name_code)
 count if !missing(name_code) & name != ""
 if r(N) == 15 {
-    noi test_pass "non-empty strings encoded"
+    test_pass "non-empty strings encoded"
 }
 else {
-    noi test_fail "non-empty strings" "expected 15, got `=r(N)'"
+    test_fail "non-empty strings" "expected 15, got `=r(N)'"
 }
 
 * Test 3.3: All empty strings
@@ -290,10 +285,10 @@ gen str10 empty = ""
 cencode empty, generate(empty_code)
 count if missing(empty_code)
 if r(N) == 10 {
-    noi test_pass "all empty strings -> all missing"
+    test_pass "all empty strings -> all missing"
 }
 else {
-    noi test_fail "all empty" "not all missing"
+    test_fail "all empty" "not all missing"
 }
 
 * Test 3.4: First observation empty
@@ -304,10 +299,10 @@ replace name = "" in 1
 cencode name, generate(name_code)
 local pass = missing(name_code[1]) & !missing(name_code[2])
 if `pass' {
-    noi test_pass "first observation empty"
+    test_pass "first observation empty"
 }
 else {
-    noi test_fail "first empty" "handling wrong"
+    test_fail "first empty" "handling wrong"
 }
 
 * Test 3.5: Last observation empty
@@ -318,10 +313,10 @@ replace name = "" in 10
 cencode name, generate(name_code)
 local pass = missing(name_code[10]) & !missing(name_code[9])
 if `pass' {
-    noi test_pass "last observation empty"
+    test_pass "last observation empty"
 }
 else {
-    noi test_fail "last empty" "handling wrong"
+    test_fail "last empty" "handling wrong"
 }
 
 * Test 3.6: Alternating empty/non-empty
@@ -331,10 +326,10 @@ gen str20 name = cond(mod(_n, 2) == 0, "even", "")
 cencode name, generate(name_code)
 count if missing(name_code)
 if r(N) == 10 {
-    noi test_pass "alternating empty/non-empty"
+    test_pass "alternating empty/non-empty"
 }
 else {
-    noi test_fail "alternating" "expected 10 missing"
+    test_fail "alternating" "expected 10 missing"
 }
 
 * Test 3.7: 90% empty strings
@@ -344,10 +339,10 @@ gen str20 name = cond(_n <= 10, "name" + string(_n), "")
 cencode name, generate(name_code)
 count if missing(name_code)
 if r(N) == 90 {
-    noi test_pass "90% empty strings"
+    test_pass "90% empty strings"
 }
 else {
-    noi test_fail "90% empty" "expected 90 missing"
+    test_fail "90% empty" "expected 90 missing"
 }
 
 * Test 3.8: Only one non-empty
@@ -358,10 +353,10 @@ replace name = "singleton" in 50
 cencode name, generate(name_code)
 local pass = (name_code[50] == 1) & missing(name_code[1])
 if `pass' {
-    noi test_pass "only one non-empty"
+    test_pass "only one non-empty"
 }
 else {
-    noi test_fail "singleton" "handling wrong"
+    test_fail "singleton" "handling wrong"
 }
 
 * Test 3.9: Empty vs single space
@@ -372,22 +367,22 @@ replace name = " " in 1/3
 cencode name, generate(name_code)
 count if !missing(name_code)
 if r(N) == 3 {
-    noi test_pass "space treated as non-empty"
+    test_pass "space treated as non-empty"
 }
 else {
-    noi test_fail "space vs empty" "space not distinguished"
+    test_fail "space vs empty" "space not distinguished"
 }
 
 * Test 3.10: Compare missing handling with encode
 clear
 set obs 50
 gen str20 name = cond(mod(_n, 3) == 0, "", "val" + string(_n))
-noi benchmark_encode name, testname("vs encode: missing pattern")
+benchmark_encode name, testname("vs encode: missing pattern")
 
 /*******************************************************************************
  * SECTION 4: Label options (10 tests)
  ******************************************************************************/
-noi print_section "Label Options"
+print_section "Label Options"
 
 * Test 4.1: Custom label name
 sysuse auto, clear
@@ -395,10 +390,10 @@ capture label drop my_labels
 cencode make, generate(make_code) label(my_labels)
 capture label list my_labels
 if _rc == 0 {
-    noi test_pass "custom label name"
+    test_pass "custom label name"
 }
 else {
-    noi test_fail "custom label" "label not created"
+    test_fail "custom label" "label not created"
 }
 drop make_code
 capture label drop my_labels
@@ -409,10 +404,10 @@ capture label drop make_encoded
 cencode make, generate(make_encoded)
 capture label list make_encoded
 if _rc == 0 {
-    noi test_pass "default label name matches varname"
+    test_pass "default label name matches varname"
 }
 else {
-    noi test_fail "default label" "label not created"
+    test_fail "default label" "label not created"
 }
 drop make_encoded
 capture label drop make_encoded
@@ -423,10 +418,10 @@ capture label drop car_labels
 cencode make, generate(make_code) label(car_labels)
 local attached : value label make_code
 if "`attached'" == "car_labels" {
-    noi test_pass "label attached to variable"
+    test_pass "label attached to variable"
 }
 else {
-    noi test_fail "label attached" "wrong label: `attached'"
+    test_fail "label attached" "wrong label: `attached'"
 }
 drop make_code
 capture label drop car_labels
@@ -436,10 +431,10 @@ sysuse auto, clear
 capture label drop new_label
 cencode make, generate(make_code) noextend
 if _rc == 0 {
-    noi test_pass "noextend option"
+    test_pass "noextend option"
 }
 else {
-    noi test_fail "noextend" "rc=`=_rc'"
+    test_fail "noextend" "rc=`=_rc'"
 }
 capture drop make_code
 
@@ -454,10 +449,10 @@ local rc1 = _rc
 capture cencode var_b, generate(b_code) label(shared)
 local rc2 = _rc
 if `rc1' == 0 & `rc2' == 0 {
-    noi test_pass "multiple vars same label"
+    test_pass "multiple vars same label"
 }
 else {
-    noi test_fail "shared label" "rc1=`rc1', rc2=`rc2'"
+    test_fail "shared label" "rc1=`rc1', rc2=`rc2'"
 }
 
 * Test 4.6: Label values contiguous
@@ -475,10 +470,10 @@ forvalues i = 1/`n' {
     if `found' == 0 local all_present = 0
 }
 if `all_present' {
-    noi test_pass "label values contiguous 1 to N"
+    test_pass "label values contiguous 1 to N"
 }
 else {
-    noi test_fail "contiguous" "gaps in values"
+    test_fail "contiguous" "gaps in values"
 }
 drop make_code
 
@@ -492,10 +487,10 @@ foreach c of local codes {
     if "`lbl'" == "" local all_labeled = 0
 }
 if `all_labeled' {
-    noi test_pass "all unique strings labeled"
+    test_pass "all unique strings labeled"
 }
 else {
-    noi test_fail "all labeled" "some unlabeled"
+    test_fail "all labeled" "some unlabeled"
 }
 drop make_code
 
@@ -506,10 +501,10 @@ gen str10 x = "val" + string(_n)
 capture label drop abcdefghijklmnopqrstuvwxyz12345
 capture cencode x, generate(x_code) label(abcdefghijklmnopqrstuvwxyz12345)
 if _rc == 0 {
-    noi test_pass "long label name (32 chars)"
+    test_pass "long label name (32 chars)"
 }
 else {
-    noi test_fail "long label name" "rc=`=_rc'"
+    test_fail "long label name" "rc=`=_rc'"
 }
 
 * Test 4.9: Label with underscore
@@ -519,20 +514,20 @@ gen str10 x = "val" + string(_n)
 capture label drop my_label_name
 capture cencode x, generate(x_code) label(my_label_name)
 if _rc == 0 {
-    noi test_pass "label name with underscore"
+    test_pass "label name with underscore"
 }
 else {
-    noi test_fail "underscore label" "rc=`=_rc'"
+    test_fail "underscore label" "rc=`=_rc'"
 }
 
 * Test 4.10: Compare labels with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: labels") label(test_lbl)
+benchmark_encode make, testname("vs encode: labels") label(test_lbl)
 
 /*******************************************************************************
  * SECTION 5: if/in conditions (10 tests)
  ******************************************************************************/
-noi print_section "if/in Conditions"
+print_section "if/in Conditions"
 
 * Test 5.1: if condition subset
 sysuse auto, clear
@@ -543,10 +538,10 @@ count if missing(make_code) & foreign == 0
 local n_miss = r(N)
 count if foreign == 1
 if `n_enc' == r(N) & `n_miss' > 0 {
-    noi test_pass "if condition subset"
+    test_pass "if condition subset"
 }
 else {
-    noi test_fail "if condition" "wrong encoding pattern"
+    test_fail "if condition" "wrong encoding pattern"
 }
 drop make_code
 
@@ -558,10 +553,10 @@ local in_range = r(N)
 count if missing(make_code) in 21/74
 local out_range = r(N)
 if `in_range' == 20 & `out_range' == 54 {
-    noi test_pass "in range"
+    test_pass "in range"
 }
 else {
-    noi test_fail "in range" "wrong counts"
+    test_fail "in range" "wrong counts"
 }
 drop make_code
 
@@ -570,10 +565,10 @@ sysuse auto, clear
 cencode make if price > 100000, generate(make_code)
 count if !missing(make_code)
 if r(N) == 0 {
-    noi test_pass "empty if result"
+    test_pass "empty if result"
 }
 else {
-    noi test_fail "empty if" "should have no matches"
+    test_fail "empty if" "should have no matches"
 }
 drop make_code
 
@@ -582,30 +577,30 @@ sysuse auto, clear
 cencode make if price > 0, generate(make_code)
 count if !missing(make_code)
 if r(N) == _N {
-    noi test_pass "if matches all"
+    test_pass "if matches all"
 }
 else {
-    noi test_fail "if all" "should match all"
+    test_fail "if all" "should match all"
 }
 drop make_code
 
 * Test 5.5: Compare if with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: if foreign") if2("foreign == 1")
+benchmark_encode make, testname("vs encode: if foreign") if2("foreign == 1")
 
 * Test 5.7: Compare in with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: in 1/30") in2("1/30")
+benchmark_encode make, testname("vs encode: in 1/30") in2("1/30")
 
 * Test 5.8: Single observation in
 sysuse auto, clear
 cencode make in 1/1, generate(make_code)
 count if !missing(make_code)
 if r(N) == 1 {
-    noi test_pass "single observation in"
+    test_pass "single observation in"
 }
 else {
-    noi test_fail "single in" "wrong count"
+    test_fail "single in" "wrong count"
 }
 drop make_code
 
@@ -617,10 +612,10 @@ gen str10 group = cond(_n <= 50, "A", "B")
 cencode category if group == "A", generate(cat_code)
 count if !missing(cat_code)
 if r(N) == 50 {
-    noi test_pass "if on string variable"
+    test_pass "if on string variable"
 }
 else {
-    noi test_fail "string if" "wrong count"
+    test_fail "string if" "wrong count"
 }
 
 * Test 5.10: in from middle
@@ -628,17 +623,17 @@ sysuse auto, clear
 cencode make in 30/50, generate(make_code)
 count if !missing(make_code) in 30/50
 if r(N) == 21 {
-    noi test_pass "in from middle"
+    test_pass "in from middle"
 }
 else {
-    noi test_fail "middle in" "wrong count"
+    test_fail "middle in" "wrong count"
 }
 drop make_code
 
 /*******************************************************************************
  * SECTION 6: Alphabetical ordering (10 tests)
  ******************************************************************************/
-noi print_section "Alphabetical Ordering"
+print_section "Alphabetical Ordering"
 
 * Test 6.1: Basic alphabetical order
 sysuse auto, clear
@@ -648,10 +643,10 @@ local first_by_code = make[1]
 gsort make
 local first_alpha = make[1]
 if "`first_by_code'" == "`first_alpha'" {
-    noi test_pass "basic alphabetical order"
+    test_pass "basic alphabetical order"
 }
 else {
-    noi test_fail "alphabetical" "`first_by_code' vs `first_alpha'"
+    test_fail "alphabetical" "`first_by_code' vs `first_alpha'"
 }
 drop make_code
 
@@ -667,10 +662,10 @@ replace x = "99" in 5
 cencode x, generate(x_code)
 local lbl1 : label (x_code) 1
 if substr("`lbl1'", 1, 1) >= "0" & substr("`lbl1'", 1, 1) <= "9" {
-    noi test_pass "numbers sort before letters"
+    test_pass "numbers sort before letters"
 }
 else {
-    noi test_fail "number sort" "first label: `lbl1'"
+    test_fail "number sort" "first label: `lbl1'"
 }
 
 * Test 6.3: Case sensitivity
@@ -684,10 +679,10 @@ replace x = "banana" in 4
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 4 {
-    noi test_pass "case sensitivity preserved"
+    test_pass "case sensitivity preserved"
 }
 else {
-    noi test_fail "case sensitivity" "not 4 unique"
+    test_fail "case sensitivity" "not 4 unique"
 }
 
 * Test 6.4: Consecutive codes A-Z
@@ -703,10 +698,10 @@ forvalues i = 1/25 {
     if "`this'" > "`next'" local ordered = 0
 }
 if `ordered' {
-    noi test_pass "consecutive codes in order"
+    test_pass "consecutive codes in order"
 }
 else {
-    noi test_fail "consecutive" "not alphabetical"
+    test_fail "consecutive" "not alphabetical"
 }
 
 * Test 6.5: Mixed length strings
@@ -722,10 +717,10 @@ cencode x, generate(x_code)
 local lbl1 : label (x_code) 1
 local lbl5 : label (x_code) 5
 if "`lbl1'" == "a" & "`lbl5'" == "b" {
-    noi test_pass "mixed length strings sort"
+    test_pass "mixed length strings sort"
 }
 else {
-    noi test_fail "mixed length" "wrong order"
+    test_fail "mixed length" "wrong order"
 }
 
 * Test 6.6: Whitespace affects sort
@@ -739,10 +734,10 @@ replace x = "a  b" in 4
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 4 {
-    noi test_pass "whitespace distinguished"
+    test_pass "whitespace distinguished"
 }
 else {
-    noi test_fail "whitespace" "not 4 unique"
+    test_fail "whitespace" "not 4 unique"
 }
 
 * Test 6.7: Empty strings excluded from codes
@@ -754,10 +749,10 @@ replace x = "alpha" in 4
 cencode x, generate(x_code)
 local lbl1 : label (x_code) 1
 if "`lbl1'" == "alpha" {
-    noi test_pass "empty strings not coded"
+    test_pass "empty strings not coded"
 }
 else {
-    noi test_fail "empty strings" "wrong first label"
+    test_fail "empty strings" "wrong first label"
 }
 
 * Test 6.8: Reverse order input
@@ -772,10 +767,10 @@ replace x = "a" in 5
 cencode x, generate(x_code)
 local lbl1 : label (x_code) 1
 if "`lbl1'" == "a" {
-    noi test_pass "reverse order input sorted"
+    test_pass "reverse order input sorted"
 }
 else {
-    noi test_fail "reverse order" "wrong first: `lbl1'"
+    test_fail "reverse order" "wrong first: `lbl1'"
 }
 
 * Test 6.9: Already sorted input
@@ -793,20 +788,20 @@ forvalues i = 1/5 {
     if x_code[`i'] != `i' local pass = 0
 }
 if `pass' {
-    noi test_pass "already sorted stays sorted"
+    test_pass "already sorted stays sorted"
 }
 else {
-    noi test_fail "already sorted" "order changed"
+    test_fail "already sorted" "order changed"
 }
 
 * Test 6.10: Compare order with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: alphabetical order")
+benchmark_encode make, testname("vs encode: alphabetical order")
 
 /*******************************************************************************
  * SECTION 7: Large datasets (10 tests)
  ******************************************************************************/
-noi print_section "Large Datasets"
+print_section "Large Datasets"
 
 * Test 7.1: 100k observations
 clear
@@ -815,10 +810,10 @@ gen str20 category = "cat" + string(mod(_n, 100))
 cencode category, generate(cat_code)
 quietly tab cat_code
 if r(r) == 100 {
-    noi test_pass "100k observations, 100 unique"
+    test_pass "100k observations, 100 unique"
 }
 else {
-    noi test_fail "100k obs" "wrong unique count"
+    test_fail "100k obs" "wrong unique count"
 }
 
 * Test 7.2: 500k observations
@@ -827,10 +822,10 @@ set obs 500000
 gen str20 category = "cat" + string(mod(_n, 500))
 capture cencode category, generate(cat_code)
 if _rc == 0 {
-    noi test_pass "500k observations"
+    test_pass "500k observations"
 }
 else {
-    noi test_fail "500k obs" "rc=`=_rc'"
+    test_fail "500k obs" "rc=`=_rc'"
 }
 
 * Test 7.3: 10k unique values
@@ -840,10 +835,10 @@ gen str20 name = "unique_" + string(mod(_n, 10000))
 cencode name, generate(name_code)
 quietly tab name_code
 if r(r) == 10000 {
-    noi test_pass "10k unique values"
+    test_pass "10k unique values"
 }
 else {
-    noi test_fail "10k unique" "wrong count"
+    test_fail "10k unique" "wrong count"
 }
 
 * Test 7.4: 1M obs, 10 unique
@@ -854,14 +849,14 @@ capture cencode category, generate(cat_code)
 if _rc == 0 {
     quietly tab cat_code
     if r(r) == 10 {
-        noi test_pass "1M obs, 10 unique"
+        test_pass "1M obs, 10 unique"
     }
     else {
-        noi test_fail "1M obs" "wrong unique count"
+        test_fail "1M obs" "wrong unique count"
     }
 }
 else {
-    noi test_fail "1M obs" "rc=`=_rc'"
+    test_fail "1M obs" "rc=`=_rc'"
 }
 
 * Test 7.5: Large with if condition
@@ -872,10 +867,10 @@ gen byte flag = mod(_n, 2)
 cencode category if flag == 1, generate(cat_code)
 count if !missing(cat_code)
 if r(N) == 250000 {
-    noi test_pass "large with if condition"
+    test_pass "large with if condition"
 }
 else {
-    noi test_fail "large if" "wrong count"
+    test_fail "large if" "wrong count"
 }
 
 * Test 7.6: Large with long strings
@@ -884,10 +879,10 @@ set obs 100000
 gen str100 longcat = "category_with_long_name_" + string(mod(_n, 100))
 capture cencode longcat, generate(long_code)
 if _rc == 0 {
-    noi test_pass "large with long strings"
+    test_pass "large with long strings"
 }
 else {
-    noi test_fail "long strings" "rc=`=_rc'"
+    test_fail "long strings" "rc=`=_rc'"
 }
 
 * Test 7.7: threads(4)
@@ -896,10 +891,10 @@ set obs 500000
 gen str20 category = "cat" + string(mod(_n, 100))
 capture cencode category, generate(cat_code) threads(4)
 if _rc == 0 {
-    noi test_pass "large with threads(4)"
+    test_pass "large with threads(4)"
 }
 else {
-    noi test_fail "threads(4)" "rc=`=_rc'"
+    test_fail "threads(4)" "rc=`=_rc'"
 }
 
 * Test 7.8: 25k unique values
@@ -909,10 +904,10 @@ gen str20 name = "v" + string(mod(_n, 25000))
 cencode name, generate(name_code)
 quietly sum name_code
 if r(max) == 25000 {
-    noi test_pass "25k unique values"
+    test_pass "25k unique values"
 }
 else {
-    noi test_fail "25k unique" "max=`=r(max)'"
+    test_fail "25k unique" "max=`=r(max)'"
 }
 
 * Test 7.9: Sparse unique pattern
@@ -922,10 +917,10 @@ gen str20 category = cond(mod(_n, 1000) == 0, "unique" + string(_n), "common")
 cencode category, generate(cat_code)
 quietly tab cat_code
 if r(r) == 101 {
-    noi test_pass "sparse unique pattern"
+    test_pass "sparse unique pattern"
 }
 else {
-    noi test_fail "sparse" "expected 101 unique"
+    test_fail "sparse" "expected 101 unique"
 }
 
 * Test 7.10: Large dataset, small sample
@@ -935,16 +930,16 @@ gen str20 category = "cat" + string(mod(_n, 100))
 cencode category in 1/100, generate(cat_code)
 count if !missing(cat_code)
 if r(N) == 100 {
-    noi test_pass "large dataset, small sample"
+    test_pass "large dataset, small sample"
 }
 else {
-    noi test_fail "small sample" "wrong count"
+    test_fail "small sample" "wrong count"
 }
 
 /*******************************************************************************
  * SECTION 8: Special characters (10 tests)
  ******************************************************************************/
-noi print_section "Special Characters"
+print_section "Special Characters"
 
 * Test 8.1: Spaces in strings
 clear
@@ -957,10 +952,10 @@ replace x = "multi  space" in 4
 replace x = "a b c" in 5
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "spaces in strings"
+    test_pass "spaces in strings"
 }
 else {
-    noi test_fail "spaces" "rc=`=_rc'"
+    test_fail "spaces" "rc=`=_rc'"
 }
 
 * Test 8.2: Leading/trailing spaces
@@ -974,10 +969,10 @@ replace x = "none" in 4
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 4 {
-    noi test_pass "leading/trailing spaces distinguished"
+    test_pass "leading/trailing spaces distinguished"
 }
 else {
-    noi test_fail "leading/trailing" "not 4 unique"
+    test_fail "leading/trailing" "not 4 unique"
 }
 
 * Test 8.3: Commas
@@ -989,10 +984,10 @@ replace x = "a,b" in 2
 replace x = "no comma" in 3
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "commas in strings"
+    test_pass "commas in strings"
 }
 else {
-    noi test_fail "commas" "rc=`=_rc'"
+    test_fail "commas" "rc=`=_rc'"
 }
 
 * Test 8.4: Dashes and underscores
@@ -1005,10 +1000,10 @@ replace x = "with-both_here" in 3
 replace x = "plain" in 4
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "dashes and underscores"
+    test_pass "dashes and underscores"
 }
 else {
-    noi test_fail "dash/underscore" "rc=`=_rc'"
+    test_fail "dash/underscore" "rc=`=_rc'"
 }
 
 * Test 8.5: Parentheses and brackets
@@ -1021,10 +1016,10 @@ replace x = "{braces}" in 3
 replace x = "plain" in 4
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "parentheses and brackets"
+    test_pass "parentheses and brackets"
 }
 else {
-    noi test_fail "brackets" "rc=`=_rc'"
+    test_fail "brackets" "rc=`=_rc'"
 }
 
 * Test 8.6: Ampersand and percent
@@ -1036,10 +1031,10 @@ replace x = "50%" in 2
 replace x = "plain" in 3
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "ampersand and percent"
+    test_pass "ampersand and percent"
 }
 else {
-    noi test_fail "amp/percent" "rc=`=_rc'"
+    test_fail "amp/percent" "rc=`=_rc'"
 }
 
 * Test 8.7: Apostrophes
@@ -1051,10 +1046,10 @@ replace x = "it's" in 2
 replace x = "plain" in 3
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "apostrophes"
+    test_pass "apostrophes"
 }
 else {
-    noi test_fail "apostrophes" "rc=`=_rc'"
+    test_fail "apostrophes" "rc=`=_rc'"
 }
 
 * Test 8.8: Slashes
@@ -1066,10 +1061,10 @@ replace x = "win\path" in 2
 replace x = "plain" in 3
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "forward and back slashes"
+    test_pass "forward and back slashes"
 }
 else {
-    noi test_fail "slashes" "rc=`=_rc'"
+    test_fail "slashes" "rc=`=_rc'"
 }
 
 * Test 8.9: Tab characters
@@ -1081,10 +1076,10 @@ replace x = "no tab" in 2
 replace x = "another" in 3
 capture cencode x, generate(x_code)
 if _rc == 0 {
-    noi test_pass "tab characters"
+    test_pass "tab characters"
 }
 else {
-    noi test_fail "tabs" "rc=`=_rc'"
+    test_fail "tabs" "rc=`=_rc'"
 }
 
 * Test 8.10: Compare special chars with encode
@@ -1096,63 +1091,63 @@ replace x = "#hashtag @mention" in 2
 replace x = "$100 + 50%" in 3
 replace x = "plain" in 4
 replace x = "another" in 5
-noi benchmark_encode x, testname("vs encode: special chars")
+benchmark_encode x, testname("vs encode: special chars")
 
 /*******************************************************************************
  * SECTION 9: Real-world datasets (10 tests)
  ******************************************************************************/
-noi print_section "Real-World Datasets"
+print_section "Real-World Datasets"
 
 * Test 9.1: auto - make
 sysuse auto, clear
-noi benchmark_encode make, testname("auto: make")
+benchmark_encode make, testname("auto: make")
 
 * Test 9.2: census - state
 sysuse census, clear
-noi benchmark_encode state, testname("census: state")
+benchmark_encode state, testname("census: state")
 
 * Test 9.3: census - region (decode first)
 sysuse census, clear
 decode region, generate(region_str)
-noi benchmark_encode region_str, testname("census: region")
+benchmark_encode region_str, testname("census: region")
 
 * Test 9.4: lifeexp - country
 webuse lifeexp, clear
-noi benchmark_encode country, testname("lifeexp: country")
+benchmark_encode country, testname("lifeexp: country")
 
 * Test 9.5: nlswork - race (tostring first)
 webuse nlswork, clear
 tostring race, generate(race_str)
-noi benchmark_encode race_str, testname("nlswork: race")
+benchmark_encode race_str, testname("nlswork: race")
 
 * Test 9.6: citytemp - region
 sysuse citytemp, clear
 decode region, generate(region_str)
-noi benchmark_encode region_str, testname("citytemp: region")
+benchmark_encode region_str, testname("citytemp: region")
 
 * Test 9.7: pop2000 - agegrp
 sysuse pop2000, clear
 decode agegrp, generate(agegrp_str)
-noi benchmark_encode agegrp_str, testname("pop2000: agegrp")
+benchmark_encode agegrp_str, testname("pop2000: agegrp")
 
 * Test 9.8: voter - candidat
 sysuse voter, clear
 decode candidat, generate(cand_str)
-noi benchmark_encode cand_str, testname("voter: candidat")
+benchmark_encode cand_str, testname("voter: candidat")
 
 * Test 9.9: educ99gdp - country
 webuse educ99gdp, clear
-noi benchmark_encode country, testname("educ99gdp: country")
+benchmark_encode country, testname("educ99gdp: country")
 
 * Test 9.10: bpwide - patient
 sysuse bpwide, clear
 tostring patient, generate(patient_str)
-noi benchmark_encode patient_str, testname("bpwide: patient")
+benchmark_encode patient_str, testname("bpwide: patient")
 
 /*******************************************************************************
  * SECTION 10: Pathological data (10 tests)
  ******************************************************************************/
-noi print_section "Pathological Data"
+print_section "Pathological Data"
 
 * Test 10.1: All same value
 clear
@@ -1161,10 +1156,10 @@ gen str20 x = "identical"
 cencode x, generate(x_code)
 quietly sum x_code
 if r(min) == 1 & r(max) == 1 {
-    noi test_pass "all same value"
+    test_pass "all same value"
 }
 else {
-    noi test_fail "all same" "not all 1"
+    test_fail "all same" "not all 1"
 }
 
 * Test 10.2: All unique values
@@ -1174,10 +1169,10 @@ gen str20 x = "unique_" + string(_n)
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 1000 {
-    noi test_pass "all unique values"
+    test_pass "all unique values"
 }
 else {
-    noi test_fail "all unique" "not 1000 unique"
+    test_fail "all unique" "not 1000 unique"
 }
 
 * Test 10.3: Binary values 50/50
@@ -1187,10 +1182,10 @@ gen str10 x = cond(_n <= 500, "A", "B")
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 2 {
-    noi test_pass "binary values 50/50"
+    test_pass "binary values 50/50"
 }
 else {
-    noi test_fail "binary" "not 2 unique"
+    test_fail "binary" "not 2 unique"
 }
 
 * Test 10.4: Very long strings (244 chars)
@@ -1199,10 +1194,10 @@ set obs 10
 gen str244 longstr = "a" * 240 + string(_n)
 capture cencode longstr, generate(long_code)
 if _rc == 0 {
-    noi test_pass "very long strings (244 chars)"
+    test_pass "very long strings (244 chars)"
 }
 else {
-    noi test_fail "long strings" "rc=`=_rc'"
+    test_fail "long strings" "rc=`=_rc'"
 }
 
 * Test 10.5: strL variables
@@ -1211,10 +1206,10 @@ set obs 10
 gen strL bigtext = "This is a longer piece of text number " + string(_n)
 capture cencode bigtext, generate(big_code)
 if _rc == 0 {
-    noi test_pass "strL variables"
+    test_pass "strL variables"
 }
 else {
-    noi test_fail "strL" "rc=`=_rc'"
+    test_fail "strL" "rc=`=_rc'"
 }
 
 * Test 10.6: Bookend pattern (first and last same)
@@ -1223,10 +1218,10 @@ set obs 100
 gen str20 x = cond(_n == 1 | _n == 100, "bookend", "middle" + string(_n))
 cencode x, generate(x_code)
 if x_code[1] == x_code[100] {
-    noi test_pass "bookend pattern"
+    test_pass "bookend pattern"
 }
 else {
-    noi test_fail "bookend" "first and last differ"
+    test_fail "bookend" "first and last differ"
 }
 
 * Test 10.7: Cyclic pattern
@@ -1236,10 +1231,10 @@ gen str10 x = "cycle" + string(mod(_n - 1, 7))
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 7 {
-    noi test_pass "cyclic pattern"
+    test_pass "cyclic pattern"
 }
 else {
-    noi test_fail "cyclic" "not 7 unique"
+    test_fail "cyclic" "not 7 unique"
 }
 
 * Test 10.8: Shuffled duplicates
@@ -1253,10 +1248,10 @@ drop shuffle
 cencode x, generate(x_code)
 quietly tab x_code
 if r(r) == 5 {
-    noi test_pass "shuffled duplicates"
+    test_pass "shuffled duplicates"
 }
 else {
-    noi test_fail "shuffled" "not 5 unique"
+    test_fail "shuffled" "not 5 unique"
 }
 
 * Test 10.9: Strings at str2045 boundary
@@ -1267,66 +1262,66 @@ capture cencode longstr, generate(long_code)
 if _rc == 0 {
     quietly tab long_code
     if r(r) == 3 {
-        noi test_pass "str2045 boundary"
+        test_pass "str2045 boundary"
     }
     else {
-        noi test_fail "str2045" "not 3 unique"
+        test_fail "str2045" "not 3 unique"
     }
 }
 else {
-    noi test_fail "str2045" "rc=`=_rc'"
+    test_fail "str2045" "rc=`=_rc'"
 }
 
 * Test 10.10: Compare pathological with encode
 clear
 set obs 50
 gen str20 x = cond(mod(_n, 10) == 0, "rare", "common")
-noi benchmark_encode x, testname("vs encode: pathological")
+benchmark_encode x, testname("vs encode: pathological")
 
 /*******************************************************************************
  * SECTION 11: Error handling (5 tests)
  ******************************************************************************/
-noi print_section "Error Handling"
+print_section "Error Handling"
 
 * Test 11.1: Generate var exists
 sysuse auto, clear
 gen make_code = 1
 capture cencode make, generate(make_code)
 if _rc == 110 {
-    noi test_pass "error: generate var exists"
+    test_pass "error: generate var exists"
 }
 else {
-    noi test_fail "var exists" "expected rc=110, got `=_rc'"
+    test_fail "var exists" "expected rc=110, got `=_rc'"
 }
 
 * Test 11.2: Source is numeric
 sysuse auto, clear
 capture cencode price, generate(price_code)
 if _rc != 0 {
-    noi test_pass "error: numeric source"
+    test_pass "error: numeric source"
 }
 else {
-    noi test_fail "numeric source" "should error"
+    test_fail "numeric source" "should error"
 }
 
 * Test 11.3: Source doesn't exist
 sysuse auto, clear
 capture cencode nonexistent, generate(ne_code)
 if _rc != 0 {
-    noi test_pass "error: nonexistent source"
+    test_pass "error: nonexistent source"
 }
 else {
-    noi test_fail "nonexistent" "should error"
+    test_fail "nonexistent" "should error"
 }
 
 * Test 11.4: Invalid generate name
 sysuse auto, clear
 capture cencode make, generate(123invalid)
 if _rc != 0 {
-    noi test_pass "error: invalid generate name"
+    test_pass "error: invalid generate name"
 }
 else {
-    noi test_fail "invalid name" "should error"
+    test_fail "invalid name" "should error"
 }
 
 * Test 11.5: Empty dataset - compare with Stata's encode
@@ -1338,16 +1333,16 @@ local stata_rc = _rc
 capture cencode x, generate(x_code)
 local cencode_rc = _rc
 if `stata_rc' == `cencode_rc' {
-    noi test_pass "empty dataset - matches Stata behavior"
+    test_pass "empty dataset - matches Stata behavior"
 }
 else {
-    noi test_fail "empty dataset" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
+    test_fail "empty dataset" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
 }
 
 /*******************************************************************************
  * SECTION 12: Consistency/comparison (5 tests)
  ******************************************************************************/
-noi print_section "Consistency/Comparison"
+print_section "Consistency/Comparison"
 
 * Test 12.1: cencode vs encode ordering
 sysuse auto, clear
@@ -1360,10 +1355,10 @@ forvalues i = 1/10 {
     if "`lbl_e'" != "`lbl_c'" local match = 0
 }
 if `match' {
-    noi test_pass "cencode vs encode ordering"
+    test_pass "cencode vs encode ordering"
 }
 else {
-    noi test_fail "ordering" "labels mismatch"
+    test_fail "ordering" "labels mismatch"
 }
 
 * Test 12.2: Round-trip cencode then cdecode
@@ -1376,14 +1371,14 @@ if _rc == 0 {
         if make[`i'] != make_back[`i'] local match = 0
     }
     if `match' {
-        noi test_pass "round-trip cencode/cdecode"
+        test_pass "round-trip cencode/cdecode"
     }
     else {
-        noi test_fail "round-trip" "mismatch"
+        test_fail "round-trip" "mismatch"
     }
 }
 else {
-    noi test_fail "round-trip" "cdecode failed"
+    test_fail "round-trip" "cdecode failed"
 }
 
 * Test 12.3: Repeated encoding same data
@@ -1398,10 +1393,10 @@ forvalues i = 1/20 {
     if x1[`i'] != x2[`i'] local match = 0
 }
 if `match' {
-    noi test_pass "repeated encoding same data"
+    test_pass "repeated encoding same data"
 }
 else {
-    noi test_fail "repeated" "values differ"
+    test_fail "repeated" "values differ"
 }
 
 * Test 12.4: Observation count preserved
@@ -1409,85 +1404,85 @@ sysuse auto, clear
 local orig_n = _N
 cencode make, generate(make_code)
 if _N == `orig_n' {
-    noi test_pass "observation count preserved"
+    test_pass "observation count preserved"
 }
 else {
-    noi test_fail "obs count" "count changed"
+    test_fail "obs count" "count changed"
 }
 
 * Test 12.5: Compare full dataset
 sysuse census, clear
-noi benchmark_encode state, testname("full comparison: census state")
+benchmark_encode state, testname("full comparison: census state")
 
 /*******************************************************************************
  * SECTION 13: Extended sysuse/webuse datasets
  ******************************************************************************/
-noi print_section "Extended sysuse/webuse Datasets"
+print_section "Extended sysuse/webuse Datasets"
 
 * Test 13.1: auto - make (string variable)
 sysuse auto, clear
-noi benchmark_encode make, testname("sysuse auto: make")
+benchmark_encode make, testname("sysuse auto: make")
 
 * Test 13.2: census - state (string variable)
 sysuse census, clear
-noi benchmark_encode state, testname("sysuse census: state")
+benchmark_encode state, testname("sysuse census: state")
 
 * Test 13.3: census - state2 (string variable)
 sysuse census, clear
-noi benchmark_encode state2, testname("sysuse census: state2")
+benchmark_encode state2, testname("sysuse census: state2")
 
 * Test 13.4: lifeexp - country (string variable)
 webuse lifeexp, clear
-noi benchmark_encode country, testname("webuse lifeexp: country")
+benchmark_encode country, testname("webuse lifeexp: country")
 
 * Test 13.5: nlsw88 - occupation (decode first since labeled)
 sysuse nlsw88, clear
 decode occupation, generate(occ_str)
-noi benchmark_encode occ_str, testname("sysuse nlsw88: occupation")
+benchmark_encode occ_str, testname("sysuse nlsw88: occupation")
 
 * Test 13.6: nlsw88 - industry (decode first since labeled)
 sysuse nlsw88, clear
 decode industry, generate(ind_str)
-noi benchmark_encode ind_str, testname("sysuse nlsw88: industry")
+benchmark_encode ind_str, testname("sysuse nlsw88: industry")
 
 * Test 13.7: nlswork - occ (tostring since numeric)
 webuse nlswork, clear
 tostring occ, generate(occ_str)
-noi benchmark_encode occ_str, testname("webuse nlswork: occ")
+benchmark_encode occ_str, testname("webuse nlswork: occ")
 
 * Test 13.8: nlswork - ind (tostring since numeric)
 webuse nlswork, clear
 tostring ind, generate(ind_str)
-noi benchmark_encode ind_str, testname("webuse nlswork: ind")
+benchmark_encode ind_str, testname("webuse nlswork: ind")
 
 * Test 13.9: grunfeld - company (tostring since numeric)
 webuse grunfeld, clear
 tostring company, generate(company_str)
-noi benchmark_encode company_str, testname("webuse grunfeld: company")
+benchmark_encode company_str, testname("webuse grunfeld: company")
 
 * Test 13.10: citytemp - division (decode since labeled)
 sysuse citytemp, clear
 decode division, generate(div_str)
-noi benchmark_encode div_str, testname("sysuse citytemp: division")
+benchmark_encode div_str, testname("sysuse citytemp: division")
 
 * Test 13.11: pop2000 - agegrp (decode since labeled)
 sysuse pop2000, clear
 decode agegrp, generate(age_str)
-noi benchmark_encode age_str, testname("sysuse pop2000: agegrp")
+benchmark_encode age_str, testname("sysuse pop2000: agegrp")
 
 * Test 13.12: bpwide - patient (tostring since numeric)
 sysuse bpwide, clear
 tostring patient, generate(pat_str)
-noi benchmark_encode pat_str, testname("sysuse bpwide: patient")
+benchmark_encode pat_str, testname("sysuse bpwide: patient")
 
 * Test 13.13: educ99gdp - country
 webuse educ99gdp, clear
-noi benchmark_encode country, testname("webuse educ99gdp: country")
+benchmark_encode country, testname("webuse educ99gdp: country")
 
 /*******************************************************************************
  * SECTION 14: Empty string edge cases
  ******************************************************************************/
-noi print_section "Empty String Edge Cases"
+print_section "Empty String Edge Cases"
 
 * Test 14.1: All empty strings
 clear
@@ -1496,10 +1491,10 @@ gen str20 allEmpty = ""
 cencode allEmpty, generate(code)
 count if missing(code)
 if r(N) == 50 {
-    noi test_pass "all empty: all become missing"
+    test_pass "all empty: all become missing"
 }
 else {
-    noi test_fail "all empty" "not all missing"
+    test_fail "all empty" "not all missing"
 }
 
 * Test 14.2: Mixed empty/non-empty (50/50)
@@ -1512,10 +1507,10 @@ local n_miss = r(N)
 count if !missing(code) & mixed != ""
 local n_enc = r(N)
 if `n_miss' == 50 & `n_enc' == 50 {
-    noi test_pass "mixed 50/50: correct split"
+    test_pass "mixed 50/50: correct split"
 }
 else {
-    noi test_fail "mixed 50/50" "miss=`n_miss', enc=`n_enc'"
+    test_fail "mixed 50/50" "miss=`n_miss', enc=`n_enc'"
 }
 
 * Test 14.3: First 10 empty, rest non-empty
@@ -1528,10 +1523,10 @@ local first_miss = r(N)
 count if !missing(code) in 11/100
 local rest_enc = r(N)
 if `first_miss' == 10 & `rest_enc' == 90 {
-    noi test_pass "first 10 empty"
+    test_pass "first 10 empty"
 }
 else {
-    noi test_fail "first 10 empty" "wrong pattern"
+    test_fail "first 10 empty" "wrong pattern"
 }
 
 * Test 14.4: Last 10 empty, rest non-empty
@@ -1544,10 +1539,10 @@ local last_miss = r(N)
 count if !missing(code) in 1/90
 local first_enc = r(N)
 if `last_miss' == 10 & `first_enc' == 90 {
-    noi test_pass "last 10 empty"
+    test_pass "last 10 empty"
 }
 else {
-    noi test_fail "last 10 empty" "wrong pattern"
+    test_fail "last 10 empty" "wrong pattern"
 }
 
 * Test 14.5: Only first observation empty
@@ -1557,10 +1552,10 @@ gen str20 x = "val" + string(_n)
 replace x = "" in 1
 cencode x, generate(code)
 if missing(code[1]) & !missing(code[2]) {
-    noi test_pass "only first empty"
+    test_pass "only first empty"
 }
 else {
-    noi test_fail "only first empty" "wrong pattern"
+    test_fail "only first empty" "wrong pattern"
 }
 
 * Test 14.6: Only last observation empty
@@ -1570,10 +1565,10 @@ gen str20 x = "val" + string(_n)
 replace x = "" in 100
 cencode x, generate(code)
 if missing(code[100]) & !missing(code[99]) {
-    noi test_pass "only last empty"
+    test_pass "only last empty"
 }
 else {
-    noi test_fail "only last empty" "wrong pattern"
+    test_fail "only last empty" "wrong pattern"
 }
 
 * Test 14.7: Random sparse empty (10% empty)
@@ -1589,22 +1584,22 @@ local correct_enc = r(N)
 count if x == ""
 local total_empty = r(N)
 if `correct_miss' == `total_empty' {
-    noi test_pass "10% sparse empty"
+    test_pass "10% sparse empty"
 }
 else {
-    noi test_fail "sparse empty" "miss pattern wrong"
+    test_fail "sparse empty" "miss pattern wrong"
 }
 
 * Test 14.8: Compare with encode - mixed empty
 clear
 set obs 50
 gen str20 x = cond(mod(_n, 5) == 0, "", "val" + string(_n))
-noi benchmark_encode x, testname("vs encode: mixed empty")
+benchmark_encode x, testname("vs encode: mixed empty")
 
 /*******************************************************************************
  * SECTION 15: Single character strings
  ******************************************************************************/
-noi print_section "Single Character Strings"
+print_section "Single Character Strings"
 
 * Test 15.1: Single character A-Z
 clear
@@ -1613,10 +1608,10 @@ gen str1 letter = char(64 + _n)
 cencode letter, generate(code)
 quietly tab code
 if r(r) == 26 {
-    noi test_pass "26 single letters A-Z"
+    test_pass "26 single letters A-Z"
 }
 else {
-    noi test_fail "A-Z" "not 26 unique"
+    test_fail "A-Z" "not 26 unique"
 }
 
 * Test 15.2: Single character a-z
@@ -1626,10 +1621,10 @@ gen str1 letter = char(96 + _n)
 cencode letter, generate(code)
 quietly tab code
 if r(r) == 26 {
-    noi test_pass "26 single letters a-z"
+    test_pass "26 single letters a-z"
 }
 else {
-    noi test_fail "a-z" "not 26 unique"
+    test_fail "a-z" "not 26 unique"
 }
 
 * Test 15.3: Single digits 0-9
@@ -1639,10 +1634,10 @@ gen str1 digit = string(_n - 1)
 cencode digit, generate(code)
 quietly tab code
 if r(r) == 10 {
-    noi test_pass "10 single digits 0-9"
+    test_pass "10 single digits 0-9"
 }
 else {
-    noi test_fail "0-9" "not 10 unique"
+    test_fail "0-9" "not 10 unique"
 }
 
 * Test 15.4: Single special characters
@@ -1663,14 +1658,14 @@ capture cencode special, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 10 {
-        noi test_pass "10 single special chars"
+        test_pass "10 single special chars"
     }
     else {
-        noi test_fail "special chars" "not 10 unique"
+        test_fail "special chars" "not 10 unique"
     }
 }
 else {
-    noi test_fail "special chars" "rc=`=_rc'"
+    test_fail "special chars" "rc=`=_rc'"
 }
 
 * Test 15.5: Single space character
@@ -1680,10 +1675,10 @@ gen str1 sp = " "
 cencode sp, generate(code)
 quietly sum code
 if r(min) == 1 & r(max) == 1 {
-    noi test_pass "single space - all same code"
+    test_pass "single space - all same code"
 }
 else {
-    noi test_fail "single space" "not all same"
+    test_fail "single space" "not all same"
 }
 
 * Test 15.6: Mix of single chars with duplicates
@@ -1693,22 +1688,22 @@ gen str1 x = char(65 + mod(_n - 1, 5))
 cencode x, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "5 repeated single chars"
+    test_pass "5 repeated single chars"
 }
 else {
-    noi test_fail "repeated chars" "not 5 unique"
+    test_fail "repeated chars" "not 5 unique"
 }
 
 * Test 15.7: Compare single chars with encode
 clear
 set obs 26
 gen str1 letter = char(64 + _n)
-noi benchmark_encode letter, testname("vs encode: single chars A-Z")
+benchmark_encode letter, testname("vs encode: single chars A-Z")
 
 /*******************************************************************************
  * SECTION 16: Very long strings
  ******************************************************************************/
-noi print_section "Very Long Strings"
+print_section "Very Long Strings"
 
 * Test 16.1: 100 character strings
 clear
@@ -1718,14 +1713,14 @@ capture cencode long100, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 10 {
-        noi test_pass "100 char strings"
+        test_pass "100 char strings"
     }
     else {
-        noi test_fail "100 char" "not 10 unique"
+        test_fail "100 char" "not 10 unique"
     }
 }
 else {
-    noi test_fail "100 char" "rc=`=_rc'"
+    test_fail "100 char" "rc=`=_rc'"
 }
 
 * Test 16.2: 200 character strings
@@ -1736,14 +1731,14 @@ capture cencode long200, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 10 {
-        noi test_pass "200 char strings"
+        test_pass "200 char strings"
     }
     else {
-        noi test_fail "200 char" "not 10 unique"
+        test_fail "200 char" "not 10 unique"
     }
 }
 else {
-    noi test_fail "200 char" "rc=`=_rc'"
+    test_fail "200 char" "rc=`=_rc'"
 }
 
 * Test 16.3: Maximum str244 strings
@@ -1754,14 +1749,14 @@ capture cencode max244, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "244 char strings (max str244)"
+        test_pass "244 char strings (max str244)"
     }
     else {
-        noi test_fail "244 char" "not 5 unique"
+        test_fail "244 char" "not 5 unique"
     }
 }
 else {
-    noi test_fail "244 char" "rc=`=_rc'"
+    test_fail "244 char" "rc=`=_rc'"
 }
 
 * Test 16.4: strL with 500 characters
@@ -1772,14 +1767,14 @@ capture cencode longL, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strL 500 char"
+        test_pass "strL 500 char"
     }
     else {
-        noi test_fail "strL 500" "not 5 unique"
+        test_fail "strL 500" "not 5 unique"
     }
 }
 else {
-    noi test_fail "strL 500" "rc=`=_rc'"
+    test_fail "strL 500" "rc=`=_rc'"
 }
 
 * Test 16.5: strL with 1000 characters
@@ -1790,14 +1785,14 @@ capture cencode longL2, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strL 1000 char"
+        test_pass "strL 1000 char"
     }
     else {
-        noi test_fail "strL 1000" "not 5 unique"
+        test_fail "strL 1000" "not 5 unique"
     }
 }
 else {
-    noi test_fail "strL 1000" "rc=`=_rc'"
+    test_fail "strL 1000" "rc=`=_rc'"
 }
 
 * Test 16.6: strL with 2000 characters
@@ -1808,14 +1803,14 @@ capture cencode longL3, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 3 {
-        noi test_pass "strL 2000 char"
+        test_pass "strL 2000 char"
     }
     else {
-        noi test_fail "strL 2000" "not 3 unique"
+        test_fail "strL 2000" "not 3 unique"
     }
 }
 else {
-    noi test_fail "strL 2000" "rc=`=_rc'"
+    test_fail "strL 2000" "rc=`=_rc'"
 }
 
 * Test 16.7: Very long strings differing only at end
@@ -1830,10 +1825,10 @@ replace diffEnd = diffEnd + "5" in 5
 cencode diffEnd, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "long strings differing at end"
+    test_pass "long strings differing at end"
 }
 else {
-    noi test_fail "diff at end" "not 5 unique"
+    test_fail "diff at end" "not 5 unique"
 }
 
 * Test 16.8: Very long strings differing only at start
@@ -1848,10 +1843,10 @@ replace diffStart = "5" + "y" * 240 in 5
 cencode diffStart, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "long strings differing at start"
+    test_pass "long strings differing at start"
 }
 else {
-    noi test_fail "diff at start" "not 5 unique"
+    test_fail "diff at start" "not 5 unique"
 }
 
 * Test 16.9: Mixed long and short strings
@@ -1861,22 +1856,22 @@ gen str244 mixed = cond(mod(_n, 2) == 0, "short" + string(_n), "z" * 200 + strin
 cencode mixed, generate(code)
 quietly tab code
 if r(r) == 10 {
-    noi test_pass "mixed long and short strings"
+    test_pass "mixed long and short strings"
 }
 else {
-    noi test_fail "mixed long/short" "not 10 unique"
+    test_fail "mixed long/short" "not 10 unique"
 }
 
 * Test 16.10: Compare long strings with encode
 clear
 set obs 10
 gen str100 x = "a" * 95 + string(_n)
-noi benchmark_encode x, testname("vs encode: 100 char strings")
+benchmark_encode x, testname("vs encode: 100 char strings")
 
 /*******************************************************************************
  * SECTION 17: Strings with special characters
  ******************************************************************************/
-noi print_section "Strings with Special Characters"
+print_section "Strings with Special Characters"
 
 * Test 17.1: Strings with double quotes
 clear
@@ -1891,14 +1886,14 @@ capture cencode withQuotes, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with double quotes"
+        test_pass "strings with double quotes"
     }
     else {
-        noi test_fail "double quotes" "not 5 unique"
+        test_fail "double quotes" "not 5 unique"
     }
 }
 else {
-    noi test_fail "double quotes" "rc=`=_rc'"
+    test_fail "double quotes" "rc=`=_rc'"
 }
 
 * Test 17.2: Strings with commas
@@ -1914,14 +1909,14 @@ capture cencode withCommas, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with commas"
+        test_pass "strings with commas"
     }
     else {
-        noi test_fail "commas" "not 5 unique"
+        test_fail "commas" "not 5 unique"
     }
 }
 else {
-    noi test_fail "commas" "rc=`=_rc'"
+    test_fail "commas" "rc=`=_rc'"
 }
 
 * Test 17.3: Strings with tabs
@@ -1937,14 +1932,14 @@ capture cencode withTabs, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with tabs"
+        test_pass "strings with tabs"
     }
     else {
-        noi test_fail "tabs" "not 5 unique"
+        test_fail "tabs" "not 5 unique"
     }
 }
 else {
-    noi test_fail "tabs" "rc=`=_rc'"
+    test_fail "tabs" "rc=`=_rc'"
 }
 
 * Test 17.4: Strings with newlines
@@ -1960,14 +1955,14 @@ capture cencode withNewlines, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with newlines"
+        test_pass "strings with newlines"
     }
     else {
-        noi test_fail "newlines" "not 5 unique"
+        test_fail "newlines" "not 5 unique"
     }
 }
 else {
-    noi test_fail "newlines" "rc=`=_rc'"
+    test_fail "newlines" "rc=`=_rc'"
 }
 
 * Test 17.5: Strings with apostrophes
@@ -1983,14 +1978,14 @@ capture cencode withApos, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with apostrophes"
+        test_pass "strings with apostrophes"
     }
     else {
-        noi test_fail "apostrophes" "not 5 unique"
+        test_fail "apostrophes" "not 5 unique"
     }
 }
 else {
-    noi test_fail "apostrophes" "rc=`=_rc'"
+    test_fail "apostrophes" "rc=`=_rc'"
 }
 
 * Test 17.6: Strings with backslashes
@@ -2006,14 +2001,14 @@ capture cencode withSlash, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "strings with backslashes"
+        test_pass "strings with backslashes"
     }
     else {
-        noi test_fail "backslashes" "not 5 unique"
+        test_fail "backslashes" "not 5 unique"
     }
 }
 else {
-    noi test_fail "backslashes" "rc=`=_rc'"
+    test_fail "backslashes" "rc=`=_rc'"
 }
 
 * Test 17.7: Strings with various punctuation
@@ -2034,14 +2029,14 @@ capture cencode punct, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 10 {
-        noi test_pass "various punctuation"
+        test_pass "various punctuation"
     }
     else {
-        noi test_fail "punctuation" "not 10 unique"
+        test_fail "punctuation" "not 10 unique"
     }
 }
 else {
-    noi test_fail "punctuation" "rc=`=_rc'"
+    test_fail "punctuation" "rc=`=_rc'"
 }
 
 * Test 17.8: Strings with brackets
@@ -2058,14 +2053,14 @@ capture cencode brackets, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 6 {
-        noi test_pass "strings with brackets"
+        test_pass "strings with brackets"
     }
     else {
-        noi test_fail "brackets" "not 6 unique"
+        test_fail "brackets" "not 6 unique"
     }
 }
 else {
-    noi test_fail "brackets" "rc=`=_rc'"
+    test_fail "brackets" "rc=`=_rc'"
 }
 
 * Test 17.9: Compare special chars with encode
@@ -2077,12 +2072,12 @@ replace x = "X;Y;Z" in 2
 replace x = "a	b	c" in 3
 replace x = "1|2|3" in 4
 replace x = "plain" in 5
-noi benchmark_encode x, testname("vs encode: special chars mix")
+benchmark_encode x, testname("vs encode: special chars mix")
 
 /*******************************************************************************
  * SECTION 18: Leading/trailing spaces
  ******************************************************************************/
-noi print_section "Leading/Trailing Spaces"
+print_section "Leading/Trailing Spaces"
 
 * Test 18.1: Leading spaces
 clear
@@ -2096,10 +2091,10 @@ replace lead = "five" in 5
 cencode lead, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "leading spaces distinguished"
+    test_pass "leading spaces distinguished"
 }
 else {
-    noi test_fail "leading spaces" "not 5 unique"
+    test_fail "leading spaces" "not 5 unique"
 }
 
 * Test 18.2: Trailing spaces
@@ -2114,10 +2109,10 @@ replace trail = "five" in 5
 cencode trail, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "trailing spaces distinguished"
+    test_pass "trailing spaces distinguished"
 }
 else {
-    noi test_fail "trailing spaces" "not 5 unique"
+    test_fail "trailing spaces" "not 5 unique"
 }
 
 * Test 18.3: Both leading and trailing
@@ -2131,10 +2126,10 @@ replace both = "   x   " in 4
 cencode both, generate(code)
 quietly tab code
 if r(r) == 4 {
-    noi test_pass "leading and trailing distinguished"
+    test_pass "leading and trailing distinguished"
 }
 else {
-    noi test_fail "both spaces" "not 4 unique"
+    test_fail "both spaces" "not 4 unique"
 }
 
 * Test 18.4: Strings differing only by whitespace
@@ -2149,10 +2144,10 @@ replace ws = "a bc" in 5
 cencode ws, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "differ only by whitespace"
+    test_pass "differ only by whitespace"
 }
 else {
-    noi test_fail "whitespace diff" "not 5 unique"
+    test_fail "whitespace diff" "not 5 unique"
 }
 
 * Test 18.5: Only whitespace strings
@@ -2167,10 +2162,10 @@ replace onlyWs = " " + char(9) + " " in 5
 cencode onlyWs, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "only whitespace strings distinguished"
+    test_pass "only whitespace strings distinguished"
 }
 else {
-    noi test_fail "only whitespace" "not 5 unique"
+    test_fail "only whitespace" "not 5 unique"
 }
 
 * Test 18.6: Compare whitespace with encode
@@ -2181,12 +2176,12 @@ replace x = "test" in 1
 replace x = " test" in 2
 replace x = "test " in 3
 replace x = " test " in 4
-noi benchmark_encode x, testname("vs encode: whitespace variations")
+benchmark_encode x, testname("vs encode: whitespace variations")
 
 /*******************************************************************************
  * SECTION 19: Numeric-looking strings
  ******************************************************************************/
-noi print_section "Numeric-Looking Strings"
+print_section "Numeric-Looking Strings"
 
 * Test 19.1: Leading zeros
 clear
@@ -2200,10 +2195,10 @@ replace zeros = "00001" in 5
 cencode zeros, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "leading zeros distinguished"
+    test_pass "leading zeros distinguished"
 }
 else {
-    noi test_fail "leading zeros" "not 5 unique"
+    test_fail "leading zeros" "not 5 unique"
 }
 
 * Test 19.2: Zip codes with leading zeros
@@ -2218,10 +2213,10 @@ replace zip = "90210" in 5
 cencode zip, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "zip codes preserved"
+    test_pass "zip codes preserved"
 }
 else {
-    noi test_fail "zip codes" "not 5 unique"
+    test_fail "zip codes" "not 5 unique"
 }
 
 * Test 19.3: Decimal number strings
@@ -2236,10 +2231,10 @@ replace decs = "1.05" in 5
 cencode decs, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "decimal strings distinguished"
+    test_pass "decimal strings distinguished"
 }
 else {
-    noi test_fail "decimal strings" "not 5 unique"
+    test_fail "decimal strings" "not 5 unique"
 }
 
 * Test 19.4: Negative number strings
@@ -2254,10 +2249,10 @@ replace negs = "-1.00" in 5
 cencode negs, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "negative strings distinguished"
+    test_pass "negative strings distinguished"
 }
 else {
-    noi test_fail "negative strings" "not 5 unique"
+    test_fail "negative strings" "not 5 unique"
 }
 
 * Test 19.5: Scientific notation strings
@@ -2272,10 +2267,10 @@ replace sci = "1e-5" in 5
 cencode sci, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "scientific notation distinguished"
+    test_pass "scientific notation distinguished"
 }
 else {
-    noi test_fail "scientific notation" "not 5 unique"
+    test_fail "scientific notation" "not 5 unique"
 }
 
 * Test 19.6: Phone numbers
@@ -2290,10 +2285,10 @@ replace phone = "+1-555-123-4567" in 5
 cencode phone, generate(code)
 quietly tab code
 if r(r) == 4 {
-    noi test_pass "phone numbers (4 unique)"
+    test_pass "phone numbers (4 unique)"
 }
 else {
-    noi test_fail "phone numbers" "not 4 unique"
+    test_fail "phone numbers" "not 4 unique"
 }
 
 * Test 19.7: Compare numeric strings with encode
@@ -2305,12 +2300,12 @@ replace x = "01" in 2
 replace x = "1" in 3
 replace x = "1.0" in 4
 replace x = "1.00" in 5
-noi benchmark_encode x, testname("vs encode: numeric strings")
+benchmark_encode x, testname("vs encode: numeric strings")
 
 /*******************************************************************************
  * SECTION 20: Unicode/international characters
  ******************************************************************************/
-noi print_section "Unicode/International Characters"
+print_section "Unicode/International Characters"
 
 * Test 20.1: Basic Latin Extended
 clear
@@ -2325,14 +2320,14 @@ capture cencode latin, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "basic Latin extended"
+        test_pass "basic Latin extended"
     }
     else {
-        noi test_fail "Latin extended" "not 5 unique"
+        test_fail "Latin extended" "not 5 unique"
     }
 }
 else {
-    noi test_fail "Latin extended" "rc=`=_rc'"
+    test_fail "Latin extended" "rc=`=_rc'"
 }
 
 * Test 20.2: Mixed ASCII and extended
@@ -2348,14 +2343,14 @@ capture cencode mixed, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "mixed ASCII and extended"
+        test_pass "mixed ASCII and extended"
     }
     else {
-        noi test_fail "mixed ASCII" "not 5 unique"
+        test_fail "mixed ASCII" "not 5 unique"
     }
 }
 else {
-    noi test_fail "mixed ASCII" "rc=`=_rc'"
+    test_fail "mixed ASCII" "rc=`=_rc'"
 }
 
 * Test 20.3: Compare international with encode
@@ -2367,12 +2362,12 @@ replace x = "Muller" in 2
 replace x = "Jensen" in 3
 replace x = "normal" in 4
 replace x = "plain" in 5
-noi benchmark_encode x, testname("vs encode: international chars")
+benchmark_encode x, testname("vs encode: international chars")
 
 /*******************************************************************************
  * SECTION 21: Case sensitivity tests
  ******************************************************************************/
-noi print_section "Case Sensitivity"
+print_section "Case Sensitivity"
 
 * Test 21.1: Same word different cases
 clear
@@ -2386,10 +2381,10 @@ replace cases = "ApPlE" in 5
 cencode cases, generate(code)
 quietly tab code
 if r(r) == 5 {
-    noi test_pass "case variations distinguished"
+    test_pass "case variations distinguished"
 }
 else {
-    noi test_fail "case variations" "not 5 unique"
+    test_fail "case variations" "not 5 unique"
 }
 
 * Test 21.2: Uppercase vs lowercase letters
@@ -2401,10 +2396,10 @@ replace letter = char(97 + _n - 27) in 27/52
 cencode letter, generate(code)
 quietly tab code
 if r(r) == 52 {
-    noi test_pass "52 letters (A-Z, a-z)"
+    test_pass "52 letters (A-Z, a-z)"
 }
 else {
-    noi test_fail "52 letters" "not 52 unique"
+    test_fail "52 letters" "not 52 unique"
 }
 
 * Test 21.3: Case difference with duplicates
@@ -2414,10 +2409,10 @@ gen str10 x = cond(mod(_n, 4) == 0, "UPPER", cond(mod(_n, 4) == 1, "lower", cond
 cencode x, generate(code)
 quietly tab code
 if r(r) == 4 {
-    noi test_pass "4 case variations with duplicates"
+    test_pass "4 case variations with duplicates"
 }
 else {
-    noi test_fail "case duplicates" "not 4 unique"
+    test_fail "case duplicates" "not 4 unique"
 }
 
 * Test 21.4: Case sort order - compare with Stata's encode
@@ -2435,10 +2430,10 @@ local stata_first = x[1]
 gsort code_ctools
 local ctools_first = x[1]
 if "`stata_first'" == "`ctools_first'" {
-    noi test_pass "case sort order matches Stata"
+    test_pass "case sort order matches Stata"
 }
 else {
-    noi test_fail "case sort order" "cencode first=`ctools_first' but encode first=`stata_first'"
+    test_fail "case sort order" "cencode first=`ctools_first' but encode first=`stata_first'"
 }
 
 * Test 21.5: Compare case sensitivity with encode
@@ -2449,12 +2444,12 @@ replace x = "Test" in 1
 replace x = "test" in 2
 replace x = "TEST" in 3
 replace x = "tEsT" in 4
-noi benchmark_encode x, testname("vs encode: case sensitivity")
+benchmark_encode x, testname("vs encode: case sensitivity")
 
 /*******************************************************************************
  * SECTION 22: Label edge cases
  ******************************************************************************/
-noi print_section "Label Edge Cases"
+print_section "Label Edge Cases"
 
 * Test 22.1: Using existing label with noextend
 clear
@@ -2466,10 +2461,10 @@ cencode x, generate(code) label(mylab) noextend
 local lbl_1 : label mylab 1
 local lbl_2 : label mylab 2
 if "`lbl_1'" == "odd" & "`lbl_2'" == "even" {
-    noi test_pass "noextend uses existing label"
+    test_pass "noextend uses existing label"
 }
 else {
-    noi test_fail "noextend label" "expected 1=odd,2=even but got 1=`lbl_1',2=`lbl_2'"
+    test_fail "noextend label" "expected 1=odd,2=even but got 1=`lbl_1',2=`lbl_2'"
 }
 capture label drop mylab
 
@@ -2484,14 +2479,14 @@ if _rc == 0 {
     * Verify all 5 categories are encoded
     quietly tab code
     if r(r) == 5 {
-        noi test_pass "extending existing labels"
+        test_pass "extending existing labels"
     }
     else {
-        noi test_fail "extending labels" "expected 5 categories, got `=r(r)'"
+        test_fail "extending labels" "expected 5 categories, got `=r(r)'"
     }
 }
 else {
-    noi test_fail "extending labels" "cencode failed with rc=`=_rc'"
+    test_fail "extending labels" "cencode failed with rc=`=_rc'"
 }
 capture label drop extlab
 
@@ -2516,18 +2511,18 @@ if `stata_rc' == `cencode_rc' {
         local ctools_lbl : label (code_ctools) 1
         local ctools_len = strlen("`ctools_lbl'")
         if `ctools_len' == `stata_len' {
-            noi test_pass "very long label text matches Stata"
+            test_pass "very long label text matches Stata"
         }
         else {
-            noi test_fail "long label text" "cencode len=`ctools_len' but encode len=`stata_len'"
+            test_fail "long label text" "cencode len=`ctools_len' but encode len=`stata_len'"
         }
     }
     else {
-        noi test_pass "very long label text - both error (as expected)"
+        test_pass "very long label text - both error (as expected)"
     }
 }
 else {
-    noi test_fail "long label text" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
+    test_fail "long label text" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
 }
 
 * Test 22.4: 100 unique values
@@ -2538,14 +2533,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 100 {
-        noi test_pass "100 unique values encoded"
+        test_pass "100 unique values encoded"
     }
     else {
-        noi test_fail "100 unique" "not 100"
+        test_fail "100 unique" "not 100"
     }
 }
 else {
-    noi test_fail "100 unique" "rc=`=_rc'"
+    test_fail "100 unique" "rc=`=_rc'"
 }
 
 * Test 22.5: 500 unique values
@@ -2556,14 +2551,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 500 {
-        noi test_pass "500 unique values encoded"
+        test_pass "500 unique values encoded"
     }
     else {
-        noi test_fail "500 unique" "not 500"
+        test_fail "500 unique" "not 500"
     }
 }
 else {
-    noi test_fail "500 unique" "rc=`=_rc'"
+    test_fail "500 unique" "rc=`=_rc'"
 }
 
 * Test 22.6: 1000 unique values
@@ -2574,14 +2569,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 1000 {
-        noi test_pass "1000 unique values encoded"
+        test_pass "1000 unique values encoded"
     }
     else {
-        noi test_fail "1000 unique" "not 1000"
+        test_fail "1000 unique" "not 1000"
     }
 }
 else {
-    noi test_fail "1000 unique" "rc=`=_rc'"
+    test_fail "1000 unique" "rc=`=_rc'"
 }
 
 * Test 22.7: 5000 unique values
@@ -2592,14 +2587,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly sum code
     if r(max) == 5000 {
-        noi test_pass "5000 unique values encoded"
+        test_pass "5000 unique values encoded"
     }
     else {
-        noi test_fail "5000 unique" "max not 5000"
+        test_fail "5000 unique" "max not 5000"
     }
 }
 else {
-    noi test_fail "5000 unique" "rc=`=_rc'"
+    test_fail "5000 unique" "rc=`=_rc'"
 }
 
 * Test 22.8: Label name same as variable name
@@ -2609,17 +2604,17 @@ gen str10 myvar = "cat" + string(mod(_n, 3))
 capture label drop myvar
 capture cencode myvar, generate(myvar_code) label(myvar)
 if _rc == 0 {
-    noi test_pass "label name same as var name"
+    test_pass "label name same as var name"
 }
 else {
-    noi test_fail "label=var name" "rc=`=_rc'"
+    test_fail "label=var name" "rc=`=_rc'"
 }
 capture label drop myvar
 
 /*******************************************************************************
  * SECTION 23: Large dataset tests
  ******************************************************************************/
-noi print_section "Large Dataset Tests"
+print_section "Large Dataset Tests"
 
 * Test 23.1: 10K observations, 10 unique
 clear
@@ -2628,10 +2623,10 @@ gen str10 x = "cat" + string(mod(_n, 10))
 cencode x, generate(code)
 quietly tab code
 if r(r) == 10 {
-    noi test_pass "10K obs, 10 unique"
+    test_pass "10K obs, 10 unique"
 }
 else {
-    noi test_fail "10K/10" "not 10 unique"
+    test_fail "10K/10" "not 10 unique"
 }
 
 * Test 23.2: 50K observations, 50 unique
@@ -2641,10 +2636,10 @@ gen str10 x = "cat" + string(mod(_n, 50))
 cencode x, generate(code)
 quietly tab code
 if r(r) == 50 {
-    noi test_pass "50K obs, 50 unique"
+    test_pass "50K obs, 50 unique"
 }
 else {
-    noi test_fail "50K/50" "not 50 unique"
+    test_fail "50K/50" "not 50 unique"
 }
 
 * Test 23.3: 100K observations, 100 unique
@@ -2655,14 +2650,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 100 {
-        noi test_pass "100K obs, 100 unique"
+        test_pass "100K obs, 100 unique"
     }
     else {
-        noi test_fail "100K/100" "not 100 unique"
+        test_fail "100K/100" "not 100 unique"
     }
 }
 else {
-    noi test_fail "100K/100" "rc=`=_rc'"
+    test_fail "100K/100" "rc=`=_rc'"
 }
 
 * Test 23.4: 100K observations, 1K unique (high cardinality)
@@ -2673,14 +2668,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly sum code
     if r(max) == 1000 {
-        noi test_pass "100K obs, 1K unique (high cardinality)"
+        test_pass "100K obs, 1K unique (high cardinality)"
     }
     else {
-        noi test_fail "100K/1K" "max not 1000"
+        test_fail "100K/1K" "max not 1000"
     }
 }
 else {
-    noi test_fail "100K/1K" "rc=`=_rc'"
+    test_fail "100K/1K" "rc=`=_rc'"
 }
 
 * Test 23.5: 100K observations, 2 unique (low cardinality)
@@ -2690,10 +2685,10 @@ gen str10 x = cond(mod(_n, 2) == 0, "A", "B")
 cencode x, generate(code)
 quietly tab code
 if r(r) == 2 {
-    noi test_pass "100K obs, 2 unique (low cardinality)"
+    test_pass "100K obs, 2 unique (low cardinality)"
 }
 else {
-    noi test_fail "100K/2" "not 2 unique"
+    test_fail "100K/2" "not 2 unique"
 }
 
 * Test 23.6: 500K observations
@@ -2702,10 +2697,10 @@ set obs 500000
 gen str10 x = "cat" + string(mod(_n, 100))
 capture cencode x, generate(code)
 if _rc == 0 {
-    noi test_pass "500K observations"
+    test_pass "500K observations"
 }
 else {
-    noi test_fail "500K obs" "rc=`=_rc'"
+    test_fail "500K obs" "rc=`=_rc'"
 }
 
 * Test 23.8: 1M observations
@@ -2716,14 +2711,14 @@ capture cencode x, generate(code)
 if _rc == 0 {
     quietly tab code
     if r(r) == 10 {
-        noi test_pass "1M observations"
+        test_pass "1M observations"
     }
     else {
-        noi test_fail "1M obs" "wrong unique count"
+        test_fail "1M obs" "wrong unique count"
     }
 }
 else {
-    noi test_fail "1M obs" "rc=`=_rc'"
+    test_fail "1M obs" "rc=`=_rc'"
 }
 
 * Test 23.9: Large with if condition
@@ -2734,10 +2729,10 @@ gen byte flag = mod(_n, 3) == 0
 cencode x if flag == 1, generate(code)
 count if !missing(code)
 if abs(r(N) - 166667) <= 1 {
-    noi test_pass "large with if condition"
+    test_pass "large with if condition"
 }
 else {
-    noi test_fail "large if" "wrong count"
+    test_fail "large if" "wrong count"
 }
 
 * Test 23.10: Large with in range
@@ -2747,16 +2742,16 @@ gen str10 x = "cat" + string(mod(_n, 50))
 cencode x in 1/100000, generate(code)
 count if !missing(code)
 if r(N) == 100000 {
-    noi test_pass "large with in range"
+    test_pass "large with in range"
 }
 else {
-    noi test_fail "large in" "wrong count"
+    test_fail "large in" "wrong count"
 }
 
 /*******************************************************************************
  * SECTION 24: Extended if/in conditions
  ******************************************************************************/
-noi print_section "Extended if/in Conditions"
+print_section "Extended if/in Conditions"
 
 * Test 24.1: if on numeric condition
 sysuse auto, clear
@@ -2764,10 +2759,10 @@ cencode make if price > 10000, generate(code)
 count if !missing(code)
 count if price > 10000
 if r(N) > 0 {
-    noi test_pass "if numeric condition"
+    test_pass "if numeric condition"
 }
 else {
-    noi test_fail "if numeric" "wrong count"
+    test_fail "if numeric" "wrong count"
 }
 drop code
 
@@ -2779,10 +2774,10 @@ gen str10 group = cond(_n <= 50, "GroupA", "GroupB")
 cencode category if group == "GroupA", generate(code)
 count if !missing(code) & group == "GroupA"
 if r(N) == 50 {
-    noi test_pass "if string condition"
+    test_pass "if string condition"
 }
 else {
-    noi test_fail "if string" "wrong count"
+    test_fail "if string" "wrong count"
 }
 
 * Test 24.3: Complex if with AND
@@ -2792,10 +2787,10 @@ count if !missing(code)
 local n_enc = r(N)
 count if price > 5000 & foreign == 1
 if `n_enc' == r(N) {
-    noi test_pass "if with AND condition"
+    test_pass "if with AND condition"
 }
 else {
-    noi test_fail "if AND" "wrong count"
+    test_fail "if AND" "wrong count"
 }
 drop code
 
@@ -2806,10 +2801,10 @@ count if !missing(code)
 local n_enc = r(N)
 count if price > 10000 | mpg > 30
 if `n_enc' == r(N) {
-    noi test_pass "if with OR condition"
+    test_pass "if with OR condition"
 }
 else {
-    noi test_fail "if OR" "wrong count"
+    test_fail "if OR" "wrong count"
 }
 drop code
 
@@ -2818,10 +2813,10 @@ sysuse auto, clear
 cencode make in 1/5, generate(code)
 count if !missing(code) in 1/5
 if r(N) == 5 {
-    noi test_pass "in first 5 rows"
+    test_pass "in first 5 rows"
 }
 else {
-    noi test_fail "in first 5" "wrong count"
+    test_fail "in first 5" "wrong count"
 }
 drop code
 
@@ -2831,10 +2826,10 @@ local last5 = _N - 4
 cencode make in `last5'/`=_N', generate(code)
 count if !missing(code)
 if r(N) == 5 {
-    noi test_pass "in last 5 rows"
+    test_pass "in last 5 rows"
 }
 else {
-    noi test_fail "in last 5" "wrong count"
+    test_fail "in last 5" "wrong count"
 }
 drop code
 
@@ -2843,10 +2838,10 @@ sysuse auto, clear
 cencode make in 30/40, generate(code)
 count if !missing(code)
 if r(N) == 11 {
-    noi test_pass "in middle rows 30/40"
+    test_pass "in middle rows 30/40"
 }
 else {
-    noi test_fail "in middle" "wrong count"
+    test_fail "in middle" "wrong count"
 }
 drop code
 
@@ -2855,10 +2850,10 @@ sysuse auto, clear
 cencode make if price > 100000, generate(code)
 count if !missing(code)
 if r(N) == 0 {
-    noi test_pass "if selects no rows"
+    test_pass "if selects no rows"
 }
 else {
-    noi test_fail "if no rows" "should be 0"
+    test_fail "if no rows" "should be 0"
 }
 drop code
 
@@ -2867,27 +2862,22 @@ sysuse auto, clear
 cencode make if price > 0, generate(code)
 count if !missing(code)
 if r(N) == _N {
-    noi test_pass "if selects all rows"
+    test_pass "if selects all rows"
 }
 else {
-    noi test_fail "if all rows" "should be all"
+    test_fail "if all rows" "should be all"
 }
 drop code
 
 * Test 24.10: Compare if/in with encode
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: if price>8000") if2("price > 8000")
+benchmark_encode make, testname("vs encode: if price>8000") if2("price > 8000")
 
 sysuse auto, clear
-noi benchmark_encode make, testname("vs encode: in 10/60") in2("10/60")
+benchmark_encode make, testname("vs encode: in 10/60") in2("10/60")
 
 /*******************************************************************************
  * SUMMARY
  ******************************************************************************/
-noi print_summary "cencode"
-
-if $TESTS_FAILED > 0 {
-    exit 1
-}
-
+* End of cencode validation
 }

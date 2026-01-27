@@ -10,6 +10,11 @@
 {phang}
 {bf:civreghdfe} {hline 2} C-accelerated instrumental variables regression with high-dimensional fixed effects
 
+{pstd}
+{cmd:civreghdfe} is a high-performance replacement for {cmd:ivreghdfe} by
+Sergio Correia ({browse "https://github.com/sergiocorreia/ivreghdfe":sergiocorreia/ivreghdfe}).
+The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} version 1.1.0+.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -579,12 +584,30 @@ ed. D. W. K. Andrews and J. H. Stock, 80-108. Cambridge: Cambridge University Pr
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
+
+
+{title:Acknowledgments}
+
+{pstd}
+This command provides similar functionality to {cmd:ivreghdfe} by Sergio Correia.
+The original {cmd:ivreghdfe} package, which combines {cmd:ivreg2} and {cmd:reghdfe},
+is available at {browse "https://github.com/sergiocorreia/ivreghdfe"}.
+We thank Sergio Correia for his groundbreaking work on high-dimensional fixed effects
+estimation, as well as Mark Schaffer, Christopher Baum, and Steven Stillman for their
+foundational work on {cmd:ivreg2}.
+
+{pstd}
+See also: Correia, S. 2016. "REGHDFE: Stata module to perform linear or instrumental-variable
+regression absorbing any number of high-dimensional fixed effects." Statistical Software
+Components, Boston College Department of Economics.
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help ivreghdfe} (if installed), {help creghdfe}, {help ivreg2} (if installed),
-{help reghdfe} (if installed)
+Online: {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe} (if installed),
+{browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
+{help ivreg2} (if installed), {help creghdfe}
 {p_end}

@@ -12,6 +12,10 @@
 {phang}
 {bf:csort} {hline 2} C-accelerated parallel sorting for Stata datasets
 
+{pstd}
+{cmd:csort} is a high-performance drop-in replacement for Stata's {help sort:sort}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -279,11 +283,15 @@ in global macros:
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help sort}, {help gsort}, {help ctools}, {help cmerge}
+Manual: {bf:[D] sort}
+
+{psee}
+Online: {help sort}, {help gsort}, {help ctools}, {help cmerge}
 {p_end}

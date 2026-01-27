@@ -11,6 +11,10 @@
 {phang}
 {bf:cdestring} {hline 2} C-accelerated parallel string to numeric conversion for Stata
 
+{pstd}
+{cmd:cdestring} is a high-performance drop-in replacement for Stata's {help destring:destring}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -226,11 +230,15 @@ When the {opt verbose} option is specified, {cmd:cdestring} additionally stores:
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help destring}, {help tostring}, {help encode}, {help real()}, {help ctools}
+Manual: {bf:[D] destring}
+
+{psee}
+Online: {help destring}, {help tostring}, {help encode}, {help real()}, {help ctools}
 {p_end}

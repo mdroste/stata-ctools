@@ -14,6 +14,11 @@
 {p2col:{bf:cqreg} {hline 2}}C-accelerated quantile regression{p_end}
 {p2colreset}{...}
 
+{pstd}
+{cmd:cqreg} is a high-performance drop-in replacement for Stata's {help qreg:qreg}
+command. Unlike native {cmd:qreg}, {cmd:cqreg} uses an Interior Point Method (IPM)
+solver and supports high-dimensional fixed effects via the {opt absorb()} option.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -295,7 +300,8 @@ Hall, P., and S. J. Sheather. 1988. On the distribution of a studentized quantil
 {title:Author}
 
 {pstd}
-Part of the ctools suite.
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {marker seealso}{...}
@@ -305,5 +311,5 @@ Part of the ctools suite.
 Manual: {bf:[R] qreg}
 
 {psee}
-{space 2}Help: {helpb qreg}, {helpb bsqreg}, {helpb sqreg}, {helpb iqreg}
+Online: {help qreg}, {help bsqreg}, {help sqreg}, {help iqreg}, {help ctools}
 {p_end}

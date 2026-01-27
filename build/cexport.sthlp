@@ -11,6 +11,11 @@
 {phang}
 {bf:cexport} {hline 2} C-accelerated data export (CSV and Excel)
 
+{pstd}
+{cmd:cexport delimited} is a high-performance replacement for Stata's
+{help export delimited:export delimited} command. {cmd:cexport excel} is a
+high-performance replacement for {help export excel:export excel}.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -274,11 +279,15 @@ has no effect when creating a new file. Requires the {cmd:replace} option.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help export delimited}, {help export excel}, {help ctools}, {help cimport}
+Manual: {bf:[D] export delimited}, {bf:[D] export excel}
+
+{psee}
+Online: {help export delimited}, {help export excel}, {help cimport}, {help ctools}
 {p_end}

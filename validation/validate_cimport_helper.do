@@ -8,7 +8,7 @@
 /*******************************************************************************
  * Create Test Data Files
  ******************************************************************************/
-noi print_section "Creating Test Data Files"
+print_section "Creating Test Data Files"
 
 capture file close _all
 
@@ -120,7 +120,7 @@ file close fh
 /*******************************************************************************
  * PATHOLOGICAL TEST DATA FILES
  ******************************************************************************/
-noi di as text "  Creating pathological test data files..."
+* (silent) "  Creating pathological test data files..."
 
 * Empty file (0 bytes)
 file open fh using "temp/empty_file.csv", write replace
@@ -618,4 +618,4 @@ forvalues i = 1/100 {
 }
 file close fh
 
-noi di as text "  Pathological test data files created."
+* (silent) "  Pathological test data files created."

@@ -20,11 +20,6 @@ if _rc != 0 {
 
 quietly {
 
-di as text ""
-di as text "======================================================================"
-di as text "              CEXPORT DELIMITED VALIDATION TEST SUITE"
-di as text "======================================================================"
-
 capture mkdir "temp"
 
 /*******************************************************************************
@@ -80,7 +75,7 @@ program define benchmark_export
     * Check dimensions first
     if `stata_n' != `cexport_n' | `stata_k' != `cexport_k' {
         restore
-        noi test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cexport N=`cexport_n' K=`cexport_k'"
+        test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cexport N=`cexport_n' K=`cexport_k'"
         exit
     }
 
@@ -91,7 +86,7 @@ program define benchmark_export
 
     if `cfrc' == 0 {
         restore
-        noi test_pass "`testname'"
+        test_pass "`testname'"
         exit
     }
 
@@ -114,7 +109,7 @@ program define benchmark_export
         capture confirm variable `v'
         if _rc != 0 {
             restore
-            noi test_fail "`testname'" "variable `v' missing from cexport data"
+            test_fail "`testname'" "variable `v' missing from cexport data"
             exit
         }
         rename `v' `v'_cexport
@@ -185,35 +180,35 @@ program define benchmark_export
 
     if `all_match' == 1 {
         if `overall_max_diff' > 0 {
-            noi test_pass "`testname' (max_diff=`overall_max_diff', max_reldiff=`overall_max_reldiff')"
+            test_pass "`testname' (max_diff=`overall_max_diff', max_reldiff=`overall_max_reldiff')"
         }
         else {
-            noi test_pass "`testname'"
+            test_pass "`testname'"
         }
     }
     else {
-        noi test_fail "`testname'" "`fail_reason'"
+        test_fail "`testname'" "`fail_reason'"
     }
 end
 
 /*******************************************************************************
  * SECTION 1: Plugin check
  ******************************************************************************/
-noi print_section "Plugin Check"
+print_section "Plugin Check"
 
 sysuse auto, clear
 capture cexport delimited using "temp/test.csv", replace
 if _rc != 0 {
-    noi test_fail "cexport plugin load" "returned error `=_rc'"
-    noi print_summary "cexport"
+    test_fail "cexport plugin load" "returned error `=_rc'"
+    print_summary "cexport"
     exit 1
 }
-noi test_pass "cexport plugin loads and runs"
+test_pass "cexport plugin loads and runs"
 
 /*******************************************************************************
  * SECTION 2: Basic comma-delimited export
  ******************************************************************************/
-noi print_section "Basic Comma-Delimited Export"
+print_section "Basic Comma-Delimited Export"
 
 sysuse auto, clear
 benchmark_export, testname("basic export")
@@ -221,7 +216,7 @@ benchmark_export, testname("basic export")
 /*******************************************************************************
  * SECTION 3: Tab delimiter
  ******************************************************************************/
-noi print_section "Tab Delimiter"
+print_section "Tab Delimiter"
 
 sysuse auto, clear
 benchmark_export, testname("tab delimiter") exportopts(delimiter(tab)) importopts(delimiters(tab))
@@ -229,7 +224,7 @@ benchmark_export, testname("tab delimiter") exportopts(delimiter(tab)) importopt
 /*******************************************************************************
  * SECTION 4: Semicolon delimiter
  ******************************************************************************/
-noi print_section "Semicolon Delimiter"
+print_section "Semicolon Delimiter"
 
 sysuse auto, clear
 benchmark_export, testname("semicolon delimiter") exportopts(delimiter(";")) importopts(delimiters(";"))
@@ -237,7 +232,7 @@ benchmark_export, testname("semicolon delimiter") exportopts(delimiter(";")) imp
 /*******************************************************************************
  * SECTION 5: novarnames option
  ******************************************************************************/
-noi print_section "novarnames Option"
+print_section "novarnames Option"
 
 sysuse auto, clear
 benchmark_export, testname("novarnames") exportopts(novarnames) importopts(varnames(nonames))
@@ -245,7 +240,7 @@ benchmark_export, testname("novarnames") exportopts(novarnames) importopts(varna
 /*******************************************************************************
  * SECTION 6: quote option
  ******************************************************************************/
-noi print_section "quote Option"
+print_section "quote Option"
 
 sysuse auto, clear
 benchmark_export, testname("quote option")  exportopts(quote)
@@ -253,7 +248,7 @@ benchmark_export, testname("quote option")  exportopts(quote)
 /*******************************************************************************
  * SECTION 7: nolabel option
  ******************************************************************************/
-noi print_section "nolabel Option"
+print_section "nolabel Option"
 
 sysuse auto, clear
 benchmark_export, testname("with labels")
@@ -264,7 +259,7 @@ benchmark_export, testname("nolabel") exportopts(nolabel)
 /*******************************************************************************
  * SECTION 8: Variable selection
  ******************************************************************************/
-noi print_section "Variable Selection"
+print_section "Variable Selection"
 
 sysuse auto, clear
 benchmark_export make price mpg, testname("variable selection (3 vars)")
@@ -272,7 +267,7 @@ benchmark_export make price mpg, testname("variable selection (3 vars)")
 /*******************************************************************************
  * SECTION 9: if condition
  ******************************************************************************/
-noi print_section "if Condition"
+print_section "if Condition"
 
 sysuse auto, clear
 benchmark_export, testname("if foreign==1") ifcond(foreign == 1)
@@ -283,7 +278,7 @@ benchmark_export, testname("if price>10000") ifcond(price > 10000)
 /*******************************************************************************
  * SECTION 10: in condition
  ******************************************************************************/
-noi print_section "in Condition"
+print_section "in Condition"
 
 sysuse auto, clear
 benchmark_export, testname("in 1/20") incond(1/20)
@@ -294,7 +289,7 @@ benchmark_export, testname("in 30/50") incond(30/50)
 /*******************************************************************************
  * SECTION 11: Combined if and in
  ******************************************************************************/
-noi print_section "Combined if and in"
+print_section "Combined if and in"
 
 sysuse auto, clear
 benchmark_export, testname("if and in combined") ifcond(price > 5000) incond(1/50)
@@ -302,7 +297,7 @@ benchmark_export, testname("if and in combined") ifcond(price > 5000) incond(1/5
 /*******************************************************************************
  * SECTION 12: Census dataset
  ******************************************************************************/
-noi print_section "Census Dataset"
+print_section "Census Dataset"
 
 sysuse census, clear
 benchmark_export, testname("census")
@@ -310,7 +305,7 @@ benchmark_export, testname("census")
 /*******************************************************************************
  * SECTION 13: Large dataset export
  ******************************************************************************/
-noi print_section "Large Dataset Export"
+print_section "Large Dataset Export"
 
 clear
 set seed 12345
@@ -326,7 +321,7 @@ benchmark_export, testname("large dataset (50K)")
 /*******************************************************************************
  * SECTION 14: Panel data (nlswork)
  ******************************************************************************/
-noi print_section "Panel Data (nlswork)"
+print_section "Panel Data (nlswork)"
 
 webuse nlswork, clear
 keep in 1/10000
@@ -336,54 +331,54 @@ benchmark_export, testname("panel data")
 /*******************************************************************************
  * SECTION 15: verbose/timeit options
  ******************************************************************************/
-noi print_section "verbose/timeit Options"
+print_section "verbose/timeit Options"
 
 sysuse auto, clear
 
 capture cexport delimited using "temp/test.csv", verbose replace
 if _rc == 0 {
-    noi test_pass "verbose option accepted"
+    test_pass "verbose option accepted"
 }
 else {
-    noi test_fail "verbose option" "returned error `=_rc'"
+    test_fail "verbose option" "returned error `=_rc'"
 }
 
 capture cexport delimited using "temp/test.csv", timeit replace
 if _rc == 0 {
-    noi test_pass "timeit option accepted"
+    test_pass "timeit option accepted"
 }
 else {
-    noi test_fail "timeit option" "returned error `=_rc'"
+    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 16: replace behavior
  ******************************************************************************/
-noi print_section "replace Behavior"
+print_section "replace Behavior"
 
 sysuse auto, clear
 cexport delimited using "temp/repl.csv", replace
 
 capture cexport delimited using "temp/repl.csv"
 if _rc != 0 {
-    noi test_pass "without replace: fails for existing file"
+    test_pass "without replace: fails for existing file"
 }
 else {
-    noi test_fail "without replace" "should fail"
+    test_fail "without replace" "should fail"
 }
 
 capture cexport delimited using "temp/repl.csv", replace
 if _rc == 0 {
-    noi test_pass "with replace: overwrites file"
+    test_pass "with replace: overwrites file"
 }
 else {
-    noi test_fail "with replace" "failed"
+    test_fail "with replace" "failed"
 }
 
 /*******************************************************************************
  * SECTION 17: Edge cases - Basic
  ******************************************************************************/
-noi print_section "Edge Cases - Basic"
+print_section "Edge Cases - Basic"
 
 * Single observation
 clear
@@ -410,7 +405,7 @@ benchmark_export, testname("strings with commas")
 /*******************************************************************************
  * SECTION: Pathological Data - Empty/Minimal Datasets
  ******************************************************************************/
-noi print_section "Pathological - Empty/Minimal Datasets"
+print_section "Pathological - Empty/Minimal Datasets"
 
 * Empty dataset (0 observations)
 clear
@@ -425,10 +420,10 @@ local stata_rc = _rc
 capture cexport delimited using "temp/empty_dataset.csv", replace
 local cexport_rc = _rc
 if `stata_rc' == `cexport_rc' {
-    noi test_pass "empty dataset (0 obs) - matches Stata behavior"
+    test_pass "empty dataset (0 obs) - matches Stata behavior"
 }
 else {
-    noi test_fail "empty dataset" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
+    test_fail "empty dataset" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 * Single observation, single variable
@@ -461,7 +456,7 @@ benchmark_export, testname("2 observations")
 /*******************************************************************************
  * SECTION: Pathological Data - Missing Value Patterns
  ******************************************************************************/
-noi print_section "Pathological - Missing Value Patterns"
+print_section "Pathological - Missing Value Patterns"
 
 * All missing numeric
 clear
@@ -584,16 +579,16 @@ local stata_rc = _rc
 capture cexport delimited using "temp/ext_missing.csv", replace
 local cexport_rc = _rc
 if `stata_rc' == `cexport_rc' {
-    noi test_pass "extended missing values (.a-.z) - matches Stata behavior"
+    test_pass "extended missing values (.a-.z) - matches Stata behavior"
 }
 else {
-    noi test_fail "extended missing values" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
+    test_fail "extended missing values" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 /*******************************************************************************
  * SECTION: Pathological Data - String Edge Cases
  ******************************************************************************/
-noi print_section "Pathological - String Edge Cases"
+print_section "Pathological - String Edge Cases"
 
 * Empty strings
 clear
@@ -669,7 +664,7 @@ benchmark_export, testname("basic Latin extended chars")
 /*******************************************************************************
  * SECTION: Pathological Data - Numeric Edge Cases
  ******************************************************************************/
-noi print_section "Pathological - Numeric Edge Cases"
+print_section "Pathological - Numeric Edge Cases"
 
 * Zero values
 clear
@@ -718,10 +713,10 @@ replace extreme = 0 in 5
 replace extreme = . in 6
 capture cexport delimited using "temp/extreme_range.csv", replace
 if _rc == 0 {
-    noi test_pass "extreme numeric range - exported"
+    test_pass "extreme numeric range - exported"
 }
 else {
-    noi test_pass "extreme numeric range - handled gracefully (rc=`=_rc')"
+    test_pass "extreme numeric range - handled gracefully (rc=`=_rc')"
 }
 
 * All numeric types
@@ -766,7 +761,7 @@ benchmark_export, testname("scientific notation values")
 /*******************************************************************************
  * SECTION: Pathological Data - Dimensions
  ******************************************************************************/
-noi print_section "Pathological - Dimensions"
+print_section "Pathological - Dimensions"
 
 * Very wide (many columns)
 clear
@@ -794,7 +789,7 @@ benchmark_export, testname("square dataset (50x10)")
 /*******************************************************************************
  * SECTION: Pathological Data - Data Patterns
  ******************************************************************************/
-noi print_section "Pathological - Data Patterns"
+print_section "Pathological - Data Patterns"
 
 * All same value (numeric)
 clear
@@ -851,7 +846,7 @@ benchmark_export, testname("random with seed")
 /*******************************************************************************
  * SECTION: Option Combinations
  ******************************************************************************/
-noi print_section "Option Combinations"
+print_section "Option Combinations"
 
 * quote + tab delimiter
 sysuse auto, clear
@@ -872,7 +867,7 @@ benchmark_export make price mpg, testname("varlist + if + quote + nolabel") ifco
 /*******************************************************************************
  * SECTION: Date Formatting (datafmt and datestring)
  ******************************************************************************/
-noi print_section "Date Formatting (datafmt/datestring)"
+print_section "Date Formatting (datafmt/datestring)"
 
 * Create test data with various date formats
 clear
@@ -952,18 +947,18 @@ if _rc == 0 {
         * Check if first date looks like ISO format (starts with year)
         local firstval = daily_date[1]
         if substr("`firstval'", 1, 4) == "2024" {
-            noi test_pass "datestring: ISO format"
+            test_pass "datestring: ISO format"
         }
         else {
-            noi test_fail "datestring: ISO format" "date not in ISO format: `firstval'"
+            test_fail "datestring: ISO format" "date not in ISO format: `firstval'"
         }
     }
     else {
-        noi test_fail "datestring: ISO format" "daily_date should be string"
+        test_fail "datestring: ISO format" "daily_date should be string"
     }
 }
 else {
-    noi test_fail "datestring: ISO format" "cexport failed with rc=`=_rc'"
+    test_fail "datestring: ISO format" "cexport failed with rc=`=_rc'"
 }
 
 * Test 9: datestring with different format (US format)
@@ -975,18 +970,18 @@ if _rc == 0 {
     if _rc == 0 {
         local firstval = daily_date[1]
         if strpos("`firstval'", "/") > 0 {
-            noi test_pass "datestring: US format"
+            test_pass "datestring: US format"
         }
         else {
-            noi test_fail "datestring: US format" "date not in US format: `firstval'"
+            test_fail "datestring: US format" "date not in US format: `firstval'"
         }
     }
     else {
-        noi test_fail "datestring: US format" "daily_date should be string"
+        test_fail "datestring: US format" "daily_date should be string"
     }
 }
 else {
-    noi test_fail "datestring: US format" "cexport failed with rc=`=_rc'"
+    test_fail "datestring: US format" "cexport failed with rc=`=_rc'"
 }
 
 * Test 10: datestring with datetime
@@ -998,18 +993,18 @@ if _rc == 0 {
     if _rc == 0 {
         local firstval = datetime[1]
         if strpos("`firstval'", "T") > 0 {
-            noi test_pass "datestring: datetime ISO"
+            test_pass "datestring: datetime ISO"
         }
         else {
-            noi test_fail "datestring: datetime ISO" "datetime not in ISO format: `firstval'"
+            test_fail "datestring: datetime ISO" "datetime not in ISO format: `firstval'"
         }
     }
     else {
-        noi test_fail "datestring: datetime ISO" "datetime should be string"
+        test_fail "datestring: datetime ISO" "datetime should be string"
     }
 }
 else {
-    noi test_fail "datestring: datetime ISO" "cexport failed with rc=`=_rc'"
+    test_fail "datestring: datetime ISO" "cexport failed with rc=`=_rc'"
 }
 
 * Test 11: datafmt combined with value labels
@@ -1057,25 +1052,25 @@ if _rc == 0 {
         * daily_date is string - check for empty strings
         count if daily_date == "" | missing(daily_date)
         if r(N) == 3 {
-            noi test_pass "datestring with missing dates"
+            test_pass "datestring with missing dates"
         }
         else {
-            noi test_fail "datestring with missing dates" "expected 3 empty/missing, got `r(N)'"
+            test_fail "datestring with missing dates" "expected 3 empty/missing, got `r(N)'"
         }
     }
     else {
         * daily_date was imported as numeric (all empty -> all missing)
         count if missing(daily_date)
         if r(N) == 3 {
-            noi test_pass "datestring with missing dates"
+            test_pass "datestring with missing dates"
         }
         else {
-            noi test_fail "datestring with missing dates" "expected 3 missing, got `r(N)'"
+            test_fail "datestring with missing dates" "expected 3 missing, got `r(N)'"
         }
     }
 }
 else {
-    noi test_fail "datestring with missing dates" "cexport failed with rc=`=_rc'"
+    test_fail "datestring with missing dates" "cexport failed with rc=`=_rc'"
 }
 
 * Test 17: Negative format prefix (%-t)
@@ -1102,7 +1097,7 @@ if _rc == 0 {
 /*******************************************************************************
  * SECTION 18: Missing values
  ******************************************************************************/
-noi print_section "Missing Values"
+print_section "Missing Values"
 
 clear
 set obs 10
@@ -1143,7 +1138,7 @@ benchmark_export, testname("consecutive missing (rows 3-6)")
 /*******************************************************************************
  * SECTION 19: Numeric precision
  ******************************************************************************/
-noi print_section "Numeric Precision"
+print_section "Numeric Precision"
 
 clear
 set obs 100
@@ -1157,7 +1152,7 @@ benchmark_export, testname("numeric precision")
 /*******************************************************************************
  * SECTION 20: Special characters in strings
  ******************************************************************************/
-noi print_section "Special Characters"
+print_section "Special Characters"
 
 clear
 input id str50 text
@@ -1172,7 +1167,7 @@ benchmark_export, testname("special characters")
 /*******************************************************************************
  * SECTION: Large Dataset Tests
  ******************************************************************************/
-noi print_section "Large Datasets"
+print_section "Large Datasets"
 
 * 10K rows export
 clear
@@ -1183,10 +1178,10 @@ gen str20 name = "item_" + string(_n)
 
 capture cexport delimited using "temp/large_10k.csv", replace
 if _rc == 0 {
-    noi test_pass "10K rows export"
+    test_pass "10K rows export"
 }
 else {
-    noi test_fail "10K rows" "rc=`=_rc'"
+    test_fail "10K rows" "rc=`=_rc'"
 }
 
 * Compare with export delimited
@@ -1202,10 +1197,10 @@ file read f2 line1_cexport
 file close f2
 
 if "`line1_stata'" == "`line1_cexport'" {
-    noi test_pass "large export matches Stata header"
+    test_pass "large export matches Stata header"
 }
 else {
-    noi test_fail "large match" "headers differ"
+    test_fail "large match" "headers differ"
 }
 
 * 50K rows
@@ -1217,10 +1212,10 @@ gen y = runiform()
 
 capture cexport delimited using "temp/large_50k.csv", replace
 if _rc == 0 {
-    noi test_pass "50K rows export"
+    test_pass "50K rows export"
 }
 else {
-    noi test_fail "50K rows" "rc=`=_rc'"
+    test_fail "50K rows" "rc=`=_rc'"
 }
 
 * Many columns (20)
@@ -1232,16 +1227,16 @@ forvalues i = 1/20 {
 
 capture cexport delimited using "temp/many_cols.csv", replace
 if _rc == 0 {
-    noi test_pass "20 columns export"
+    test_pass "20 columns export"
 }
 else {
-    noi test_fail "20 columns" "rc=`=_rc'"
+    test_fail "20 columns" "rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION: Pathological Data (Original)
  ******************************************************************************/
-noi print_section "Pathological Data"
+print_section "Pathological Data"
 
 * All missing values
 clear
@@ -1252,10 +1247,10 @@ gen z = .
 
 capture cexport delimited using "temp/all_missing.csv", replace
 if _rc == 0 {
-    noi test_pass "all missing values"
+    test_pass "all missing values"
 }
 else {
-    noi test_fail "all missing" "rc=`=_rc'"
+    test_fail "all missing" "rc=`=_rc'"
 }
 
 * Empty strings
@@ -1266,10 +1261,10 @@ gen value = _n
 
 capture cexport delimited using "temp/empty_strings.csv", replace
 if _rc == 0 {
-    noi test_pass "empty strings"
+    test_pass "empty strings"
 }
 else {
-    noi test_fail "empty strings" "rc=`=_rc'"
+    test_fail "empty strings" "rc=`=_rc'"
 }
 
 * Single column
@@ -1279,10 +1274,10 @@ gen only_col = runiform()
 
 capture cexport delimited using "temp/single_col.csv", replace
 if _rc == 0 {
-    noi test_pass "single column"
+    test_pass "single column"
 }
 else {
-    noi test_fail "single column" "rc=`=_rc'"
+    test_fail "single column" "rc=`=_rc'"
 }
 
 * Single row
@@ -1294,10 +1289,10 @@ gen c = 3
 
 capture cexport delimited using "temp/single_row.csv", replace
 if _rc == 0 {
-    noi test_pass "single row"
+    test_pass "single row"
 }
 else {
-    noi test_fail "single row" "rc=`=_rc'"
+    test_fail "single row" "rc=`=_rc'"
 }
 
 * Very long strings
@@ -1307,10 +1302,10 @@ gen str244 long_text = "a" * 200
 
 capture cexport delimited using "temp/long_strings.csv", replace
 if _rc == 0 {
-    noi test_pass "long strings (200 chars)"
+    test_pass "long strings (200 chars)"
 }
 else {
-    noi test_fail "long strings" "rc=`=_rc'"
+    test_fail "long strings" "rc=`=_rc'"
 }
 
 * Extreme numeric values
@@ -1325,16 +1320,16 @@ replace extreme = . in 5
 
 capture cexport delimited using "temp/extreme_nums.csv", replace
 if _rc == 0 {
-    noi test_pass "extreme numeric values"
+    test_pass "extreme numeric values"
 }
 else {
-    noi test_fail "extreme nums" "rc=`=_rc'"
+    test_fail "extreme nums" "rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Comparison Tests
  ******************************************************************************/
-noi print_section "Pathological Comparison Tests"
+print_section "Pathological Comparison Tests"
 
 * All missing vs Stata
 clear
@@ -1416,7 +1411,7 @@ benchmark_export, testname("30 columns matches Stata")
 /*******************************************************************************
  * SECTION: Real-World Datasets
  ******************************************************************************/
-noi print_section "Real-World Datasets"
+print_section "Real-World Datasets"
 
 * auto dataset
 sysuse auto, clear
@@ -1444,10 +1439,10 @@ benchmark_export state pop, testname("census: state and pop only")
 webuse nlswork, clear
 capture cexport delimited using "temp/nlswork.csv", replace
 if _rc == 0 {
-    noi test_pass "nlswork dataset export"
+    test_pass "nlswork dataset export"
 }
 else {
-    noi test_fail "nlswork" "rc=`=_rc'"
+    test_fail "nlswork" "rc=`=_rc'"
 }
 
 * nlswork first 5000 rows (benchmark comparison)
@@ -1480,7 +1475,7 @@ if _rc == 0 {
 /*******************************************************************************
  * SECTION: Synthetic Datasets for Testing
  ******************************************************************************/
-noi print_section "Synthetic Test Datasets"
+print_section "Synthetic Test Datasets"
 
 * Panel data structure
 clear
@@ -1548,7 +1543,7 @@ benchmark_export, testname("education student data")
 /*******************************************************************************
  * SECTION: Comparison Tests
  ******************************************************************************/
-noi print_section "Comparison with export delimited"
+print_section "Comparison with export delimited"
 
 * Basic comparison
 sysuse auto, clear
@@ -1560,10 +1555,10 @@ capture file open f1 using "temp/compare_stata.csv", read
 capture file open f2 using "temp/compare_cexport.csv", read
 * Just check both files exist and can be opened
 if _rc == 0 {
-    noi test_pass "comparison files created"
+    test_pass "comparison files created"
 }
 else {
-    noi test_fail "comparison" "file error"
+    test_fail "comparison" "file error"
 }
 capture file close f1
 capture file close f2
@@ -1582,16 +1577,16 @@ import delimited using "temp/roundtrip.csv", clear
 local imported_N = _N
 
 if `imported_N' == 100 {
-    noi test_pass "round-trip export/import"
+    test_pass "round-trip export/import"
 }
 else {
-    noi test_fail "round-trip" "wrong N"
+    test_fail "round-trip" "wrong N"
 }
 
 /*******************************************************************************
  * SECTION: Edge Cases
  ******************************************************************************/
-noi print_section "Edge Cases"
+print_section "Edge Cases"
 
 * Variable names with underscores
 clear
@@ -1601,10 +1596,10 @@ gen another_var = runiform()
 
 capture cexport delimited using "temp/underscores.csv", replace
 if _rc == 0 {
-    noi test_pass "variable names with underscores"
+    test_pass "variable names with underscores"
 }
 else {
-    noi test_fail "underscores" "rc=`=_rc'"
+    test_fail "underscores" "rc=`=_rc'"
 }
 
 * Numeric-looking strings
@@ -1614,10 +1609,10 @@ gen str10 numstr = string(_n * 100)
 
 capture cexport delimited using "temp/numstr.csv", replace
 if _rc == 0 {
-    noi test_pass "numeric-looking strings"
+    test_pass "numeric-looking strings"
 }
 else {
-    noi test_fail "numstr" "rc=`=_rc'"
+    test_fail "numstr" "rc=`=_rc'"
 }
 
 * Mixed types
@@ -1632,16 +1627,16 @@ gen str20 s = "text_" + string(_n)
 
 capture cexport delimited using "temp/mixed_types.csv", replace
 if _rc == 0 {
-    noi test_pass "mixed variable types"
+    test_pass "mixed variable types"
 }
 else {
-    noi test_fail "mixed types" "rc=`=_rc'"
+    test_fail "mixed types" "rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION: Excel Export Tests
  ******************************************************************************/
-noi print_section "Excel Export Tests"
+print_section "Excel Export Tests"
 
 /*******************************************************************************
  * Helper: benchmark_export_excel - Export with both methods and compare
@@ -1653,7 +1648,7 @@ program define benchmark_export_excel
     * Export with Stata's export excel
     capture export excel using "temp/stata_export.xlsx", `exportopts' replace
     if _rc != 0 {
-        noi test_fail "`testname'" "Stata export excel failed with rc=`=_rc'"
+        test_fail "`testname'" "Stata export excel failed with rc=`=_rc'"
         exit
     }
     local stata_n = _N
@@ -1662,7 +1657,7 @@ program define benchmark_export_excel
     * Export with cexport excel
     capture cexport excel using "temp/cexport_export.xlsx", `exportopts' replace
     if _rc != 0 {
-        noi test_fail "`testname'" "cexport excel failed with rc=`=_rc'"
+        test_fail "`testname'" "cexport excel failed with rc=`=_rc'"
         exit
     }
 
@@ -1670,7 +1665,7 @@ program define benchmark_export_excel
     clear
     capture import excel using "temp/stata_export.xlsx", firstrow clear
     if _rc != 0 {
-        noi test_fail "`testname'" "Failed to re-import Stata export"
+        test_fail "`testname'" "Failed to re-import Stata export"
         exit
     }
     local reimport_stata_n = _N
@@ -1682,7 +1677,7 @@ program define benchmark_export_excel
     clear
     capture import excel using "temp/cexport_export.xlsx", firstrow clear
     if _rc != 0 {
-        noi test_fail "`testname'" "Failed to re-import cexport output"
+        test_fail "`testname'" "Failed to re-import cexport output"
         exit
     }
     local reimport_cexport_n = _N
@@ -1690,7 +1685,7 @@ program define benchmark_export_excel
 
     * Check dimensions match
     if `reimport_stata_n' != `reimport_cexport_n' | `reimport_stata_k' != `reimport_cexport_k' {
-        noi test_fail "`testname'" "dimensions differ: Stata N=`reimport_stata_n' K=`reimport_stata_k', cexport N=`reimport_cexport_n' K=`reimport_cexport_k'"
+        test_fail "`testname'" "dimensions differ: Stata N=`reimport_stata_n' K=`reimport_stata_k', cexport N=`reimport_cexport_n' K=`reimport_cexport_k'"
         exit
     }
 
@@ -1717,10 +1712,10 @@ program define benchmark_export_excel
     * Compare data
     capture cf _all using `cexport_reimport'
     if _rc == 0 {
-        noi test_pass "`testname'"
+        test_pass "`testname'"
     }
     else {
-        noi test_fail "`testname'" "cf _all comparison failed - data not identical"
+        test_fail "`testname'" "cf _all comparison failed - data not identical"
     }
 
     * Clean up temp files
@@ -1737,7 +1732,7 @@ program define cexport_excel_test
 
     capture cexport excel using "temp/test_export.xlsx", `exportopts' replace
     if _rc != 0 {
-        noi test_fail "`testname'" "rc=`=_rc'"
+        test_fail "`testname'" "rc=`=_rc'"
         exit
     }
 
@@ -1748,24 +1743,24 @@ program define cexport_excel_test
     clear
     capture import excel using "temp/test_export.xlsx", firstrow clear
     if _rc != 0 {
-        noi test_fail "`testname'" "Failed to re-import"
+        test_fail "`testname'" "Failed to re-import"
         exit
     }
 
     if `expectn' > 0 & _N != `expectn' {
-        noi test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
+        test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
         exit
     }
 
     if `expectk' > 0 & c(k) != `expectk' {
-        noi test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
+        test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
         exit
     }
 
     * Clean up
     capture erase "temp/test_export.xlsx"
 
-    noi test_pass "`testname'"
+    test_pass "`testname'"
 end
 
 * Create test data for Excel export
@@ -1822,7 +1817,7 @@ save `excel_numeric_data', replace
 
 * Basic Excel export tests
 use `excel_basic_data', clear
-noi benchmark_export_excel, testname("Excel basic export") exportopts(firstrow(variables))
+benchmark_export_excel, testname("Excel basic export") exportopts(firstrow(variables))
 
 * Export without firstrow
 use `excel_basic_data', clear
@@ -1830,16 +1825,16 @@ cexport excel using "temp/excel_nofirstrow.xlsx", firstrow(nonames) replace
 clear
 import excel using "temp/excel_nofirstrow.xlsx", clear
 if _N == 5 {
-    noi test_pass "Excel export without firstrow"
+    test_pass "Excel export without firstrow"
 }
 else {
-    noi test_fail "Excel export without firstrow" "expected N=5, got N=`=_N'"
+    test_fail "Excel export without firstrow" "expected N=5, got N=`=_N'"
 }
 capture erase "temp/excel_nofirstrow.xlsx"
 
 * Export with sheet name
 use `excel_basic_data', clear
-noi cexport_excel_test, testname("Excel export with sheet name") exportopts(sheet("TestData")) expectn(5) expectk(4)
+cexport_excel_test, testname("Excel export with sheet name") exportopts(sheet("TestData")) expectn(5) expectk(4)
 
 * Variable selection
 use `excel_basic_data', clear
@@ -1847,19 +1842,19 @@ cexport excel id name using "temp/excel_varsel.xlsx", replace
 clear
 import excel using "temp/excel_varsel.xlsx", firstrow clear
 if _N == 5 & c(k) == 2 {
-    noi test_pass "Excel export selected variables"
+    test_pass "Excel export selected variables"
 }
 else {
-    noi test_fail "Excel export selected variables" "expected N=5 K=2, got N=`=_N' K=`=c(k)'"
+    test_fail "Excel export selected variables" "expected N=5 K=2, got N=`=_N' K=`=c(k)'"
 }
 capture erase "temp/excel_varsel.xlsx"
 
 * Type handling tests
 use `excel_numeric_data', clear
-noi benchmark_export_excel, testname("Excel numeric types export") exportopts(firstrow(variables))
+benchmark_export_excel, testname("Excel numeric types export") exportopts(firstrow(variables))
 
 use `excel_missing_data', clear
-noi benchmark_export_excel, testname("Excel missing values export") exportopts(firstrow(variables))
+benchmark_export_excel, testname("Excel missing values export") exportopts(firstrow(variables))
 
 * Value label tests
 use `excel_labeled_data', clear
@@ -1868,10 +1863,10 @@ clear
 import excel using "temp/excel_labeled.xlsx", firstrow clear
 capture confirm string variable status
 if _rc == 0 {
-    noi test_pass "Excel export with value labels"
+    test_pass "Excel export with value labels"
 }
 else {
-    noi test_fail "Excel export with value labels" "status should be string with labels"
+    test_fail "Excel export with value labels" "status should be string with labels"
 }
 capture erase "temp/excel_labeled.xlsx"
 
@@ -1881,10 +1876,10 @@ clear
 import excel using "temp/excel_nolabel.xlsx", firstrow clear
 capture confirm numeric variable status
 if _rc == 0 {
-    noi test_pass "Excel export with nolabel option"
+    test_pass "Excel export with nolabel option"
 }
 else {
-    noi test_fail "Excel export with nolabel option" "status should be numeric with nolabel"
+    test_fail "Excel export with nolabel option" "status should be numeric with nolabel"
 }
 capture erase "temp/excel_nolabel.xlsx"
 
@@ -1894,10 +1889,10 @@ cexport excel using "temp/excel_iftest.xlsx" if id <= 3, replace
 clear
 import excel using "temp/excel_iftest.xlsx", firstrow clear
 if _N == 3 {
-    noi test_pass "Excel export with if condition"
+    test_pass "Excel export with if condition"
 }
 else {
-    noi test_fail "Excel export with if condition" "expected N=3, got N=`=_N'"
+    test_fail "Excel export with if condition" "expected N=3, got N=`=_N'"
 }
 capture erase "temp/excel_iftest.xlsx"
 
@@ -1906,10 +1901,10 @@ cexport excel using "temp/excel_intest.xlsx" in 2/4, replace
 clear
 import excel using "temp/excel_intest.xlsx", firstrow clear
 if _N == 3 {
-    noi test_pass "Excel export with in range"
+    test_pass "Excel export with in range"
 }
 else {
-    noi test_fail "Excel export with in range" "expected N=3, got N=`=_N'"
+    test_fail "Excel export with in range" "expected N=3, got N=`=_N'"
 }
 capture erase "temp/excel_intest.xlsx"
 
@@ -1918,20 +1913,20 @@ use `excel_basic_data', clear
 cexport excel using "temp/excel_exists_test.xlsx", replace
 capture cexport excel using "temp/excel_exists_test.xlsx"
 if _rc != 0 {
-    noi test_pass "Excel file exists error"
+    test_pass "Excel file exists error"
 }
 else {
-    noi test_fail "Excel file exists error" "should have returned error"
+    test_fail "Excel file exists error" "should have returned error"
 }
 capture erase "temp/excel_exists_test.xlsx"
 
 use `excel_basic_data', clear
 capture cexport excel using "temp/wrong.csv", replace
 if _rc != 0 {
-    noi test_pass "Excel wrong extension error"
+    test_pass "Excel wrong extension error"
 }
 else {
-    noi test_fail "Excel wrong extension error" "should have returned error"
+    test_fail "Excel wrong extension error" "should have returned error"
 }
 
 * Clean up Excel temp files
@@ -1942,7 +1937,7 @@ capture erase "temp/test_export.xlsx"
 /*******************************************************************************
  * SECTION: Excel Export - New Options (cell, missing, keepcellfmt)
  ******************************************************************************/
-noi print_section "Excel Export - New Options"
+print_section "Excel Export - New Options"
 
 * Test cell() option - starting cell offset
 use `excel_basic_data', clear
@@ -1953,16 +1948,16 @@ import excel using "temp/excel_cell_b5.xlsx", clear
 * Check that column A is empty and row 1-4 are empty
 capture confirm variable A
 if _rc != 0 {
-    noi test_pass "Excel cell(B5) - column A empty"
+    test_pass "Excel cell(B5) - column A empty"
 }
 else {
     * Column A exists - check if it's all missing
     count if !missing(A)
     if r(N) == 0 {
-        noi test_pass "Excel cell(B5) - column A all missing"
+        test_pass "Excel cell(B5) - column A all missing"
     }
     else {
-        noi test_fail "Excel cell(B5)" "column A should be empty"
+        test_fail "Excel cell(B5)" "column A should be empty"
     }
 }
 capture erase "temp/excel_cell_b5.xlsx"
@@ -1972,10 +1967,10 @@ use `excel_basic_data', clear
 foreach cellref in A1 Z1 AA1 C10 {
     capture cexport excel id name using "temp/excel_cell_`cellref'.xlsx", cell(`cellref') replace
     if _rc == 0 {
-        noi test_pass "Excel cell(`cellref') accepted"
+        test_pass "Excel cell(`cellref') accepted"
     }
     else {
-        noi test_fail "Excel cell(`cellref')" "rc=`=_rc'"
+        test_fail "Excel cell(`cellref')" "rc=`=_rc'"
     }
     capture erase "temp/excel_cell_`cellref'.xlsx"
 }
@@ -1990,14 +1985,14 @@ capture confirm string variable x
 if _rc == 0 {
     count if x == "NA"
     if r(N) == 2 {
-        noi test_pass "Excel missing(NA) - numeric missing replaced"
+        test_pass "Excel missing(NA) - numeric missing replaced"
     }
     else {
-        noi test_fail "Excel missing(NA)" "expected 2 NA values, got `r(N)'"
+        test_fail "Excel missing(NA)" "expected 2 NA values, got `r(N)'"
     }
 }
 else {
-    noi test_fail "Excel missing(NA)" "x should be string with NA values"
+    test_fail "Excel missing(NA)" "x should be string with NA values"
 }
 capture erase "temp/excel_missing_na.xlsx"
 
@@ -2010,14 +2005,14 @@ capture confirm string variable x
 if _rc == 0 {
     count if x == "."
     if r(N) == 2 {
-        noi test_pass "Excel missing(.) - periods for missing"
+        test_pass "Excel missing(.) - periods for missing"
     }
     else {
-        noi test_fail "Excel missing(.)" "expected 2 period values, got `r(N)'"
+        test_fail "Excel missing(.)" "expected 2 period values, got `r(N)'"
     }
 }
 else {
-    noi test_fail "Excel missing(.)" "x should be string with . values"
+    test_fail "Excel missing(.)" "x should be string with . values"
 }
 capture erase "temp/excel_missing_dot.xlsx"
 
@@ -2028,10 +2023,10 @@ clear
 import excel using "temp/excel_missing_empty.xlsx", firstrow clear
 * Empty string missing values - should result in empty cells
 if _N == 5 {
-    noi test_pass "Excel missing('') - empty string replacement"
+    test_pass "Excel missing('') - empty string replacement"
 }
 else {
-    noi test_fail "Excel missing('')" "expected N=5, got N=`=_N'"
+    test_fail "Excel missing('')" "expected N=5, got N=`=_N'"
 }
 capture erase "temp/excel_missing_empty.xlsx"
 
@@ -2044,10 +2039,10 @@ cexport excel id name value using "temp/excel_keepfmt.xlsx", keepcellfmt replace
 clear
 import excel using "temp/excel_keepfmt.xlsx", firstrow clear
 if _N == 5 & c(k) == 3 {
-    noi test_pass "Excel keepcellfmt - file updated"
+    test_pass "Excel keepcellfmt - file updated"
 }
 else {
-    noi test_fail "Excel keepcellfmt" "expected N=5 K=3, got N=`=_N' K=`=c(k)'"
+    test_fail "Excel keepcellfmt" "expected N=5 K=3, got N=`=_N' K=`=c(k)'"
 }
 capture erase "temp/excel_keepfmt.xlsx"
 
@@ -2058,10 +2053,10 @@ clear
 import excel using "temp/excel_combo.xlsx", clear
 * Data should start at C3, with N/A for missing values
 if _N > 0 {
-    noi test_pass "Excel cell() + missing() combination"
+    test_pass "Excel cell() + missing() combination"
 }
 else {
-    noi test_fail "Excel cell() + missing() combination" "no data imported"
+    test_fail "Excel cell() + missing() combination" "no data imported"
 }
 capture erase "temp/excel_combo.xlsx"
 
@@ -2073,10 +2068,10 @@ cexport excel using "temp/excel_combo2.xlsx", cell(F1) keepcellfmt replace
 clear
 import excel using "temp/excel_combo2.xlsx", firstrow clear
 if _N > 0 {
-    noi test_pass "Excel cell() + keepcellfmt combination"
+    test_pass "Excel cell() + keepcellfmt combination"
 }
 else {
-    noi test_fail "Excel cell() + keepcellfmt combination" "no data imported"
+    test_fail "Excel cell() + keepcellfmt combination" "no data imported"
 }
 capture erase "temp/excel_combo2.xlsx"
 
@@ -2087,10 +2082,10 @@ cexport excel using "temp/excel_allopts.xlsx", cell(B2) missing("--") keepcellfm
 clear
 import excel using "temp/excel_allopts.xlsx", clear
 if _N > 0 {
-    noi test_pass "Excel cell() + missing() + keepcellfmt all together"
+    test_pass "Excel cell() + missing() + keepcellfmt all together"
 }
 else {
-    noi test_fail "Excel all options" "no data imported"
+    test_fail "Excel all options" "no data imported"
 }
 capture erase "temp/excel_allopts.xlsx"
 
@@ -2102,10 +2097,10 @@ clear
 import excel using "temp/excel_auto_opts.xlsx", clear
 * Import starts at B2, so first row (row 1) should be empty or headers start at row 2
 if _N > 0 {
-    noi test_pass "Excel auto dataset with new options"
+    test_pass "Excel auto dataset with new options"
 }
 else {
-    noi test_fail "Excel auto dataset with new options" "no data imported"
+    test_fail "Excel auto dataset with new options" "no data imported"
 }
 capture erase "temp/excel_auto_opts.xlsx"
 
@@ -2122,10 +2117,5 @@ foreach f of local files {
     capture erase "temp/`f'"
 }
 
-noi print_summary "cexport"
-
-if $TESTS_FAILED > 0 {
-    exit 1
-}
-
+* End of cexport validation
 }

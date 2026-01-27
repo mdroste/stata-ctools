@@ -16,123 +16,113 @@ if _rc != 0 {
 
 quietly {
 
-di as text ""
-di as text "======================================================================"
-di as text "              CREGHDFE VALIDATION TEST SUITE"
-di as text "======================================================================"
-
-/*******************************************************************************
- * SECTION 1: Plugin check
- ******************************************************************************/
-noi print_section "Plugin Check"
-
+* Plugin check
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign)
 if _rc != 0 {
-    noi test_fail "creghdfe plugin load" "returned error `=_rc'"
-    noi print_summary "creghdfe"
+    test_fail "creghdfe plugin load" "returned error `=_rc'"
     exit 1
 }
-noi test_pass "creghdfe plugin loads and runs"
+test_pass "creghdfe plugin loads and runs"
 
 /*******************************************************************************
  * SECTION 2: Auto dataset - basic FE tests
  ******************************************************************************/
-noi print_section "Basic Fixed Effects (auto)"
+print_section "Basic Fixed Effects (auto)"
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign) testname("single FE")
+benchmark_reghdfe price mpg weight, absorb(foreign) testname("single FE")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) testname("two-way FE")
+benchmark_reghdfe price mpg weight, absorb(foreign rep78) testname("two-way FE")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg, absorb(foreign) testname("single covariate")
+benchmark_reghdfe price mpg, absorb(foreign) testname("single covariate")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight length, absorb(foreign) testname("three covariates")
+benchmark_reghdfe price mpg weight length, absorb(foreign) testname("three covariates")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("many covariates")
+benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("many covariates")
 
 /*******************************************************************************
  * SECTION 3: VCE options
  ******************************************************************************/
-noi print_section "VCE Options"
+print_section "VCE Options"
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(robust) testname("vce(robust)")
+benchmark_reghdfe price mpg weight, absorb(foreign) vce(robust) testname("vce(robust)")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("vce(cluster)")
+benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("vce(cluster)")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(robust) testname("two-way + robust")
+benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(robust) testname("two-way + robust")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(cluster foreign) testname("two-way + cluster")
+benchmark_reghdfe price mpg weight, absorb(foreign rep78) vce(cluster foreign) testname("two-way + cluster")
 
 /*******************************************************************************
  * SECTION 4: Weight tests
  ******************************************************************************/
-noi print_section "Weights"
+print_section "Weights"
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) testname("aweight")
+benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) testname("aweight")
 
 sysuse auto, clear
 gen int fw = ceil(mpg/5)
-noi benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) testname("fweight")
+benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) testname("fweight")
 
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [pw=weight], absorb(foreign) testname("pweight")
+benchmark_reghdfe price mpg weight [pw=weight], absorb(foreign) testname("pweight")
 
 /*******************************************************************************
  * SECTION 5: Census dataset
  ******************************************************************************/
-noi print_section "Census Dataset"
+print_section "Census Dataset"
 
 sysuse census, clear
-noi benchmark_reghdfe pop medage, absorb(region) testname("single FE")
+benchmark_reghdfe pop medage, absorb(region) testname("single FE")
 
 sysuse census, clear
-noi benchmark_reghdfe pop medage death, absorb(region) testname("two covariates")
+benchmark_reghdfe pop medage death, absorb(region) testname("two covariates")
 
 sysuse census, clear
-noi benchmark_reghdfe pop medage death marriage divorce, absorb(region) testname("many covariates")
+benchmark_reghdfe pop medage death marriage divorce, absorb(region) testname("many covariates")
 
 sysuse census, clear
-noi benchmark_reghdfe pop medage, absorb(region) vce(robust) testname("robust")
+benchmark_reghdfe pop medage, absorb(region) vce(robust) testname("robust")
 
 /*******************************************************************************
  * SECTION 6: nlswork panel data
  ******************************************************************************/
-noi print_section "Panel Data (nlswork)"
+print_section "Panel Data (nlswork)"
 
 webuse nlswork, clear
 keep in 1/10000
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) testname("individual FE")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode) testname("individual FE")
 
 webuse nlswork, clear
 keep in 1/10000
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode year) testname("two-way FE")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode year) testname("two-way FE")
 
 webuse nlswork, clear
 keep in 1/10000
-noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("three covariates")
+benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("three covariates")
 
 webuse nlswork, clear
 keep in 1/10000
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(robust) testname("robust")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(robust) testname("robust")
 
 webuse nlswork, clear
 keep in 1/10000
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("cluster idcode")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("cluster idcode")
 
 /*******************************************************************************
  * SECTION 7: Large dataset
  ******************************************************************************/
-noi print_section "Large Dataset"
+print_section "Large Dataset"
 
 clear
 set seed 12345
@@ -144,53 +134,53 @@ gen x2 = rnormal()
 gen x3 = runiformint(1, 100)
 gen y = 2*x1 + 3*x2 - 0.5*x3 + rnormal()
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id) testname("50K single FE")
+benchmark_reghdfe y x1 x2 x3, absorb(id) testname("50K single FE")
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id year) testname("50K two-way FE")
+benchmark_reghdfe y x1 x2 x3, absorb(id year) testname("50K two-way FE")
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K robust")
+benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K robust")
 
 /*******************************************************************************
  * SECTION 8: tolerance/maxiter options
  ******************************************************************************/
-noi print_section "tolerance/maxiter Options"
+print_section "tolerance/maxiter Options"
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) tolerance(1e-10)
 if _rc == 0 {
-    noi test_pass "tolerance(1e-10) accepted"
+    test_pass "tolerance(1e-10) accepted"
 }
 else {
-    noi test_fail "tolerance option" "returned error `=_rc'"
+    test_fail "tolerance option" "returned error `=_rc'"
 }
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) maxiter(1000)
 if _rc == 0 {
-    noi test_pass "maxiter(1000) accepted"
+    test_pass "maxiter(1000) accepted"
 }
 else {
-    noi test_fail "maxiter option" "returned error `=_rc'"
+    test_fail "maxiter option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 9: resid option
  ******************************************************************************/
-noi print_section "resid Option"
+print_section "resid Option"
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) resid
 if _rc == 0 {
     capture confirm variable _reghdfe_resid
     if _rc == 0 {
-        noi test_pass "resid option creates residual variable"
+        test_pass "resid option creates residual variable"
     }
     else {
-        noi test_fail "resid option" "residual variable not created"
+        test_fail "resid option" "residual variable not created"
     }
 }
 else {
-    noi test_fail "resid option" "returned error `=_rc'"
+    test_fail "resid option" "returned error `=_rc'"
 }
 
 sysuse auto, clear
@@ -198,43 +188,43 @@ capture creghdfe price mpg weight, absorb(foreign) resid2(myresid)
 if _rc == 0 {
     capture confirm variable myresid
     if _rc == 0 {
-        noi test_pass "resid2(name) creates named residual"
+        test_pass "resid2(name) creates named residual"
     }
     else {
-        noi test_fail "resid2(name)" "residual variable not created"
+        test_fail "resid2(name)" "residual variable not created"
     }
 }
 else {
-    noi test_fail "resid2 option" "returned error `=_rc'"
+    test_fail "resid2 option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 10: verbose/timeit options
  ******************************************************************************/
-noi print_section "verbose/timeit Options"
+print_section "verbose/timeit Options"
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) verbose
 if _rc == 0 {
-    noi test_pass "verbose option accepted"
+    test_pass "verbose option accepted"
 }
 else {
-    noi test_fail "verbose option" "returned error `=_rc'"
+    test_fail "verbose option" "returned error `=_rc'"
 }
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) timeit
 if _rc == 0 {
-    noi test_pass "timeit option accepted"
+    test_pass "timeit option accepted"
 }
 else {
-    noi test_fail "timeit option" "returned error `=_rc'"
+    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 11: if/in conditions
  ******************************************************************************/
-noi print_section "if/in Conditions"
+print_section "if/in Conditions"
 
 sysuse auto, clear
 reghdfe price mpg weight if price > 5000, absorb(foreign)
@@ -246,10 +236,10 @@ matrix creghdfe_b = e(b)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "if condition: N matches"
+    test_pass "if condition: N matches"
 }
 else {
-    noi test_fail "if condition" "N differs"
+    test_fail "if condition" "N differs"
 }
 
 sysuse auto, clear
@@ -260,30 +250,30 @@ creghdfe price mpg weight in 1/50, absorb(foreign)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "in condition: N matches"
+    test_pass "in condition: N matches"
 }
 else {
-    noi test_fail "in condition" "N differs"
+    test_fail "in condition" "N differs"
 }
 
 /*******************************************************************************
  * SECTION 12: nostandardize option
  ******************************************************************************/
-noi print_section "nostandardize Option"
+print_section "nostandardize Option"
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) nostandardize
 if _rc == 0 {
-    noi test_pass "nostandardize option accepted"
+    test_pass "nostandardize option accepted"
 }
 else {
-    noi test_fail "nostandardize option" "returned error `=_rc'"
+    test_fail "nostandardize option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 13: Edge cases - Singletons
  ******************************************************************************/
-noi print_section "Edge Cases - Singletons"
+print_section "Edge Cases - Singletons"
 
 * Single observation per FE group (all singletons)
 clear
@@ -296,10 +286,10 @@ gen y = x + rnormal()
 capture creghdfe y x, absorb(id)
 * With 100 obs and 100 unique IDs, all are singletons - expect error 2001 or graceful handling
 if _rc == 0 | _rc == 2001 {
-    noi test_pass "singleton FE handling (rc=`=_rc')"
+    test_pass "singleton FE handling (rc=`=_rc')"
 }
 else {
-    noi test_fail "singleton FE" "returned unexpected error `=_rc'"
+    test_fail "singleton FE" "returned unexpected error `=_rc'"
 }
 
 * Many singletons mixed with valid groups
@@ -313,10 +303,10 @@ gen y = x + rnormal()
 
 capture creghdfe y x, absorb(id)
 if _rc == 0 | _rc == 2001 {
-    noi test_pass "mixed singletons/groups (rc=`=_rc')"
+    test_pass "mixed singletons/groups (rc=`=_rc')"
 }
 else {
-    noi test_fail "mixed singletons" "returned unexpected error `=_rc'"
+    test_fail "mixed singletons" "returned unexpected error `=_rc'"
 }
 
 * Partial singletons in two-way FE
@@ -327,16 +317,16 @@ replace year_singleton = 1900 + _n if _n <= 100  // Create some singletons
 
 capture creghdfe ln_wage age tenure, absorb(idcode year_singleton)
 if _rc == 0 | _rc == 2001 {
-    noi test_pass "two-way FE with singletons (rc=`=_rc')"
+    test_pass "two-way FE with singletons (rc=`=_rc')"
 }
 else {
-    noi test_fail "two-way singletons" "returned unexpected error `=_rc'"
+    test_fail "two-way singletons" "returned unexpected error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 14: Edge cases - High-dimensional FE
  ******************************************************************************/
-noi print_section "Edge Cases - High-dimensional FE"
+print_section "Edge Cases - High-dimensional FE"
 
 * Many FE levels (1000 groups)
 clear
@@ -354,10 +344,10 @@ creghdfe y x1 x2, absorb(id)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "many FE levels (1000): N matches"
+    test_pass "many FE levels (1000): N matches"
 }
 else {
-    noi test_fail "many FE levels" "N differs"
+    test_fail "many FE levels" "N differs"
 }
 
 * Very high-dimensional two-way FE
@@ -369,7 +359,7 @@ gen id2 = runiformint(1, 400)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2) testname("high-dim two-way (500x400)")
+benchmark_reghdfe y x, absorb(id1 id2) testname("high-dim two-way (500x400)")
 
 * Three-way FE
 clear
@@ -381,12 +371,12 @@ gen id3 = runiformint(1, 20)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2 id3) testname("three-way FE (100x50x20)")
+benchmark_reghdfe y x, absorb(id1 id2 id3) testname("three-way FE (100x50x20)")
 
 /*******************************************************************************
  * SECTION 15: Edge cases - Unbalanced panels
  ******************************************************************************/
-noi print_section "Edge Cases - Unbalanced Panels"
+print_section "Edge Cases - Unbalanced Panels"
 
 * Highly unbalanced panel (varying group sizes)
 clear
@@ -408,9 +398,9 @@ gen year = runiformint(2000, 2020)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id) testname("unbalanced panel (varying group sizes)")
+benchmark_reghdfe y x, absorb(id) testname("unbalanced panel (varying group sizes)")
 
-noi benchmark_reghdfe y x, absorb(id year) testname("unbalanced two-way FE")
+benchmark_reghdfe y x, absorb(id year) testname("unbalanced two-way FE")
 
 * Extreme unbalance: one huge group, many small groups
 clear
@@ -424,16 +414,16 @@ gen y = x + rnormal()
 
 capture creghdfe y x, absorb(id)
 if _rc == 0 | _rc == 2001 {
-    noi test_pass "extreme unbalance (one huge, many tiny) rc=`=_rc'"
+    test_pass "extreme unbalance (one huge, many tiny) rc=`=_rc'"
 }
 else {
-    noi test_fail "extreme unbalance" "returned unexpected error `=_rc'"
+    test_fail "extreme unbalance" "returned unexpected error `=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 16: Edge cases - Missing values
  ******************************************************************************/
-noi print_section "Edge Cases - Missing Values"
+print_section "Edge Cases - Missing Values"
 
 * Missing values in dependent variable
 clear
@@ -451,10 +441,10 @@ creghdfe y x, absorb(id)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "missing in depvar: N matches (`reghdfe_N')"
+    test_pass "missing in depvar: N matches (`reghdfe_N')"
 }
 else {
-    noi test_fail "missing in depvar" "N differs: reghdfe=`reghdfe_N' creghdfe=`creghdfe_N'"
+    test_fail "missing in depvar" "N differs: reghdfe=`reghdfe_N' creghdfe=`creghdfe_N'"
 }
 
 * Missing values in independent variable
@@ -473,10 +463,10 @@ creghdfe y x, absorb(id)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "missing in indepvar: N matches (`reghdfe_N')"
+    test_pass "missing in indepvar: N matches (`reghdfe_N')"
 }
 else {
-    noi test_fail "missing in indepvar" "N differs"
+    test_fail "missing in indepvar" "N differs"
 }
 
 * Missing values in FE variable
@@ -495,10 +485,10 @@ creghdfe y x, absorb(id)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "missing in FE var: N matches (`reghdfe_N')"
+    test_pass "missing in FE var: N matches (`reghdfe_N')"
 }
 else {
-    noi test_fail "missing in FE var" "N differs"
+    test_fail "missing in FE var" "N differs"
 }
 
 * Many missing values (50% missing)
@@ -516,20 +506,20 @@ if _rc == 0 {
     creghdfe y x, absorb(id)
     local creghdfe_N = e(N)
     if `reghdfe_N' == `creghdfe_N' {
-        noi test_pass "50% missing: N matches (`reghdfe_N')"
+        test_pass "50% missing: N matches (`reghdfe_N')"
     }
     else {
-        noi test_fail "50% missing" "N differs"
+        test_fail "50% missing" "N differs"
     }
 }
 else {
-    noi test_pass "50% missing - both fail gracefully"
+    test_pass "50% missing - both fail gracefully"
 }
 
 /*******************************************************************************
  * SECTION 17: Edge cases - Perfect collinearity
  ******************************************************************************/
-noi print_section "Edge Cases - Perfect Collinearity"
+print_section "Edge Cases - Perfect Collinearity"
 
 * Collinear regressors
 clear
@@ -542,10 +532,10 @@ gen y = x1 + rnormal()
 
 capture creghdfe y x1 x2, absorb(id)
 if _rc == 0 {
-    noi test_pass "collinear regressors handled (dropped)"
+    test_pass "collinear regressors handled (dropped)"
 }
 else {
-    noi test_pass "collinear regressors - error gracefully (rc=`=_rc')"
+    test_pass "collinear regressors - error gracefully (rc=`=_rc')"
 }
 
 * Variable collinear with FE
@@ -559,75 +549,75 @@ gen y = x + rnormal()
 
 capture creghdfe y x fe_indicator, absorb(id)
 if _rc == 0 {
-    noi test_pass "regressor collinear with FE handled"
+    test_pass "regressor collinear with FE handled"
 }
 else {
-    noi test_pass "regressor collinear with FE - error gracefully (rc=`=_rc')"
+    test_pass "regressor collinear with FE - error gracefully (rc=`=_rc')"
 }
 
 /*******************************************************************************
  * SECTION 18: VCE options - comprehensive
  ******************************************************************************/
-noi print_section "VCE Options - Comprehensive"
+print_section "VCE Options - Comprehensive"
 
 * Large clusters
 webuse nlswork, clear
 keep in 1/15000
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("large clusters (many)")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("large clusters (many)")
 
 * Small clusters
 sysuse auto, clear
 gen cluster_var = ceil(_n / 10)  // ~7-8 clusters
-noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster cluster_var) testname("small clusters (few)")
+benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster cluster_var) testname("small clusters (few)")
 
 * Single cluster (extreme case)
 sysuse auto, clear
 gen single_cluster = 1
 capture creghdfe price mpg weight, absorb(foreign) vce(cluster single_cluster)
 if _rc != 0 {
-    noi test_pass "single cluster - fails gracefully (rc=`=_rc')"
+    test_pass "single cluster - fails gracefully (rc=`=_rc')"
 }
 else {
-    noi test_pass "single cluster - runs (may have warnings)"
+    test_pass "single cluster - runs (may have warnings)"
 }
 
 * Two clusters
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("two clusters (foreign)")
+benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster foreign) testname("two clusters (foreign)")
 
 * Robust with weights
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) vce(robust) testname("robust + aweight")
+benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) vce(robust) testname("robust + aweight")
 
 sysuse auto, clear
 gen fw = ceil(mpg/5)
-noi benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) vce(robust) testname("robust + fweight")
+benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) vce(robust) testname("robust + fweight")
 
 * Cluster with weights
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) vce(cluster foreign) testname("cluster + aweight")
+benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) vce(cluster foreign) testname("cluster + aweight")
 
 /*******************************************************************************
  * SECTION 19: Weight tests - comprehensive
  ******************************************************************************/
-noi print_section "Weight Tests - Comprehensive"
+print_section "Weight Tests - Comprehensive"
 
 * aweight with panel data
 webuse nlswork, clear
 keep in 1/5000
 gen aw_var = hours if !missing(hours)
 replace aw_var = 40 if missing(aw_var)
-noi benchmark_reghdfe ln_wage age tenure [aw=aw_var], absorb(idcode) testname("aweight panel")
+benchmark_reghdfe ln_wage age tenure [aw=aw_var], absorb(idcode) testname("aweight panel")
 
 * fweight with various values
 sysuse auto, clear
 gen fw_varied = ceil(price/1000)
-noi benchmark_reghdfe price mpg weight [fw=fw_varied], absorb(foreign) testname("fweight varied")
+benchmark_reghdfe price mpg weight [fw=fw_varied], absorb(foreign) testname("fweight varied")
 
 * pweight (survey weights)
 sysuse auto, clear
 gen pw_var = runiform() * 10 + 1
-noi benchmark_reghdfe price mpg weight [pw=pw_var], absorb(foreign) testname("pweight random")
+benchmark_reghdfe price mpg weight [pw=pw_var], absorb(foreign) testname("pweight random")
 
 * Large fweights
 clear
@@ -638,28 +628,28 @@ gen x = runiform()
 gen y = x + rnormal()
 gen fw = runiformint(1, 100)
 
-noi benchmark_reghdfe y x [fw=fw], absorb(id) testname("large fweights")
+benchmark_reghdfe y x [fw=fw], absorb(id) testname("large fweights")
 
 /*******************************************************************************
  * SECTION 20: Covariate variations
  ******************************************************************************/
-noi print_section "Covariate Variations"
+print_section "Covariate Variations"
 
 * Single covariate
 sysuse auto, clear
-noi benchmark_reghdfe price mpg, absorb(foreign) testname("1 covariate")
+benchmark_reghdfe price mpg, absorb(foreign) testname("1 covariate")
 
 * Two covariates
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight, absorb(foreign) testname("2 covariates")
+benchmark_reghdfe price mpg weight, absorb(foreign) testname("2 covariates")
 
 * Five covariates
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("5 covariates")
+benchmark_reghdfe price mpg weight length turn displacement, absorb(foreign) testname("5 covariates")
 
 * Many covariates
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight length turn displacement headroom trunk, absorb(foreign) testname("8 covariates")
+benchmark_reghdfe price mpg weight length turn displacement headroom trunk, absorb(foreign) testname("8 covariates")
 
 * Covariates with different scales
 clear
@@ -671,81 +661,81 @@ gen x_medium = runiform() * 100
 gen x_large = runiform() * 1000000
 gen y = x_small + x_medium + x_large + rnormal()
 
-noi benchmark_reghdfe y x_small x_medium x_large, absorb(id) testname("covariates different scales")
+benchmark_reghdfe y x_small x_medium x_large, absorb(id) testname("covariates different scales")
 
 /*******************************************************************************
  * SECTION 21: Additional sysuse/webuse datasets
  ******************************************************************************/
-noi print_section "Additional Built-in Datasets"
+print_section "Additional Built-in Datasets"
 
 * Grunfeld panel data
 capture webuse grunfeld, clear
 if _rc == 0 {
-    noi benchmark_reghdfe invest mvalue kstock, absorb(company) testname("grunfeld: company FE")
+    benchmark_reghdfe invest mvalue kstock, absorb(company) testname("grunfeld: company FE")
 
     webuse grunfeld, clear
-    noi benchmark_reghdfe invest mvalue kstock, absorb(company year) testname("grunfeld: two-way FE")
+    benchmark_reghdfe invest mvalue kstock, absorb(company year) testname("grunfeld: two-way FE")
 
     webuse grunfeld, clear
-    noi benchmark_reghdfe invest mvalue kstock, absorb(company) vce(robust) testname("grunfeld: robust")
+    benchmark_reghdfe invest mvalue kstock, absorb(company) vce(robust) testname("grunfeld: robust")
 
     webuse grunfeld, clear
-    noi benchmark_reghdfe invest mvalue kstock, absorb(company) vce(cluster company) testname("grunfeld: cluster company")
+    benchmark_reghdfe invest mvalue kstock, absorb(company) vce(cluster company) testname("grunfeld: cluster company")
 }
 else {
-    noi test_pass "grunfeld dataset not available - skipped"
+    test_pass "grunfeld dataset not available - skipped"
 }
 
 * Pig dataset
 capture webuse pig, clear
 if _rc == 0 {
-    noi benchmark_reghdfe weight week, absorb(id) testname("pig: individual FE")
+    benchmark_reghdfe weight week, absorb(id) testname("pig: individual FE")
 
     webuse pig, clear
-    noi benchmark_reghdfe weight week, absorb(id) vce(robust) testname("pig: robust")
+    benchmark_reghdfe weight week, absorb(id) vce(robust) testname("pig: robust")
 }
 else {
-    noi test_pass "pig dataset not available - skipped"
+    test_pass "pig dataset not available - skipped"
 }
 
 * bplong - blood pressure data
 capture webuse bplong, clear
 if _rc == 0 {
-    noi benchmark_reghdfe bp when, absorb(patient) testname("bplong: patient FE")
+    benchmark_reghdfe bp when, absorb(patient) testname("bplong: patient FE")
 
     webuse bplong, clear
-    noi benchmark_reghdfe bp when sex, absorb(patient) testname("bplong: with sex covariate")
+    benchmark_reghdfe bp when sex, absorb(patient) testname("bplong: with sex covariate")
 }
 else {
-    noi test_pass "bplong dataset not available - skipped"
+    test_pass "bplong dataset not available - skipped"
 }
 
 * cancer - survival data
 capture webuse cancer, clear
 if _rc == 0 {
     gen age_group = ceil(age / 10)
-    noi benchmark_reghdfe studytime age, absorb(drug) testname("cancer: drug FE")
+    benchmark_reghdfe studytime age, absorb(drug) testname("cancer: drug FE")
 }
 else {
-    noi test_pass "cancer dataset not available - skipped"
+    test_pass "cancer dataset not available - skipped"
 }
 
 * lifeexp - life expectancy
 capture webuse lifeexp, clear
 if _rc == 0 {
-    noi benchmark_reghdfe lexp gnppc, absorb(region) testname("lifeexp: region FE")
+    benchmark_reghdfe lexp gnppc, absorb(region) testname("lifeexp: region FE")
 
     webuse lifeexp, clear
-    noi benchmark_reghdfe lexp gnppc safewater, absorb(region) testname("lifeexp: two covariates")
+    benchmark_reghdfe lexp gnppc safewater, absorb(region) testname("lifeexp: two covariates")
 }
 else {
-    noi test_pass "lifeexp dataset not available - skipped"
+    test_pass "lifeexp dataset not available - skipped"
 }
 
 /*******************************************************************************
  * SECTION 22: Large datasets (50K, 100K)
  ******************************************************************************/
-noi print_section "Large Datasets (50K, 100K)"
+print_section "Large Datasets (50K, 100K)"
 
 * 50K observations
 clear
@@ -758,13 +748,13 @@ gen x2 = rnormal()
 gen x3 = runiform() * 100
 gen y = 2*x1 + 3*x2 - 0.5*x3 + rnormal()
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id) testname("50K obs, single FE")
+benchmark_reghdfe y x1 x2 x3, absorb(id) testname("50K obs, single FE")
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id year) testname("50K obs, two-way FE")
+benchmark_reghdfe y x1 x2 x3, absorb(id year) testname("50K obs, two-way FE")
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K obs, robust")
+benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K obs, robust")
 
-noi benchmark_reghdfe y x1 x2 x3, absorb(id) vce(cluster id) testname("50K obs, clustered")
+benchmark_reghdfe y x1 x2 x3, absorb(id) vce(cluster id) testname("50K obs, clustered")
 
 * 100K observations
 clear
@@ -776,14 +766,14 @@ gen x1 = runiform()
 gen x2 = rnormal()
 gen y = x1 + x2 + rnormal()
 
-noi benchmark_reghdfe y x1 x2, absorb(id) testname("100K obs, single FE")
+benchmark_reghdfe y x1 x2, absorb(id) testname("100K obs, single FE")
 
-noi benchmark_reghdfe y x1 x2, absorb(id year) testname("100K obs, two-way FE")
+benchmark_reghdfe y x1 x2, absorb(id year) testname("100K obs, two-way FE")
 
 /*******************************************************************************
  * SECTION 23: Pathological numeric values
  ******************************************************************************/
-noi print_section "Pathological - Numeric Values"
+print_section "Pathological - Numeric Values"
 
 * Very small values
 clear
@@ -795,10 +785,10 @@ gen y = x * 1e6 + rnormal() / 1e6
 
 capture creghdfe y x, absorb(id)
 if _rc == 0 {
-    noi test_pass "very small values"
+    test_pass "very small values"
 }
 else {
-    noi test_fail "very small values" "rc=`=_rc'"
+    test_fail "very small values" "rc=`=_rc'"
 }
 
 * Very large values
@@ -811,10 +801,10 @@ gen y = x / 1e6 + rnormal() * 1e3
 
 capture creghdfe y x, absorb(id)
 if _rc == 0 {
-    noi test_pass "very large values"
+    test_pass "very large values"
 }
 else {
-    noi test_fail "very large values" "rc=`=_rc'"
+    test_fail "very large values" "rc=`=_rc'"
 }
 
 * Mixed scale
@@ -828,10 +818,10 @@ gen y = x_tiny * 1e9 + x_huge / 1e9 + rnormal()
 
 capture creghdfe y x_tiny x_huge, absorb(id)
 if _rc == 0 {
-    noi test_pass "mixed scale (tiny and huge)"
+    test_pass "mixed scale (tiny and huge)"
 }
 else {
-    noi test_fail "mixed scale" "rc=`=_rc'"
+    test_fail "mixed scale" "rc=`=_rc'"
 }
 
 * All zeros in X
@@ -844,10 +834,10 @@ gen y = rnormal()
 
 capture creghdfe y x, absorb(id)
 if _rc != 0 {
-    noi test_pass "all zeros in X - fails gracefully (rc=`=_rc')"
+    test_pass "all zeros in X - fails gracefully (rc=`=_rc')"
 }
 else {
-    noi test_pass "all zeros in X - handled"
+    test_pass "all zeros in X - handled"
 }
 
 * Constant Y
@@ -860,16 +850,16 @@ gen y = 100  // Constant
 
 capture creghdfe y x, absorb(id)
 if _rc != 0 {
-    noi test_pass "constant Y - fails gracefully (rc=`=_rc')"
+    test_pass "constant Y - fails gracefully (rc=`=_rc')"
 }
 else {
-    noi test_pass "constant Y - handled"
+    test_pass "constant Y - handled"
 }
 
 /*******************************************************************************
  * SECTION 24: Sparse FE patterns
  ******************************************************************************/
-noi print_section "Pathological - Sparse FE Patterns"
+print_section "Pathological - Sparse FE Patterns"
 
 * Very sparse two-way FE (many possible cells, few filled)
 clear
@@ -880,7 +870,7 @@ gen id2 = runiformint(1, 200)  // 200 possible values
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2) testname("sparse two-way (500x200, 1K obs)")
+benchmark_reghdfe y x, absorb(id1 id2) testname("sparse two-way (500x200, 1K obs)")
 
 * Nested FE (id2 perfectly nested within id1)
 clear
@@ -893,16 +883,16 @@ gen y = x + rnormal()
 
 capture creghdfe y x, absorb(id1 id2)
 if _rc == 0 | _rc == 2001 {
-    noi test_pass "nested FE (id2 within id1) rc=`=_rc'"
+    test_pass "nested FE (id2 within id1) rc=`=_rc'"
 }
 else {
-    noi test_fail "nested FE" "unexpected error rc=`=_rc'"
+    test_fail "nested FE" "unexpected error rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION 25: Three-way FE comprehensive
  ******************************************************************************/
-noi print_section "Three-way Fixed Effects"
+print_section "Three-way Fixed Effects"
 
 * Basic three-way FE
 clear
@@ -914,7 +904,7 @@ gen id3 = runiformint(1, 20)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2 id3) testname("three-way FE basic")
+benchmark_reghdfe y x, absorb(id1 id2 id3) testname("three-way FE basic")
 
 * Three-way FE with robust
 clear
@@ -926,7 +916,7 @@ gen id3 = runiformint(1, 20)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2 id3) vce(robust) testname("three-way FE robust")
+benchmark_reghdfe y x, absorb(id1 id2 id3) vce(robust) testname("three-way FE robust")
 
 * Three-way FE with clustering
 clear
@@ -938,54 +928,54 @@ gen id3 = runiformint(1, 20)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id1 id2 id3) vce(cluster id1) testname("three-way FE clustered")
+benchmark_reghdfe y x, absorb(id1 id2 id3) vce(cluster id1) testname("three-way FE clustered")
 
 /*******************************************************************************
  * SECTION 26: Panel data variations from nlswork
  ******************************************************************************/
-noi print_section "Panel Data Variations (nlswork)"
+print_section "Panel Data Variations (nlswork)"
 
 * Full nlswork dataset
 webuse nlswork, clear
-noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("nlswork full: individual FE")
+benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("nlswork full: individual FE")
 
 webuse nlswork, clear
-noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode year) testname("nlswork full: two-way FE")
+benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode year) testname("nlswork full: two-way FE")
 
 webuse nlswork, clear
-noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(robust) testname("nlswork full: robust")
+benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(robust) testname("nlswork full: robust")
 
 webuse nlswork, clear
-noi benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(cluster idcode) testname("nlswork full: cluster idcode")
+benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(cluster idcode) testname("nlswork full: cluster idcode")
 
 * nlswork with industry FE
 webuse nlswork, clear
 keep if !missing(ind_code)
-noi benchmark_reghdfe ln_wage age tenure, absorb(ind_code) testname("nlswork: industry FE")
+benchmark_reghdfe ln_wage age tenure, absorb(ind_code) testname("nlswork: industry FE")
 
 webuse nlswork, clear
 keep if !missing(ind_code)
-noi benchmark_reghdfe ln_wage age tenure, absorb(idcode ind_code) testname("nlswork: individual + industry FE")
+benchmark_reghdfe ln_wage age tenure, absorb(idcode ind_code) testname("nlswork: individual + industry FE")
 
 /*******************************************************************************
  * SECTION 27: Combinations of options
  ******************************************************************************/
-noi print_section "Option Combinations"
+print_section "Option Combinations"
 
 * Two-way FE + robust + weights
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign rep78) vce(robust) testname("two-way + robust + aweight")
+benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign rep78) vce(robust) testname("two-way + robust + aweight")
 
 * Two-way FE + cluster + weights
 webuse nlswork, clear
 keep in 1/5000
 gen aw_var = hours if !missing(hours)
 replace aw_var = 40 if missing(aw_var)
-noi benchmark_reghdfe ln_wage age tenure [aw=aw_var], absorb(idcode year) vce(cluster idcode) testname("two-way + cluster + aweight")
+benchmark_reghdfe ln_wage age tenure [aw=aw_var], absorb(idcode year) vce(cluster idcode) testname("two-way + cluster + aweight")
 
 * if condition + weights
 sysuse auto, clear
-noi benchmark_reghdfe price mpg weight [aw=weight] if price > 5000, absorb(foreign) testname("if + aweight")
+benchmark_reghdfe price mpg weight [aw=weight] if price > 5000, absorb(foreign) testname("if + aweight")
 
 * in condition + robust
 sysuse auto, clear
@@ -996,16 +986,16 @@ creghdfe price mpg weight in 1/50, absorb(foreign) vce(robust)
 local creghdfe_N = e(N)
 
 if `reghdfe_N' == `creghdfe_N' {
-    noi test_pass "in + robust: N matches"
+    test_pass "in + robust: N matches"
 }
 else {
-    noi test_fail "in + robust" "N differs"
+    test_fail "in + robust" "N differs"
 }
 
 /*******************************************************************************
  * SECTION 28: Stress tests - extreme cases
  ******************************************************************************/
-noi print_section "Stress Tests"
+print_section "Stress Tests"
 
 * Maximum FE levels that fit in memory
 clear
@@ -1017,10 +1007,10 @@ gen y = x + rnormal()
 
 capture creghdfe y x, absorb(id)
 if _rc == 0 {
-    noi test_pass "10K FE levels (50K obs)"
+    test_pass "10K FE levels (50K obs)"
 }
 else {
-    noi test_fail "10K FE levels" "rc=`=_rc'"
+    test_fail "10K FE levels" "rc=`=_rc'"
 }
 
 * Many covariates (10)
@@ -1033,7 +1023,7 @@ forvalues i = 1/10 {
 }
 gen y = x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10 + rnormal()
 
-noi benchmark_reghdfe y x1 x2 x3 x4 x5 x6 x7 x8 x9 x10, absorb(id) testname("10 covariates")
+benchmark_reghdfe y x1 x2 x3 x4 x5 x6 x7 x8 x9 x10, absorb(id) testname("10 covariates")
 
 * Highly imbalanced clusters
 clear
@@ -1046,7 +1036,7 @@ gen id = runiformint(1, 200)
 gen x = runiform()
 gen y = x + rnormal()
 
-noi benchmark_reghdfe y x, absorb(id) vce(cluster cluster_id) testname("highly imbalanced clusters")
+benchmark_reghdfe y x, absorb(id) vce(cluster cluster_id) testname("highly imbalanced clusters")
 
 /*******************************************************************************
  * SECTION 29: Factor variables (i.varname)
@@ -1060,7 +1050,7 @@ noi benchmark_reghdfe y x, absorb(id) vce(cluster cluster_id) testname("highly i
  *   1. creghdfe runs without error on factor variable specifications
  *   2. Key results (N, r2, non-base coefficients) match reghdfe
  ******************************************************************************/
-noi print_section "Factor Variables"
+print_section "Factor Variables"
 
 * Basic factor variable with i.foreign (2 levels)
 sysuse auto, clear
@@ -1077,14 +1067,14 @@ if _rc == 0 {
     if _rc != 0 local creghdfe_coef_foreign = _b[foreign]
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < 1e-7 {
-        noi test_pass "i.foreign (2 levels)"
+        test_pass "i.foreign (2 levels)"
     }
     else {
-        noi test_fail "i.foreign (2 levels)" "N or r2 or coef differs"
+        test_fail "i.foreign (2 levels)" "N or r2 or coef differs"
     }
 }
 else {
-    noi test_fail "i.foreign (2 levels)" "creghdfe returned error `=_rc'"
+    test_fail "i.foreign (2 levels)" "creghdfe returned error `=_rc'"
 }
 
 * Factor variable with more levels - i.rep78 (5 levels)
@@ -1099,14 +1089,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.rep78 (5 levels)"
+        test_pass "i.rep78 (5 levels)"
     }
     else {
-        noi test_fail "i.rep78 (5 levels)" "N=`reghdfe_N'/`creghdfe_N' r2=`reghdfe_r2'/`creghdfe_r2'"
+        test_fail "i.rep78 (5 levels)" "N=`reghdfe_N'/`creghdfe_N' r2=`reghdfe_r2'/`creghdfe_r2'"
     }
 }
 else {
-    noi test_fail "i.rep78 (5 levels)" "creghdfe returned error `=_rc'"
+    test_fail "i.rep78 (5 levels)" "creghdfe returned error `=_rc'"
 }
 
 * Factor variable with robust SE
@@ -1121,14 +1111,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.foreign + robust"
+        test_pass "i.foreign + robust"
     }
     else {
-        noi test_fail "i.foreign + robust" "N or r2 differs"
+        test_fail "i.foreign + robust" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.foreign + robust" "creghdfe returned error `=_rc'"
+    test_fail "i.foreign + robust" "creghdfe returned error `=_rc'"
 }
 
 * Factor variable with clustering
@@ -1143,14 +1133,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.rep78 + cluster"
+        test_pass "i.rep78 + cluster"
     }
     else {
-        noi test_fail "i.rep78 + cluster" "N or r2 differs"
+        test_fail "i.rep78 + cluster" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.rep78 + cluster" "creghdfe returned error `=_rc'"
+    test_fail "i.rep78 + cluster" "creghdfe returned error `=_rc'"
 }
 
 * Factor variable with panel data
@@ -1166,14 +1156,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.race panel"
+        test_pass "i.race panel"
     }
     else {
-        noi test_fail "i.race panel" "N or r2 differs"
+        test_fail "i.race panel" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.race panel" "creghdfe returned error `=_rc'"
+    test_fail "i.race panel" "creghdfe returned error `=_rc'"
 }
 
 * Factor variable with two-way FE
@@ -1189,14 +1179,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.race two-way FE"
+        test_pass "i.race two-way FE"
     }
     else {
-        noi test_fail "i.race two-way FE" "N or r2 differs"
+        test_fail "i.race two-way FE" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.race two-way FE" "creghdfe returned error `=_rc'"
+    test_fail "i.race two-way FE" "creghdfe returned error `=_rc'"
 }
 
 * Continuous-by-factor interaction (c.var#i.var)
@@ -1211,14 +1201,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "c.mpg#i.foreign interaction"
+        test_pass "c.mpg#i.foreign interaction"
     }
     else {
-        noi test_fail "c.mpg#i.foreign" "N or r2 differs"
+        test_fail "c.mpg#i.foreign" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "c.mpg#i.foreign" "creghdfe returned error `=_rc'"
+    test_fail "c.mpg#i.foreign" "creghdfe returned error `=_rc'"
 }
 
 * Factor-by-factor interaction (i.var#i.var)
@@ -1233,14 +1223,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.race#i.married interaction"
+        test_pass "i.race#i.married interaction"
     }
     else {
-        noi test_fail "i.race#i.married" "N or r2 differs"
+        test_fail "i.race#i.married" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.race#i.married" "creghdfe returned error `=_rc'"
+    test_fail "i.race#i.married" "creghdfe returned error `=_rc'"
 }
 
 * Base level specification (ib#.var)
@@ -1255,14 +1245,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "ib3.rep78 (custom base level)"
+        test_pass "ib3.rep78 (custom base level)"
     }
     else {
-        noi test_fail "ib3.rep78" "N or r2 differs"
+        test_fail "ib3.rep78" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "ib3.rep78" "creghdfe returned error `=_rc'"
+    test_fail "ib3.rep78" "creghdfe returned error `=_rc'"
 }
 
 * Full factorial interaction (i.var##c.var)
@@ -1277,14 +1267,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.foreign##c.mpg full factorial"
+        test_pass "i.foreign##c.mpg full factorial"
     }
     else {
-        noi test_fail "i.foreign##c.mpg" "N or r2 differs"
+        test_fail "i.foreign##c.mpg" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "i.foreign##c.mpg" "creghdfe returned error `=_rc'"
+    test_fail "i.foreign##c.mpg" "creghdfe returned error `=_rc'"
 }
 
 * Multiple separate factor variables
@@ -1300,14 +1290,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "i.race i.union (multiple factors)"
+        test_pass "i.race i.union (multiple factors)"
     }
     else {
-        noi test_fail "multiple factors" "N or r2 differs"
+        test_fail "multiple factors" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "multiple factors" "creghdfe returned error `=_rc'"
+    test_fail "multiple factors" "creghdfe returned error `=_rc'"
 }
 
 /*******************************************************************************
@@ -1320,7 +1310,7 @@ else {
  * Tests verify that creghdfe matches reghdfe when using manually generated
  * lag/difference variables instead of time series operators.
  ******************************************************************************/
-noi print_section "Time Series Operators"
+print_section "Time Series Operators"
 
 * Test with manually created lag variable (workaround for L.)
 webuse grunfeld, clear
@@ -1340,14 +1330,14 @@ if _rc == 0 {
     local creghdfe_coef = _b[L_mvalue]
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
-        noi test_pass "manual lag (L.mvalue equivalent)"
+        test_pass "manual lag (L.mvalue equivalent)"
     }
     else {
-        noi test_fail "manual lag" "N or r2 or coef differs"
+        test_fail "manual lag" "N or r2 or coef differs"
     }
 }
 else {
-    noi test_fail "manual lag" "creghdfe returned error `=_rc'"
+    test_fail "manual lag" "creghdfe returned error `=_rc'"
 }
 
 * Test with multiple manually created lags
@@ -1366,14 +1356,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "manual multiple lags (L. L2. equivalent)"
+        test_pass "manual multiple lags (L. L2. equivalent)"
     }
     else {
-        noi test_fail "manual multiple lags" "N or r2 differs"
+        test_fail "manual multiple lags" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "manual multiple lags" "creghdfe returned error `=_rc'"
+    test_fail "manual multiple lags" "creghdfe returned error `=_rc'"
 }
 
 * Test with manually created difference variable (workaround for D.)
@@ -1393,14 +1383,14 @@ if _rc == 0 {
     local creghdfe_coef = _b[D_mvalue]
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
-        noi test_pass "manual difference (D.mvalue equivalent)"
+        test_pass "manual difference (D.mvalue equivalent)"
     }
     else {
-        noi test_fail "manual difference" "N or r2 or coef differs"
+        test_fail "manual difference" "N or r2 or coef differs"
     }
 }
 else {
-    noi test_fail "manual difference" "creghdfe returned error `=_rc'"
+    test_fail "manual difference" "creghdfe returned error `=_rc'"
 }
 
 * Test with manually created lead variable (workaround for F.)
@@ -1420,14 +1410,14 @@ if _rc == 0 {
     local creghdfe_coef = _b[F_mvalue]
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
-        noi test_pass "manual lead (F.mvalue equivalent)"
+        test_pass "manual lead (F.mvalue equivalent)"
     }
     else {
-        noi test_fail "manual lead" "N or r2 or coef differs"
+        test_fail "manual lead" "N or r2 or coef differs"
     }
 }
 else {
-    noi test_fail "manual lead" "creghdfe returned error `=_rc'"
+    test_fail "manual lead" "creghdfe returned error `=_rc'"
 }
 
 * Test with manually created lag + two-way FE
@@ -1445,14 +1435,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "manual lag + two-way FE"
+        test_pass "manual lag + two-way FE"
     }
     else {
-        noi test_fail "manual lag + two-way FE" "N or r2 differs"
+        test_fail "manual lag + two-way FE" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "manual lag + two-way FE" "creghdfe returned error `=_rc'"
+    test_fail "manual lag + two-way FE" "creghdfe returned error `=_rc'"
 }
 
 * Test with manually created lag + robust SE
@@ -1470,14 +1460,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "manual lag + robust"
+        test_pass "manual lag + robust"
     }
     else {
-        noi test_fail "manual lag + robust" "N or r2 differs"
+        test_fail "manual lag + robust" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "manual lag + robust" "creghdfe returned error `=_rc'"
+    test_fail "manual lag + robust" "creghdfe returned error `=_rc'"
 }
 
 * Test with manually created lag + clustering
@@ -1495,14 +1485,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "manual lag + cluster"
+        test_pass "manual lag + cluster"
     }
     else {
-        noi test_fail "manual lag + cluster" "N or r2 differs"
+        test_fail "manual lag + cluster" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "manual lag + cluster" "creghdfe returned error `=_rc'"
+    test_fail "manual lag + cluster" "creghdfe returned error `=_rc'"
 }
 
 * nlswork panel with manually created lag
@@ -1521,14 +1511,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "nlswork manual lag"
+        test_pass "nlswork manual lag"
     }
     else {
-        noi test_fail "nlswork manual lag" "N or r2 differs"
+        test_fail "nlswork manual lag" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "nlswork manual lag" "creghdfe returned error `=_rc'"
+    test_fail "nlswork manual lag" "creghdfe returned error `=_rc'"
 }
 
 * nlswork panel with manually created difference
@@ -1547,14 +1537,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "nlswork manual difference"
+        test_pass "nlswork manual difference"
     }
     else {
-        noi test_fail "nlswork manual difference" "N or r2 differs"
+        test_fail "nlswork manual difference" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "nlswork manual difference" "creghdfe returned error `=_rc'"
+    test_fail "nlswork manual difference" "creghdfe returned error `=_rc'"
 }
 
 * Direct L. operator error handling - verify appropriate error or handling
@@ -1562,11 +1552,11 @@ webuse grunfeld, clear
 xtset company year
 capture creghdfe invest L.mvalue kstock, absorb(company)
 if _rc != 0 {
-    noi test_pass "direct L.var error handling (rc=`=_rc')"
+    test_pass "direct L.var error handling (rc=`=_rc')"
 }
 else {
     * If it succeeds, verify results make sense (creghdfe may support direct TS operators)
-    noi test_pass "direct L.var accepted (N=`=e(N)')"
+    test_pass "direct L.var accepted (N=`=e(N)')"
 }
 
 * Direct D. operator error handling
@@ -1574,10 +1564,10 @@ webuse grunfeld, clear
 xtset company year
 capture creghdfe invest D.mvalue kstock, absorb(company)
 if _rc != 0 {
-    noi test_pass "direct D.var error handling (rc=`=_rc')"
+    test_pass "direct D.var error handling (rc=`=_rc')"
 }
 else {
-    noi test_pass "direct D.var accepted (N=`=e(N)')"
+    test_pass "direct D.var accepted (N=`=e(N)')"
 }
 
 * Direct F. operator error handling
@@ -1585,10 +1575,10 @@ webuse grunfeld, clear
 xtset company year
 capture creghdfe invest F.mvalue kstock, absorb(company)
 if _rc != 0 {
-    noi test_pass "direct F.var error handling (rc=`=_rc')"
+    test_pass "direct F.var error handling (rc=`=_rc')"
 }
 else {
-    noi test_pass "direct F.var accepted (N=`=e(N)')"
+    test_pass "direct F.var accepted (N=`=e(N)')"
 }
 
 * Lead and lag together
@@ -1607,14 +1597,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "lead and lag together"
+        test_pass "lead and lag together"
     }
     else {
-        noi test_fail "lead and lag together" "N or r2 differs"
+        test_fail "lead and lag together" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "lead and lag together" "creghdfe returned error `=_rc'"
+    test_fail "lead and lag together" "creghdfe returned error `=_rc'"
 }
 
 * Time series with factor variables
@@ -1632,14 +1622,14 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
 
     if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
-        noi test_pass "manual lag + i.company factor"
+        test_pass "manual lag + i.company factor"
     }
     else {
-        noi test_fail "lag + factor" "N or r2 differs"
+        test_fail "lag + factor" "N or r2 differs"
     }
 }
 else {
-    noi test_fail "lag + factor" "creghdfe returned error `=_rc'"
+    test_fail "lag + factor" "creghdfe returned error `=_rc'"
 }
 
 /*******************************************************************************
@@ -1650,7 +1640,7 @@ else {
  * accepted and variables are created, but values may not be stored correctly.
  * This is a pre-existing issue being tracked for future fixes.
  ******************************************************************************/
-noi print_section "New reghdfe-compatible Options"
+print_section "New reghdfe-compatible Options"
 
 * Test 1: residuals() alias for resid2() - syntax acceptance
 sysuse auto, clear
@@ -1658,14 +1648,14 @@ capture creghdfe price mpg weight, absorb(foreign) residuals(myresid)
 if _rc == 0 {
     capture confirm variable myresid
     if _rc == 0 {
-        noi test_pass "residuals() alias creates variable (syntax accepted)"
+        test_pass "residuals() alias creates variable (syntax accepted)"
     }
     else {
-        noi test_fail "residuals()" "variable not created"
+        test_fail "residuals()" "variable not created"
     }
 }
 else {
-    noi test_fail "residuals()" "returned error `=_rc'"
+    test_fail "residuals()" "returned error `=_rc'"
 }
 
 * Test 2: dofadjustments(none) - this affects scalar calculations which work
@@ -1677,14 +1667,14 @@ if _rc == 0 {
     local df_pair = e(df_a)
     * With dofadjustments(none), df_a should be >= pairwise (no mobility adjustment)
     if `df_none' >= `df_pair' {
-        noi test_pass "dofadjustments(none) >= pairwise df_a"
+        test_pass "dofadjustments(none) >= pairwise df_a"
     }
     else {
-        noi test_fail "dofadjustments" "df_a with none (`df_none') < pairwise (`df_pair')"
+        test_fail "dofadjustments" "df_a with none (`df_none') < pairwise (`df_pair')"
     }
 }
 else {
-    noi test_fail "dofadjustments(none)" "returned error `=_rc'"
+    test_fail "dofadjustments(none)" "returned error `=_rc'"
 }
 
 * Test 3: groupvar() - syntax acceptance (variable storage is a known limitation)
@@ -1693,14 +1683,14 @@ capture creghdfe price mpg weight, absorb(foreign rep78) groupvar(mobgroup)
 if _rc == 0 {
     capture confirm variable mobgroup
     if _rc == 0 {
-        noi test_pass "groupvar() syntax accepted (variable created)"
+        test_pass "groupvar() syntax accepted (variable created)"
     }
     else {
-        noi test_fail "groupvar()" "variable not created"
+        test_fail "groupvar()" "variable not created"
     }
 }
 else {
-    noi test_fail "groupvar()" "returned error `=_rc'"
+    test_fail "groupvar()" "returned error `=_rc'"
 }
 
 * Test 4: savefe - syntax acceptance (variable storage is a known limitation)
@@ -1712,33 +1702,33 @@ if _rc == 0 {
     capture confirm variable __hdfe2__
     local fe2_exists = (_rc == 0)
     if `fe1_exists' & `fe2_exists' {
-        noi test_pass "savefe syntax accepted (FE variables created)"
+        test_pass "savefe syntax accepted (FE variables created)"
     }
     else {
-        noi test_fail "savefe" "FE variables not created (fe1=`fe1_exists' fe2=`fe2_exists')"
+        test_fail "savefe" "FE variables not created (fe1=`fe1_exists' fe2=`fe2_exists')"
     }
 }
 else {
-    noi test_fail "savefe" "returned error `=_rc'"
+    test_fail "savefe" "returned error `=_rc'"
 }
 
 * Test 5: dofadjustments variants - all should be accepted
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign rep78) dofadjustments(all)
 if _rc == 0 {
-    noi test_pass "dofadjustments(all) accepted"
+    test_pass "dofadjustments(all) accepted"
 }
 else {
-    noi test_fail "dofadjustments(all)" "returned error `=_rc'"
+    test_fail "dofadjustments(all)" "returned error `=_rc'"
 }
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign rep78) dofadjustments(firstpair)
 if _rc == 0 {
-    noi test_pass "dofadjustments(firstpair) accepted"
+    test_pass "dofadjustments(firstpair) accepted"
 }
 else {
-    noi test_fail "dofadjustments(firstpair)" "returned error `=_rc'"
+    test_fail "dofadjustments(firstpair)" "returned error `=_rc'"
 }
 
 * Test 6: Multiple new options together - syntax acceptance
@@ -1757,24 +1747,19 @@ if _rc == 0 {
     if _rc != 0 local all_exist = 0
 
     if `all_exist' {
-        noi test_pass "multiple new options syntax accepted (all variables created)"
+        test_pass "multiple new options syntax accepted (all variables created)"
     }
     else {
-        noi test_fail "multiple options" "not all variables created"
+        test_fail "multiple options" "not all variables created"
     }
 }
 else {
-    noi test_fail "multiple options" "returned error `=_rc'"
+    test_fail "multiple options" "returned error `=_rc'"
 }
 
 /*******************************************************************************
  * Summary
  ******************************************************************************/
 
-noi print_summary "creghdfe"
-
-if $TESTS_FAILED > 0 {
-    exit 1
-}
-
+* End of creghdfe validation
 }

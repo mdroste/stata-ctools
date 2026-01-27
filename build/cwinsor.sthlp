@@ -11,6 +11,10 @@
 {phang}
 {bf:cwinsor} {hline 2} C-accelerated parallel winsorization for Stata variables
 
+{pstd}
+{cmd:cwinsor} is a high-performance replacement for {cmd:winsor2} by Yujun Lian
+({browse "https://ideas.repec.org/c/boc/bocode/s457765.html":SSC}).
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -243,11 +247,22 @@ optimal performance.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
+
+
+{title:Acknowledgments}
+
+{pstd}
+This command provides similar functionality to {cmd:winsor2} by Yujun Lian.
+The original {cmd:winsor2} package is available from SSC:
+{browse "https://ideas.repec.org/c/boc/bocode/s457765.html"}. We thank Yujun Lian
+for his useful contribution to the Stata community.
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help winsor2} (if installed), {help summarize}, {help centile}, {help pctile}, {help ctools}
+Online: {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2} (if installed),
+{help summarize}, {help centile}, {help pctile}, {help ctools}
 {p_end}

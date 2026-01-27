@@ -15,11 +15,6 @@ if _rc != 0 {
 
 quietly {
 
-di as text ""
-di as text "======================================================================"
-di as text "              CIMPORT DELIMITED VALIDATION TEST SUITE"
-di as text "======================================================================"
-
 capture mkdir "temp"
 
 /*******************************************************************************
@@ -68,7 +63,7 @@ program define benchmark_import
     * Import with Stata's import delimited (with varnames(1) to match cimport)
     capture import delimited `using', `stata_opts' clear
     if _rc != 0 {
-        noi test_fail "`testname'" "Stata import failed with rc=`=_rc'"
+        test_fail "`testname'" "Stata import failed with rc=`=_rc'"
         exit
     }
     tempfile stata_data
@@ -79,7 +74,7 @@ program define benchmark_import
     * Import with cimport delimited (uses first row as headers by default)
     capture cimport delimited `using', `importopts' clear
     if _rc != 0 {
-        noi test_fail "`testname'" "cimport failed with rc=`=_rc'"
+        test_fail "`testname'" "cimport failed with rc=`=_rc'"
         exit
     }
     tempfile cimport_data
@@ -89,7 +84,7 @@ program define benchmark_import
 
     * Check dimensions first
     if `stata_n' != `cimport_n' | `stata_k' != `cimport_k' {
-        noi test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
+        test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
         exit
     }
 
@@ -120,10 +115,10 @@ program define benchmark_import
     * Compare data (without sorting - both should be in same order)
     capture cf _all using `stata_renamed'
     if _rc == 0 {
-        noi test_pass "`testname'"
+        test_pass "`testname'"
     }
     else {
-        noi test_fail "`testname'" "cf _all comparison failed - data not identical"
+        test_fail "`testname'" "cf _all comparison failed - data not identical"
     }
 end
 
@@ -142,19 +137,19 @@ program define cimport_test
 
     capture cimport delimited `using', `importopts' clear
     if _rc != 0 {
-        noi test_fail "`testname'" "rc=`=_rc'"
+        test_fail "`testname'" "rc=`=_rc'"
         exit
     }
 
     * Check expected row count
     if `expectn' > 0 & _N != `expectn' {
-        noi test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
+        test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
         exit
     }
 
     * Check expected column count
     if `expectk' > 0 & c(k) != `expectk' {
-        noi test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
+        test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
         exit
     }
 
@@ -162,12 +157,12 @@ program define cimport_test
     if "`check'" != "" {
         capture assert `check'
         if _rc != 0 {
-            noi test_fail "`testname'" "check() failed: `check'"
+            test_fail "`testname'" "check() failed: `check'"
             exit
         }
     }
 
-    noi test_pass "`testname'"
+    test_pass "`testname'"
 end
 
 /*******************************************************************************
@@ -181,38 +176,38 @@ if _rc != 0 {
 /*******************************************************************************
  * SECTION: Plugin Check
  ******************************************************************************/
-noi print_section "Plugin Check"
+print_section "Plugin Check"
 
 capture cimport delimited using "temp/basic.csv", clear
 if _rc != 0 {
-    noi test_fail "cimport plugin load" "returned error `=_rc'"
-    noi print_summary "cimport"
+    test_fail "cimport plugin load" "returned error `=_rc'"
+    print_summary "cimport"
     exit 1
 }
-noi test_pass "cimport plugin loads and runs"
+test_pass "cimport plugin loads and runs"
 
 /*******************************************************************************
  * SECTION: Basic Import Comparison
  ******************************************************************************/
-noi print_section "Basic Import Comparison"
+print_section "Basic Import Comparison"
 
-noi benchmark_import using "temp/basic.csv", testname("basic CSV")
+benchmark_import using "temp/basic.csv", testname("basic CSV")
 
 /*******************************************************************************
  * SECTION: Delimiter Options
  ******************************************************************************/
-noi print_section "Delimiter Options"
+print_section "Delimiter Options"
 
-noi benchmark_import using "temp/tab_delim.tsv", testname("tab delimiter") importopts(delimiters(tab))
-noi benchmark_import using "temp/semicolon.csv", testname("semicolon delimiter") importopts(delimiters(";"))
+benchmark_import using "temp/tab_delim.tsv", testname("tab delimiter") importopts(delimiters(tab))
+benchmark_import using "temp/semicolon.csv", testname("semicolon delimiter") importopts(delimiters(";"))
 
 /*******************************************************************************
  * SECTION: varnames Options
  ******************************************************************************/
-noi print_section "varnames Options"
+print_section "varnames Options"
 
-noi benchmark_import using "temp/noheader.csv", testname("varnames(nonames)") importopts(varnames(nonames))
-noi benchmark_import using "temp/basic.csv", testname("varnames(1)") importopts(varnames(1))
+benchmark_import using "temp/noheader.csv", testname("varnames(nonames)") importopts(varnames(nonames))
+benchmark_import using "temp/basic.csv", testname("varnames(1)") importopts(varnames(1))
 
 * Create test file with header on row 3
 file open fh using "temp/varnames_row3.csv", write replace
@@ -223,45 +218,45 @@ file write fh "Alice,100" _n
 file write fh "Bob,200" _n
 file close fh
 
-noi benchmark_import using "temp/varnames_row3.csv", testname("varnames(3)") importopts(varnames(3))
+benchmark_import using "temp/varnames_row3.csv", testname("varnames(3)") importopts(varnames(3))
 
 /*******************************************************************************
  * SECTION: case Options
  ******************************************************************************/
-noi print_section "case Options"
+print_section "case Options"
 
-noi benchmark_import using "temp/mixedcase.csv", testname("case(preserve)") importopts(case(preserve))
-noi benchmark_import using "temp/mixedcase.csv", testname("case(lower)") importopts(case(lower))
-noi benchmark_import using "temp/mixedcase.csv", testname("case(upper)") importopts(case(upper))
+benchmark_import using "temp/mixedcase.csv", testname("case(preserve)") importopts(case(preserve))
+benchmark_import using "temp/mixedcase.csv", testname("case(lower)") importopts(case(lower))
+benchmark_import using "temp/mixedcase.csv", testname("case(upper)") importopts(case(upper))
 
 /*******************************************************************************
  * SECTION: Quoted Fields
  ******************************************************************************/
-noi print_section "Quoted Fields"
+print_section "Quoted Fields"
 
-noi benchmark_import using "temp/quoted.csv", testname("quoted fields with commas")
-noi benchmark_import using "temp/quoted.csv", testname("bindquotes(strict)") importopts(bindquotes(strict))
+benchmark_import using "temp/quoted.csv", testname("quoted fields with commas")
+benchmark_import using "temp/quoted.csv", testname("bindquotes(strict)") importopts(bindquotes(strict))
 
 /*******************************************************************************
  * SECTION: Numeric Type Handling
  ******************************************************************************/
-noi print_section "Numeric Type Handling"
+print_section "Numeric Type Handling"
 
-noi benchmark_import using "temp/numerics.csv", testname("numeric types")
-noi benchmark_import using "temp/numerics.csv", testname("asfloat") importopts(asfloat)
-noi benchmark_import using "temp/numerics.csv", testname("asdouble") importopts(asdouble)
+benchmark_import using "temp/numerics.csv", testname("numeric types")
+benchmark_import using "temp/numerics.csv", testname("asfloat") importopts(asfloat)
+benchmark_import using "temp/numerics.csv", testname("asdouble") importopts(asdouble)
 
 /*******************************************************************************
  * SECTION: Missing Values
  ******************************************************************************/
-noi print_section "Missing Values"
+print_section "Missing Values"
 
-noi benchmark_import using "temp/missing.csv", testname("missing values")
+benchmark_import using "temp/missing.csv", testname("missing values")
 
 /*******************************************************************************
  * SECTION: stringcols/numericcols Options
  ******************************************************************************/
-noi print_section "stringcols/numericcols Options"
+print_section "stringcols/numericcols Options"
 
 * stringcols preserves leading zeros
 capture cimport delimited using "temp/zipcodes.csv", stringcols(1) clear
@@ -270,38 +265,38 @@ if _rc == 0 {
     capture confirm string variable zipcode
     if _rc == 0 {
         if zipcode[1] == "01234" {
-            noi test_pass "stringcols preserves leading zeros"
+            test_pass "stringcols preserves leading zeros"
         }
         else {
-            noi test_fail "stringcols" "leading zeros not preserved (got `=zipcode[1]')"
+            test_fail "stringcols" "leading zeros not preserved (got `=zipcode[1]')"
         }
     }
     else {
-        noi test_fail "stringcols" "zipcode is not string type"
+        test_fail "stringcols" "zipcode is not string type"
     }
 }
 else {
-    noi test_fail "stringcols" "cimport failed with rc=`=_rc'"
+    test_fail "stringcols" "cimport failed with rc=`=_rc'"
 }
 
-noi benchmark_import using "temp/basic.csv", testname("numericcols forces numeric") ///
+benchmark_import using "temp/basic.csv", testname("numericcols forces numeric") ///
     importopts(numericcols(2))
 
-noi benchmark_import using "temp/zipcodes.csv", testname("stringcols multiple columns") ///
+benchmark_import using "temp/zipcodes.csv", testname("stringcols multiple columns") ///
     importopts(stringcols(1 3))
 
 /*******************************************************************************
  * SECTION: decimalseparator/groupseparator Options
  ******************************************************************************/
-noi print_section "decimalseparator/groupseparator Options"
+print_section "decimalseparator/groupseparator Options"
 
 * European format test
 capture cimport delimited using "temp/european.csv", delimiters(";") decimalseparator(,) groupseparator(.) clear
 if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
-    noi test_pass "European format"
+    test_pass "European format"
 }
 else {
-    noi test_fail "European format" "decimal parsing failed"
+    test_fail "European format" "decimal parsing failed"
 }
 
 * Decimal separator with semicolon delimiter
@@ -313,16 +308,16 @@ file close fh
 
 capture cimport delimited using "temp/comma_decimal.csv", delimiters(";") decimalseparator(,) clear
 if _rc == 0 & abs(value[1] - 123.45) < 0.01 {
-    noi test_pass "decimalseparator only"
+    test_pass "decimalseparator only"
 }
 else {
-    noi test_fail "decimalseparator only" "expected 123.45, got `=value[1]'"
+    test_fail "decimalseparator only" "expected 123.45, got `=value[1]'"
 }
 
 /*******************************************************************************
  * SECTION: locale and parselocale Options
  ******************************************************************************/
-noi print_section "locale and parselocale Options"
+print_section "locale and parselocale Options"
 
 * Test German locale (comma decimal, period grouping)
 file open fh using "temp/german_numbers.csv", write replace
@@ -333,10 +328,10 @@ file close fh
 
 capture cimport delimited using "temp/german_numbers.csv", delimiters(";") locale(de_DE) parselocale clear
 if _rc == 0 & abs(betrag[1] - 1234.56) < 0.01 {
-    noi test_pass "German locale (de_DE)"
+    test_pass "German locale (de_DE)"
 }
 else {
-    noi test_fail "German locale" "expected 1234.56, got `=betrag[1]' (rc=`=_rc')"
+    test_fail "German locale" "expected 1234.56, got `=betrag[1]' (rc=`=_rc')"
 }
 
 * Test French locale (comma decimal, space grouping)
@@ -348,10 +343,10 @@ file close fh
 
 capture cimport delimited using "temp/french_numbers.csv", delimiters(";") locale(fr_FR) parselocale clear
 if _rc == 0 & abs(montant[1] - 1234.56) < 0.01 {
-    noi test_pass "French locale (fr_FR)"
+    test_pass "French locale (fr_FR)"
 }
 else {
-    noi test_fail "French locale" "expected 1234.56, got `=montant[1]' (rc=`=_rc')"
+    test_fail "French locale" "expected 1234.56, got `=montant[1]' (rc=`=_rc')"
 }
 
 * Test Swiss locale (period decimal, apostrophe grouping)
@@ -363,10 +358,10 @@ file close fh
 
 capture cimport delimited using "temp/swiss_numbers.csv", locale(de_CH) parselocale clear
 if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
-    noi test_pass "Swiss locale (de_CH)"
+    test_pass "Swiss locale (de_CH)"
 }
 else {
-    noi test_fail "Swiss locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+    test_fail "Swiss locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
 }
 
 * Test US locale (period decimal, comma grouping)
@@ -378,28 +373,28 @@ file close fh
 
 capture cimport delimited using "temp/us_numbers.csv", locale(en_US) parselocale clear
 if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
-    noi test_pass "US locale (en_US)"
+    test_pass "US locale (en_US)"
 }
 else {
-    noi test_fail "US locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+    test_fail "US locale" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
 }
 
 * Test parselocale without explicit locale (uses default)
 capture cimport delimited using "temp/us_numbers.csv", parselocale clear
 if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
-    noi test_pass "parselocale without locale (default)"
+    test_pass "parselocale without locale (default)"
 }
 else {
-    noi test_fail "parselocale default" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+    test_fail "parselocale default" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
 }
 
 * Test locale option alone (without parselocale) - should not affect parsing
 capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) clear
 if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
-    noi test_pass "locale without parselocale (no effect)"
+    test_pass "locale without parselocale (no effect)"
 }
 else {
-    noi test_fail "locale alone" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
+    test_fail "locale alone" "expected 1234.56, got `=amount[1]' (rc=`=_rc')"
 }
 
 * Test Italian locale
@@ -411,32 +406,32 @@ file close fh
 
 capture cimport delimited using "temp/italian_numbers.csv", delimiters(";") locale(it_IT) parselocale clear
 if _rc == 0 & abs(prezzo[1] - 1234.56) < 0.01 {
-    noi test_pass "Italian locale (it_IT)"
+    test_pass "Italian locale (it_IT)"
 }
 else {
-    noi test_fail "Italian locale" "expected 1234.56, got `=prezzo[1]' (rc=`=_rc')"
+    test_fail "Italian locale" "expected 1234.56, got `=prezzo[1]' (rc=`=_rc')"
 }
 
 * Test unknown locale (should warn but continue)
 capture cimport delimited using "temp/us_numbers.csv", locale(xx_XX) parselocale clear
 if _rc == 0 {
-    noi test_pass "unknown locale handled gracefully"
+    test_pass "unknown locale handled gracefully"
 }
 else {
-    noi test_fail "unknown locale" "rc=`=_rc'"
+    test_fail "unknown locale" "rc=`=_rc'"
 }
 
 /*******************************************************************************
  * SECTION: colrange Option (additional tests)
  ******************************************************************************/
-noi print_section "colrange Option - Additional Tests"
+print_section "colrange Option - Additional Tests"
 
 * Test colrange with start only
-noi benchmark_import using "temp/range_test.csv", testname("colrange(3:) from col 3 to end") ///
+benchmark_import using "temp/range_test.csv", testname("colrange(3:) from col 3 to end") ///
     importopts(colrange(3:))
 
 * Test colrange with end only
-noi benchmark_import using "temp/range_test.csv", testname("colrange(:3) first 3 cols") ///
+benchmark_import using "temp/range_test.csv", testname("colrange(:3) first 3 cols") ///
     importopts(colrange(:3))
 
 * Test single column (colrange(3:3) means column 3 only)
@@ -448,56 +443,56 @@ file close fh
 
 capture cimport delimited using "temp/wide_cols.csv", colrange(3:3) clear
 if _rc == 0 & c(k) == 1 {
-    noi test_pass "colrange single column (3:3)"
+    test_pass "colrange single column (3:3)"
 }
 else {
-    noi test_fail "colrange single (3:3)" "expected 1 col, got `=c(k)' (rc=`=_rc')"
+    test_fail "colrange single (3:3)" "expected 1 col, got `=c(k)' (rc=`=_rc')"
 }
 
 * Test colrange(N) = columns N to end (same as N:)
 capture cimport delimited using "temp/wide_cols.csv", colrange(3) clear
 if _rc == 0 & c(k) == 3 {
-    noi test_pass "colrange(3) = cols 3 to end"
+    test_pass "colrange(3) = cols 3 to end"
 }
 else {
-    noi test_fail "colrange(3)" "expected 3 cols, got `=c(k)' (rc=`=_rc')"
+    test_fail "colrange(3)" "expected 3 cols, got `=c(k)' (rc=`=_rc')"
 }
 
 /*******************************************************************************
  * SECTION: threads Option
  ******************************************************************************/
-noi print_section "threads Option"
+print_section "threads Option"
 
-noi cimport_test using "temp/basic.csv", testname("threads(2)") importopts(threads(2)) expectn(5)
-noi cimport_test using "temp/basic.csv", testname("threads(1)") importopts(threads(1)) expectn(5)
+cimport_test using "temp/basic.csv", testname("threads(2)") importopts(threads(2)) expectn(5)
+cimport_test using "temp/basic.csv", testname("threads(1)") importopts(threads(1)) expectn(5)
 
 /*******************************************************************************
  * SECTION: rowrange Option
  ******************************************************************************/
-noi print_section "rowrange Option"
+print_section "rowrange Option"
 
-noi benchmark_import using "temp/range_test.csv", testname("rowrange(10:20)") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange(10:20)") ///
     importopts(rowrange(10:20))
 
-noi benchmark_import using "temp/range_test.csv", testname("rowrange(50:) to end") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange(50:) to end") ///
     importopts(rowrange(50:))
 
 /*******************************************************************************
  * SECTION: colrange Option
  ******************************************************************************/
-noi print_section "colrange Option"
+print_section "colrange Option"
 
-noi benchmark_import using "temp/range_test.csv", testname("colrange(2:4)") ///
+benchmark_import using "temp/range_test.csv", testname("colrange(2:4)") ///
     importopts(colrange(2:4))
 
 /*******************************************************************************
  * SECTION: Encoding Options
  ******************************************************************************/
-noi print_section "Encoding Options"
+print_section "Encoding Options"
 
 * Test 1-2: UTF-8 basic
-noi benchmark_import using "temp/basic.csv", testname("UTF-8 auto-detection")
-noi benchmark_import using "temp/basic.csv", testname("encoding(utf-8) explicit") importopts(encoding(utf-8))
+benchmark_import using "temp/basic.csv", testname("UTF-8 auto-detection")
+benchmark_import using "temp/basic.csv", testname("encoding(utf-8) explicit") importopts(encoding(utf-8))
 
 * Test 3: UTF-8 international characters
 file open fh using "temp/utf8_special.csv", write replace
@@ -506,7 +501,7 @@ file write fh "Jose Garcia,Sao Paulo" _n
 file write fh "Francois Muller,Zurich" _n
 file close fh
 
-noi benchmark_import using "temp/utf8_special.csv", testname("UTF-8 international chars")
+benchmark_import using "temp/utf8_special.csv", testname("UTF-8 international chars")
 
 * Test 4: UTF-8 with BOM
 file open fh using "temp/utf8_bom.csv", write replace
@@ -519,10 +514,10 @@ file close fh
 capture cimport delimited using "temp/utf8_bom.csv", clear
 capture confirm variable id
 if _rc == 0 & _N == 2 {
-    noi test_pass "UTF-8 with BOM (skipped correctly)"
+    test_pass "UTF-8 with BOM (skipped correctly)"
 }
 else {
-    noi test_fail "UTF-8 BOM" "BOM not skipped"
+    test_fail "UTF-8 BOM" "BOM not skipped"
 }
 
 * Test 5-8: Various encoding options accepted
@@ -531,16 +526,16 @@ file write fh "name,value" _n
 file write fh "caf" _char(233) ",100" _n
 file close fh
 
-noi benchmark_import using "temp/latin1_test.csv", testname("encoding(latin1)") importopts(encoding(latin1))
+benchmark_import using "temp/latin1_test.csv", testname("encoding(latin1)") importopts(encoding(latin1))
 
 file open fh using "temp/cp1252_test.csv", write replace
 file write fh "text,value" _n
 file write fh _char(147) "quoted" _char(148) ",100" _n
 file close fh
 
-noi benchmark_import using "temp/cp1252_test.csv", testname("encoding(windows-1252)") importopts(encoding(windows-1252))
-noi benchmark_import using "temp/basic.csv", testname("encoding(latin9)") importopts(encoding(latin9))
-noi benchmark_import using "temp/basic.csv", testname("encoding(ascii)") importopts(encoding(ascii))
+benchmark_import using "temp/cp1252_test.csv", testname("encoding(windows-1252)") importopts(encoding(windows-1252))
+benchmark_import using "temp/basic.csv", testname("encoding(latin9)") importopts(encoding(latin9))
+benchmark_import using "temp/basic.csv", testname("encoding(ascii)") importopts(encoding(ascii))
 
 * Test 9: MacRoman
 file open fh using "temp/macroman_test.csv", write replace
@@ -548,7 +543,7 @@ file write fh "text,value" _n
 file write fh _char(138) _char(140) ",100" _n
 file close fh
 
-noi benchmark_import using "temp/macroman_test.csv", testname("encoding(macroman)") importopts(encoding(macroman))
+benchmark_import using "temp/macroman_test.csv", testname("encoding(macroman)") importopts(encoding(macroman))
 
 * Note: UTF-8 auto-detection test removed - Stata's import delimited has a bug
 * where auto-detection fails in batch mode (inside quietly blocks), causing
@@ -563,19 +558,19 @@ file close fh
 
 capture cimport delimited using "temp/utf16le_bom.csv", clear
 if _rc == 0 {
-    noi test_pass "UTF-16LE with BOM"
+    test_pass "UTF-16LE with BOM"
 }
 else {
-    noi test_fail "UTF-16LE BOM" "rc=`=_rc'"
+    test_fail "UTF-16LE BOM" "rc=`=_rc'"
 }
 
 * Test 12: Verbose shows encoding
 capture cimport delimited using "temp/basic.csv", clear verbose
 if _rc == 0 {
-    noi test_pass "encoding with verbose mode"
+    test_pass "encoding with verbose mode"
 }
 else {
-    noi test_fail "verbose encoding" "rc=`=_rc'"
+    test_fail "verbose encoding" "rc=`=_rc'"
 }
 
 * Test 13: Comparison with Stata
@@ -585,7 +580,7 @@ file write fh "Cafe,100" _n
 file write fh "Naive,200" _n
 file close fh
 
-noi benchmark_import using "temp/compare_enc.csv", testname("encoding: matches Stata") importopts(encoding(utf-8))
+benchmark_import using "temp/compare_enc.csv", testname("encoding: matches Stata") importopts(encoding(utf-8))
 
 * Test 14: Case variations
 capture cimport delimited using "temp/basic.csv", clear encoding(UTF-8)
@@ -596,19 +591,19 @@ capture cimport delimited using "temp/basic.csv", clear encoding(utf8)
 local rc3 = _rc
 
 if `rc1' == 0 & `rc2' == 0 & `rc3' == 0 {
-    noi test_pass "encoding name case variations"
+    test_pass "encoding name case variations"
 }
 else {
-    noi test_fail "encoding case" "some variants failed"
+    test_fail "encoding case" "some variants failed"
 }
 
 * Test 15: Large file with encoding
-noi benchmark_import using "temp/large_10k.csv", testname("large file UTF-8 (10K rows)")
+benchmark_import using "temp/large_10k.csv", testname("large file UTF-8 (10K rows)")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Empty and Minimal Files
  ******************************************************************************/
-noi print_section "Pathological Data - Empty/Minimal Files"
+print_section "Pathological Data - Empty/Minimal Files"
 
 * Empty file (0 bytes) - compare with Stata's behavior
 capture import delimited using "temp/empty_file.csv", clear
@@ -616,40 +611,40 @@ local stata_rc = _rc
 capture cimport delimited using "temp/empty_file.csv", clear
 local cimport_rc = _rc
 if `stata_rc' == `cimport_rc' {
-    noi test_pass "empty file (0 bytes) - matches Stata behavior"
+    test_pass "empty file (0 bytes) - matches Stata behavior"
 }
 else {
-    noi test_fail "empty file" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
+    test_fail "empty file" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Header only (no data rows)
 capture cimport delimited using "temp/header_only.csv", clear
 if _rc == 0 {
     if _N == 0 {
-        noi test_pass "header only (no data) - N=0"
+        test_pass "header only (no data) - N=0"
     }
     else {
-        noi test_pass "header only (no data) - imported N=`=_N'"
+        test_pass "header only (no data) - imported N=`=_N'"
     }
 }
 else {
-    noi test_pass "header only (no data) - handled gracefully (rc=`=_rc')"
+    test_pass "header only (no data) - handled gracefully (rc=`=_rc')"
 }
 
 * Single empty row after header
-noi benchmark_import using "temp/single_empty_row.csv", testname("single empty row")
+benchmark_import using "temp/single_empty_row.csv", testname("single empty row")
 
 * Tiny datasets
-noi benchmark_import using "temp/tiny_1x1.csv", testname("tiny 1x1 dataset")
-noi benchmark_import using "temp/tiny_1xN.csv", testname("tiny 1xN dataset")
-noi benchmark_import using "temp/tiny_Nx1.csv", testname("tiny Nx1 dataset")
-noi benchmark_import using "temp/single_row.csv", testname("single row CSV")
-noi benchmark_import using "temp/single_col.csv", testname("single column CSV")
+benchmark_import using "temp/tiny_1x1.csv", testname("tiny 1x1 dataset")
+benchmark_import using "temp/tiny_1xN.csv", testname("tiny 1xN dataset")
+benchmark_import using "temp/tiny_Nx1.csv", testname("tiny Nx1 dataset")
+benchmark_import using "temp/single_row.csv", testname("single row CSV")
+benchmark_import using "temp/single_col.csv", testname("single column CSV")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Missing Value Patterns
  ******************************************************************************/
-noi print_section "Pathological Data - Missing Values"
+print_section "Pathological Data - Missing Values"
 
 * All empty values
 file open fh using "temp/all_empty.csv", write replace
@@ -658,53 +653,53 @@ file write fh ",," _n
 file write fh ",," _n
 file close fh
 
-noi benchmark_import using "temp/all_empty.csv", testname("all empty values")
-noi benchmark_import using "temp/one_col_all_missing.csv", testname("one column all missing")
-noi benchmark_import using "temp/one_row_all_missing.csv", testname("one row all missing")
-noi benchmark_import using "temp/empty_rows_middle.csv", testname("empty rows in middle")
-noi benchmark_import using "temp/first_col_missing.csv", testname("first column all missing")
-noi benchmark_import using "temp/last_col_missing.csv", testname("last column all missing")
-noi benchmark_import using "temp/first_row_missing.csv", testname("first data row all missing")
-noi benchmark_import using "temp/last_row_missing.csv", testname("last row all missing")
-noi benchmark_import using "temp/all_columns_empty.csv", testname("all columns empty (commas only)")
-noi benchmark_import using "temp/alternating_missing.csv", testname("alternating missing pattern")
-noi benchmark_import using "temp/checkerboard_missing.csv", testname("checkerboard missing pattern")
-noi benchmark_import using "temp/sparse_data.csv", testname("sparse data (80% missing)")
-noi benchmark_import using "temp/missing.csv", testname("missing values")
+benchmark_import using "temp/all_empty.csv", testname("all empty values")
+benchmark_import using "temp/one_col_all_missing.csv", testname("one column all missing")
+benchmark_import using "temp/one_row_all_missing.csv", testname("one row all missing")
+benchmark_import using "temp/empty_rows_middle.csv", testname("empty rows in middle")
+benchmark_import using "temp/first_col_missing.csv", testname("first column all missing")
+benchmark_import using "temp/last_col_missing.csv", testname("last column all missing")
+benchmark_import using "temp/first_row_missing.csv", testname("first data row all missing")
+benchmark_import using "temp/last_row_missing.csv", testname("last row all missing")
+benchmark_import using "temp/all_columns_empty.csv", testname("all columns empty (commas only)")
+benchmark_import using "temp/alternating_missing.csv", testname("alternating missing pattern")
+benchmark_import using "temp/checkerboard_missing.csv", testname("checkerboard missing pattern")
+benchmark_import using "temp/sparse_data.csv", testname("sparse data (80% missing)")
+benchmark_import using "temp/missing.csv", testname("missing values")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Whitespace Handling
  ******************************************************************************/
-noi print_section "Pathological Data - Whitespace"
+print_section "Pathological Data - Whitespace"
 
-noi benchmark_import using "temp/leading_whitespace.csv", testname("leading whitespace in fields")
-noi benchmark_import using "temp/trailing_whitespace.csv", testname("trailing whitespace in fields")
-noi benchmark_import using "temp/mixed_whitespace.csv", testname("mixed whitespace")
+benchmark_import using "temp/leading_whitespace.csv", testname("leading whitespace in fields")
+benchmark_import using "temp/trailing_whitespace.csv", testname("trailing whitespace in fields")
+benchmark_import using "temp/mixed_whitespace.csv", testname("mixed whitespace")
 
 * Whitespace-only fields - behavior may differ from Stata (tabs vs spaces)
-noi cimport_test using "temp/whitespace_only_fields.csv", testname("whitespace-only fields") expectn(3)
+cimport_test using "temp/whitespace_only_fields.csv", testname("whitespace-only fields") expectn(3)
 
 /*******************************************************************************
  * SECTION: Pathological Data - Line Endings
  ******************************************************************************/
-noi print_section "Pathological Data - Line Endings"
+print_section "Pathological Data - Line Endings"
 
-noi benchmark_import using "temp/no_final_newline.csv", testname("no final newline")
-noi benchmark_import using "temp/crlf_endings.csv", testname("Windows CRLF line endings")
-noi benchmark_import using "temp/mixed_line_endings.csv", testname("mixed line endings")
-noi benchmark_import using "temp/blank_lines_middle.csv", testname("blank lines in middle")
+benchmark_import using "temp/no_final_newline.csv", testname("no final newline")
+benchmark_import using "temp/crlf_endings.csv", testname("Windows CRLF line endings")
+benchmark_import using "temp/mixed_line_endings.csv", testname("mixed line endings")
+benchmark_import using "temp/blank_lines_middle.csv", testname("blank lines in middle")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Column Count Variations
  ******************************************************************************/
-noi print_section "Pathological Data - Column Variations"
+print_section "Pathological Data - Column Variations"
 
-noi benchmark_import using "temp/fewer_cols.csv", testname("fewer columns in some rows")
-noi benchmark_import using "temp/extra_cols.csv", testname("extra columns in some rows")
-noi benchmark_import using "temp/trailing_commas.csv", testname("trailing commas (all rows)")
-noi benchmark_import using "temp/trailing_commas_some.csv", testname("trailing commas (some rows)")
+benchmark_import using "temp/fewer_cols.csv", testname("fewer columns in some rows")
+benchmark_import using "temp/extra_cols.csv", testname("extra columns in some rows")
+benchmark_import using "temp/trailing_commas.csv", testname("trailing commas (all rows)")
+benchmark_import using "temp/trailing_commas_some.csv", testname("trailing commas (some rows)")
 
-noi benchmark_import using "temp/very_wide.csv", testname("very wide (100 columns)")
+benchmark_import using "temp/very_wide.csv", testname("very wide (100 columns)")
 
 * Many columns (20)
 file open fh using "temp/many_cols.csv", write replace
@@ -724,33 +719,33 @@ forvalues j = 1/50 {
 }
 file close fh
 
-noi benchmark_import using "temp/many_cols.csv", testname("20 columns CSV")
+benchmark_import using "temp/many_cols.csv", testname("20 columns CSV")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Header Issues
  ******************************************************************************/
-noi print_section "Pathological Data - Headers"
+print_section "Pathological Data - Headers"
 
-noi benchmark_import using "temp/duplicate_headers.csv", testname("duplicate headers")
-noi benchmark_import using "temp/special_header_chars.csv", testname("special chars in headers")
-noi benchmark_import using "temp/headers_with_spaces.csv", testname("headers with spaces")
-noi benchmark_import using "temp/numeric_headers.csv", testname("numeric headers")
-noi benchmark_import using "temp/long_headers.csv", testname("very long header names")
+benchmark_import using "temp/duplicate_headers.csv", testname("duplicate headers")
+benchmark_import using "temp/special_header_chars.csv", testname("special chars in headers")
+benchmark_import using "temp/headers_with_spaces.csv", testname("headers with spaces")
+benchmark_import using "temp/numeric_headers.csv", testname("numeric headers")
+benchmark_import using "temp/long_headers.csv", testname("very long header names")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Quoting Issues
  ******************************************************************************/
-noi print_section "Pathological Data - Quoting"
+print_section "Pathological Data - Quoting"
 
-noi benchmark_import using "temp/embedded_commas.csv", testname("embedded commas")
-noi benchmark_import using "temp/embedded_quotes.csv", testname("embedded quotes (escaped)")
-noi benchmark_import using "temp/mixed_quoting.csv", testname("mixed quoting styles")
-noi benchmark_import using "temp/quoted.csv", testname("quoted fields")
+benchmark_import using "temp/embedded_commas.csv", testname("embedded commas")
+benchmark_import using "temp/embedded_quotes.csv", testname("embedded quotes (escaped)")
+benchmark_import using "temp/mixed_quoting.csv", testname("mixed quoting styles")
+benchmark_import using "temp/quoted.csv", testname("quoted fields")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Numeric Edge Cases
  ******************************************************************************/
-noi print_section "Pathological Data - Numeric Edge Cases"
+print_section "Pathological Data - Numeric Edge Cases"
 
 * Long lines
 file open fh using "temp/long_lines.csv", write replace
@@ -761,7 +756,7 @@ forvalues i = 1/10 {
 }
 file close fh
 
-noi benchmark_import using "temp/long_lines.csv", testname("long lines (100 chars)")
+benchmark_import using "temp/long_lines.csv", testname("long lines (100 chars)")
 
 * Numeric edge values
 file open fh using "temp/numeric_edge.csv", write replace
@@ -773,55 +768,55 @@ file write fh "-1e10" _n
 file write fh "0.000001" _n
 file close fh
 
-noi benchmark_import using "temp/numeric_edge.csv", testname("numeric edge values")
-noi benchmark_import using "temp/scientific_notation.csv", testname("scientific notation")
-noi benchmark_import using "temp/negative_numbers.csv", testname("negative numbers")
-noi benchmark_import using "temp/mixed_signs.csv", testname("mixed signs (+/-)")
-noi benchmark_import using "temp/numerics.csv", testname("numerics")
+benchmark_import using "temp/numeric_edge.csv", testname("numeric edge values")
+benchmark_import using "temp/scientific_notation.csv", testname("scientific notation")
+benchmark_import using "temp/negative_numbers.csv", testname("negative numbers")
+benchmark_import using "temp/mixed_signs.csv", testname("mixed signs (+/-)")
+benchmark_import using "temp/numerics.csv", testname("numerics")
 
 /*******************************************************************************
  * SECTION: Pathological Data - String Edge Cases
  ******************************************************************************/
-noi print_section "Pathological Data - String Edge Cases"
+print_section "Pathological Data - String Edge Cases"
 
-noi benchmark_import using "temp/very_long_strings.csv", testname("very long strings (500 chars)")
-noi benchmark_import using "temp/numeric_strings.csv", testname("numeric-looking strings")
-noi benchmark_import using "temp/strings_only.csv", testname("strings only (no numeric)")
+benchmark_import using "temp/very_long_strings.csv", testname("very long strings (500 chars)")
+benchmark_import using "temp/numeric_strings.csv", testname("numeric-looking strings")
+benchmark_import using "temp/strings_only.csv", testname("strings only (no numeric)")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Type Inference
  ******************************************************************************/
-noi print_section "Pathological Data - Type Inference"
+print_section "Pathological Data - Type Inference"
 
-noi benchmark_import using "temp/boolean_like.csv", testname("boolean-like values")
-noi benchmark_import using "temp/date_formats.csv", testname("date-like values")
+benchmark_import using "temp/boolean_like.csv", testname("boolean-like values")
+benchmark_import using "temp/date_formats.csv", testname("date-like values")
 
 * Time formats - column parsing may differ from Stata
-noi cimport_test using "temp/time_formats.csv", testname("time-like values") expectn(3)
+cimport_test using "temp/time_formats.csv", testname("time-like values") expectn(3)
 
 * Currency values - quoting/parsing may differ from Stata
-noi cimport_test using "temp/currency_values.csv", testname("currency values") expectn(2)
+cimport_test using "temp/currency_values.csv", testname("currency values") expectn(2)
 
-noi benchmark_import using "temp/percentage_values.csv", testname("percentage values")
-noi benchmark_import using "temp/ambiguous_types.csv", testname("ambiguous types")
-noi benchmark_import using "temp/type_change.csv", testname("type change mid-column")
+benchmark_import using "temp/percentage_values.csv", testname("percentage values")
+benchmark_import using "temp/ambiguous_types.csv", testname("ambiguous types")
+benchmark_import using "temp/type_change.csv", testname("type change mid-column")
 
 /*******************************************************************************
  * SECTION: Pathological Data - Data Density
  ******************************************************************************/
-noi print_section "Pathological Data - Data Density"
+print_section "Pathological Data - Data Density"
 
-noi benchmark_import using "temp/all_same_value.csv", testname("all same value (1,1,1)")
-noi benchmark_import using "temp/dense_data.csv", testname("dense data (no missing)")
-noi benchmark_import using "temp/very_deep.csv", testname("very deep (5000x2)")
-noi benchmark_import using "temp/square_10x10.csv", testname("square data (10x10)")
+benchmark_import using "temp/all_same_value.csv", testname("all same value (1,1,1)")
+benchmark_import using "temp/dense_data.csv", testname("dense data (no missing)")
+benchmark_import using "temp/very_deep.csv", testname("very deep (5000x2)")
+benchmark_import using "temp/square_10x10.csv", testname("square data (10x10)")
 
 /*******************************************************************************
  * SECTION: Large File Tests
  ******************************************************************************/
-noi print_section "Large File Tests"
+print_section "Large File Tests"
 
-noi benchmark_import using "temp/large_10k.csv", testname("10K rows import")
+benchmark_import using "temp/large_10k.csv", testname("10K rows import")
 
 * 50K rows
 file open fh using "temp/large_50k.csv", write replace
@@ -831,7 +826,7 @@ forvalues i = 1/50000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_50k.csv", testname("50K rows import")
+benchmark_import using "temp/large_50k.csv", testname("50K rows import")
 
 * Large file with many columns
 file open fh using "temp/large_wide.csv", write replace
@@ -851,7 +846,7 @@ forvalues j = 1/1000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_wide.csv", testname("large wide (1Kx50)")
+benchmark_import using "temp/large_wide.csv", testname("large wide (1Kx50)")
 
 * Large file with mixed types
 file open fh using "temp/large_mixed.csv", write replace
@@ -863,12 +858,12 @@ forvalues i = 1/20000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_mixed.csv", testname("large mixed types (20K)")
+benchmark_import using "temp/large_mixed.csv", testname("large mixed types (20K)")
 
 /*******************************************************************************
  * SECTION: Synthetic Test Datasets
  ******************************************************************************/
-noi print_section "Synthetic Test Datasets"
+print_section "Synthetic Test Datasets"
 
 * Panel data structure
 file open fh using "temp/panel_data.csv", write replace
@@ -881,7 +876,7 @@ forvalues id = 1/100 {
 }
 file close fh
 
-noi benchmark_import using "temp/panel_data.csv", testname("panel data (100x5)")
+benchmark_import using "temp/panel_data.csv", testname("panel data (100x5)")
 
 * Survey data with missing
 file open fh using "temp/survey_data.csv", write replace
@@ -901,7 +896,7 @@ forvalues i = 1/200 {
 }
 file close fh
 
-noi benchmark_import using "temp/survey_data.csv", testname("survey data with missing")
+benchmark_import using "temp/survey_data.csv", testname("survey data with missing")
 
 * Financial OHLCV data
 file open fh using "temp/financial_ohlcv.csv", write replace
@@ -919,7 +914,7 @@ forvalues i = 1/252 {
 }
 file close fh
 
-noi benchmark_import using "temp/financial_ohlcv.csv", testname("financial OHLCV data")
+benchmark_import using "temp/financial_ohlcv.csv", testname("financial OHLCV data")
 
 * E-commerce data
 file open fh using "temp/ecommerce_orders.csv", write replace
@@ -935,7 +930,7 @@ forvalues i = 1/1000 {
 }
 file close fh
 
-noi benchmark_import using "temp/ecommerce_orders.csv", testname("e-commerce orders")
+benchmark_import using "temp/ecommerce_orders.csv", testname("e-commerce orders")
 
 * Healthcare data with complex types
 file open fh using "temp/healthcare_data.csv", write replace
@@ -954,7 +949,7 @@ forvalues i = 1/500 {
 }
 file close fh
 
-noi benchmark_import using "temp/healthcare_data.csv", testname("healthcare patient data")
+benchmark_import using "temp/healthcare_data.csv", testname("healthcare patient data")
 
 * Education data
 file open fh using "temp/education_data.csv", write replace
@@ -968,12 +963,12 @@ forvalues i = 1/500 {
 }
 file close fh
 
-noi benchmark_import using "temp/education_data.csv", testname("education student data")
+benchmark_import using "temp/education_data.csv", testname("education student data")
 
 /*******************************************************************************
  * SECTION: Malformed CSV Handling
  ******************************************************************************/
-noi print_section "Malformed CSV Handling"
+print_section "Malformed CSV Handling"
 
 * Unterminated quote at end of file
 file open fh using "temp/malformed_unterminated_quote.csv", write replace
@@ -984,10 +979,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_unterminated_quote.csv", clear
 if _rc == 0 {
-    noi test_pass "unterminated quote - imported (N=`=_N')"
+    test_pass "unterminated quote - imported (N=`=_N')"
 }
 else {
-    noi test_pass "unterminated quote - handled gracefully (rc=`=_rc')"
+    test_pass "unterminated quote - handled gracefully (rc=`=_rc')"
 }
 
 * Quote in middle of unquoted field
@@ -999,10 +994,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_mid_quote.csv", clear
 if _rc == 0 {
-    noi test_pass "mid-field quote - imported (N=`=_N')"
+    test_pass "mid-field quote - imported (N=`=_N')"
 }
 else {
-    noi test_pass "mid-field quote - handled gracefully (rc=`=_rc')"
+    test_pass "mid-field quote - handled gracefully (rc=`=_rc')"
 }
 
 * Very inconsistent column counts
@@ -1016,10 +1011,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_very_inconsistent.csv", clear
 if _rc == 0 {
-    noi test_pass "very inconsistent cols - imported (N=`=_N', K=`=c(k)')"
+    test_pass "very inconsistent cols - imported (N=`=_N', K=`=c(k)')"
 }
 else {
-    noi test_pass "very inconsistent cols - handled gracefully (rc=`=_rc')"
+    test_pass "very inconsistent cols - handled gracefully (rc=`=_rc')"
 }
 
 * Only commas (no actual data)
@@ -1031,10 +1026,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_only_commas.csv", clear
 if _rc == 0 {
-    noi test_pass "only commas - imported (N=`=_N')"
+    test_pass "only commas - imported (N=`=_N')"
 }
 else {
-    noi test_pass "only commas - handled gracefully (rc=`=_rc')"
+    test_pass "only commas - handled gracefully (rc=`=_rc')"
 }
 
 * Random binary-like data
@@ -1045,10 +1040,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_binary.csv", clear
 if _rc == 0 {
-    noi test_pass "binary chars - imported (N=`=_N')"
+    test_pass "binary chars - imported (N=`=_N')"
 }
 else {
-    noi test_pass "binary chars - handled gracefully (rc=`=_rc')"
+    test_pass "binary chars - handled gracefully (rc=`=_rc')"
 }
 
 * Null bytes
@@ -1060,10 +1055,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_nulls.csv", clear
 if _rc == 0 {
-    noi test_pass "null bytes - imported (N=`=_N')"
+    test_pass "null bytes - imported (N=`=_N')"
 }
 else {
-    noi test_pass "null bytes - handled gracefully (rc=`=_rc')"
+    test_pass "null bytes - handled gracefully (rc=`=_rc')"
 }
 
 * Very long line (>10K chars)
@@ -1076,10 +1071,10 @@ file close fh
 
 capture cimport delimited using "temp/malformed_very_long_line.csv", clear
 if _rc == 0 {
-    noi test_pass "very long line (2K chars) - imported (N=`=_N')"
+    test_pass "very long line (2K chars) - imported (N=`=_N')"
 }
 else {
-    noi test_pass "very long line - handled gracefully (rc=`=_rc')"
+    test_pass "very long line - handled gracefully (rc=`=_rc')"
 }
 
 * Headers with invalid Stata varname chars
@@ -1091,81 +1086,81 @@ file close fh
 
 capture cimport delimited using "temp/malformed_bad_headers.csv", clear
 if _rc == 0 {
-    noi test_pass "invalid header chars - imported (N=`=_N', K=`=c(k)')"
+    test_pass "invalid header chars - imported (N=`=_N', K=`=c(k)')"
     ds
-    noi di as text "    Variables: `r(varlist)'"
+    * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    noi test_pass "invalid header chars - handled gracefully (rc=`=_rc')"
+    test_pass "invalid header chars - handled gracefully (rc=`=_rc')"
 }
 
 /*******************************************************************************
  * SECTION: Option Edge Cases
  ******************************************************************************/
-noi print_section "Option Edge Cases"
+print_section "Option Edge Cases"
 
 * rowrange edge cases
-noi benchmark_import using "temp/range_test.csv", testname("rowrange(1:1) header only") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange(1:1) header only") ///
     importopts(rowrange(1:1))
 
-noi benchmark_import using "temp/range_test.csv", testname("rowrange(101:101) last row") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange(101:101) last row") ///
     importopts(rowrange(101:101))
 
-noi benchmark_import using "temp/range_test.csv", testname("rowrange beyond file") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange beyond file") ///
     importopts(rowrange(102:200))
 
 * colrange edge cases
-noi benchmark_import using "temp/range_test.csv", testname("colrange(1:1) first col only") ///
+benchmark_import using "temp/range_test.csv", testname("colrange(1:1) first col only") ///
     importopts(colrange(1:1))
 
-noi benchmark_import using "temp/range_test.csv", testname("colrange(5:5) last col only") ///
+benchmark_import using "temp/range_test.csv", testname("colrange(5:5) last col only") ///
     importopts(colrange(5:5))
 
 * Combined rowrange and colrange
-noi benchmark_import using "temp/range_test.csv", testname("rowrange + colrange") ///
+benchmark_import using "temp/range_test.csv", testname("rowrange + colrange") ///
     importopts(rowrange(10:20) colrange(2:4))
 
 * stringcols with all columns
-noi benchmark_import using "temp/numerics.csv", testname("stringcols(1 2 3) all cols") ///
+benchmark_import using "temp/numerics.csv", testname("stringcols(1 2 3) all cols") ///
     importopts(stringcols(1 2 3))
 
 * asfloat with large numbers
-noi benchmark_import using "temp/large_10k.csv", testname("asfloat large dataset") ///
+benchmark_import using "temp/large_10k.csv", testname("asfloat large dataset") ///
     importopts(asfloat)
 
 * asdouble with precision
-noi benchmark_import using "temp/numerics.csv", testname("asdouble precision") ///
+benchmark_import using "temp/numerics.csv", testname("asdouble precision") ///
     importopts(asdouble)
 
 * Multiple threads (cimport-specific option)
-noi cimport_test using "temp/large_10k.csv", testname("threads(4) large file") ///
+cimport_test using "temp/large_10k.csv", testname("threads(4) large file") ///
     importopts(threads(4)) expectn(10000)
 
-noi cimport_test using "temp/basic.csv", testname("threads(8) small file") ///
+cimport_test using "temp/basic.csv", testname("threads(8) small file") ///
     importopts(threads(8)) expectn(5)
 
 /*******************************************************************************
  * SECTION: Comparison with Stata's import delimited
  ******************************************************************************/
-noi print_section "Comparison with Stata's import delimited"
+print_section "Comparison with Stata's import delimited"
 
-noi benchmark_import using "temp/basic.csv", testname("matches import delimited (basic)")
-noi benchmark_import using "temp/quoted.csv", testname("matches import delimited (quoted)")
-noi benchmark_import using "temp/missing.csv", testname("matches import delimited (missing)")
-noi benchmark_import using "temp/numerics.csv", testname("matches import delimited (numerics)")
+benchmark_import using "temp/basic.csv", testname("matches import delimited (basic)")
+benchmark_import using "temp/quoted.csv", testname("matches import delimited (quoted)")
+benchmark_import using "temp/missing.csv", testname("matches import delimited (missing)")
+benchmark_import using "temp/numerics.csv", testname("matches import delimited (numerics)")
 
 * Additional comparison tests
-noi benchmark_import using "temp/tab_delim.tsv", testname("matches Stata (tab delimited)") importopts(delimiters(tab))
-noi benchmark_import using "temp/semicolon.csv", testname("matches Stata (semicolon)") importopts(delimiters(";"))
-noi benchmark_import using "temp/noheader.csv", testname("matches Stata (no header)") importopts(varnames(nonames))
-noi benchmark_import using "temp/large_10k.csv", testname("matches Stata (large 10K)")
-noi benchmark_import using "temp/zipcodes.csv", testname("matches Stata (zipcodes)")
+benchmark_import using "temp/tab_delim.tsv", testname("matches Stata (tab delimited)") importopts(delimiters(tab))
+benchmark_import using "temp/semicolon.csv", testname("matches Stata (semicolon)") importopts(delimiters(";"))
+benchmark_import using "temp/noheader.csv", testname("matches Stata (no header)") importopts(varnames(nonames))
+benchmark_import using "temp/large_10k.csv", testname("matches Stata (large 10K)")
+benchmark_import using "temp/zipcodes.csv", testname("matches Stata (zipcodes)")
 
 /*******************************************************************************
  * SECTION: Stata Built-in Datasets (sysuse)
  * Export to CSV then test cimport matches import delimited
  ******************************************************************************/
-noi print_section "Stata Built-in Datasets (sysuse)"
+print_section "Stata Built-in Datasets (sysuse)"
 
 * List of all sysuse datasets
 local sysuse_datasets auto auto2 bplong bpwide cancer census citytemp citytemp4 ///
@@ -1177,10 +1172,10 @@ foreach ds of local sysuse_datasets {
         export delimited using "temp/sysuse_`ds'.csv", replace
     }
     if _rc == 0 {
-        noi benchmark_import using "temp/sysuse_`ds'.csv", testname("sysuse `ds'")
+        benchmark_import using "temp/sysuse_`ds'.csv", testname("sysuse `ds'")
     }
     else {
-        noi di as text "  [SKIP] sysuse `ds' not available"
+        * (silent) "  [SKIP] sysuse `ds' not available"
     }
 }
 
@@ -1188,7 +1183,7 @@ foreach ds of local sysuse_datasets {
  * SECTION: Stata Web Datasets (webuse)
  * Export to CSV then test cimport matches import delimited
  ******************************************************************************/
-noi print_section "Stata Web Datasets (webuse)"
+print_section "Stata Web Datasets (webuse)"
 
 * Common webuse datasets for testing
 local webuse_datasets airline auto2 bdesop cancer countxmpl grunfeld ///
@@ -1201,17 +1196,17 @@ foreach ds of local webuse_datasets {
         export delimited using "temp/webuse_`ds'.csv", replace
     }
     if _rc == 0 {
-        noi benchmark_import using "temp/webuse_`ds'.csv", testname("webuse `ds'")
+        benchmark_import using "temp/webuse_`ds'.csv", testname("webuse `ds'")
     }
     else {
-        noi di as text "  [SKIP] webuse `ds' not available or no internet"
+        * (silent) "  [SKIP] webuse `ds' not available or no internet"
     }
 }
 
 /*******************************************************************************
  * SECTION: Additional Pathological Cases - Delimiter Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Delimiter Edge Cases"
+print_section "Additional Pathological - Delimiter Edge Cases"
 
 * Pipe delimiter - test directly without benchmark_import due to quoting issues
 file open fh using "temp/pipe_delim.csv", write replace
@@ -1248,10 +1243,10 @@ capture {
     }
 }
 if _rc == 0 {
-    noi test_pass "pipe delimiter"
+    test_pass "pipe delimiter"
 }
 else {
-    noi test_fail "pipe delimiter" "test failed with rc=`=_rc'"
+    test_fail "pipe delimiter" "test failed with rc=`=_rc'"
 }
 
 * Space delimiter - test directly due to quoting issues with space in syntax
@@ -1288,10 +1283,10 @@ capture {
     }
 }
 if _rc == 0 {
-    noi test_pass "space delimiter"
+    test_pass "space delimiter"
 }
 else {
-    noi test_fail "space delimiter" "test failed with rc=`=_rc'"
+    test_fail "space delimiter" "test failed with rc=`=_rc'"
 }
 
 * Colon delimiter - test directly due to colon being special in syntax
@@ -1327,10 +1322,10 @@ capture {
     }
 }
 if _rc == 0 {
-    noi test_pass "colon delimiter"
+    test_pass "colon delimiter"
 }
 else {
-    noi test_fail "colon delimiter" "test failed with rc=`=_rc'"
+    test_fail "colon delimiter" "test failed with rc=`=_rc'"
 }
 
 * Multiple consecutive delimiters (empty fields)
@@ -1342,7 +1337,7 @@ file write fh ",,3,,5" _n
 file write fh ",,,4,5" _n
 file close fh
 
-noi benchmark_import using "temp/consecutive_delims.csv", testname("consecutive delimiters")
+benchmark_import using "temp/consecutive_delims.csv", testname("consecutive delimiters")
 
 * Tab within quoted field
 file open fh using "temp/tab_in_quoted.csv", write replace
@@ -1351,7 +1346,7 @@ file write fh `"1,"Alpha"' _tab `"Beta",100"' _n
 file write fh `"2,"Gamma"' _tab `"Delta",200"' _n
 file close fh
 
-noi benchmark_import using "temp/tab_in_quoted.csv", testname("tab within quoted field")
+benchmark_import using "temp/tab_in_quoted.csv", testname("tab within quoted field")
 
 * Delimiter at start/end of line
 file open fh using "temp/delim_at_edges.csv", write replace
@@ -1360,12 +1355,12 @@ file write fh ",1,2,3," _n
 file write fh ",4,5,6," _n
 file close fh
 
-noi benchmark_import using "temp/delim_at_edges.csv", testname("delimiter at line start/end")
+benchmark_import using "temp/delim_at_edges.csv", testname("delimiter at line start/end")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Quote Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Quote Edge Cases"
+print_section "Additional Pathological - Quote Edge Cases"
 
 * Empty quoted strings
 file open fh using "temp/empty_quoted.csv", write replace
@@ -1375,7 +1370,7 @@ file write fh `"2,"",200"' _n
 file write fh `"3,Normal,300"' _n
 file close fh
 
-noi benchmark_import using "temp/empty_quoted.csv", testname("empty quoted strings")
+benchmark_import using "temp/empty_quoted.csv", testname("empty quoted strings")
 
 * Quoted vs unquoted empty
 file open fh using "temp/quoted_vs_unquoted_empty.csv", write replace
@@ -1384,7 +1379,7 @@ file write fh `"1,"","' _n
 file write fh `"2,"","' _n
 file close fh
 
-noi benchmark_import using "temp/quoted_vs_unquoted_empty.csv", testname("quoted vs unquoted empty")
+benchmark_import using "temp/quoted_vs_unquoted_empty.csv", testname("quoted vs unquoted empty")
 
 * Single quote character as field
 file open fh using "temp/single_quote_field.csv", write replace
@@ -1393,7 +1388,7 @@ file write fh `"1,"""",100"' _n
 file write fh "2,normal,200" _n
 file close fh
 
-noi benchmark_import using "temp/single_quote_field.csv", testname("single quote as field")
+benchmark_import using "temp/single_quote_field.csv", testname("single quote as field")
 
 * Quote at field boundaries only
 file open fh using "temp/boundary_quotes.csv", write replace
@@ -1404,10 +1399,10 @@ file close fh
 
 capture cimport delimited using "temp/boundary_quotes.csv", clear
 if _rc == 0 {
-    noi test_pass "boundary quotes - imported (N=`=_N')"
+    test_pass "boundary quotes - imported (N=`=_N')"
 }
 else {
-    noi test_pass "boundary quotes - handled gracefully (rc=`=_rc')"
+    test_pass "boundary quotes - handled gracefully (rc=`=_rc')"
 }
 
 * Newline within quoted field (multiline field)
@@ -1421,10 +1416,10 @@ file close fh
 
 capture cimport delimited using "temp/multiline_field.csv", clear
 if _rc == 0 {
-    noi test_pass "multiline quoted field - imported (N=`=_N')"
+    test_pass "multiline quoted field - imported (N=`=_N')"
 }
 else {
-    noi test_pass "multiline quoted field - handled gracefully (rc=`=_rc')"
+    test_pass "multiline quoted field - handled gracefully (rc=`=_rc')"
 }
 
 * CRLF within quoted field
@@ -1436,10 +1431,10 @@ file close fh
 
 capture cimport delimited using "temp/crlf_in_quoted.csv", clear
 if _rc == 0 {
-    noi test_pass "CRLF in quoted field - imported (N=`=_N')"
+    test_pass "CRLF in quoted field - imported (N=`=_N')"
 }
 else {
-    noi test_pass "CRLF in quoted field - handled gracefully (rc=`=_rc')"
+    test_pass "CRLF in quoted field - handled gracefully (rc=`=_rc')"
 }
 
 * Triple quotes
@@ -1449,12 +1444,12 @@ file write fh `"1,"""Triple""" quoted"' _n
 file write fh "2,normal" _n
 file close fh
 
-noi benchmark_import using "temp/triple_quotes.csv", testname("triple quotes")
+benchmark_import using "temp/triple_quotes.csv", testname("triple quotes")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Numeric Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Numeric Edge Cases"
+print_section "Additional Pathological - Numeric Edge Cases"
 
 * Infinity representations
 file open fh using "temp/infinity_values.csv", write replace
@@ -1466,7 +1461,7 @@ file write fh "4,infinity" _n
 file write fh "5,-infinity" _n
 file close fh
 
-noi benchmark_import using "temp/infinity_values.csv", testname("infinity representations")
+benchmark_import using "temp/infinity_values.csv", testname("infinity representations")
 
 * NaN representations
 file open fh using "temp/nan_values.csv", write replace
@@ -1478,7 +1473,7 @@ file write fh "4,NA" _n
 file write fh "5,N/A" _n
 file close fh
 
-noi benchmark_import using "temp/nan_values.csv", testname("NaN representations")
+benchmark_import using "temp/nan_values.csv", testname("NaN representations")
 
 * Hexadecimal values
 file open fh using "temp/hex_values.csv", write replace
@@ -1489,7 +1484,7 @@ file write fh "3,0x00" _n
 file write fh "4,0xDEADBEEF" _n
 file close fh
 
-noi benchmark_import using "temp/hex_values.csv", testname("hexadecimal values")
+benchmark_import using "temp/hex_values.csv", testname("hexadecimal values")
 
 * Numbers with thousands separators
 file open fh using "temp/thousands_sep.csv", write replace
@@ -1499,7 +1494,7 @@ file write fh `"2,"1,000,000""' _n
 file write fh `"3,"12,345,678.90""' _n
 file close fh
 
-noi benchmark_import using "temp/thousands_sep.csv", testname("thousands separators")
+benchmark_import using "temp/thousands_sep.csv", testname("thousands separators")
 
 * Numbers with leading plus sign
 file open fh using "temp/leading_plus.csv", write replace
@@ -1509,7 +1504,7 @@ file write fh "2,+0.5" _n
 file write fh "3,+1e5" _n
 file close fh
 
-noi benchmark_import using "temp/leading_plus.csv", testname("leading plus sign")
+benchmark_import using "temp/leading_plus.csv", testname("leading plus sign")
 
 * Very small numbers (underflow edge)
 file open fh using "temp/very_small_nums.csv", write replace
@@ -1519,7 +1514,7 @@ file write fh "2,1e-308" _n
 file write fh "3,0.000000000000001" _n
 file close fh
 
-noi benchmark_import using "temp/very_small_nums.csv", testname("very small numbers")
+benchmark_import using "temp/very_small_nums.csv", testname("very small numbers")
 
 * Very large numbers (overflow edge)
 file open fh using "temp/very_large_nums.csv", write replace
@@ -1529,7 +1524,7 @@ file write fh "2,1e307" _n
 file write fh "3,9999999999999999999" _n
 file close fh
 
-noi benchmark_import using "temp/very_large_nums.csv", testname("very large numbers")
+benchmark_import using "temp/very_large_nums.csv", testname("very large numbers")
 
 * Mixed integer sizes
 file open fh using "temp/mixed_int_sizes.csv", write replace
@@ -1539,7 +1534,7 @@ file write fh "2,200,20000,2000000,20000000000" _n
 file write fh "127,32767,2147483647,9223372036854775807,9999999999999999999" _n
 file close fh
 
-noi benchmark_import using "temp/mixed_int_sizes.csv", testname("mixed integer sizes")
+benchmark_import using "temp/mixed_int_sizes.csv", testname("mixed integer sizes")
 
 * Decimal precision edge cases
 file open fh using "temp/decimal_precision.csv", write replace
@@ -1551,12 +1546,12 @@ file write fh "4,0.1000000000000001" _n
 file write fh "5,0.12345678901234567890" _n
 file close fh
 
-noi benchmark_import using "temp/decimal_precision.csv", testname("decimal precision")
+benchmark_import using "temp/decimal_precision.csv", testname("decimal precision")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - String Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - String Edge Cases"
+print_section "Additional Pathological - String Edge Cases"
 
 * Strings that look like Stata missing values
 file open fh using "temp/stata_missing_strings.csv", write replace
@@ -1568,7 +1563,7 @@ file write fh "4,." _n
 file write fh "5,.." _n
 file close fh
 
-noi benchmark_import using "temp/stata_missing_strings.csv", testname("Stata missing value strings")
+benchmark_import using "temp/stata_missing_strings.csv", testname("Stata missing value strings")
 
 * Strings with only special characters
 file open fh using "temp/special_char_strings.csv", write replace
@@ -1579,7 +1574,7 @@ file write fh "3,<>?/" _n
 file write fh "4,[]{}|" _n
 file close fh
 
-noi benchmark_import using "temp/special_char_strings.csv", testname("special character strings")
+benchmark_import using "temp/special_char_strings.csv", testname("special character strings")
 
 * Strings with backslashes
 file open fh using "temp/backslash_strings.csv", write replace
@@ -1589,7 +1584,7 @@ file write fh "2,\\server\share" _n
 file write fh "3,path\\to\\file" _n
 file close fh
 
-noi benchmark_import using "temp/backslash_strings.csv", testname("backslash in strings")
+benchmark_import using "temp/backslash_strings.csv", testname("backslash in strings")
 
 * Strings with forward slashes
 file open fh using "temp/slash_strings.csv", write replace
@@ -1599,7 +1594,7 @@ file write fh "2,http://example.com" _n
 file write fh "3,a/b/c/d/e" _n
 file close fh
 
-noi benchmark_import using "temp/slash_strings.csv", testname("forward slashes in strings")
+benchmark_import using "temp/slash_strings.csv", testname("forward slashes in strings")
 
 * Very short strings (1 char)
 file open fh using "temp/single_char_strings.csv", write replace
@@ -1611,7 +1606,7 @@ file write fh "4,@" _n
 file write fh "5, " _n
 file close fh
 
-noi benchmark_import using "temp/single_char_strings.csv", testname("single character strings")
+benchmark_import using "temp/single_char_strings.csv", testname("single character strings")
 
 * Repeated characters
 file open fh using "temp/repeated_chars.csv", write replace
@@ -1622,7 +1617,7 @@ file write fh "3,.........." _n
 file write fh "4,,,,,,,,,," _n
 file close fh
 
-noi benchmark_import using "temp/repeated_chars.csv", testname("repeated characters")
+benchmark_import using "temp/repeated_chars.csv", testname("repeated characters")
 
 * Control characters (except null which was tested)
 file open fh using "temp/control_chars.csv", write replace
@@ -1634,10 +1629,10 @@ file close fh
 
 capture cimport delimited using "temp/control_chars.csv", clear
 if _rc == 0 {
-    noi test_pass "control characters - imported (N=`=_N')"
+    test_pass "control characters - imported (N=`=_N')"
 }
 else {
-    noi test_pass "control characters - handled gracefully (rc=`=_rc')"
+    test_pass "control characters - handled gracefully (rc=`=_rc')"
 }
 
 * High ASCII characters
@@ -1649,12 +1644,12 @@ file write fh "3," _char(250) _char(251) _char(252) _n
 file close fh
 
 * High ASCII - encoding interpretation may differ from Stata
-noi cimport_test using "temp/high_ascii.csv", testname("high ASCII characters") expectn(3)
+cimport_test using "temp/high_ascii.csv", testname("high ASCII characters") expectn(3)
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Header Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Header Edge Cases"
+print_section "Additional Pathological - Header Edge Cases"
 
 * Reserved Stata keywords as headers
 file open fh using "temp/reserved_keywords.csv", write replace
@@ -1665,12 +1660,12 @@ file close fh
 
 capture cimport delimited using "temp/reserved_keywords.csv", clear
 if _rc == 0 {
-    noi test_pass "reserved keywords as headers - imported (N=`=_N')"
+    test_pass "reserved keywords as headers - imported (N=`=_N')"
     ds
-    noi di as text "    Variables: `r(varlist)'"
+    * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    noi test_pass "reserved keywords - handled gracefully (rc=`=_rc')"
+    test_pass "reserved keywords - handled gracefully (rc=`=_rc')"
 }
 
 * Headers starting with underscore
@@ -1680,7 +1675,7 @@ file write fh "1,Alpha,100,X" _n
 file write fh "2,Beta,200,Y" _n
 file close fh
 
-noi benchmark_import using "temp/underscore_headers.csv", testname("underscore-prefixed headers")
+benchmark_import using "temp/underscore_headers.csv", testname("underscore-prefixed headers")
 
 * Headers starting with numbers
 file open fh using "temp/number_start_headers.csv", write replace
@@ -1691,12 +1686,12 @@ file close fh
 
 capture cimport delimited using "temp/number_start_headers.csv", clear
 if _rc == 0 {
-    noi test_pass "number-starting headers - imported (N=`=_N')"
+    test_pass "number-starting headers - imported (N=`=_N')"
     ds
-    noi di as text "    Variables: `r(varlist)'"
+    * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    noi test_pass "number-starting headers - handled gracefully (rc=`=_rc')"
+    test_pass "number-starting headers - handled gracefully (rc=`=_rc')"
 }
 
 * Empty header name
@@ -1708,10 +1703,10 @@ file close fh
 
 capture cimport delimited using "temp/empty_header_name.csv", clear
 if _rc == 0 {
-    noi test_pass "empty header name - imported (N=`=_N', K=`=c(k)')"
+    test_pass "empty header name - imported (N=`=_N', K=`=c(k)')"
 }
 else {
-    noi test_pass "empty header name - handled gracefully (rc=`=_rc')"
+    test_pass "empty header name - handled gracefully (rc=`=_rc')"
 }
 
 * All headers are numbers
@@ -1721,7 +1716,7 @@ file write fh "10,20,30,40,50" _n
 file write fh "11,21,31,41,51" _n
 file close fh
 
-noi benchmark_import using "temp/all_numeric_headers.csv", testname("all numeric headers")
+benchmark_import using "temp/all_numeric_headers.csv", testname("all numeric headers")
 
 * Headers with unicode
 file open fh using "temp/unicode_headers.csv", write replace
@@ -1730,7 +1725,7 @@ file write fh "1,Jean,100" _n
 file write fh "2,Marie,200" _n
 file close fh
 
-noi benchmark_import using "temp/unicode_headers.csv", testname("unicode in headers")
+benchmark_import using "temp/unicode_headers.csv", testname("unicode in headers")
 
 * Very many duplicate headers
 file open fh using "temp/many_duplicate_headers.csv", write replace
@@ -1741,18 +1736,18 @@ file close fh
 
 capture cimport delimited using "temp/many_duplicate_headers.csv", clear
 if _rc == 0 {
-    noi test_pass "many duplicate headers - imported (K=`=c(k)')"
+    test_pass "many duplicate headers - imported (K=`=c(k)')"
     ds
-    noi di as text "    Variables: `r(varlist)'"
+    * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    noi test_pass "many duplicate headers - handled gracefully (rc=`=_rc')"
+    test_pass "many duplicate headers - handled gracefully (rc=`=_rc')"
 }
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Row/Structure Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Row/Structure Edge Cases"
+print_section "Additional Pathological - Row/Structure Edge Cases"
 
 * Many consecutive empty rows
 file open fh using "temp/many_empty_rows.csv", write replace
@@ -1766,7 +1761,7 @@ file write fh ",," _n
 file write fh "2,200" _n
 file close fh
 
-noi benchmark_import using "temp/many_empty_rows.csv", testname("many consecutive empty rows")
+benchmark_import using "temp/many_empty_rows.csv", testname("many consecutive empty rows")
 
 * Many consecutive blank lines
 file open fh using "temp/many_blank_lines.csv", write replace
@@ -1782,10 +1777,10 @@ file close fh
 
 capture cimport delimited using "temp/many_blank_lines.csv", clear
 if _rc == 0 {
-    noi test_pass "many blank lines - imported (N=`=_N')"
+    test_pass "many blank lines - imported (N=`=_N')"
 }
 else {
-    noi test_pass "many blank lines - handled gracefully (rc=`=_rc')"
+    test_pass "many blank lines - handled gracefully (rc=`=_rc')"
 }
 
 * First data row is empty
@@ -1796,7 +1791,7 @@ file write fh "1,2,3" _n
 file write fh "4,5,6" _n
 file close fh
 
-noi benchmark_import using "temp/first_data_empty.csv", testname("first data row empty")
+benchmark_import using "temp/first_data_empty.csv", testname("first data row empty")
 
 * Last data row is empty
 file open fh using "temp/last_data_empty.csv", write replace
@@ -1806,7 +1801,7 @@ file write fh "4,5,6" _n
 file write fh ",," _n
 file close fh
 
-noi benchmark_import using "temp/last_data_empty.csv", testname("last data row empty")
+benchmark_import using "temp/last_data_empty.csv", testname("last data row empty")
 
 * Rows that are just whitespace
 file open fh using "temp/whitespace_rows.csv", write replace
@@ -1820,10 +1815,10 @@ file close fh
 
 capture cimport delimited using "temp/whitespace_rows.csv", clear
 if _rc == 0 {
-    noi test_pass "whitespace-only rows - imported (N=`=_N')"
+    test_pass "whitespace-only rows - imported (N=`=_N')"
 }
 else {
-    noi test_pass "whitespace-only rows - handled gracefully (rc=`=_rc')"
+    test_pass "whitespace-only rows - handled gracefully (rc=`=_rc')"
 }
 
 * Very unbalanced data (first row has most cols)
@@ -1836,10 +1831,10 @@ file close fh
 
 capture cimport delimited using "temp/unbalanced_first_wide.csv", clear
 if _rc == 0 {
-    noi test_pass "unbalanced (first wide) - imported (N=`=_N', K=`=c(k)')"
+    test_pass "unbalanced (first wide) - imported (N=`=_N', K=`=c(k)')"
 }
 else {
-    noi test_pass "unbalanced (first wide) - handled gracefully (rc=`=_rc')"
+    test_pass "unbalanced (first wide) - handled gracefully (rc=`=_rc')"
 }
 
 * Very unbalanced data (last row has most cols)
@@ -1852,16 +1847,16 @@ file close fh
 
 capture cimport delimited using "temp/unbalanced_last_wide.csv", clear
 if _rc == 0 {
-    noi test_pass "unbalanced (last wide) - imported (N=`=_N', K=`=c(k)')"
+    test_pass "unbalanced (last wide) - imported (N=`=_N', K=`=c(k)')"
 }
 else {
-    noi test_pass "unbalanced (last wide) - handled gracefully (rc=`=_rc')"
+    test_pass "unbalanced (last wide) - handled gracefully (rc=`=_rc')"
 }
 
 /*******************************************************************************
  * SECTION: Additional Pathological - File Format Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - File Format Edge Cases"
+print_section "Additional Pathological - File Format Edge Cases"
 
 * File with only header (no newline after)
 file open fh using "temp/header_no_newline.csv", write replace
@@ -1870,10 +1865,10 @@ file close fh
 
 capture cimport delimited using "temp/header_no_newline.csv", clear
 if _rc == 0 {
-    noi test_pass "header only no newline - imported (N=`=_N')"
+    test_pass "header only no newline - imported (N=`=_N')"
 }
 else {
-    noi test_pass "header only no newline - handled gracefully (rc=`=_rc')"
+    test_pass "header only no newline - handled gracefully (rc=`=_rc')"
 }
 
 * Single value file (no delimiters)
@@ -1882,7 +1877,7 @@ file write fh "x" _n
 file write fh "42" _n
 file close fh
 
-noi benchmark_import using "temp/single_value.csv", testname("single value file")
+benchmark_import using "temp/single_value.csv", testname("single value file")
 
 * File with BOM in wrong position
 file open fh using "temp/bom_wrong_position.csv", write replace
@@ -1893,10 +1888,10 @@ file close fh
 
 capture cimport delimited using "temp/bom_wrong_position.csv", clear
 if _rc == 0 {
-    noi test_pass "BOM in data row - imported (N=`=_N')"
+    test_pass "BOM in data row - imported (N=`=_N')"
 }
 else {
-    noi test_pass "BOM in data row - handled gracefully (rc=`=_rc')"
+    test_pass "BOM in data row - handled gracefully (rc=`=_rc')"
 }
 
 * UTF-16BE BOM
@@ -1908,10 +1903,10 @@ file close fh
 
 capture cimport delimited using "temp/utf16be_bom.csv", clear
 if _rc == 0 {
-    noi test_pass "UTF-16BE BOM - imported (N=`=_N')"
+    test_pass "UTF-16BE BOM - imported (N=`=_N')"
 }
 else {
-    noi test_pass "UTF-16BE BOM - handled gracefully (rc=`=_rc')"
+    test_pass "UTF-16BE BOM - handled gracefully (rc=`=_rc')"
 }
 
 * File with only whitespace
@@ -1923,10 +1918,10 @@ file close fh
 
 capture cimport delimited using "temp/only_whitespace.csv", clear
 if _rc == 0 {
-    noi test_pass "only whitespace file - imported (N=`=_N')"
+    test_pass "only whitespace file - imported (N=`=_N')"
 }
 else {
-    noi test_pass "only whitespace file - handled gracefully (rc=`=_rc')"
+    test_pass "only whitespace file - handled gracefully (rc=`=_rc')"
 }
 
 * File with only newlines
@@ -1939,10 +1934,10 @@ file close fh
 
 capture cimport delimited using "temp/only_newlines.csv", clear
 if _rc == 0 {
-    noi test_pass "only newlines file - imported (N=`=_N')"
+    test_pass "only newlines file - imported (N=`=_N')"
 }
 else {
-    noi test_pass "only newlines file - handled gracefully (rc=`=_rc')"
+    test_pass "only newlines file - handled gracefully (rc=`=_rc')"
 }
 
 * Mixed CR and LF (old Mac + Unix style)
@@ -1952,10 +1947,10 @@ file close fh
 
 capture cimport delimited using "temp/mixed_cr_lf.csv", clear
 if _rc == 0 {
-    noi test_pass "mixed CR and LF - imported (N=`=_N')"
+    test_pass "mixed CR and LF - imported (N=`=_N')"
 }
 else {
-    noi test_pass "mixed CR and LF - handled gracefully (rc=`=_rc')"
+    test_pass "mixed CR and LF - handled gracefully (rc=`=_rc')"
 }
 
 * File ending with multiple newlines
@@ -1968,12 +1963,12 @@ file write fh "" _n
 file write fh "" _n
 file close fh
 
-noi benchmark_import using "temp/trailing_newlines.csv", testname("trailing newlines")
+benchmark_import using "temp/trailing_newlines.csv", testname("trailing newlines")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Type Coercion Edge Cases
  ******************************************************************************/
-noi print_section "Additional Pathological - Type Coercion"
+print_section "Additional Pathological - Type Coercion"
 
 * Column starts as integer, becomes float
 file open fh using "temp/int_to_float.csv", write replace
@@ -1984,7 +1979,7 @@ file write fh "3,300.5" _n
 file write fh "4,400" _n
 file close fh
 
-noi benchmark_import using "temp/int_to_float.csv", testname("int to float transition")
+benchmark_import using "temp/int_to_float.csv", testname("int to float transition")
 
 * Column starts as float, becomes integer
 file open fh using "temp/float_to_int.csv", write replace
@@ -1995,7 +1990,7 @@ file write fh "3,300" _n
 file write fh "4,400" _n
 file close fh
 
-noi benchmark_import using "temp/float_to_int.csv", testname("float to int transition")
+benchmark_import using "temp/float_to_int.csv", testname("float to int transition")
 
 * Late type change (numeric to string deep in file)
 file open fh using "temp/late_type_change.csv", write replace
@@ -2009,7 +2004,7 @@ forvalues i = 52/60 {
 }
 file close fh
 
-noi benchmark_import using "temp/late_type_change.csv", testname("late type change (row 51)")
+benchmark_import using "temp/late_type_change.csv", testname("late type change (row 51)")
 
 * All values look numeric except one
 file open fh using "temp/one_string_among_nums.csv", write replace
@@ -2021,7 +2016,7 @@ file write fh "4,400" _n
 file write fh "5,500" _n
 file close fh
 
-noi benchmark_import using "temp/one_string_among_nums.csv", testname("one string among numerics")
+benchmark_import using "temp/one_string_among_nums.csv", testname("one string among numerics")
 
 * Numeric with trailing spaces
 file open fh using "temp/numeric_trailing_space.csv", write replace
@@ -2031,7 +2026,7 @@ file write fh "2,200  " _n
 file write fh "3,300   " _n
 file close fh
 
-noi benchmark_import using "temp/numeric_trailing_space.csv", testname("numeric with trailing spaces")
+benchmark_import using "temp/numeric_trailing_space.csv", testname("numeric with trailing spaces")
 
 * Numeric with leading spaces
 file open fh using "temp/numeric_leading_space.csv", write replace
@@ -2041,12 +2036,12 @@ file write fh "2,  200" _n
 file write fh "3,   300" _n
 file close fh
 
-noi benchmark_import using "temp/numeric_leading_space.csv", testname("numeric with leading spaces")
+benchmark_import using "temp/numeric_leading_space.csv", testname("numeric with leading spaces")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Large/Stress Tests
  ******************************************************************************/
-noi print_section "Additional Pathological - Stress Tests"
+print_section "Additional Pathological - Stress Tests"
 
 * Very wide file (200 columns)
 file open fh using "temp/very_very_wide.csv", write replace
@@ -2066,7 +2061,7 @@ forvalues j = 1/10 {
 }
 file close fh
 
-noi benchmark_import using "temp/very_very_wide.csv", testname("very wide (200 columns)")
+benchmark_import using "temp/very_very_wide.csv", testname("very wide (200 columns)")
 
 * 100K rows
 file open fh using "temp/large_100k.csv", write replace
@@ -2076,7 +2071,7 @@ forvalues i = 1/100000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_100k.csv", testname("100K rows")
+benchmark_import using "temp/large_100k.csv", testname("100K rows")
 
 * Large file with many string columns
 file open fh using "temp/large_strings.csv", write replace
@@ -2086,7 +2081,7 @@ forvalues i = 1/10000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_strings.csv", testname("large with strings (10K)")
+benchmark_import using "temp/large_strings.csv", testname("large with strings (10K)")
 
 * Large file with high missing rate
 file open fh using "temp/large_sparse.csv", write replace
@@ -2103,12 +2098,12 @@ forvalues i = 1/10000 {
 }
 file close fh
 
-noi benchmark_import using "temp/large_sparse.csv", testname("large sparse (70% missing)")
+benchmark_import using "temp/large_sparse.csv", testname("large sparse (70% missing)")
 
 /*******************************************************************************
  * SECTION: Real-World Data Patterns
  ******************************************************************************/
-noi print_section "Real-World Data Patterns"
+print_section "Real-World Data Patterns"
 
 * Log file format (timestamp, level, message)
 file open fh using "temp/log_format.csv", write replace
@@ -2119,7 +2114,7 @@ file write fh `"2023-01-15 10:30:47.789,WARN,"Deprecated API used""' _n
 file write fh `"2023-01-15 10:30:48.012,ERROR,"Connection failed: timeout""' _n
 file close fh
 
-noi benchmark_import using "temp/log_format.csv", testname("log file format")
+benchmark_import using "temp/log_format.csv", testname("log file format")
 
 * Geographic coordinates
 file open fh using "temp/geo_coords.csv", write replace
@@ -2131,7 +2126,7 @@ file write fh "4,-33.8688,151.2093,Sydney" _n
 file write fh "5,35.6762,139.6503,Tokyo" _n
 file close fh
 
-noi benchmark_import using "temp/geo_coords.csv", testname("geographic coordinates")
+benchmark_import using "temp/geo_coords.csv", testname("geographic coordinates")
 
 * IP addresses and ports
 file open fh using "temp/network_data.csv", write replace
@@ -2141,7 +2136,7 @@ file write fh "192.168.1.2,54322,10.0.0.2,443,TCP" _n
 file write fh "10.0.0.100,12345,172.16.0.1,22,SSH" _n
 file close fh
 
-noi benchmark_import using "temp/network_data.csv", testname("network data (IPs)")
+benchmark_import using "temp/network_data.csv", testname("network data (IPs)")
 
 * Gene/protein identifiers
 file open fh using "temp/bioinformatics.csv", write replace
@@ -2151,7 +2146,7 @@ file write fh "ENSG00000012048,BRCA1,17,43044295,43170245,-" _n
 file write fh "ENSG00000141510,TP53,17,7661779,7687550,-" _n
 file close fh
 
-noi benchmark_import using "temp/bioinformatics.csv", testname("bioinformatics data")
+benchmark_import using "temp/bioinformatics.csv", testname("bioinformatics data")
 
 * Web analytics data
 file open fh using "temp/web_analytics.csv", write replace
@@ -2161,7 +2156,7 @@ file write fh `"def456,/products,"/home",12345,0"' _n
 file write fh `"ghi789,/contact,"",1234,1"' _n
 file close fh
 
-noi benchmark_import using "temp/web_analytics.csv", testname("web analytics data")
+benchmark_import using "temp/web_analytics.csv", testname("web analytics data")
 
 * Sensor/IoT data
 file open fh using "temp/sensor_data.csv", write replace
@@ -2175,7 +2170,7 @@ forvalues i = 1/100 {
 }
 file close fh
 
-noi benchmark_import using "temp/sensor_data.csv", testname("sensor/IoT data")
+benchmark_import using "temp/sensor_data.csv", testname("sensor/IoT data")
 
 * Mixed language text
 file open fh using "temp/multilang_text.csv", write replace
@@ -2187,7 +2182,7 @@ file write fh "4,Hola Mundo,es" _n
 file write fh "5,Ciao Mondo,it" _n
 file close fh
 
-noi benchmark_import using "temp/multilang_text.csv", testname("multilingual text")
+benchmark_import using "temp/multilang_text.csv", testname("multilingual text")
 
 * Configuration key-value pairs
 file open fh using "temp/config_data.csv", write replace
@@ -2199,7 +2194,7 @@ file write fh "api_endpoint,https://api.example.com/v2,string" _n
 file write fh "rate_limit,1.5,float" _n
 file close fh
 
-noi benchmark_import using "temp/config_data.csv", testname("config key-value data")
+benchmark_import using "temp/config_data.csv", testname("config key-value data")
 
 * Inventory data with SKUs
 file open fh using "temp/inventory_sku.csv", write replace
@@ -2210,7 +2205,7 @@ file write fh "SKU-003-C,Gizmo C,200,4.99,Gizmos" _n
 file write fh "SKU-004-D,Thingamajig,25,49.99,Misc" _n
 file close fh
 
-noi benchmark_import using "temp/inventory_sku.csv", testname("inventory SKU data")
+benchmark_import using "temp/inventory_sku.csv", testname("inventory SKU data")
 
 * Employee HR data
 file open fh using "temp/employee_hr.csv", write replace
@@ -2221,23 +2216,23 @@ file write fh "E003,Bob,Johnson,Engineering,2021-01-10,78000,0" _n
 file write fh `"E004,"Mary Ann",Williams,HR,2018-11-20,88000,1"' _n
 file close fh
 
-noi benchmark_import using "temp/employee_hr.csv", testname("employee HR data")
+benchmark_import using "temp/employee_hr.csv", testname("employee HR data")
 
 /*******************************************************************************
  * SECTION: Combined Options Tests
  ******************************************************************************/
-noi print_section "Combined Options Tests"
+print_section "Combined Options Tests"
 
 * rowrange + colrange + threads
-noi cimport_test using "temp/range_test.csv", testname("rowrange+colrange+threads") ///
+cimport_test using "temp/range_test.csv", testname("rowrange+colrange+threads") ///
     importopts(rowrange(10:50) colrange(2:4) threads(4)) expectn(41) expectk(3)
 
 * varnames + case
-noi benchmark_import using "temp/mixedcase.csv", testname("varnames(1) + case(lower)") ///
+benchmark_import using "temp/mixedcase.csv", testname("varnames(1) + case(lower)") ///
     importopts(varnames(1) case(lower))
 
 * stringcols + asfloat
-noi benchmark_import using "temp/zipcodes.csv", testname("stringcols + asfloat") ///
+benchmark_import using "temp/zipcodes.csv", testname("stringcols + asfloat") ///
     importopts(stringcols(1) asfloat)
 
 * Note: delimiter + encoding test removed - semicolon delimiter and encoding
@@ -2245,13 +2240,13 @@ noi benchmark_import using "temp/zipcodes.csv", testname("stringcols + asfloat")
 * cause syntax issues in some Stata contexts.
 
 * Multiple options together
-noi cimport_test using "temp/large_10k.csv", testname("threads+asdouble+rowrange") ///
+cimport_test using "temp/large_10k.csv", testname("threads+asdouble+rowrange") ///
     importopts(threads(4) asdouble rowrange(100:200)) expectn(101)
 
 /*******************************************************************************
  * SECTION: Excel Import Tests
  ******************************************************************************/
-noi print_section "Excel Import Tests"
+print_section "Excel Import Tests"
 
 /*******************************************************************************
  * Helper: benchmark_excel - Import with both methods and compare
@@ -2267,7 +2262,7 @@ program define benchmark_excel
     local stata_opts : subinstr local importopts "clear" "", all
     capture import excel `using', `stata_opts'
     if _rc != 0 {
-        noi test_fail "`testname'" "Stata import excel failed with rc=`=_rc'"
+        test_fail "`testname'" "Stata import excel failed with rc=`=_rc'"
         exit
     }
     tempfile stata_data
@@ -2279,7 +2274,7 @@ program define benchmark_excel
     clear
     capture cimport excel `using', `importopts'
     if _rc != 0 {
-        noi test_fail "`testname'" "cimport excel failed with rc=`=_rc'"
+        test_fail "`testname'" "cimport excel failed with rc=`=_rc'"
         exit
     }
     tempfile cimport_data
@@ -2289,7 +2284,7 @@ program define benchmark_excel
 
     * Check dimensions
     if `stata_n' != `cimport_n' | `stata_k' != `cimport_k' {
-        noi test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
+        test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cimport N=`cimport_n' K=`cimport_k'"
         exit
     }
 
@@ -2317,10 +2312,10 @@ program define benchmark_excel
     * Compare data
     capture cf _all using `stata_renamed'
     if _rc == 0 {
-        noi test_pass "`testname'"
+        test_pass "`testname'"
     }
     else {
-        noi test_fail "`testname'" "cf _all comparison failed - data not identical"
+        test_fail "`testname'" "cf _all comparison failed - data not identical"
     }
 end
 
@@ -2334,33 +2329,33 @@ program define cimport_excel_test
     * Note: importopts should include clear if needed
     capture cimport excel `using', `importopts'
     if _rc != 0 {
-        noi test_fail "`testname'" "rc=`=_rc'"
+        test_fail "`testname'" "rc=`=_rc'"
         exit
     }
 
     if `expectn' > 0 & _N != `expectn' {
-        noi test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
+        test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
         exit
     }
 
     if `expectk' > 0 & c(k) != `expectk' {
-        noi test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
+        test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
         exit
     }
 
     if "`check'" != "" {
         capture assert `check'
         if _rc != 0 {
-            noi test_fail "`testname'" "check() failed: `check'"
+            test_fail "`testname'" "check() failed: `check'"
             exit
         }
     }
 
-    noi test_pass "`testname'"
+    test_pass "`testname'"
 end
 
 * Create test Excel files
-noi di as text "  Creating test Excel files..."
+* (silent) "  Creating test Excel files..."
 
 * Basic Excel file
 clear
@@ -2449,51 +2444,51 @@ gen VALUE = _n * 100
 export excel using "temp/excel_uppercase.xlsx", firstrow(variables) replace
 
 * Basic import tests
-noi benchmark_excel using "temp/excel_basic.xlsx", testname("Excel basic import") importopts(firstrow clear)
-noi cimport_excel_test using "temp/excel_noheader.xlsx", testname("Excel no firstrow") importopts(clear) expectn(3) expectk(3)
-noi cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel with firstrow") importopts(firstrow clear) expectn(5) expectk(4)
+benchmark_excel using "temp/excel_basic.xlsx", testname("Excel basic import") importopts(firstrow clear)
+cimport_excel_test using "temp/excel_noheader.xlsx", testname("Excel no firstrow") importopts(clear) expectn(3) expectk(3)
+cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel with firstrow") importopts(firstrow clear) expectn(5) expectk(4)
 
 * Sheet selection tests
-noi cimport_excel_test using "temp/excel_multisheet.xlsx", testname("Excel first sheet (default)") ///
+cimport_excel_test using "temp/excel_multisheet.xlsx", testname("Excel first sheet (default)") ///
     importopts(firstrow clear) expectn(3) expectk(3)
-noi cimport_excel_test using "temp/excel_multisheet.xlsx", testname("Excel named sheet") ///
+cimport_excel_test using "temp/excel_multisheet.xlsx", testname("Excel named sheet") ///
     importopts(sheet("Sheet2") firstrow clear) expectn(2) expectk(3)
 
 * Cell range tests
-noi cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel cellrange A1:B3") ///
+cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel cellrange A1:B3") ///
     importopts(cellrange(A1:B3) firstrow clear) expectn(2) expectk(2)
-noi cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel cellrange from A2") ///
+cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel cellrange from A2") ///
     importopts(cellrange(A2:) firstrow clear) expectn(4) expectk(4)
 
 * Type handling tests
-noi benchmark_excel using "temp/excel_numtypes.xlsx", testname("Excel numeric types") importopts(firstrow clear)
-noi benchmark_excel using "temp/excel_strings.xlsx", testname("Excel string types") importopts(firstrow clear)
-noi cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel allstring option") ///
+benchmark_excel using "temp/excel_numtypes.xlsx", testname("Excel numeric types") importopts(firstrow clear)
+benchmark_excel using "temp/excel_strings.xlsx", testname("Excel string types") importopts(firstrow clear)
+cimport_excel_test using "temp/excel_basic.xlsx", testname("Excel allstring option") ///
     importopts(allstring firstrow clear) expectn(5) expectk(4)
 
 * Case handling tests
-noi cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(preserve)") ///
+cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(preserve)") ///
     importopts(firstrow clear) expectn(2) expectk(3)
-noi cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(lower)") ///
+cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(lower)") ///
     importopts(firstrow clear case(lower)) expectn(2) expectk(3)
-noi cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(upper)") ///
+cimport_excel_test using "temp/excel_uppercase.xlsx", testname("Excel case(upper)") ///
     importopts(firstrow clear case(upper)) expectn(2) expectk(3)
 
 * Error handling tests
 capture cimport excel using "temp/nonexistent.xlsx", clear
 if _rc != 0 {
-    noi test_pass "Excel nonexistent file error"
+    test_pass "Excel nonexistent file error"
 }
 else {
-    noi test_fail "Excel nonexistent file error" "should have returned error"
+    test_fail "Excel nonexistent file error" "should have returned error"
 }
 
 capture cimport excel using "temp/basic.csv", clear
 if _rc != 0 {
-    noi test_pass "Excel invalid extension error"
+    test_pass "Excel invalid extension error"
 }
 else {
-    noi test_fail "Excel invalid extension error" "should have returned error"
+    test_fail "Excel invalid extension error" "should have returned error"
 }
 
 * Clean up Excel temp files
@@ -2517,10 +2512,5 @@ foreach f of local files {
     capture erase "temp/`f'"
 }
 
-noi print_summary "cimport"
-
-if $TESTS_FAILED > 0 {
-    exit 1
-}
-
+* End of cimport validation
 }

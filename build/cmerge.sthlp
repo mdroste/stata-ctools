@@ -11,6 +11,10 @@
 {phang}
 {bf:cmerge} {hline 2} C-accelerated merge for Stata datasets
 
+{pstd}
+{cmd:cmerge} is a high-performance drop-in replacement for Stata's {help merge:merge}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -197,11 +201,15 @@ the data transfer overhead may reduce the relative performance advantage.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help merge}, {help ctools}, {help csort}
+Manual: {bf:[D] merge}
+
+{psee}
+Online: {help merge}, {help joinby}, {help ctools}, {help csort}
 {p_end}

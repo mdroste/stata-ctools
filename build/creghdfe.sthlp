@@ -10,6 +10,10 @@
 {phang}
 {bf:creghdfe} {hline 2} C-accelerated high-dimensional fixed effects regression
 
+{pstd}
+{cmd:creghdfe} is a high-performance replacement for {cmd:reghdfe} version 6.0+
+by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe":sergiocorreia/reghdfe}).
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -160,11 +164,30 @@ including timing for each stage of the computation.
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
+
+
+{title:Acknowledgments}
+
+{pstd}
+This command provides similar functionality to {cmd:reghdfe} by Sergio Correia.
+The original {cmd:reghdfe} package is available at
+{browse "https://github.com/sergiocorreia/reghdfe"}. We thank Sergio Correia
+for his groundbreaking work on high-dimensional fixed effects estimation in Stata.
+
+{pstd}
+See also: Correia, S. 2016. "Linear Models with High-Dimensional Fixed Effects:
+An Efficient and Feasible Estimator." Working paper.
+{browse "http://scorreia.com/research/hdfe.pdf"}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help reghdfe} (if installed), {help ctools}, {help areg}
+Manual: {bf:[R] areg}
+
+{psee}
+Online: {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
+{help areg}, {help xtreg}, {help ctools}
 {p_end}

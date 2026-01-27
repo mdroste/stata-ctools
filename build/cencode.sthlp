@@ -11,6 +11,10 @@
 {phang}
 {bf:cencode} {hline 2} C-accelerated parallel string encoding for Stata
 
+{pstd}
+{cmd:cencode} is a high-performance drop-in replacement for Stata's {help encode:encode}
+command.
+
 
 {marker syntax}{...}
 {title:Syntax}
@@ -168,11 +172,15 @@ When the {opt verbose} option is specified, {cmd:cencode} additionally stores:
 {title:Author}
 
 {pstd}
-ctools package
+Michael Droste{break}
+{browse "https://github.com/mdroste/stata-ctools":github.com/mdroste/stata-ctools}
 
 
 {title:Also see}
 
 {psee}
-{space 2}Help: {help encode}, {help decode}, {help label}, {help ctools}
+Manual: {bf:[D] encode}
+
+{psee}
+Online: {help encode}, {help decode}, {help cdecode}, {help label}, {help ctools}
 {p_end}
