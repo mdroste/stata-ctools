@@ -1293,6 +1293,92 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 24c: New Options (robust, cluster, display, dofminus)
+ ******************************************************************************/
+print_section "New Options (Phase 1)"
+
+* Test standalone robust option
+sysuse auto, clear
+civreghdfe price (mpg = weight length), absorb(foreign) robust
+if e(N) > 0 {
+    test_pass "standalone robust option"
+}
+else {
+    test_fail "standalone robust" "e(N) not stored"
+}
+
+* Verify robust and vce(robust) give same results
+civreghdfe price (mpg = weight length), absorb(foreign) vce(robust)
+local se_vce = sqrt(e(V)[1,1])
+civreghdfe price (mpg = weight length), absorb(foreign) robust
+local se_robust = sqrt(e(V)[1,1])
+if abs(`se_vce' - `se_robust') < 1e-10 {
+    test_pass "robust = vce(robust)"
+}
+else {
+    test_fail "robust = vce(robust)" "se_vce=`se_vce' se_robust=`se_robust'"
+}
+
+* Test standalone cluster option
+civreghdfe price (mpg = weight length), absorb(foreign) cluster(foreign)
+if e(N_clust) > 0 {
+    test_pass "standalone cluster option"
+}
+else {
+    test_fail "standalone cluster" "e(N_clust) not stored"
+}
+
+* Test dofminus option
+civreghdfe price (mpg = weight length), absorb(foreign)
+local df_r_default = e(df_r)
+civreghdfe price (mpg = weight length), absorb(foreign) dofminus(1)
+local df_r_minus = e(df_r)
+if `df_r_minus' == `df_r_default' - 1 {
+    test_pass "dofminus(1) reduces df_r by 1"
+}
+else {
+    test_fail "dofminus" "df_r_default=`df_r_default' df_r_minus=`df_r_minus'"
+}
+
+* Test eform display option
+capture civreghdfe price (mpg = weight length), absorb(foreign) eform(OR)
+if _rc == 0 {
+    test_pass "eform(OR) display option"
+}
+else {
+    test_fail "eform()" "returned error `=_rc'"
+}
+
+* Test subtitle option
+capture civreghdfe price (mpg = weight length), absorb(foreign) subtitle("Custom subtitle")
+if _rc == 0 {
+    test_pass "subtitle option"
+}
+else {
+    test_fail "subtitle" "returned error `=_rc'"
+}
+
+* Test fwl() alias for partial() - check that it works
+clear
+set seed 12345
+set obs 500
+gen firm = ceil(_n / 10)
+gen z1 = runiform()
+gen z2 = rnormal()
+gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
+gen x_exog1 = runiform()
+gen x_exog2 = rnormal()
+gen y = 2*x_endog + 1.0*x_exog1 + 0.5*x_exog2 + rnormal()
+
+capture civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm) fwl(x_exog2)
+if _rc == 0 {
+    test_pass "fwl() alias for partial()"
+}
+else {
+    test_fail "fwl()" "returned error `=_rc'"
+}
+
+/*******************************************************************************
  * SECTION 25: HAC/Kernel Options (bw, kernel, dkraay, kiefer)
  *
  * NOTE: HAC diagnostic statistics (idstat, widstat) use different formulas

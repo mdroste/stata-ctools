@@ -57,7 +57,7 @@ These installations will download all of the Stata program and documentation fil
 ## Building from Source Files
 
 
-You probably do not need to compile the ctools plugin syourself; GitHub automatically builds plugins for Windows, Mac (Intel and ARM/M-series), and Linux. If you want to build plugins from source, make sure OpenMP is available on your system.
+You probably do not need to compile the ctools plugin yourself; GitHub automatically builds plugins for Windows, Mac, and Linux. If you want or need to build plugins from source, make sure OpenMP is available on your system. 
 
 ```bash
 make              # Build for current platform
@@ -66,7 +66,7 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-If you have a workstation/server CPU with lots of cache memory, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
+If you have a workstation/server CPU with lots of cache, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
 
 See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
