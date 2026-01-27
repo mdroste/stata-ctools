@@ -4,7 +4,7 @@
 
 Extremely fast drop-in replacements for a variety of Stata commands.
 
-**This project is pre-release. This software has not been widely tested, and there are probably bugs. It is being posted to allow me to test it with a small audience outside myself. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
+**This project is pre-release. It has not been exhaustively tested. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
@@ -96,4 +96,4 @@ This program is MIT-licensed.
 
 ## Contributing
 
-Contributions are welcome. Please open an issue or submit a pull request.
+Contributions are welcome. Please open an [Issue](https://github.com/mdroste/stata-ctools/issues) or submit a pull request.
