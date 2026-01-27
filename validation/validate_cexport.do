@@ -6,7 +6,7 @@
  *
  * VERIFICATION: Exports both CSVs, imports them back into Stata, and compares:
  *   - First attempts cf _all for byte-for-byte comparison
- *   - Falls back to tolerance-based comparison (1e-10 absolute, 1e-10 relative)
+ *   - Falls back to ABSOLUTE tolerance-based comparison (1e-7)
  *     to handle floating point precision differences in CSV formatting
  *   - String variables must match exactly
  *   - Reports max difference even when tests pass (if tolerance check was needed)
@@ -119,9 +119,8 @@ program define benchmark_export
 
     local all_match = 1
     local fail_reason ""
-    local tol = 1e-10
+    local tol = $DEFAULT_TOL
     local overall_max_diff = 0
-    local overall_max_reldiff = 0
 
     foreach v of local allvars {
         * Check if string or numeric
@@ -136,36 +135,30 @@ program define benchmark_export
             }
         }
         else {
-            * Numeric variable - compare values allowing tolerance
+            * Numeric variable - compare values using ABSOLUTE tolerance only
             * Create double copies to avoid type mismatch issues
             quietly gen double _v1 = `v'_stata
             quietly gen double _v2 = `v'_cexport
             quietly gen double _diff = abs(_v1 - _v2) if !missing(_v1) & !missing(_v2)
-            quietly gen double _reldiff = _diff / max(abs(_v1), 1e-300) if !missing(_v1) & !missing(_v2)
 
             * Track max differences across all variables
             quietly summarize _diff
             if r(max) != . & r(max) > `overall_max_diff' {
                 local overall_max_diff = r(max)
             }
-            quietly summarize _reldiff
-            if r(max) != . & r(max) > `overall_max_reldiff' {
-                local overall_max_reldiff = r(max)
-            }
 
-            * Use relative tolerance: allow 1e-10 relative difference or absolute 1e-10, whichever is larger
-            quietly gen double _reltol = max(`tol', abs(_v1) * `tol') if !missing(_v1)
-            quietly count if _diff > _reltol
+            * Use ABSOLUTE tolerance only
+            quietly count if _diff > `tol'
             if r(N) > 0 {
                 local all_match = 0
                 quietly summarize _diff, detail
                 local diff_mean = r(mean)
                 local diff_max = r(max)
                 local fail_reason "numeric variable `v' has `r(N)' values exceeding tolerance (mean_diff=`diff_mean', max_diff=`diff_max')"
-                drop _v1 _v2 _diff _reldiff _reltol
+                drop _v1 _v2 _diff
                 continue, break
             }
-            drop _v1 _v2 _diff _reldiff _reltol
+            drop _v1 _v2 _diff
             * Check missing values match
             quietly count if missing(`v'_stata) != missing(`v'_cexport)
             if r(N) > 0 {
@@ -180,7 +173,7 @@ program define benchmark_export
 
     if `all_match' == 1 {
         if `overall_max_diff' > 0 {
-            test_pass "`testname' (max_diff=`overall_max_diff', max_reldiff=`overall_max_reldiff')"
+            test_pass "`testname' (max_diff=`overall_max_diff')"
         }
         else {
             test_pass "`testname'"

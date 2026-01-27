@@ -307,7 +307,7 @@ capture which binsreg
 local binsreg_installed = (_rc == 0)
 
 if `binsreg_installed' {
-    local binsreg_tol = 3e-7  // HDFE cases may have ~2.4e-7 precision limit
+    local binsreg_tol = 1e-7  // Use standard absolute tolerance
 
     * Test 1: controls only
     clear

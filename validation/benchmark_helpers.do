@@ -4,6 +4,14 @@
  * Benchmark helper programs for ctools validation test suite
  * Each program runs both ctools and Stata native commands, compares results,
  * and reports [PASS] or [FAIL] with detailed error descriptions
+ *
+ * TOLERANCE POLICY:
+ *   - All comparisons use ABSOLUTE differences: abs(ctools_value - stata_value)
+ *   - Default tolerance is 1e-7 (from $DEFAULT_TOL in validate_setup.do)
+ *   - This applies to all scalars, coefficients e(b), and VCE e(V)
+ *   - No relative tolerance is used - large values must match with same precision
+ *   - Missing values in ctools when Stata has a value is treated as a FAILURE
+ *
  ******************************************************************************/
 
 /*******************************************************************************
@@ -339,29 +347,20 @@ program define benchmark_reghdfe
         }
     }
 
-    * Compare continuous scalars (use tolerance)
+    * Compare continuous scalars (use ABSOLUTE tolerance only)
     foreach scalar in r2 r2_a r2_within rss tss mss F rmse {
         local val1 = `reghdfe_`scalar''
         local val2 = `creghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
             local diff = abs(`val1' - `val2')
-            * Use relative tolerance for larger values
-            if abs(`val1') > 1 {
-                local reldiff = `diff' / abs(`val1')
-                if `reldiff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
-                }
-            }
-            else {
-                if `diff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
-                }
+            if `diff' > `tol' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_creghdfe"
         }
     }
@@ -387,35 +386,28 @@ program define benchmark_reghdfe
         local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
     }
 
-    * Compare VCE e(V) using relative tolerance
+    * Compare VCE e(V) using ABSOLUTE tolerance
     tempname diff_V
     matrix `diff_V' = reghdfe_V - creghdfe_V
     local rows = rowsof(`diff_V')
     local cols = colsof(`diff_V')
-    local maxreldiff_V = 0
-    local maxreldiff_V_i = 0
-    local maxreldiff_V_j = 0
+    local maxdiff_V = 0
+    local maxdiff_V_i = 0
+    local maxdiff_V_j = 0
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
             local diff = abs(`diff_V'[`i', `j'])
-            local base = abs(reghdfe_V[`i', `j'])
-            if `base' > 1e-10 {
-                local reldiff = `diff' / `base'
-            }
-            else {
-                local reldiff = `diff'
-            }
-            if `reldiff' > `maxreldiff_V' {
-                local maxreldiff_V = `reldiff'
-                local maxreldiff_V_i = `i'
-                local maxreldiff_V_j = `j'
+            if `diff' > `maxdiff_V' {
+                local maxdiff_V = `diff'
+                local maxdiff_V_i = `i'
+                local maxdiff_V_j = `j'
             }
         }
     }
 
-    if `maxreldiff_V' >= `tol' {
+    if `maxdiff_V' >= `tol' {
         local has_failure = 1
-        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+        local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
     }
 
     * Report result
@@ -534,29 +526,20 @@ program define benchmark_qreg
         }
     }
 
-    * Compare continuous scalars (use tolerance)
+    * Compare continuous scalars (use ABSOLUTE tolerance only)
     foreach scalar in q sum_adev sum_rdev q_v f_r {
         local val1 = `qreg_`scalar''
         local val2 = `cqreg_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
             local diff = abs(`val1' - `val2')
-            * Use relative tolerance for larger values
-            if abs(`val1') > 1 {
-                local reldiff = `diff' / abs(`val1')
-                if `reldiff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
-                }
-            }
-            else {
-                if `diff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
-                }
+            if `diff' > `tol' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_cqreg"
         }
     }
@@ -592,7 +575,7 @@ program define benchmark_qreg
         }
     }
 
-    * Compare VCE e(V) using relative tolerance
+    * Compare VCE e(V) using ABSOLUTE tolerance
     * First check dimensions match (already checked via e(b) above)
     local qreg_Vrows = rowsof(qreg_V)
     local cqreg_Vrows = rowsof(cqreg_V)
@@ -602,30 +585,23 @@ program define benchmark_qreg
         matrix `diff_V' = qreg_V - cqreg_V
         local rows = rowsof(`diff_V')
         local cols = colsof(`diff_V')
-        local maxreldiff_V = 0
-        local maxreldiff_V_i = 0
-        local maxreldiff_V_j = 0
+        local maxdiff_V = 0
+        local maxdiff_V_i = 0
+        local maxdiff_V_j = 0
         forvalues i = 1/`rows' {
             forvalues j = 1/`cols' {
                 local diff = abs(`diff_V'[`i', `j'])
-                local base = abs(qreg_V[`i', `j'])
-                if `base' > 1e-10 {
-                    local reldiff = `diff' / `base'
-                }
-                else {
-                    local reldiff = `diff'
-                }
-                if `reldiff' > `maxreldiff_V' {
-                    local maxreldiff_V = `reldiff'
-                    local maxreldiff_V_i = `i'
-                    local maxreldiff_V_j = `j'
+                if `diff' > `maxdiff_V' {
+                    local maxdiff_V = `diff'
+                    local maxdiff_V_i = `i'
+                    local maxdiff_V_j = `j'
                 }
             }
         }
 
-        if `maxreldiff_V' >= `tol' {
+        if `maxdiff_V' >= `tol' {
             local has_failure = 1
-            local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+            local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
         }
     }
 
@@ -1008,63 +984,40 @@ program define benchmark_ivreghdfe
         }
     }
 
-    * Compare continuous scalars (use tolerance)
-    * Main estimation results: use strict tolerance
+    * Compare continuous scalars (use ABSOLUTE tolerance only)
+    * Main estimation results
     foreach scalar in r2 r2_a rss mss F rmse {
         local val1 = `ivreghdfe_`scalar''
         local val2 = `civreghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
             local diff = abs(`val1' - `val2')
-            * Use relative tolerance for larger values
-            if abs(`val1') > 1 {
-                local reldiff = `diff' / abs(`val1')
-                if `reldiff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
-                }
-            }
-            else {
-                if `diff' > `tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
-                }
+            if `diff' > `tol' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_civreghdfe"
         }
     }
 
-    * Diagnostic statistics: use 100% relative tolerance (effectively skip checking)
-    * These are known to have significant numerical differences with robust/HAC VCE
-    * due to differences in how robust variance is computed for first-stage diagnostics.
-    * The main estimation (b, V) is what matters for GMM2S/CUE matching.
-    * NOTE: Do NOT tighten this tolerance without understanding the underlying
-    * differences in diagnostic stat computation between civreghdfe and ivreghdfe.
-    local diag_tol = 1.0
+    * Diagnostic statistics: use ABSOLUTE tolerance (same as other scalars)
+    * All comparisons must use abs(diff) <= tol per validation requirements
     foreach scalar in idstat idp widstat sargan sarganp {
         local val1 = `ivreghdfe_`scalar''
         local val2 = `civreghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
             local diff = abs(`val1' - `val2')
-            * Use relative tolerance for larger values
-            if abs(`val1') > 1 {
-                local reldiff = `diff' / abs(`val1')
-                if `reldiff' > `diag_tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):reldiff=`reldiff'"
-                }
-            }
-            else {
-                if `diff' > `diag_tol' {
-                    local has_failure = 1
-                    local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
-                }
+            if `diff' > `tol' {
+                local has_failure = 1
+                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_civreghdfe"
         }
     }
@@ -1090,35 +1043,28 @@ program define benchmark_ivreghdfe
         local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
     }
 
-    * Compare VCE e(V) using relative tolerance
+    * Compare VCE e(V) using ABSOLUTE tolerance
     tempname diff_V
     matrix `diff_V' = ivreghdfe_V - civreghdfe_V
     local rows = rowsof(`diff_V')
     local cols = colsof(`diff_V')
-    local maxreldiff_V = 0
-    local maxreldiff_V_i = 0
-    local maxreldiff_V_j = 0
+    local maxdiff_V = 0
+    local maxdiff_V_i = 0
+    local maxdiff_V_j = 0
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
             local diff = abs(`diff_V'[`i', `j'])
-            local base = abs(ivreghdfe_V[`i', `j'])
-            if `base' > 1e-10 {
-                local reldiff = `diff' / `base'
-            }
-            else {
-                local reldiff = `diff'
-            }
-            if `reldiff' > `maxreldiff_V' {
-                local maxreldiff_V = `reldiff'
-                local maxreldiff_V_i = `i'
-                local maxreldiff_V_j = `j'
+            if `diff' > `maxdiff_V' {
+                local maxdiff_V = `diff'
+                local maxdiff_V_i = `i'
+                local maxdiff_V_j = `j'
             }
         }
     }
 
-    if `maxreldiff_V' >= `tol' {
+    if `maxdiff_V' >= `tol' {
         local has_failure = 1
-        local all_diffs "`all_diffs' e(V)[`maxreldiff_V_i',`maxreldiff_V_j']:maxreldiff=`maxreldiff_V'"
+        local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
     }
 
     * Report result

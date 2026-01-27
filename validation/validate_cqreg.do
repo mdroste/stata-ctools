@@ -69,9 +69,8 @@ benchmark_qreg price mpg weight length turn displacement, testname("many covaria
 print_section "VCE Options - Full Coverage"
 
 * vce(robust) - Huber sandwich estimator
-* Use slightly relaxed tolerance (2e-6) for numerical precision differences
 sysuse auto, clear
-benchmark_qreg price mpg weight, vce(robust) tol(2e-6) testname("vce(robust)")
+benchmark_qreg price mpg weight, vce(robust) testname("vce(robust)")
 
 * vce(iid) - assumes i.i.d. errors
 sysuse auto, clear
@@ -771,65 +770,21 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
-* if condition
+* if condition - use benchmark_qreg for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-qreg price mpg weight if price > 5000
-local qreg_N = e(N)
+benchmark_qreg price mpg weight if price > 5000, testname("if condition")
 
-cqreg price mpg weight if price > 5000
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if condition: N matches"
-}
-else {
-    test_fail "if condition" "N differs"
-}
-
-* in condition
+* in condition - use benchmark_qreg for full comparison
 sysuse auto, clear
-qreg price mpg weight in 1/50
-local qreg_N = e(N)
+benchmark_qreg price mpg weight in 1/50, testname("in condition")
 
-cqreg price mpg weight in 1/50
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
-
-* Combined if and in
+* Combined if and in - use benchmark_qreg for full comparison
 sysuse auto, clear
-qreg price mpg weight if foreign == 0 in 1/60
-local qreg_N = e(N)
+benchmark_qreg price mpg weight if foreign == 0 in 1/60, testname("if and in combined")
 
-cqreg price mpg weight if foreign == 0 in 1/60
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if and in combined: N matches"
-}
-else {
-    test_fail "if and in combined" "N differs"
-}
-
-* if with numeric comparison
+* if with numeric comparison - use benchmark_qreg for full comparison
 sysuse auto, clear
-qreg price mpg weight if mpg > 20
-local qreg_N = e(N)
-
-cqreg price mpg weight if mpg > 20
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if mpg > 20: N matches"
-}
-else {
-    test_fail "if mpg > 20" "N differs"
-}
+benchmark_qreg price mpg weight if mpg > 20, testname("if mpg > 20")
 
 /*******************************************************************************
  * SECTION 26: absorb Option (experimental)
@@ -1099,12 +1054,11 @@ else {
     else {
         * Check objective function (sum_adev) matches within tolerance
         local adev_diff = abs(`qreg_adev' - `cqreg_adev')
-        local adev_reldiff = `adev_diff' / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.foreign: median"
         }
         else {
-            test_fail "i.foreign: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.foreign: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1127,12 +1081,12 @@ else {
         test_fail "i.rep78: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.rep78: median"
         }
         else {
-            test_fail "i.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.rep78: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1155,12 +1109,12 @@ else {
         test_fail "i.rep78: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.rep78: q=0.25"
         }
         else {
-            test_fail "i.rep78: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.rep78: q=0.25" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1183,12 +1137,12 @@ else {
         test_fail "i.rep78: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.rep78: q=0.75"
         }
         else {
-            test_fail "i.rep78: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.rep78: q=0.75" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1211,12 +1165,12 @@ else {
         test_fail "i.foreign i.rep78: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.foreign i.rep78: median"
         }
         else {
-            test_fail "i.foreign i.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.foreign i.rep78: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1239,12 +1193,12 @@ else {
         test_fail "nlsw88 i.race: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "nlsw88 i.race: median"
         }
         else {
-            test_fail "nlsw88 i.race: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1267,12 +1221,12 @@ else {
         test_fail "nlsw88 i.race: q=0.10" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "nlsw88 i.race: q=0.10"
         }
         else {
-            test_fail "nlsw88 i.race: q=0.10" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: q=0.10" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1295,12 +1249,12 @@ else {
         test_fail "nlsw88 i.race: q=0.90" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "nlsw88 i.race: q=0.90"
         }
         else {
-            test_fail "nlsw88 i.race: q=0.90" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: q=0.90" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1323,12 +1277,12 @@ else {
         test_fail "nlsw88 i.occupation: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "nlsw88 i.occupation: median"
         }
         else {
-            test_fail "nlsw88 i.occupation: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.occupation: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1351,12 +1305,12 @@ else {
         test_fail "nlsw88 i.industry: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "nlsw88 i.industry: median"
         }
         else {
-            test_fail "nlsw88 i.industry: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.industry: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1393,12 +1347,12 @@ else {
         test_fail "i.race#i.married: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "i.race#i.married: median (alternate solution OK)"
         }
         else {
-            test_fail "i.race#i.married: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.race#i.married: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1427,12 +1381,12 @@ else {
         test_fail "ib3.rep78: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "ib3.rep78: median (alternate solution OK)"
         }
         else {
-            test_fail "ib3.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "ib3.rep78: median" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1459,12 +1413,12 @@ else {
         test_fail "ib3.rep78: q=0.75" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+        if `adev_diff' < $DEFAULT_TOL {
             test_pass "ib3.rep78: q=0.75 (alternate solution OK)"
         }
         else {
-            test_fail "ib3.rep78: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "ib3.rep78: q=0.75" "sum_adev diff=`adev_diff'"
         }
     }
 }
@@ -1555,12 +1509,12 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld L.mvalue: median"
             }
             else {
-                test_fail "grunfeld L.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld L.mvalue: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1582,12 +1536,12 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld L.mvalue: q=0.25"
             }
             else {
-                test_fail "grunfeld L.mvalue: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld L.mvalue: q=0.25" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1609,12 +1563,12 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld L.mvalue: q=0.75"
             }
             else {
-                test_fail "grunfeld L.mvalue: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld L.mvalue: q=0.75" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1636,12 +1590,12 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld D.mvalue: median"
             }
             else {
-                test_fail "grunfeld D.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld D.mvalue: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1663,12 +1617,12 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld D.mvalue: q=0.25"
             }
             else {
-                test_fail "grunfeld D.mvalue: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld D.mvalue: q=0.25" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1690,12 +1644,12 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld D.mvalue: q=0.75"
             }
             else {
-                test_fail "grunfeld D.mvalue: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld D.mvalue: q=0.75" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1717,12 +1671,12 @@ if _rc == 0 {
             test_fail "grunfeld L2.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld L2.mvalue: median"
             }
             else {
-                test_fail "grunfeld L2.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld L2.mvalue: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1744,12 +1698,12 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue D.kstock: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld L.mvalue D.kstock: median"
             }
             else {
-                test_fail "grunfeld L.mvalue D.kstock: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld L.mvalue D.kstock: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1771,12 +1725,12 @@ if _rc == 0 {
             test_fail "grunfeld F.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "grunfeld F.mvalue: median"
             }
             else {
-                test_fail "grunfeld F.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "grunfeld F.mvalue: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1809,12 +1763,12 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "nlswork L.tenure: median"
             }
             else {
-                test_fail "nlswork L.tenure: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "nlswork L.tenure: median" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1836,12 +1790,12 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "nlswork L.tenure: q=0.25"
             }
             else {
-                test_fail "nlswork L.tenure: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "nlswork L.tenure: q=0.25" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1863,12 +1817,12 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "nlswork L.tenure: q=0.75"
             }
             else {
-                test_fail "nlswork L.tenure: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "nlswork L.tenure: q=0.75" "sum_adev diff=`adev_diff'"
             }
         }
     }
@@ -1890,12 +1844,12 @@ if _rc == 0 {
             test_fail "nlswork D.tenure: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            local adev_diff = abs(`qreg_adev' - `cqreg_adev')
+            if `adev_diff' < $DEFAULT_TOL {
                 test_pass "nlswork D.tenure: median"
             }
             else {
-                test_fail "nlswork D.tenure: median" "sum_adev reldiff=`adev_reldiff'"
+                test_fail "nlswork D.tenure: median" "sum_adev diff=`adev_diff'"
             }
         }
     }

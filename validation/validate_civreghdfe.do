@@ -135,20 +135,8 @@ gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
 gen x_exog = runiform()
 gen y = 2*x_endog + 1.5*x_exog + rnormal()
 
-ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id)
-matrix ivreghdfe_b = e(b)
-local ivreghdfe_N = e(N)
-
-civreghdfe y (x_endog = z1 z2) x_exog, absorb(id)
-matrix civreghdfe_b = e(b)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "20K dataset: N matches"
-}
-else {
-    test_fail "20K dataset" "N differs"
-}
+* Use benchmark_ivreghdfe for full comparison (N, coefficients, VCE)
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) testname("20K dataset")
 
 /*******************************************************************************
  * SECTION 9: first option
@@ -229,33 +217,13 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
+* if condition - use benchmark_ivreghdfe for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-ivreghdfe price (mpg = weight) if price > 5000, absorb(foreign)
-local ivreghdfe_N = e(N)
+benchmark_ivreghdfe price (mpg = weight) if price > 5000, absorb(foreign) testname("if condition")
 
-civreghdfe price (mpg = weight) if price > 5000, absorb(foreign)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "if condition: N matches"
-}
-else {
-    test_fail "if condition" "N differs"
-}
-
+* in condition - use benchmark_ivreghdfe for full comparison
 sysuse auto, clear
-ivreghdfe price (mpg = weight) in 1/50, absorb(foreign)
-local ivreghdfe_N = e(N)
-
-civreghdfe price (mpg = weight) in 1/50, absorb(foreign)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
+benchmark_ivreghdfe price (mpg = weight) in 1/50, absorb(foreign) testname("in condition")
 
 /*******************************************************************************
  * SECTION 14: Coefficient comparison
@@ -614,11 +582,11 @@ local b_full = _b[x_endog]
 civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm) partial(x_exog2)
 local b_partial = _b[x_endog]
 local diff = abs(`b_full' - `b_partial')
-if `diff' < 0.01 {
+if `diff' < 1e-7 {
     test_pass "partial() coefficients match full model (FWL theorem)"
 }
 else {
-    test_fail "partial() FWL" "coefficient diff = `diff' (should be < 0.01)"
+    test_fail "partial() FWL" "coefficient diff = `diff'"
 }
 
 * Test partial() with multiple variables
@@ -788,7 +756,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "i.varname exog: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "i.varname exog: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test i.varname as instrument
@@ -820,7 +788,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "i.varname instrument: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "i.varname instrument: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test multiple factor variables
@@ -887,11 +855,11 @@ if _rc == 0 {
         local civreghdfe_N = e(N)
         local civreghdfe_r2 = e(r2)
 
-        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < 1e-4 {
+        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < 1e-7 {
             test_pass "c.turn#i.foreign: matches ivreghdfe"
         }
         else {
-            test_fail "c.turn#i.foreign" "N or r2 differs"
+            test_fail "c.turn#i.foreign" "N or r2 differs: N=`ivreghdfe_N'/`civreghdfe_N' r2=`ivreghdfe_r2'/`civreghdfe_r2'"
         }
     }
     else {
@@ -899,7 +867,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "c.turn#i.foreign: ivreghdfe comparison skipped"
+    test_fail "c.turn#i.foreign: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 /*******************************************************************************
@@ -995,9 +963,9 @@ if _rc == 0 {
         test_fail "L.varname N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
     }
 
-    * Check coefficient is reasonably close
+    * Check coefficient matches with strict tolerance
     local coef_diff = abs(`ivreghdfe_b' - `civreghdfe_b')
-    if `coef_diff' < 0.01 {
+    if `coef_diff' < 1e-7 {
         test_pass "L.varname: coefficient matches ivreghdfe"
     }
     else {
@@ -1005,7 +973,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "L.varname: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "L.varname: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test combination of time series operators
@@ -1070,7 +1038,7 @@ local kclass_b = _b[x_endog]
 ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm)
 local tsls_b = _b[x_endog]
 local diff = abs(`kclass_b' - `tsls_b')
-if `diff' < 1e-6 {
+if `diff' < 1e-7 {
     test_pass "kclass(1) equals 2SLS"
 }
 else {
@@ -1381,17 +1349,7 @@ else {
 /*******************************************************************************
  * SECTION 25: HAC/Kernel Options (bw, kernel, dkraay, kiefer)
  *
- * NOTE: HAC diagnostic statistics (idstat, widstat) use different formulas
- * in ivreghdfe vs civreghdfe when explicit kernel() is specified with panel FE.
- * - ivreghdfe applies a special HAC-weighted LM statistic formula
- * - civreghdfe uses the standard KP LM formula with HAC S-matrix
- * These result in fundamentally different values that cannot be reconciled
- * without replicating ivreghdfe's exact internal formulas.
- *
- * Tolerances set based on achievable matching:
- * - Coefficients: match exactly
- * - VCE: ~10% difference for kernel tests (different HAC formulas)
- * - Diagnostic stats: larger differences due to formula differences
+ * All tests use the standard absolute tolerance (1e-7 or as specified by tol()).
  ******************************************************************************/
 print_section "HAC/Kernel Options"
 
@@ -1409,20 +1367,20 @@ gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
 gen x_exog = runiform()
 gen y = 2*x_endog + 1.5*x_exog + rnormal()
 
-* Benchmark kernel tests - VCE matches within ~10%, diagnostic stats differ more
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(bartlett) bw(2) testname("kernel(bartlett) bw(2)") tol(0.50)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(parzen) bw(3) testname("kernel(parzen) bw(3)") tol(0.50)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(qs) bw(2) testname("kernel(qs) bw(2)") tol(0.50)
+* Benchmark kernel tests - use default strict tolerance
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(bartlett) bw(2) testname("kernel(bartlett) bw(2)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(parzen) bw(3) testname("kernel(parzen) bw(3)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(qs) bw(2) testname("kernel(qs) bw(2)")
 
-* Benchmark Driscoll-Kraay - matches well
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testname("dkraay(2)") tol(0.01)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)") tol(0.02)
+* Benchmark Driscoll-Kraay
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testname("dkraay(2)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)")
 
-* Benchmark Kiefer - larger differences in diagnostic stats
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer") tol(0.70)
+* Benchmark Kiefer
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer")
 
-* Benchmark bw with robust - matches reasonably
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) testname("bw(2) + robust") tol(0.05)
+* Benchmark bw with robust
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) testname("bw(2) + robust")
 
 /*******************************************************************************
  * Summary

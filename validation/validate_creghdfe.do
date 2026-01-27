@@ -155,12 +155,12 @@ else {
 }
 
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) maxiter(1000)
+capture creghdfe price mpg weight, absorb(foreign) iterate(1000)
 if _rc == 0 {
-    test_pass "maxiter(1000) accepted"
+    test_pass "iterate(1000) accepted"
 }
 else {
-    test_fail "maxiter option" "returned error `=_rc'"
+    test_fail "iterate option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
@@ -226,35 +226,13 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
+* if condition - use benchmark_reghdfe for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-reghdfe price mpg weight if price > 5000, absorb(foreign)
-matrix reghdfe_b = e(b)
-local reghdfe_N = e(N)
+benchmark_reghdfe price mpg weight if price > 5000, absorb(foreign) testname("if condition")
 
-creghdfe price mpg weight if price > 5000, absorb(foreign)
-matrix creghdfe_b = e(b)
-local creghdfe_N = e(N)
-
-if `reghdfe_N' == `creghdfe_N' {
-    test_pass "if condition: N matches"
-}
-else {
-    test_fail "if condition" "N differs"
-}
-
+* in condition - use benchmark_reghdfe for full comparison
 sysuse auto, clear
-reghdfe price mpg weight in 1/50, absorb(foreign)
-local reghdfe_N = e(N)
-
-creghdfe price mpg weight in 1/50, absorb(foreign)
-local creghdfe_N = e(N)
-
-if `reghdfe_N' == `creghdfe_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
+benchmark_reghdfe price mpg weight in 1/50, absorb(foreign) testname("in condition")
 
 /*******************************************************************************
  * SECTION 12: nostandardize option
