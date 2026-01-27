@@ -55,6 +55,7 @@ The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
 {synopt:{opt max:iter(#)}}maximum CG iterations (default: 500){p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt noc:onstant}}suppress constant term (absorbed with FE){p_end}
 
 {syntab:Reporting}
@@ -205,6 +206,12 @@ solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of CG iterations. Default is 500.
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+operations including HDFE absorption and matrix computations. By default,
+{cmd:civreghdfe} uses all available CPU cores as reported by OpenMP. Use this
+option to limit parallelism, for example when running multiple jobs simultaneously.
 
 {phang}
 {opt noconstant} suppresses the constant term. Note that with absorbed fixed

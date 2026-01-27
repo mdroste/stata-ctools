@@ -60,6 +60,7 @@ high-performance replacement for {help export excel:export excel}.
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
 {synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 
 {synoptset 24 tabbed}{...}
@@ -153,6 +154,12 @@ variables. This overrides the variables' display formats. Common formats include
 {phang}
 {opt timeit} displays a timing breakdown showing data loading time, write
 time, and throughput.
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+data loading and export operations. By default, {cmd:cexport} uses all available
+CPU cores as reported by OpenMP. Use this option to limit parallelism, for
+example when running multiple jobs simultaneously.
 
 
 {marker exceloptions}{...}

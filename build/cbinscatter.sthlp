@@ -59,6 +59,7 @@ Michael Stepner ({browse "https://github.com/michaelstepner/binscatter":michaels
 {synopt:{opt reportreg}}report underlying regression{p_end}
 {synopt:{opt v:erbose}}display progress information{p_end}
 {synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
@@ -198,6 +199,12 @@ including observation counts and timing for each stage.
 {phang}
 {opt timeit} displays a timing breakdown showing time spent in each
 computational phase (load, residualize, bin computation, line fitting).
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+operations. By default, {cmd:cbinscatter} uses all available CPU cores as
+reported by OpenMP. Use this option to limit parallelism, for example when
+running multiple jobs simultaneously.
 
 
 {marker examples}{...}

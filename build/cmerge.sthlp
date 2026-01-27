@@ -50,6 +50,7 @@ where {it:merge_type} is one of
 {synopt:{opt norep:ort}}do not display result summary{p_end}
 {synopt:{opt verbose}}display detailed timing and progress information{p_end}
 {synopt:{opt time:it}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
 {synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
@@ -116,6 +117,12 @@ during the merge operation.
 {phang}
 {opt timeit} displays a timing breakdown showing time spent in each phase of
 the merge operation.
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+operations. By default, {cmd:cmerge} uses all available CPU cores as reported by
+OpenMP. Use this option to limit parallelism, for example when running multiple
+jobs simultaneously.
 
 {phang}
 {opt nolabel} prevents value labels from being copied from the using dataset.

@@ -47,6 +47,7 @@ solver and supports high-dimensional fixed effects via the {opt absorb()} option
 {syntab:Reporting}
 {synopt:{opt v:erbose}}display progress information{p_end}
 {synopt:{opt timeit}}display execution time{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
 {synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-8)}{p_end}
@@ -149,6 +150,12 @@ timing breakdowns.
 
 {phang}
 {opt timeit} displays the total execution time.
+
+{phang}
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+linear algebra operations. By default, {cmd:cqreg} uses all available CPU cores
+as reported by OpenMP. Use this option to limit parallelism, for example when
+running multiple jobs simultaneously.
 
 {dlgtab:Optimization}
 
