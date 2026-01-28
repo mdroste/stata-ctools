@@ -78,7 +78,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 - ctools does not work with datasets exceeding 2^31 observations (~2.147 billion obs). This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of the Stata function interface for C plugins and can only be addressed with an update to the Stata Plugin Interface. 
 
 ## Issues
-[] Precision issues in some cases for accumulated scalar statistics (e.g. total/model/residual sum of squares) associated with regression output (cqreg, creghdfe, civredhfe): only matches replacement to ~7 significant digits
+- [ ] Precision of accumulated scalar statistics (e.g. total/model/residual sum of squares) associated with regression output (cqreg, creghdfe, civredhfe): only matches replacement to ~7 significant digits.
 
 ## Authorship
 
