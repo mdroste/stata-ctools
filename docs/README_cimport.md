@@ -86,6 +86,17 @@ cimport delimited using data.csv, clear varnames(nonames)
 - Load data into variables using parallel processing
 - OpenMP-parallelized parsing
 
+### Speedup Tricks
+
+- **Memory-mapped I/O**: The entire CSV file is `mmap`'d for zero-copy access, avoiding `read()` syscall overhead and letting the OS handle page-level caching
+- **OS-level prefetch hints**: `madvise(MADV_SEQUENTIAL | MADV_WILLNEED)` on POSIX tells the kernel to read ahead aggressively
+- **SIMD CSV parsing**: SSE2 (x86) and NEON (ARM64) intrinsics scan 16 bytes at a time for delimiters and newlines, accelerating field boundary detection
+- **8-way unrolled quote detection**: Inner loop processes 8 characters per iteration to validate quoted fields with minimal branch overhead
+- **Parallel row processing**: Each OpenMP thread processes an independent chunk of rows; chunk boundaries are determined by a fast newline pre-scan
+- **Compact field references**: Each parsed field is stored as a 64-bit offset + 32-bit length (12 bytes total), minimizing metadata memory for files with millions of fields
+- **Arena allocator for strings**: String values are bulk-allocated in a thread-safe arena with atomic CAS, avoiding per-string `malloc` calls
+- **Persistent thread pool**: Worker threads are reused across scan and load phases
+
 ### Fast Mode
 
 The `fast` option provides additional speedups for very large files by:

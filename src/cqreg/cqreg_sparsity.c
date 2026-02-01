@@ -201,7 +201,7 @@ ST_double cqreg_bandwidth_bofinger(ST_int N, ST_double q)
     ST_double phi4 = pow(phi_zq, 4);
     ST_double term = 2.0 * z_q * z_q + 1.0;
 
-    ST_double h = pow(4.5 * phi4 * term * term / (ST_double)N, 0.2);
+    ST_double h = pow(4.5 * phi4 / (term * term) / (ST_double)N, 0.2);
 
     return h;
 }
@@ -220,7 +220,7 @@ ST_double cqreg_bandwidth_chamberlain(ST_int N, ST_double q, ST_double alpha)
         phi_zq = 1e-10;  /* Prevent division by zero for extreme quantiles */
     }
 
-    ST_double h = z_alpha * sqrt(q * (1.0 - q) / (ST_double)N) / phi_zq;
+    ST_double h = z_alpha * sqrt(q * (1.0 - q) / (ST_double)N);
 
     return h;
 }

@@ -2,9 +2,9 @@
 
 [![PluginsSome ](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
 
-Extremely fast drop-in replacements for a variety of Stata commands.
+Very fast, C-accelerated drop-in replacements for a variety of Stata commands. Written with Claude Code. 
 
-**This project is pre-release. It has not been exhaustively tested. Please report any bugs you encounter on [Issues](https://github.com/mdroste/stata-ctools/issues).**
+**This project is pre-release. It has not been exhaustively tested. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
@@ -22,6 +22,7 @@ Extremely fast drop-in replacements for a variety of Stata commands.
 | `decode` | `cdecode` | Recast labeled numeric as string | **10-20x** |
 | `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
 | `gstats winsor` | `cwinsor` | Winsorize variables | **2-10x** |
+| `rangestat` | `crangestat` | Range statistics of variables | **10-50x** |
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |

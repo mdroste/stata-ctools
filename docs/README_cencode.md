@@ -58,11 +58,11 @@ cencode make if foreign == 1, generate(foreign_make)
 - Looks up each string in the hash table (O(1) average)
 - Writes the numeric code to the output variable
 
-### Key Optimizations
-1. **Streaming**: Only stores unique strings, not all N observations
-2. **Hash Table**: O(1) average lookup time with FNV-1a hashing
-3. **Arena Allocation**: Efficient memory allocation for unique strings
-4. **Alphabetical Ordering**: Codes assigned in alphabetical order (1, 2, 3, ...)
+### Speedup Tricks
+1. **Streaming two-pass design**: Only K unique strings are stored in memory (not all N observations), keeping the memory footprint at O(K) instead of O(N)
+2. **FNV-1a hash table**: O(1) average lookup for both the uniqueness check (pass 1) and the encoding lookup (pass 2)—avoids the O(K) linear scans native `encode` uses
+3. **Arena allocator**: Unique strings are bulk-allocated in a contiguous arena with O(1) bump-pointer allocation and a single bulk free, eliminating per-string `malloc`/`free` overhead
+4. **Alphabetical ordering**: After collecting uniques, codes are assigned in sorted order (1, 2, 3, ...) matching Stata's `encode` convention
 
 ## Performance
 

@@ -17,6 +17,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cdestring..."
+
 /*******************************************************************************
  * Helper: Compare cdestring vs destring
  ******************************************************************************/
@@ -100,7 +102,7 @@ program define benchmark_destring
         * Compare results (use tolerance for floating-point comparison)
         local ndiff_total = 0
         foreach v of local varlist {
-            quietly count if abs(`v'_c - `v'_s) > 1e-10 & !missing(`v'_c) & !missing(`v'_s)
+            quietly count if abs(`v'_c - `v'_s) > $DEFAULT_TOL & !missing(`v'_c) & !missing(`v'_s)
             local ndiff_total = `ndiff_total' + r(N)
             * Also check missing patterns match
             quietly count if missing(`v'_c) != missing(`v'_s)
@@ -163,7 +165,7 @@ program define benchmark_destring
             local vc = "`v'_c"
             local vs = "`v'_s"
             * Compare non-missing values with tolerance
-            quietly count if abs(`vc' - `vs') > 1e-10 & !missing(`vc') & !missing(`vs')
+            quietly count if abs(`vc' - `vs') > $DEFAULT_TOL & !missing(`vc') & !missing(`vs')
             local ndiff_total = `ndiff_total' + r(N)
             * Check missing patterns match
             quietly count if missing(`vc') != missing(`vs')
@@ -313,7 +315,7 @@ replace x = "3.125" in 3
 replace x = "0.001" in 4
 replace x = "-99.99" in 5
 cdestring x, generate(x_num)
-local pass = (abs(x_num[1] - 1.5) < 1e-10) & (abs(x_num[3] - 3.125) < 1e-10)
+local pass = (abs(x_num[1] - 1.5) < $DEFAULT_TOL) & (abs(x_num[3] - 3.125) < $DEFAULT_TOL)
 if `pass' {
     test_pass "decimal numbers"
 }
@@ -665,7 +667,7 @@ clear
 set obs 5
 gen str10 x = string(_n * 10) + "%"
 cdestring x, generate(x_num) percent
-local pass = (abs(x_num[1] - 0.1) < 1e-10) & (abs(x_num[5] - 0.5) < 1e-10)
+local pass = (abs(x_num[1] - 0.1) < $DEFAULT_TOL) & (abs(x_num[5] - 0.5) < $DEFAULT_TOL)
 if `pass' {
     test_pass "percent option basic"
 }
@@ -737,7 +739,7 @@ clear
 set obs 5
 gen str10 x = "100%"
 cdestring x, generate(x_num) percent
-if abs(x_num[1] - 1.0) < 1e-10 {
+if abs(x_num[1] - 1.0) < $DEFAULT_TOL {
     test_pass "100% converts to 1.0"
 }
 else {
@@ -770,7 +772,7 @@ replace x = "3,125" in 3
 replace x = "10,0" in 4
 replace x = "0,5" in 5
 cdestring x, generate(x_num) dpcomma
-local pass = (abs(x_num[1] - 1.5) < 1e-10) & (abs(x_num[3] - 3.125) < 1e-10)
+local pass = (abs(x_num[1] - 1.5) < $DEFAULT_TOL) & (abs(x_num[3] - 3.125) < $DEFAULT_TOL)
 if `pass' {
     test_pass "dpcomma basic"
 }
@@ -865,7 +867,7 @@ gen str20 x_dot = string(_n / 7, "%10.4f")
 gen str20 x_comma = subinstr(x_dot, ".", ",", 1)
 destring x_dot, generate(x_dot_num)
 cdestring x_comma, generate(x_comma_num) dpcomma
-count if abs(x_dot_num - x_comma_num) > 1e-10
+count if abs(x_dot_num - x_comma_num) > $DEFAULT_TOL
 if r(N) == 0 {
     test_pass "dpcomma equals standard decimal"
 }
@@ -1242,7 +1244,7 @@ gen str15 x = string(_n) + "%"
 capture cdestring x, generate(x_num) percent
 if _rc == 0 {
     * Values should be _n / 100
-    count if abs(x_num - _n/100) < 1e-10
+    count if abs(x_num - _n/100) < $DEFAULT_TOL
     if r(N) == 50000 {
         test_pass "50K with percent"
     }
@@ -1540,31 +1542,5 @@ benchmark_destring x, testname("vs destring: float precision") generate(x) float
  * SUMMARY
  ******************************************************************************/
 * End of cdestring validation
-}
-
-* Print summary when run standalone
-noisily {
-    di as text ""
-    di as text "{hline 55}"
-    di as text "cdestring Validation Summary"
-    di as text "{hline 55}"
-    di as text "  Passed:  " as result %5.0f $TESTS_PASSED
-    di as text "  Failed:  " as result %5.0f $TESTS_FAILED
-    di as text "  Total:   " as result %5.0f $TESTS_TOTAL
-    di as text "{hline 55}"
-
-    if $TESTS_FAILED > 0 {
-        di as error ""
-        di as error "Failed Tests:"
-        print_failures
-        di as text ""
-    }
-
-    if $TESTS_FAILED == 0 {
-        di as result "ALL TESTS PASSED"
-    }
-    else {
-        di as error "VALIDATION FAILED"
-    }
-    di as text ""
+noi print_summary "cdestring"
 }

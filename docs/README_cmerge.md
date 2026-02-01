@@ -73,13 +73,17 @@ cmerge m:1 code using lookup.dta, force
 - Applies `keep()` and `assert()` filters
 - Renames placeholder variables to match using dataset
 
-### Optimization Features
+### Speedup Tricks
 
-| Feature | Description |
-|---------|-------------|
-| Hash-based lookup | For m:1/1:1 merges when `keep()` excludes using-only rows |
-| Pre-sorted detection | Automatically detects if data is already sorted |
-| Parallel radix sort | OpenMP-parallelized LSD radix sort |
+- **Parallel 4-pass LSD radix sort**: Sorts key variables using 8-bit radix (256 buckets) with OpenMP-parallelized histogram and scatter phases; pointer swapping between passes avoids copying
+- **Cache-line aligned histograms**: 64-byte aligned per-thread histograms prevent false sharing during parallel counting
+- **Hybrid group search**: Uses linear scan for the first 16 elements, then switches to binary search for larger groups—exploits branch prediction for small groups
+- **Specialized numeric key comparison**: Fast path skips string comparison logic when all key variables are numeric
+- **Pre-sorted detection**: Automatically detects if data is already sorted and skips the sort phase entirely
+- **Parallel data loading**: SIMD-accelerated (AVX2/SSE2/NEON) bulk load with 16x loop unrolling from Stata's Plugin Interface
+- **Overflow-safe allocation**: `ctools_safe_malloc2` checks for integer overflow before every allocation, avoiding silent corruption on large datasets
+- **Arena allocator for strings**: Bulk-allocated string storage with O(1) allocation and single bulk free, reducing `malloc` overhead
+- **Persistent thread pool**: Worker threads are reused across sort and merge phases
 
 ## Merge Indicator Values
 

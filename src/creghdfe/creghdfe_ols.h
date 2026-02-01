@@ -16,6 +16,54 @@
 #define invert_from_cholesky ctools_invert_from_cholesky
 
 /* ========================================================================
+ * Double-double arithmetic for quad-precision accumulation
+ * Represents a number as hi + lo where |lo| <= 0.5 * ulp(hi)
+ * ======================================================================== */
+
+typedef struct {
+    ST_double hi;
+    ST_double lo;
+} dd_real;
+
+/* Error-free transformations */
+static inline dd_real two_sum(ST_double a, ST_double b) {
+    ST_double s = a + b;
+    ST_double v = s - a;
+    ST_double e = (a - (s - v)) + (b - v);
+    return (dd_real){s, e};
+}
+
+static inline dd_real two_prod(ST_double a, ST_double b) {
+    ST_double p = a * b;
+    ST_double e = fma(a, b, -p);
+    return (dd_real){p, e};
+}
+
+/* Double-double addition: (a.hi + a.lo) + b */
+static inline dd_real dd_add_d(dd_real a, ST_double b) {
+    dd_real s = two_sum(a.hi, b);
+    s.lo += a.lo;
+    /* Renormalize */
+    ST_double t = s.hi + s.lo;
+    s.lo = s.lo - (t - s.hi);
+    s.hi = t;
+    return s;
+}
+
+/* Double-double sum of squares: sum(x[i]^2) with quad precision */
+ST_double dd_sum_sq(const ST_double *x, ST_int N);
+
+/* Double-double weighted sum of squares: sum(w[i] * x[i]^2) */
+ST_double dd_sum_sq_weighted(const ST_double *x, const ST_double *w, ST_int N);
+
+/* Double-double sum of squared deviations: sum((x[i] - mean)^2) */
+ST_double dd_sum_sq_dev(const ST_double *x, ST_double mean, ST_int N);
+
+/* Double-double weighted sum of squared deviations */
+ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
+                                  const ST_double *w, ST_int N);
+
+/* ========================================================================
  * Dot product variants for numerical precision
  * ======================================================================== */
 

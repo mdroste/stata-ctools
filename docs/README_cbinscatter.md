@@ -94,22 +94,25 @@ cbinscatter price mpg, linetype(cubic) verbose timeit
 
 `cbinscatter` achieves dramatic speedups through:
 
-### Histogram-Based Binning
-- Uses O(N) histogram algorithm instead of O(N log N) sorting
-- Sequential memory access for cache efficiency
-- 40x+ speedups for bin computation alone
+### Speedup Tricks
 
-### Parallel Data Loading
-- 8-way loop unrolling for efficient data transfer
-- OpenMP parallelization where applicable
+**Binning Algorithm:**
+- **Histogram-based quantile binning**: For large datasets (>50K), builds a 4096-bucket histogram in O(N) and assigns bins from cumulative counts—avoids the O(N log N) sort that traditional `binscatter` requires
+- **Direct bin assignment from sorted order**: When data is sorted, bin boundaries are read off directly without binary search
+- **O(N) weighted quantile computation**: Accumulates cumulative weights in a single pass to find quantile boundaries
 
-### Single-Pass Statistics
-- Bin means computed in single pass
-- Linear and quadratic fits use closed-form solutions
+**Statistics Computation:**
+- **Single-pass accumulation**: Mean, variance, and standard error for each bin are computed in one pass over the data, avoiding repeated traversals
+- **Contiguous allocation block**: All per-bin accumulators (x_sum, y_sum, x2_sum, count, etc.) are allocated in a single cache-friendly memory block
+- **Fast path for unweighted no-SE case**: A specialized loop skips weight and SE computation when neither is needed, reducing per-observation work
 
-### Optimized Residualization
-- Controls partialled out via efficient OLS
-- Fixed effects absorbed using `creghdfe`'s HDFE algorithm
+**Residualization:**
+- **Native HDFE via CG solver**: Fixed effects are absorbed using the same symmetric Kaczmarz CG algorithm as `creghdfe`, with pre-computed inverse counts and thread-local buffers
+- **Fused project-subtract**: Combines projection and subtraction in a single memory pass
+
+**Data I/O:**
+- **SIMD bulk load**: AVX2/SSE2/NEON accelerated with 16x loop unrolling via `ctools_data_io`
+- **Overflow-safe allocation**: `ctools_safe_mul_size` checks prevent silent overflow on datasets with many bins or groups
 
 ### Performance Benchmark
 On a dataset with 25 million observations, `cbinscatter` completes in under 1 second including graph generation.

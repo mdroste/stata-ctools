@@ -14,10 +14,6 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
-quietly {
-
-noi di as text "Running validation tests for cencode..."
-
 /*******************************************************************************
  * Helper: Compare cencode vs encode
  ******************************************************************************/
@@ -2882,5 +2878,4 @@ benchmark_encode make, testname("vs encode: in 10/60") in2("10/60")
  * SUMMARY
  ******************************************************************************/
 * End of cencode validation
-noi print_summary "cencode"
 }

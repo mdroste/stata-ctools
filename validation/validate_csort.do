@@ -22,6 +22,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for csort..."
+
 * Plugin functionality check
 sysuse auto, clear
 capture csort price
@@ -1361,4 +1363,5 @@ foreach alg in lsd msd timsort sample merge ips4o {
 }
 
 * End of csort validation
+noi print_summary "csort"
 }

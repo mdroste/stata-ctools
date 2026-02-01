@@ -13,9 +13,6 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
-quietly {
-
-noi di as text "Running validation tests for civreghdfe..."
 
 * Check if ivreghdfe is installed
 capture which ivreghdfe
@@ -240,17 +237,20 @@ matrix ivreghdfe_b = e(b)
 civreghdfe price (mpg = weight length), absorb(foreign)
 matrix civreghdfe_b = e(b)
 
-* Compare coefficients using sigfigs
-matrix_min_sigfigs ivreghdfe_b civreghdfe_b
-local min_sf = r(min_sigfigs)
+tempname diff
+matrix `diff' = ivreghdfe_b - civreghdfe_b
+local cols = colsof(`diff')
+local maxdiff = 0
+forvalues j = 1/`cols' {
+    local d = abs(`diff'[1, `j'])
+    if `d' > `maxdiff' local maxdiff = `d'
+}
 
-if `min_sf' >= $DEFAULT_SIGFIGS {
-    local sf_fmt : display %4.1f `min_sf'
-    test_pass "coefficients match (sigfigs=`sf_fmt')"
+if `maxdiff' < 1e-7 {
+    test_pass "coefficients match (maxdiff=`maxdiff')"
 }
 else {
-    local sf_fmt : display %4.1f `min_sf'
-    test_fail "coefficients" "sigfigs=`sf_fmt' below threshold"
+    test_fail "coefficients" "maxdiff=`maxdiff' exceeds tolerance"
 }
 
 /*******************************************************************************
@@ -580,14 +580,12 @@ civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm)
 local b_full = _b[x_endog]
 civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm) partial(x_exog2)
 local b_partial = _b[x_endog]
-sigfigs `b_full' `b_partial'
-local sf = r(sigfigs)
-if `sf' >= $DEFAULT_SIGFIGS {
+local diff = abs(`b_full' - `b_partial')
+if `diff' < 1e-7 {
     test_pass "partial() coefficients match full model (FWL theorem)"
 }
 else {
-    local sf_fmt : display %4.1f `sf'
-    test_fail "partial() FWL" "coefficient sigfigs = `sf_fmt'"
+    test_fail "partial() FWL" "coefficient diff = `diff'"
 }
 
 * Test partial() with multiple variables
@@ -856,7 +854,7 @@ if _rc == 0 {
         local civreghdfe_N = e(N)
         local civreghdfe_r2 = e(r2)
 
-        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < $DEFAULT_TOL {
+        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < 1e-7 {
             test_pass "c.turn#i.foreign: matches ivreghdfe"
         }
         else {
@@ -966,7 +964,7 @@ if _rc == 0 {
 
     * Check coefficient matches with strict tolerance
     local coef_diff = abs(`ivreghdfe_b' - `civreghdfe_b')
-    if `coef_diff' < $DEFAULT_TOL {
+    if `coef_diff' < 1e-7 {
         test_pass "L.varname: coefficient matches ivreghdfe"
     }
     else {
@@ -1281,7 +1279,7 @@ civreghdfe price (mpg = weight length), absorb(foreign) vce(robust)
 local se_vce = sqrt(e(V)[1,1])
 civreghdfe price (mpg = weight length), absorb(foreign) robust
 local se_robust = sqrt(e(V)[1,1])
-if abs(`se_vce' - `se_robust') < $DEFAULT_TOL {
+if abs(`se_vce' - `se_robust') < 1e-10 {
     test_pass "robust = vce(robust)"
 }
 else {
@@ -1388,5 +1386,4 @@ benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) tes
  ******************************************************************************/
 
 * End of civreghdfe validation
-noi print_summary "civreghdfe"
 }

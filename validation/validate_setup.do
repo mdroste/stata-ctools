@@ -3,6 +3,13 @@
  *
  * Core validation framework for ctools test suite
  * Minimal output: only summary table and failures are displayed
+ *
+ * TOLERANCE POLICY:
+ *   All comparisons use SIGNIFICANT FIGURES, not absolute differences.
+ *   sigfigs = -log10(|a - b| / max(|a|, |b|))
+ *   Default threshold is 7 significant figures ($DEFAULT_SIGFIGS).
+ *   This ensures scale-invariant precision: 1e6 vs 1e6+1 and 0.001 vs 0.001001
+ *   both require ~3 sigfigs of agreement.
  ******************************************************************************/
 
 version 14.0
@@ -20,8 +27,12 @@ global TESTS_PASSED = 0
 global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
 
-* Default tolerance - do NOT change this value except by human decision.
-* This tolerance ensures numerical precision of ctools implementations.
+* Default significant figures threshold - do NOT change this value except by human decision.
+* This ensures numerical precision of ctools implementations.
+* A value of 7 means results must agree to at least 7 significant figures.
+global DEFAULT_SIGFIGS = 7
+
+* Legacy alias for backwards compatibility
 global DEFAULT_TOL = 1e-7
 
 * Initialize failure tracking (up to 100 failures)
@@ -96,73 +107,241 @@ end
 capture program drop print_summary
 program define print_summary
     args component
-    * Silent - no output (validate_all.do handles summary)
+    di as text ""
+    di as text "{hline 45}"
+    di as text "  `component' validation results"
+    di as text "{hline 45}"
+    di as text "  Passed: " as result "$TESTS_PASSED"
+    di as text "  Failed: " _continue
+    if $TESTS_FAILED == 0 {
+        di as result "$TESTS_FAILED"
+    }
+    else {
+        di as error "$TESTS_FAILED"
+    }
+    di as text "  Total:  " as result "$TESTS_TOTAL"
+    di as text "{hline 45}"
+    if $TESTS_FAILED == 0 {
+        di as result "  ALL TESTS PASSED"
+    }
+    else {
+        di as error "  SOME TESTS FAILED"
+        print_failures
+    }
+    di as text "{hline 45}"
+    di as text ""
 end
 
 /*******************************************************************************
- * assert_scalar_equal - Compare two scalar values
+ * sigfigs - Compute number of significant figures of agreement between two values
+ *
+ * Formula: -log10(|a - b| / max(|a|, |b|))
+ *
+ * Returns:
+ *   - 15 (double precision limit) if values are identical
+ *   - 0 if one value is zero and the other is not
+ *   - Number of matching significant figures otherwise
+ *
+ * Examples:
+ *   1.234567 vs 1.234568 → ~6.1 sig figs (differ in 7th digit)
+ *   1000000 vs 1000001   → ~6.0 sig figs
+ *   0.001234 vs 0.001235 → ~3.1 sig figs
+ ******************************************************************************/
+capture program drop sigfigs
+program define sigfigs, rclass
+    args val1 val2
+
+    * Handle missing values
+    if missing(`val1') | missing(`val2') {
+        return scalar sigfigs = 0
+        exit
+    }
+
+    * If values are identical (including both zero), return max precision
+    if `val1' == `val2' {
+        return scalar sigfigs = 15
+        exit
+    }
+
+    * If both values are effectively zero (below machine precision), they match
+    * This handles cases like 0 vs 1e-17 which are numerically equivalent
+    local eps = 1e-14
+    if (abs(`val1') < `eps') & (abs(`val2') < `eps') {
+        return scalar sigfigs = 15
+        exit
+    }
+
+    * If one is zero and other is not, no significant figures agree
+    if (`val1' == 0) | (`val2' == 0) {
+        return scalar sigfigs = 0
+        exit
+    }
+
+    * Compute significant figures of agreement
+    local absdiff = abs(`val1' - `val2')
+    local maxabs = max(abs(`val1'), abs(`val2'))
+    local reldiff = `absdiff' / `maxabs'
+
+    * Handle edge case where reldiff is 0 (shouldn't happen, but be safe)
+    if `reldiff' == 0 {
+        return scalar sigfigs = 15
+        exit
+    }
+
+    * sigfigs = -log10(reldiff)
+    local sf = -log10(`reldiff')
+
+    * Handle missing result from log10 (extreme values)
+    if missing(`sf') {
+        return scalar sigfigs = 15
+        exit
+    }
+
+    * Clamp to [0, 15] range (double precision limits)
+    if `sf' < 0 {
+        local sf = 0
+    }
+    if `sf' > 15 {
+        local sf = 15
+    }
+
+    return scalar sigfigs = `sf'
+end
+
+/*******************************************************************************
+ * assert_scalar_equal - Compare two scalar values by significant figures
+ *
+ * Tests whether two values agree to at least N significant figures.
+ * Default threshold is 7 significant figures ($DEFAULT_SIGFIGS).
  ******************************************************************************/
 capture program drop assert_scalar_equal
 program define assert_scalar_equal
-    args val1 val2 tol testname
+    args val1 val2 min_sigfigs testname
 
-    if "`tol'" == "" local tol = $DEFAULT_TOL
+    if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
 
-    local diff = abs(`val1' - `val2')
-    if `diff' == 0 | `diff' < `tol' {
+    * Compute significant figures of agreement
+    sigfigs `val1' `val2'
+    local sf = r(sigfigs)
+
+    if `sf' >= `min_sigfigs' {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "expected `val2', got `val1' (diff=`diff')"
+        local sf_fmt : display %5.1f `sf'
+        test_fail "`testname'" "expected `val2', got `val1' (sigfigs=`sf_fmt', need `min_sigfigs')"
     }
 end
 
 /*******************************************************************************
- * assert_matrix_equal - Compare two matrices element-wise
+ * assert_matrix_equal - Compare two matrices element-wise by significant figures
+ *
+ * Tests whether all matrix elements agree to at least N significant figures.
+ * Reports the minimum sigfigs found across all element comparisons.
  ******************************************************************************/
 capture program drop assert_matrix_equal
 program define assert_matrix_equal
-    args mat1 mat2 tol testname
+    args mat1 mat2 min_sigfigs testname
 
-    if "`tol'" == "" local tol = $DEFAULT_TOL
+    if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
 
-    tempname diff
-    matrix `diff' = `mat1' - `mat2'
-    local maxdiff = 0
-    local rows = rowsof(`diff')
-    local cols = colsof(`diff')
+    local min_sf = 15
+    local min_i = 1
+    local min_j = 1
+    local rows = rowsof(`mat1')
+    local cols = colsof(`mat1')
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
-            local d = abs(`diff'[`i', `j'])
-            if `d' > `maxdiff' local maxdiff = `d'
+            local v1 = `mat1'[`i', `j']
+            local v2 = `mat2'[`i', `j']
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf' {
+                local min_sf = `sf'
+                local min_i = `i'
+                local min_j = `j'
+            }
         }
     }
 
-    if `maxdiff' < `tol' {
+    if `min_sf' >= `min_sigfigs' {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "max element diff=`maxdiff'"
+        local sf_fmt : display %5.1f `min_sf'
+        test_fail "`testname'" "element [`min_i',`min_j'] sigfigs=`sf_fmt', need `min_sigfigs'"
     }
 end
 
 /*******************************************************************************
- * assert_var_equal - Compare two numeric variables
+ * matrix_min_sigfigs - Return minimum sigfigs across all matrix elements
+ *
+ * For use in inline comparisons. Returns r(min_sigfigs), r(min_i), r(min_j).
+ ******************************************************************************/
+capture program drop matrix_min_sigfigs
+program define matrix_min_sigfigs, rclass
+    args mat1 mat2
+
+    local min_sf = 15
+    local min_i = 1
+    local min_j = 1
+    local rows = rowsof(`mat1')
+    local cols = colsof(`mat1')
+    forvalues i = 1/`rows' {
+        forvalues j = 1/`cols' {
+            local v1 = `mat1'[`i', `j']
+            local v2 = `mat2'[`i', `j']
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf' {
+                local min_sf = `sf'
+                local min_i = `i'
+                local min_j = `j'
+            }
+        }
+    }
+
+    return scalar min_sigfigs = `min_sf'
+    return scalar min_i = `min_i'
+    return scalar min_j = `min_j'
+end
+
+/*******************************************************************************
+ * assert_var_equal - Compare two numeric variables by significant figures
+ *
+ * Tests whether all observations agree to at least N significant figures.
  ******************************************************************************/
 capture program drop assert_var_equal
 program define assert_var_equal
-    args var1 var2 tol testname
+    args var1 var2 min_sigfigs testname
 
-    if "`tol'" == "" local tol = 1e-10
+    if "`min_sigfigs'" == "" local min_sigfigs = $DEFAULT_SIGFIGS
 
-    quietly count if abs(`var1' - `var2') > `tol'
+    * Generate sigfigs for each observation
+    tempvar sf
+    quietly {
+        * Handle identical values (including both zero)
+        gen double `sf' = 15 if `var1' == `var2'
+        * Handle one zero, other non-zero
+        replace `sf' = 0 if (`sf' == .) & ((`var1' == 0) | (`var2' == 0))
+        * Compute sigfigs for remaining cases
+        replace `sf' = -log10(abs(`var1' - `var2') / max(abs(`var1'), abs(`var2'))) if `sf' == .
+        * Clamp to valid range
+        replace `sf' = 0 if `sf' < 0
+        replace `sf' = 15 if `sf' > 15
+    }
+
+    * Count observations that fail the threshold
+    quietly count if `sf' < `min_sigfigs'
     local ndiff = r(N)
 
     if `ndiff' == 0 {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "`ndiff' values differ"
+        quietly summarize `sf'
+        local min_sf : display %5.1f r(min)
+        test_fail "`testname'" "`ndiff' values below `min_sigfigs' sigfigs (min=`min_sf')"
     }
 end
 

@@ -24,7 +24,7 @@ program define creghdfe, eclass
 
     syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(string) [VCE(string) Verbose TIMEit ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
-        DOFadjustments(string) GROUPvar(name) THReads(integer 0)]
+        DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
 
     local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
 
@@ -307,6 +307,7 @@ program define creghdfe, eclass
     scalar __creghdfe_dof_adjust_type = `dof_adjust_type'
     scalar __creghdfe_savefe = `savefe'
     scalar __creghdfe_compute_groupvar = ("`groupvar'" != "")
+    scalar __creghdfe_use_quad = ("`quad'" != "")
 
     * Build threads option string
     local threads_code ""
@@ -374,12 +375,6 @@ program define creghdfe, eclass
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
     matrix __creghdfe_V = J(`K_x' + 1, `K_x' + 1, 0)
 
-    * Debug: Print plugin varlist and indices
-    di "DEBUG: plugin_varlist = `plugin_varlist'"
-    di "DEBUG: resid_var_idx = " __creghdfe_resid_var_idx
-    local nvars_plugin : word count `plugin_varlist'
-    di "DEBUG: nvars_plugin = `nvars_plugin'"
-
     * Call the C plugin with full_regression subcommand
     capture noisily plugin call ctools_plugin `plugin_varlist' if `touse', ///
         "creghdfe `threads_code' full_regression"
@@ -390,11 +385,12 @@ program define creghdfe, eclass
         capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
         capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
         capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-        capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
+        capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad
         capture scalar drop __creghdfe_resid_var_idx
         capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
         capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
         capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
+        capture scalar drop __creghdfe_touse_idx
         capture matrix drop __creghdfe_V
         di as error "Error in regression (rc=`reg_rc')"
         exit `reg_rc'
@@ -413,9 +409,7 @@ program define creghdfe, eclass
     local K_keep = __creghdfe_K_keep
     local df_a = __creghdfe_df_a
     local mobility_groups = __creghdfe_mobility_groups
-    local rss = __creghdfe_rss
-    local tss = __creghdfe_tss
-    local tss_within = __creghdfe_tss_within
+    * Use scalars (not locals) throughout to avoid precision loss in string conversion.
     local has_cons = __creghdfe_has_cons
     local cons = __creghdfe_cons
     capture local num_iters = __creghdfe_iterations
@@ -451,8 +445,12 @@ program define creghdfe, eclass
     }
 
     * Calculate R-squared and adjusted R-squared
-    local r2 = 1 - `rss' / `tss'
-    local r2_within = 1 - `rss' / `tss_within'
+    * Use scalars for precision-critical computations to avoid local precision loss
+    scalar __cr_rss = scalar(__creghdfe_rss)
+    scalar __cr_tss = scalar(__creghdfe_tss)
+    scalar __cr_tss_w = scalar(__creghdfe_tss_within)
+    local r2 = 1 - scalar(__cr_rss) / scalar(__cr_tss)
+    local r2_within = 1 - scalar(__cr_rss) / scalar(__cr_tss_w)
     local df_m = `K_keep'
 
     * df_r depends on VCE type:
@@ -485,19 +483,19 @@ program define creghdfe, eclass
     if `df_r_ols' < 1 {
         local df_r_ols = 1
     }
-    local r2_a = 1 - (`rss'/`df_r_ols') / (`tss'/(`N_final'-1))
-    local rmse = sqrt(`rss' / `df_r_ols')
+    local r2_a = 1 - (scalar(__cr_rss)/`df_r_ols') / (scalar(__cr_tss)/(`N_final'-1))
+    local rmse = sqrt(scalar(__cr_rss) / `df_r_ols')
 
     * Calculate F-statistic
     * For unadjusted VCE: use traditional MSS/MSE formula with within-group variation
     * For robust/cluster VCE: use Wald test F = b'*V^-1*b / k
     * e(mss) = TSS - RSS (total model sum of squares for reporting)
     * But F uses within-group MSS = tss_within - rss
-    local mss = `tss' - `rss'
-    local mss_within = `tss_within' - `rss'
+    scalar __cr_mss = scalar(__cr_tss) - scalar(__cr_rss)
+    scalar __cr_mss_w = scalar(__cr_tss_w) - scalar(__cr_rss)
     if `vcetype' == 0 {
         * Traditional F-statistic using within-group variation
-        local F = (`mss_within' / `df_m') / (`rss' / `df_r')
+        local F = (scalar(__cr_mss_w) / `df_m') / (scalar(__cr_rss) / `df_r')
     }
     else {
         * Wald F-statistic for robust/cluster VCE - computed after V matrix is built
@@ -620,10 +618,10 @@ program define creghdfe, eclass
     ereturn scalar r2_within = `r2_within'
     ereturn scalar r2_a = `r2_a'
     ereturn scalar rmse = `rmse'
-    ereturn scalar rss = `rss'
-    ereturn scalar mss = `mss'
-    ereturn scalar tss = `tss'
-    ereturn scalar tss_within = `tss_within'
+    ereturn scalar rss = scalar(__cr_rss)
+    ereturn scalar mss = scalar(__cr_mss)
+    ereturn scalar tss = scalar(__cr_tss)
+    ereturn scalar tss_within = scalar(__cr_tss_w)
     ereturn scalar df_a = `df_a_adjusted'
     ereturn scalar df_a_initial = `df_a'
     ereturn scalar df_a_nested = `df_a_nested'
@@ -718,7 +716,7 @@ program define creghdfe, eclass
         }
         local coefs = `cats' - `redundant'
         local total_coefs = `total_coefs' + `coefs'
-        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "   `nested_marker'{c |}"
+        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "    `nested_marker'{c |}"
     }
     di as text "{hline 13}{c BT}{hline 39}{c BRC}"
     if `has_nested' {
@@ -729,14 +727,15 @@ program define creghdfe, eclass
     capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
     capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
     capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
-    capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid
+    capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad
     capture scalar drop __creghdfe_resid_var_idx
     capture scalar drop __creghdfe_has_weights __creghdfe_weight_type
     capture scalar drop __creghdfe_dof_adjust_type __creghdfe_savefe
     capture scalar drop __creghdfe_compute_groupvar __creghdfe_groupvar_idx __creghdfe_savefe_idx
     capture scalar drop __creghdfe_N __creghdfe_num_singletons __creghdfe_K_keep
     capture scalar drop __creghdfe_df_a __creghdfe_mobility_groups
-    capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within
+    capture scalar drop __creghdfe_rss __creghdfe_tss __creghdfe_tss_within __creghdfe_touse_idx
+    capture scalar drop __cr_rss __cr_tss __cr_tss_w __cr_mss __cr_mss_w
     capture scalar drop __creghdfe_has_cons __creghdfe_cons
     capture scalar drop __creghdfe_ols_N __creghdfe_df_a_nested_computed
     capture scalar drop __creghdfe_num_collinear __creghdfe_N_clust __creghdfe_iterations

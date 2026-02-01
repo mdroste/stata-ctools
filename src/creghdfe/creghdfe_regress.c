@@ -139,6 +139,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
         resid_var_idx = (ST_int)val;
     }
 
+    /* Check if quad-precision accumulation is requested */
+    ST_int use_quad = 0;
+    if (SF_scal_use("__creghdfe_use_quad", &val) == 0) {
+        use_quad = (ST_int)val;
+    }
+
     if (G < 1 || G > 10) {
         SF_error("creghdfe: invalid number of FE groups (must be 1-10)\n");
         return 198;
@@ -1086,27 +1092,38 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * Note: for aweight/pweight, weights have been normalized so sum(w) = N
      * ================================================================ */
     for (k = 0; k < K; k++) {
-        ST_double ss = 0.0;
         ST_double *col = &data[k * N];
         ST_double mean_k = means[k];
 
+        /* Compute TSS = sum((x - mean)^2) [or weighted variant].
+         * When quad option is specified, use double-double arithmetic
+         * to match Mata's quadcross() precision. Otherwise use Kahan
+         * summation with volatile to prevent FMA. */
+        ST_double ss = 0.0;
         if (has_weights && g_state->weights != NULL) {
-            /* Weighted TSS: sum(w * (x - mean)^2) */
-            for (idx = 0; idx < N; idx++) {
-                ST_double dev = col[idx] - mean_k;
-                ss += g_state->weights[idx] * dev * dev;
+            if (use_quad) {
+                ss = dd_sum_sq_dev_weighted(col, mean_k, g_state->weights, N);
+            } else {
+                /* Kahan summation to match Mata's crossdev() */
+                for (idx = 0; idx < N; idx++) {
+                    ST_double d = col[idx] - mean_k;
+                    volatile ST_double sq = d * d;
+                    ss += g_state->weights[idx] * sq;
+                }
             }
-            /* For normalized weights (aw/pw), sum(w) = N, so df is still N-1 */
-            /* For fweight, sum(w) = sum_weights, so df is sum_weights - 1 */
             ST_double df_stdev = (weight_type == 2) ? (g_state->sum_weights - 1.0) : (ST_double)(N - 1);
             tss[k] = ss;
             stdevs[k] = sqrt(ss / df_stdev);
         } else {
-            /* Unweighted TSS */
-            #pragma omp simd reduction(+:ss)
-            for (idx = 0; idx < N; idx++) {
-                ST_double dev = col[idx] - mean_k;
-                ss += dev * dev;
+            if (use_quad) {
+                ss = dd_sum_sq_dev(col, mean_k, N);
+            } else {
+                /* Kahan summation to match Mata's crossdev() */
+                for (idx = 0; idx < N; idx++) {
+                    ST_double d = col[idx] - mean_k;
+                    volatile ST_double sq = d * d;
+                    ss += sq;
+                }
             }
             tss[k] = ss;
             stdevs[k] = sqrt(ss / (N - 1));
@@ -1334,15 +1351,28 @@ ST_retcode do_full_regression(int argc, char *argv[])
     if (has_weights) {
         compute_xtx_xty_weighted(data_keep, g_state->weights, weight_type, N, K_keep + 1, xtx_keep, xty_keep);
         /* Weighted TSS_within = sum(w_i * y_i^2)
-         * For aw/pw: weights are already normalized (sum=N), use them directly
-         * For fweight: use raw weights directly */
-        tss_within = 0.0;
-        for (idx = 0; idx < N; idx++) {
-            tss_within += g_state->weights[idx] * data_keep[idx] * data_keep[idx];
+         * Use quad-precision or Kahan summation based on option. */
+        if (use_quad) {
+            tss_within = dd_sum_sq_weighted(data_keep, g_state->weights, N);
+        } else {
+            tss_within = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                volatile ST_double sq = data_keep[idx] * data_keep[idx];
+                tss_within += g_state->weights[idx] * sq;
+            }
         }
     } else {
         compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
-        tss_within = fast_dot(data_keep, data_keep, N);
+        /* Compute tss_within: use quad-precision or Kahan summation. */
+        if (use_quad) {
+            tss_within = dd_sum_sq(data_keep, N);
+        } else {
+            tss_within = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                volatile ST_double sq = data_keep[idx] * data_keep[idx];
+                tss_within += sq;
+            }
+        }
     }
 
     t_ols = get_time_sec();
@@ -1688,23 +1718,32 @@ ST_retcode do_full_regression(int argc, char *argv[])
         for (idx = 0; idx < N; idx++) {
             ST_double y_hat = 0.0;
             for (k = 0; k < K_keep; k++) {
-                y_hat += data_keep[(k + 1) * N + idx] * beta_keep[k];
+                /* Use volatile to prevent FMA, matching Mata's matrix multiply */
+                volatile ST_double prod = data_keep[(k + 1) * N + idx] * beta_keep[k];
+                y_hat += prod;
             }
             resid[idx] = data_keep[idx] - y_hat;
         }
 
-        /* Recompute RSS from residuals directly for better numerical precision.
-         * The formula RSS = TSS - sum(beta * X'Y) suffers from catastrophic
-         * cancellation when R^2 is close to 1. Computing RSS = sum(resid^2)
-         * is more numerically stable. */
-        rss = 0.0;
-        if (has_weights) {
-            for (idx = 0; idx < N; idx++) {
-                rss += g_state->weights[idx] * resid[idx] * resid[idx];
+        /* Recompute RSS from residuals: use quad-precision or Kahan. */
+        if (use_quad) {
+            if (has_weights) {
+                rss = dd_sum_sq_weighted(resid, g_state->weights, N);
+            } else {
+                rss = dd_sum_sq(resid, N);
             }
         } else {
-            for (idx = 0; idx < N; idx++) {
-                rss += resid[idx] * resid[idx];
+            rss = 0.0;
+            if (has_weights) {
+                for (idx = 0; idx < N; idx++) {
+                    volatile ST_double sq = resid[idx] * resid[idx];
+                    rss += g_state->weights[idx] * sq;
+                }
+            } else {
+                for (idx = 0; idx < N; idx++) {
+                    volatile ST_double sq = resid[idx] * resid[idx];
+                    rss += sq;
+                }
             }
         }
     }
@@ -1732,15 +1771,18 @@ ST_retcode do_full_regression(int argc, char *argv[])
     if (standardize) {
         ST_double stdev_y = stdevs[0];
 
-        rss = rss * stdev_y * stdev_y;
-        tss_within = tss_within * stdev_y * stdev_y;
-
-        /* Destandardize residuals */
+        /* Destandardize residuals first */
         if (resid) {
             for (idx = 0; idx < N; idx++) {
                 resid[idx] *= stdev_y;
             }
         }
+
+        /* Match reghdfe: multiply standardized RSS/TSS_within by stdev_y^2.
+         * reghdfe computes RSS from standardized residuals via quadcross(),
+         * then does sol.rss = sol.rss * stdev_y ^ 2 (reghdfe.mata:3717). */
+        rss = rss * stdev_y * stdev_y;
+        tss_within = tss_within * stdev_y * stdev_y;
 
         for (k = 0; k < K_keep; k++) {
             ST_int orig_idx = keep_idx[k];

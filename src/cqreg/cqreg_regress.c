@@ -284,9 +284,10 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
                                             ST_double quantile,
                                             cqreg_bw_method bw_method,
                                             const cqreg_ipm_config *ipm_config,
-                                            const ST_double *main_beta)
+                                            const ST_double *main_beta,
+                                            ST_double precomputed_bw)
 {
-    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);
     ST_double q_lo = quantile - h;
     ST_double q_hi = quantile + h;
 
@@ -315,9 +316,9 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
     aux_config.maxiter = 200;       /* Same as main solve */
-    aux_config.tol_primal = 1e-8;   /* Tight tolerance for accurate sparsity */
-    aux_config.tol_dual = 1e-8;     /* Tight tolerance for accurate sparsity */
-    aux_config.tol_gap = 1e-8;      /* Tight tolerance for accurate sparsity */
+    aux_config.tol_primal = ipm_config->tol_primal;
+    aux_config.tol_dual = ipm_config->tol_dual;
+    aux_config.tol_gap = ipm_config->tol_gap;
     aux_config.verbose = 0;         /* Suppress output for aux solves */
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 
@@ -331,16 +332,6 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
         free(beta_lo);
         free(beta_hi);
         return 1.0;
-    }
-
-    /*
-     * OPTIMIZATION: Initialize auxiliary betas from main_beta.
-     * Even though τ±h differs from τ, the coefficients are typically close.
-     * This provides a better starting point than OLS, reducing iterations.
-     */
-    if (main_beta != NULL) {
-        memcpy(beta_lo, main_beta, K * sizeof(ST_double));
-        memcpy(beta_hi, main_beta, K * sizeof(ST_double));
     }
 
     /* Solve quantile regression at q_lo and q_hi.
@@ -465,9 +456,10 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
                                                   cqreg_bw_method bw_method,
                                                   const cqreg_ipm_config *ipm_config,
                                                   const ST_double *main_beta,
-                                                  ST_double *out_bandwidth)
+                                                  ST_double *out_bandwidth,
+                                                  ST_double precomputed_bw)
 {
-    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);
     ST_double q_lo = quantile - h;
     ST_double q_hi = quantile + h;
 
@@ -499,9 +491,9 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
     aux_config.maxiter = 200;
-    aux_config.tol_primal = 1e-8;
-    aux_config.tol_dual = 1e-8;
-    aux_config.tol_gap = 1e-8;
+    aux_config.tol_primal = ipm_config->tol_primal;
+    aux_config.tol_dual = ipm_config->tol_dual;
+    aux_config.tol_gap = ipm_config->tol_gap;
     aux_config.verbose = 0;
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 
@@ -682,6 +674,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int vce_type = read_scalar_int("__cqreg_vce_type", 0);
     ST_int bw_method = read_scalar_int("__cqreg_bw_method", 0);
     ST_int density_method = read_scalar_int("__cqreg_density_method", 1);  /* Default: fitted */
+    ST_double precomputed_bw = read_scalar("__cqreg_bandwidth", -1.0);  /* Pre-computed in Stata for precision */
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-12);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
@@ -983,7 +976,8 @@ ST_retcode cqreg_full_regression(const char *args)
                                                           state->bw_method,
                                                           &ipm_config,
                                                           state->beta,
-                                                          &state->bandwidth);
+                                                          &state->bandwidth,
+                                                          precomputed_bw);
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
         /* Fitted method for IID: use Siddiqui difference quotient method.
          * This fits QR at τ±h and computes sparsity at mean(X).
@@ -994,8 +988,9 @@ ST_retcode cqreg_full_regression(const char *args)
                                                      N, K, quantile,
                                                      state->bw_method,
                                                      &ipm_config,
-                                                     state->beta);
-        state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
+                                                     state->beta,
+                                                     precomputed_bw);
+        state->bandwidth = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, state->bw_method);
     } else {
         /* Residual method: use difference quotient sparsity */
         state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);

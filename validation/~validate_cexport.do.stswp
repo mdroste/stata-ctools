@@ -20,10 +20,6 @@ if _rc != 0 {
 
 capture mkdir "temp"
 
-quietly {
-
-noi di as text "Running validation tests for cexport..."
-
 /*******************************************************************************
  * Helper: benchmark_export - Export with both methods, import back, compare
  * Required: testname() - the test criterion/name
@@ -2113,5 +2109,4 @@ foreach f of local files {
 }
 
 * End of cexport validation
-noi print_summary "cexport"
 }

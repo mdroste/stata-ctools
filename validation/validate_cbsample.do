@@ -13,6 +13,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cbsample..."
+
 * Plugin functionality check
 clear
 set obs 100
@@ -228,4 +230,5 @@ else {
 }
 
 * End of cbsample validation
+noi print_summary "cbsample"
 }

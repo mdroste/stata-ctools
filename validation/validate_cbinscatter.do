@@ -17,6 +17,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cbinscatter..."
+
 * Plugin check
 sysuse auto, clear
 capture cbinscatter price mpg, nograph
@@ -307,7 +309,7 @@ capture which binsreg
 local binsreg_installed = (_rc == 0)
 
 if `binsreg_installed' {
-    local binsreg_tol = 1e-7  // Use standard absolute tolerance
+    local binsreg_tol = $DEFAULT_TOL
 
     * Test 1: controls only
     clear
@@ -974,4 +976,5 @@ else {
 }
 
 * End of cbinscatter validation
+noi print_summary "cbinscatter"
 }

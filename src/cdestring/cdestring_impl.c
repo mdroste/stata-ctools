@@ -4,26 +4,20 @@
  * High-performance string-to-numeric conversion for Stata
  * Part of the ctools suite
  *
- * Algorithm:
- * 1. Parse command arguments (variable indices, options)
- * 2. For each variable (parallelized across variables):
- *    a. Read all string values from Stata into C memory
- *    b. For each observation (sequential):
- *       - Strip ignore characters if specified
- *       - Strip % and divide by 100 if percent option
- *       - Parse string to double using fast parser
- *       - Store result in C array
- *    c. Write numeric values back to Stata (sequential)
- *
- * Parallelization strategy:
- * - Processing is parallelized across variables (not observations)
- * - This avoids concurrent access to Stata's SPI for the same variable
+ * Algorithm (3-phase parallel pipeline):
+ * 1. Bulk load (parallel across variables): Use ctools_data_load_selective()
+ *    to load all source string variables from Stata into C memory.
+ * 2. Parse (parallel across observations): OpenMP parallel loop converts
+ *    strings to doubles in pure C memory with no SPI calls.
+ * 3. Bulk store (parallel across variables): Write numeric results back to
+ *    Stata via SF_vstore, one thread per variable.
  */
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <stdbool.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -257,160 +251,12 @@ static void free_options(cdestring_options *opts)
 }
 
 /* ============================================================================
- * Main Implementation
- * ============================================================================ */
-
-/*
- * Process a single variable: convert string to numeric.
- * This function runs entirely sequentially for Stata SPI safety.
- *
- * Returns:
- *   0 = success
- *   1 = had non-numeric values (only returned if force=0)
- *  -1 = error
- */
-static int process_variable(int src_idx, int dst_idx,
-                            ST_int obs1, size_t nobs,
-                            cdestring_options *opts,
-                            int *nconverted, int *nfailed)
-{
-    int local_converted = 0;
-    int local_failed = 0;
-    int had_nonnumeric = 0;
-
-    /* Determine decimal and group separators */
-    char dec_sep = opts->dpcomma ? ',' : '.';
-    char grp_sep = opts->dpcomma ? '.' : '\0';
-
-    /* Check if source is a string variable */
-    if (!SF_var_is_string(src_idx)) {
-        return -1;
-    }
-
-    int is_strl = SF_var_is_strl(src_idx);
-
-    /* Allocate work buffer */
-    char *buf = malloc(CDESTRING_STR_BUF_SIZE + 1);
-    char *work_buf = malloc(CDESTRING_STR_BUF_SIZE + 1);
-    char *large_buf = NULL;
-    size_t large_buf_size = 0;
-
-    if (!buf || !work_buf) {
-        free(buf);
-        free(work_buf);
-        return -1;
-    }
-
-    /* Process each observation sequentially */
-    for (size_t i = 0; i < nobs; i++) {
-        ST_int obs = obs1 + (ST_int)i;
-
-        /* Skip observations that don't meet the if/in condition */
-        if (!SF_ifobs(obs)) {
-            SF_vstore(dst_idx, obs, SV_missval);
-            continue;
-        }
-
-        int slen = SF_sdatalen(src_idx, obs);
-
-        /* Empty string -> missing */
-        if (slen <= 0) {
-            SF_vstore(dst_idx, obs, SV_missval);
-            local_converted++;
-            continue;
-        }
-
-        /* Get the string */
-        char *str_ptr;
-        if ((size_t)slen <= CDESTRING_STR_BUF_SIZE) {
-            if (is_strl) {
-                SF_strldata(src_idx, obs, buf, slen + 1);
-            } else {
-                SF_sdata(src_idx, obs, buf);
-            }
-            buf[slen] = '\0';
-            str_ptr = buf;
-        } else {
-            /* Need larger buffer */
-            if ((size_t)slen > large_buf_size) {
-                free(large_buf);
-                large_buf_size = (size_t)slen + 256;
-                large_buf = malloc(large_buf_size + 1);
-                if (!large_buf) {
-                    SF_vstore(dst_idx, obs, SV_missval);
-                    local_failed++;
-                    had_nonnumeric = 1;
-                    continue;
-                }
-            }
-            if (is_strl) {
-                SF_strldata(src_idx, obs, large_buf, slen + 1);
-            } else {
-                SF_sdata(src_idx, obs, large_buf);
-            }
-            large_buf[slen] = '\0';
-            str_ptr = large_buf;
-        }
-
-        /* Copy to work buffer for modification */
-        int len = slen;
-        if ((size_t)len < CDESTRING_STR_BUF_SIZE) {
-            memcpy(work_buf, str_ptr, len + 1);
-            str_ptr = work_buf;
-        }
-
-        /* Strip ignored characters */
-        if (opts->ignore_len > 0) {
-            len = strip_ignored_chars(str_ptr, len);
-        }
-
-        /* Strip percent sign */
-        int has_percent = 0;
-        if (opts->percent) {
-            has_percent = strip_percent(str_ptr, &len);
-        }
-
-        /* Parse the number */
-        double result;
-        int parsed = ctools_parse_double_with_separators(
-            str_ptr, len, &result, SV_missval, dec_sep, grp_sep);
-
-        if (parsed) {
-            /* Apply percent transformation */
-            if (opts->percent && has_percent && result != SV_missval) {
-                result /= 100.0;
-            }
-            SF_vstore(dst_idx, obs, result);
-            local_converted++;
-        } else {
-            /* Parse failed */
-            SF_vstore(dst_idx, obs, SV_missval);
-            if (opts->force) {
-                local_converted++;
-            } else {
-                local_failed++;
-                had_nonnumeric = 1;
-            }
-        }
-    }
-
-    free(large_buf);
-    free(buf);
-    free(work_buf);
-
-    *nconverted = local_converted;
-    *nfailed = local_failed;
-
-    return had_nonnumeric ? 1 : 0;
-}
-
-/* ============================================================================
  * Public Entry Point
  * ============================================================================ */
 
 ST_retcode cdestring_main(const char *args)
 {
-    double t_start, t_parse, t_convert, t_total;
+    double t_start, t_parse, t_load, t_convert, t_store, t_total;
     cdestring_options opts;
     ST_retcode rc = 0;
     int total_converted = 0;
@@ -453,61 +299,199 @@ ST_retcode cdestring_main(const char *args)
         return 0;
     }
 
-    /* Allocate per-variable result arrays for OpenMP */
-    int *var_converted = calloc(opts.nvars, sizeof(int));
-    int *var_failed = calloc(opts.nvars, sizeof(int));
-    int *var_result = calloc(opts.nvars, sizeof(int));
+    int nvars = opts.nvars;
 
-    if (!var_converted || !var_failed || !var_result) {
-        free(var_converted);
-        free(var_failed);
-        free(var_result);
+    /* Determine decimal and group separators */
+    char dec_sep = opts.dpcomma ? ',' : '.';
+    char grp_sep = opts.dpcomma ? '.' : '\0';
+
+    /* ====================================================================
+     * Phase 1: Bulk load source string variables (parallel across vars)
+     * ==================================================================== */
+
+    stata_data data;
+    stata_retcode load_rc = ctools_data_load_selective(&data, opts.src_indices,
+                                                        (size_t)nvars, (size_t)obs1, (size_t)obs2);
+    if (load_rc != STATA_OK) {
+        free_options(&opts);
+        SF_error("cdestring: failed to load string data\n");
+        return 920;
+    }
+
+    t_load = ctools_timer_seconds();
+
+    /* ====================================================================
+     * Phase 2: Parse strings to doubles (parallel across observations)
+     * ==================================================================== */
+
+    /* Build if-condition mask (sequential — SPI calls) */
+    unsigned char *if_mask = malloc(nobs);
+    if (!if_mask) {
+        stata_data_free(&data);
+        free_options(&opts);
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
+    }
+    for (size_t i = 0; i < nobs; i++) {
+        if_mask[i] = SF_ifobs((ST_int)(obs1 + (ST_int)i)) ? 1 : 0;
+    }
+
+    /* Allocate result arrays: one double array per variable */
+    double **results = malloc((size_t)nvars * sizeof(double *));
+    if (!results) {
+        stata_data_free(&data);
         free_options(&opts);
         SF_error("cdestring: memory allocation failed\n");
         return 920;
     }
 
-    /* Process variables in parallel */
-    #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic, 1) if(opts.nvars > 1)
-    #endif
-    for (int v = 0; v < opts.nvars; v++) {
-        int src_idx = opts.src_indices[v];
-        int dst_idx = opts.dst_indices[v];
-
-        var_result[v] = process_variable(src_idx, dst_idx, obs1, nobs,
-                                          &opts, &var_converted[v], &var_failed[v]);
+    for (int v = 0; v < nvars; v++) {
+        results[v] = malloc(nobs * sizeof(double));
+        if (!results[v]) {
+            for (int j = 0; j < v; j++) free(results[j]);
+            free(results);
+            stata_data_free(&data);
+            free_options(&opts);
+            SF_error("cdestring: memory allocation failed\n");
+            return 920;
+        }
     }
 
+    /* Per-variable counters */
+    int *var_converted = calloc(nvars, sizeof(int));
+    int *var_failed = calloc(nvars, sizeof(int));
+    if (!var_converted || !var_failed) {
+        for (int v = 0; v < nvars; v++) free(results[v]);
+        free(results);
+        free(var_converted);
+        free(var_failed);
+        stata_data_free(&data);
+        free_options(&opts);
+        SF_error("cdestring: memory allocation failed\n");
+        return 920;
+    }
+
+    /* Process each variable: parallel over observations */
+    for (int v = 0; v < nvars; v++) {
+        char **str_data = data.vars[v].data.str;
+        double *res = results[v];
+        int local_converted = 0;
+        int local_failed = 0;
+        int local_nonnumeric = 0;
+
+        #pragma omp parallel for reduction(+:local_converted,local_failed,local_nonnumeric) schedule(static)
+        for (size_t i = 0; i < nobs; i++) {
+            /* Skip observations that don't meet the if/in condition */
+            if (!if_mask[i]) {
+                res[i] = SV_missval;
+                continue;
+            }
+
+            const char *src = str_data[i];
+
+            /* Empty or NULL string -> missing */
+            if (src == NULL || src[0] == '\0') {
+                res[i] = SV_missval;
+                local_converted++;
+                continue;
+            }
+
+            /* Work on a thread-local copy for in-place modifications */
+            char work_buf[CDESTRING_STR_BUF_SIZE + 1];
+            int len = (int)strlen(src);
+            if (len > CDESTRING_STR_BUF_SIZE) len = CDESTRING_STR_BUF_SIZE;
+            memcpy(work_buf, src, len);
+            work_buf[len] = '\0';
+
+            /* Strip ignored characters */
+            if (opts.ignore_len > 0) {
+                len = strip_ignored_chars(work_buf, len);
+            }
+
+            /* Strip percent sign */
+            int has_percent = 0;
+            if (opts.percent) {
+                has_percent = strip_percent(work_buf, &len);
+            }
+
+            /* Empty after stripping -> missing */
+            if (len == 0) {
+                res[i] = SV_missval;
+                local_converted++;
+                continue;
+            }
+
+            /* Parse the number */
+            double val;
+            int parsed = ctools_parse_double_with_separators(
+                work_buf, len, &val, SV_missval, dec_sep, grp_sep);
+
+            if (parsed) {
+                if (opts.percent && has_percent && val != SV_missval) {
+                    val /= 100.0;
+                }
+                res[i] = val;
+                local_converted++;
+            } else {
+                res[i] = SV_missval;
+                if (opts.force) {
+                    local_converted++;
+                } else {
+                    local_failed++;
+                    local_nonnumeric = 1;
+                }
+            }
+        }
+
+        var_converted[v] = local_converted;
+        var_failed[v] = local_failed;
+        if (local_nonnumeric) had_nonnumeric = 1;
+    }
+
+    /* Free loaded string data and if-mask — no longer needed */
+    stata_data_free(&data);
+    free(if_mask);
+
+    t_convert = ctools_timer_seconds();
+
+    /* ====================================================================
+     * Phase 3: Store results back to Stata (parallel across variables)
+     * ==================================================================== */
+
+    /* Each thread writes one variable's results via SF_vstore.
+     * Different threads access different variable columns — SPI-safe. */
+    #pragma omp parallel for schedule(static)
+    for (int v = 0; v < nvars; v++) {
+        int dst_idx = opts.dst_indices[v];
+        double *res = results[v];
+        for (size_t i = 0; i < nobs; i++) {
+            SF_vstore(dst_idx, (ST_int)(obs1 + (ST_int)i), res[i]);
+        }
+    }
+
+    t_store = ctools_timer_seconds();
+
     /* Aggregate results */
-    for (int v = 0; v < opts.nvars; v++) {
-        if (var_result[v] < 0) {
-            rc = 920;
-        }
-        if (var_result[v] == 1) {
-            had_nonnumeric = 1;
-        }
+    for (int v = 0; v < nvars; v++) {
         total_converted += var_converted[v];
         total_failed += var_failed[v];
     }
 
+    /* Free result arrays */
+    for (int v = 0; v < nvars; v++) free(results[v]);
+    free(results);
     free(var_converted);
     free(var_failed);
-    free(var_result);
 
-    if (rc != 0) {
-        free_options(&opts);
-        return rc;
-    }
-
-    t_convert = ctools_timer_seconds();
-    t_total = t_convert - t_start;
+    t_total = t_store - t_start;
 
     /* Store results */
     SF_scal_save("_cdestring_n_converted", (double)total_converted);
     SF_scal_save("_cdestring_n_failed", (double)total_failed);
     SF_scal_save("_cdestring_time_parse", t_parse - t_start);
-    SF_scal_save("_cdestring_time_convert", t_convert - t_parse);
+    SF_scal_save("_cdestring_time_load", t_load - t_parse);
+    SF_scal_save("_cdestring_time_convert", t_convert - t_load);
+    SF_scal_save("_cdestring_time_store", t_store - t_convert);
     SF_scal_save("_cdestring_time_total", t_total);
 
 #ifdef _OPENMP
@@ -520,11 +504,9 @@ ST_retcode cdestring_main(const char *args)
 
     free_options(&opts);
 
-    /* If non-numeric values found and force not specified, return error */
+    /* If non-numeric values found and force not specified, let ado handle message */
     if (had_nonnumeric && !force_flag) {
-        /* Note: We've already stored missing values, the ado file will
-           report which variables had issues */
-        rc = 0;  /* Don't error, let ado file handle the message */
+        rc = 0;
     }
 
     return rc;

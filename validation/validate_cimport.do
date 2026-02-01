@@ -13,9 +13,11 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
+capture mkdir "temp"
+
 quietly {
 
-capture mkdir "temp"
+noi di as text "Running validation tests for cimport..."
 
 /*******************************************************************************
  * Helper: benchmark_import - Import with both methods and compare using cf _all
@@ -290,9 +292,10 @@ benchmark_import using "temp/zipcodes.csv", testname("stringcols multiple column
  ******************************************************************************/
 print_section "decimalseparator/groupseparator Options"
 
+* NOTE: Tolerance threshold is $DEFAULT_TOL (1e-7). Do NOT change this unless explicitly asked by a person.
 * European format test
 capture cimport delimited using "temp/european.csv", delimiters(";") decimalseparator(,) groupseparator(.) clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "European format"
 }
 else {
@@ -307,7 +310,7 @@ file write fh "2;234,56" _n
 file close fh
 
 capture cimport delimited using "temp/comma_decimal.csv", delimiters(";") decimalseparator(,) clear
-if _rc == 0 & abs(value[1] - 123.45) < 1e-4 {
+if _rc == 0 & abs(value[1] - 123.45) < $DEFAULT_TOL {
     test_pass "decimalseparator only"
 }
 else {
@@ -327,7 +330,7 @@ file write fh "2;2.345,67" _n
 file close fh
 
 capture cimport delimited using "temp/german_numbers.csv", delimiters(";") locale(de_DE) parselocale clear
-if _rc == 0 & abs(betrag[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(betrag[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "German locale (de_DE)"
 }
 else {
@@ -342,7 +345,7 @@ file write fh "2;2 345,67" _n
 file close fh
 
 capture cimport delimited using "temp/french_numbers.csv", delimiters(";") locale(fr_FR) parselocale clear
-if _rc == 0 & abs(montant[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(montant[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "French locale (fr_FR)"
 }
 else {
@@ -357,7 +360,7 @@ file write fh "2,2'345.67" _n
 file close fh
 
 capture cimport delimited using "temp/swiss_numbers.csv", locale(de_CH) parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "Swiss locale (de_CH)"
 }
 else {
@@ -372,7 +375,7 @@ file write fh "2,2345.67" _n
 file close fh
 
 capture cimport delimited using "temp/us_numbers.csv", locale(en_US) parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "US locale (en_US)"
 }
 else {
@@ -381,7 +384,7 @@ else {
 
 * Test parselocale without explicit locale (uses default)
 capture cimport delimited using "temp/us_numbers.csv", parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "parselocale without locale (default)"
 }
 else {
@@ -390,7 +393,7 @@ else {
 
 * Test locale option alone (without parselocale) - should not affect parsing
 capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "locale without parselocale (no effect)"
 }
 else {
@@ -405,7 +408,7 @@ file write fh "2;9.876,54" _n
 file close fh
 
 capture cimport delimited using "temp/italian_numbers.csv", delimiters(";") locale(it_IT) parselocale clear
-if _rc == 0 & abs(prezzo[1] - 1234.56) < 1e-4 {
+if _rc == 0 & abs(prezzo[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "Italian locale (it_IT)"
 }
 else {
@@ -2513,4 +2516,5 @@ foreach f of local files {
 }
 
 * End of cimport validation
+noi print_summary "cimport"
 }

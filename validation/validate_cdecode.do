@@ -16,6 +16,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cdecode..."
+
 /*******************************************************************************
  * Helper: Compare cdecode vs decode
  ******************************************************************************/
@@ -2417,4 +2419,5 @@ else {
  * SUMMARY
  ******************************************************************************/
 * End of cdecode validation
+noi print_summary "cdecode"
 }

@@ -273,6 +273,29 @@ program define cqreg, eclass
         }
     }
 
+    * Pre-compute bandwidth in Stata for exact precision match with qreg.
+    * Using Stata's invnormal()/normalden() avoids C approximation errors.
+    local __bw_alpha = 0.05
+    local __invtau = invnormal(`quantile')
+    local __phi_invtau = normalden(`__invtau')
+    local __invtau2 = (`__invtau')^2
+    if `bwmethod_num' == 0 {
+        * Hall-Sheather
+        local __z_alpha = invnormal(1 - `__bw_alpha'/2)
+        local __bw = (`nobs'^(-1/3)) * (`__z_alpha'^(2/3)) * ///
+            (1.5*`__phi_invtau'^2 / (2*`__invtau2'+1))^(1/3)
+    }
+    else if `bwmethod_num' == 1 {
+        * Bofinger
+        local __bw = `nobs'^(-1/5) * ((4.5*`__phi_invtau'^4) / ///
+            (2*`__invtau2'+1)^2)^(1/5)
+    }
+    else {
+        * Chamberlain
+        local __z_alpha = invnormal(1 - `__bw_alpha'/2)
+        local __bw = `__z_alpha' * sqrt(`nobs'^(-1)*`quantile'*(1-`quantile'))
+    }
+
     * Set up parameters via Stata scalars (expected by C plugin)
     scalar __cqreg_quantile = `quantile'
     scalar __cqreg_K = `nvars'              // depvar + indepvars
@@ -284,6 +307,7 @@ program define cqreg, eclass
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_nopreprocess = `nopreprocess'
+    scalar __cqreg_bandwidth = `__bw'
 
     * Build threads option string
     local threads_code ""

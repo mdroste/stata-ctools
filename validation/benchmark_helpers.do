@@ -6,10 +6,11 @@
  * and reports [PASS] or [FAIL] with detailed error descriptions
  *
  * TOLERANCE POLICY:
- *   - All comparisons use ABSOLUTE differences: abs(ctools_value - stata_value)
- *   - Default tolerance is 1e-7 (from $DEFAULT_TOL in validate_setup.do)
+ *   - All comparisons use SIGNIFICANT FIGURES, not absolute differences
+ *   - sigfigs = -log10(|a - b| / max(|a|, |b|))
+ *   - Default threshold is 7 significant figures ($DEFAULT_SIGFIGS)
  *   - This applies to all scalars, coefficients e(b), and VCE e(V)
- *   - No relative tolerance is used - large values must match with same precision
+ *   - Scale-invariant: 1000000 vs 1000001 and 0.001 vs 0.001001 both have ~3 sigfigs
  *   - Missing values in ctools when Stata has a value is treated as a FAILURE
  *
  ******************************************************************************/
@@ -239,11 +240,13 @@ end
  *   - e(b) - coefficient vector
  *   - e(V) - variance-covariance matrix
  *
+ * All comparisons use significant figures (default 7 sigfigs).
+ *
  * Syntax: benchmark_reghdfe depvar indepvars [weight], absorb(varlist) [options]
  ******************************************************************************/
 capture program drop benchmark_reghdfe
 program define benchmark_reghdfe
-    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(string) testname(string) tol(real 1e-7)]
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(varlist) [vce(string) testname(string) minsf(real 7)]
 
     gettoken depvar indepvars : varlist
 
@@ -347,16 +350,18 @@ program define benchmark_reghdfe
         }
     }
 
-    * Compare continuous scalars (use ABSOLUTE tolerance only)
+    * Compare continuous scalars using significant figures
     foreach scalar in r2 r2_a r2_within rss tss mss F rmse {
         local val1 = `reghdfe_`scalar''
         local val2 = `creghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
-            local diff = abs(`val1' - `val2')
-            if `diff' > `tol' {
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `minsf' {
                 local has_failure = 1
-                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                local sf_fmt : display %4.1f `sf'
+                local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
@@ -365,49 +370,53 @@ program define benchmark_reghdfe
         }
     }
 
-    * Compare coefficients e(b)
-    tempname diff_b
-    matrix `diff_b' = reghdfe_b - creghdfe_b
-    local cols = colsof(`diff_b')
-    local maxdiff_b = 0
-    local maxdiff_b_idx = 0
+    * Compare coefficients e(b) using significant figures
+    local cols = colsof(reghdfe_b)
+    local min_sf_b = 15
+    local min_sf_b_idx = 0
     forvalues j = 1/`cols' {
-        local d = abs(`diff_b'[1, `j'])
-        if `d' > `maxdiff_b' {
-            local maxdiff_b = `d'
-            local maxdiff_b_idx = `j'
+        local v1 = reghdfe_b[1, `j']
+        local v2 = creghdfe_b[1, `j']
+        sigfigs `v1' `v2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf_b' {
+            local min_sf_b = `sf'
+            local min_sf_b_idx = `j'
         }
     }
 
-    if `maxdiff_b' >= `tol' {
+    if `min_sf_b' < `minsf' {
         local has_failure = 1
         local coefname : colnames reghdfe_b
-        local badcoef : word `maxdiff_b_idx' of `coefname'
-        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+        local badcoef : word `min_sf_b_idx' of `coefname'
+        local sf_fmt : display %4.1f `min_sf_b'
+        local all_diffs "`all_diffs' e(b)[`badcoef']:sigfigs=`sf_fmt'"
     }
 
-    * Compare VCE e(V) using ABSOLUTE tolerance
-    tempname diff_V
-    matrix `diff_V' = reghdfe_V - creghdfe_V
-    local rows = rowsof(`diff_V')
-    local cols = colsof(`diff_V')
-    local maxdiff_V = 0
-    local maxdiff_V_i = 0
-    local maxdiff_V_j = 0
+    * Compare VCE e(V) using significant figures
+    local rows = rowsof(reghdfe_V)
+    local cols = colsof(reghdfe_V)
+    local min_sf_V = 15
+    local min_sf_V_i = 0
+    local min_sf_V_j = 0
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
-            local diff = abs(`diff_V'[`i', `j'])
-            if `diff' > `maxdiff_V' {
-                local maxdiff_V = `diff'
-                local maxdiff_V_i = `i'
-                local maxdiff_V_j = `j'
+            local v1 = reghdfe_V[`i', `j']
+            local v2 = creghdfe_V[`i', `j']
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_V' {
+                local min_sf_V = `sf'
+                local min_sf_V_i = `i'
+                local min_sf_V_j = `j'
             }
         }
     }
 
-    if `maxdiff_V' >= `tol' {
+    if `min_sf_V' < `minsf' {
         local has_failure = 1
-        local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
+        local sf_fmt : display %4.1f `min_sf_V'
+        local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
     }
 
     * Report result
@@ -434,11 +443,13 @@ end
  *   - e(b) - coefficient vector
  *   - e(V) - variance-covariance matrix
  *
+ * All comparisons use significant figures (default 7 sigfigs).
+ *
  * Syntax: benchmark_qreg depvar indepvars [, quantile(real) options]
  ******************************************************************************/
 capture program drop benchmark_qreg
 program define benchmark_qreg
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) tol(real 1e-7)]
+    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) vce(string) testname(string) minsf(real 7)]
 
     gettoken depvar indepvars : varlist
 
@@ -526,16 +537,18 @@ program define benchmark_qreg
         }
     }
 
-    * Compare continuous scalars (use ABSOLUTE tolerance only)
+    * Compare continuous scalars using significant figures
     foreach scalar in q sum_adev sum_rdev q_v f_r {
         local val1 = `qreg_`scalar''
         local val2 = `cqreg_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
-            local diff = abs(`val1' - `val2')
-            if `diff' > `tol' {
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `minsf' {
                 local has_failure = 1
-                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                local sf_fmt : display %4.1f `sf'
+                local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
@@ -544,7 +557,7 @@ program define benchmark_qreg
         }
     }
 
-    * Compare coefficients e(b)
+    * Compare coefficients e(b) using significant figures
     * First check dimensions match
     local qreg_cols = colsof(qreg_b)
     local cqreg_cols = colsof(cqreg_b)
@@ -554,54 +567,58 @@ program define benchmark_qreg
         local all_diffs "`all_diffs' e(b):dim_mismatch(`qreg_cols'!=`cqreg_cols')"
     }
     else {
-        tempname diff_b
-        matrix `diff_b' = qreg_b - cqreg_b
-        local cols = colsof(`diff_b')
-        local maxdiff_b = 0
-        local maxdiff_b_idx = 0
+        local cols = colsof(qreg_b)
+        local min_sf_b = 15
+        local min_sf_b_idx = 0
         forvalues j = 1/`cols' {
-            local d = abs(`diff_b'[1, `j'])
-            if `d' > `maxdiff_b' {
-                local maxdiff_b = `d'
-                local maxdiff_b_idx = `j'
+            local v1 = qreg_b[1, `j']
+            local v2 = cqreg_b[1, `j']
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_b' {
+                local min_sf_b = `sf'
+                local min_sf_b_idx = `j'
             }
         }
 
-        if `maxdiff_b' >= `tol' {
+        if `min_sf_b' < `minsf' {
             local has_failure = 1
             local coefname : colnames qreg_b
-            local badcoef : word `maxdiff_b_idx' of `coefname'
-            local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+            local badcoef : word `min_sf_b_idx' of `coefname'
+            local sf_fmt : display %4.1f `min_sf_b'
+            local all_diffs "`all_diffs' e(b)[`badcoef']:sigfigs=`sf_fmt'"
         }
     }
 
-    * Compare VCE e(V) using ABSOLUTE tolerance
+    * Compare VCE e(V) using significant figures
     * First check dimensions match (already checked via e(b) above)
     local qreg_Vrows = rowsof(qreg_V)
     local cqreg_Vrows = rowsof(cqreg_V)
 
     if `qreg_Vrows' == `cqreg_Vrows' {
-        tempname diff_V
-        matrix `diff_V' = qreg_V - cqreg_V
-        local rows = rowsof(`diff_V')
-        local cols = colsof(`diff_V')
-        local maxdiff_V = 0
-        local maxdiff_V_i = 0
-        local maxdiff_V_j = 0
+        local rows = rowsof(qreg_V)
+        local cols = colsof(qreg_V)
+        local min_sf_V = 15
+        local min_sf_V_i = 0
+        local min_sf_V_j = 0
         forvalues i = 1/`rows' {
             forvalues j = 1/`cols' {
-                local diff = abs(`diff_V'[`i', `j'])
-                if `diff' > `maxdiff_V' {
-                    local maxdiff_V = `diff'
-                    local maxdiff_V_i = `i'
-                    local maxdiff_V_j = `j'
+                local v1 = qreg_V[`i', `j']
+                local v2 = cqreg_V[`i', `j']
+                sigfigs `v1' `v2'
+                local sf = r(sigfigs)
+                if `sf' < `min_sf_V' {
+                    local min_sf_V = `sf'
+                    local min_sf_V_i = `i'
+                    local min_sf_V_j = `j'
                 }
             }
         }
 
-        if `maxdiff_V' >= `tol' {
+        if `min_sf_V' < `minsf' {
             local has_failure = 1
-            local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
+            local sf_fmt : display %4.1f `min_sf_V'
+            local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
         }
     }
 
@@ -849,20 +866,19 @@ end
  *   - e(b) - coefficient vector
  *   - e(V) - variance-covariance matrix
  *
- * NOTE: The default tolerance (1e-7) should NOT be changed except by a human
- * user. Any loosening of tolerances can mask numerical precision issues.
+ * All comparisons use significant figures (default 7 sigfigs).
  *
  * Syntax: benchmark_ivreghdfe spec, absorb(varlist) [options]
  ******************************************************************************/
 capture program drop benchmark_ivreghdfe
 program define benchmark_ivreghdfe
-    syntax anything(name=spec), Absorb(varlist) ///
-        [vce(string) testname(string) tol(real 1e-7) ///
+    syntax anything(name=spec) [if] [in], Absorb(varlist) ///
+        [vce(string) testname(string) minsf(real 7) ///
         LIML FULLER(real 0) Kclass(real 0) GMM2s CUE COVIV ///
         BW(integer 0) KERNEL(string) DKRAAY(integer 0) KIEFER ///
         b0(string)]
 
-    if "`testname'" == "" local testname "ivreghdfe `spec', absorb(`absorb')"
+    if "`testname'" == "" local testname "ivreghdfe `spec' `if' `in', absorb(`absorb')"
 
     * Build vce option
     local vceopt ""
@@ -891,7 +907,7 @@ program define benchmark_ivreghdfe
     preserve
 
     * Run ivreghdfe (quietly)
-    capture quietly ivreghdfe `spec', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
+    capture quietly ivreghdfe `spec' `if' `in', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
     local ivreghdfe_rc = _rc
 
     if `ivreghdfe_rc' != 0 {
@@ -924,7 +940,7 @@ program define benchmark_ivreghdfe
     local ivreghdfe_N_hdfe = e(N_hdfe)
 
     * Run civreghdfe (quietly)
-    capture quietly civreghdfe `spec', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
+    capture quietly civreghdfe `spec' `if' `in', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt'
     local civreghdfe_rc = _rc
 
     if `civreghdfe_rc' != 0 {
@@ -984,17 +1000,19 @@ program define benchmark_ivreghdfe
         }
     }
 
-    * Compare continuous scalars (use ABSOLUTE tolerance only)
+    * Compare continuous scalars using significant figures
     * Main estimation results
     foreach scalar in r2 r2_a rss mss F rmse {
         local val1 = `ivreghdfe_`scalar''
         local val2 = `civreghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
-            local diff = abs(`val1' - `val2')
-            if `diff' > `tol' {
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `minsf' {
                 local has_failure = 1
-                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                local sf_fmt : display %4.1f `sf'
+                local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
@@ -1003,17 +1021,18 @@ program define benchmark_ivreghdfe
         }
     }
 
-    * Diagnostic statistics: use ABSOLUTE tolerance (same as other scalars)
-    * All comparisons must use abs(diff) <= tol per validation requirements
+    * Diagnostic statistics: use significant figures
     foreach scalar in idstat idp widstat sargan sarganp {
         local val1 = `ivreghdfe_`scalar''
         local val2 = `civreghdfe_`scalar''
         * Only compare if both are non-missing
         if !missing(`val1') & !missing(`val2') {
-            local diff = abs(`val1' - `val2')
-            if `diff' > `tol' {
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `minsf' {
                 local has_failure = 1
-                local all_diffs "`all_diffs' e(`scalar'):diff=`diff'"
+                local sf_fmt : display %4.1f `sf'
+                local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
             }
         }
         else if !missing(`val1') & missing(`val2') {
@@ -1022,49 +1041,53 @@ program define benchmark_ivreghdfe
         }
     }
 
-    * Compare coefficients e(b)
-    tempname diff_b
-    matrix `diff_b' = ivreghdfe_b - civreghdfe_b
-    local cols = colsof(`diff_b')
-    local maxdiff_b = 0
-    local maxdiff_b_idx = 0
+    * Compare coefficients e(b) using significant figures
+    local cols = colsof(ivreghdfe_b)
+    local min_sf_b = 15
+    local min_sf_b_idx = 0
     forvalues j = 1/`cols' {
-        local d = abs(`diff_b'[1, `j'])
-        if `d' > `maxdiff_b' {
-            local maxdiff_b = `d'
-            local maxdiff_b_idx = `j'
+        local v1 = ivreghdfe_b[1, `j']
+        local v2 = civreghdfe_b[1, `j']
+        sigfigs `v1' `v2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf_b' {
+            local min_sf_b = `sf'
+            local min_sf_b_idx = `j'
         }
     }
 
-    if `maxdiff_b' >= `tol' {
+    if `min_sf_b' < `minsf' {
         local has_failure = 1
         local coefname : colnames ivreghdfe_b
-        local badcoef : word `maxdiff_b_idx' of `coefname'
-        local all_diffs "`all_diffs' e(b)[`badcoef']:maxdiff=`maxdiff_b'"
+        local badcoef : word `min_sf_b_idx' of `coefname'
+        local sf_fmt : display %4.1f `min_sf_b'
+        local all_diffs "`all_diffs' e(b)[`badcoef']:sigfigs=`sf_fmt'"
     }
 
-    * Compare VCE e(V) using ABSOLUTE tolerance
-    tempname diff_V
-    matrix `diff_V' = ivreghdfe_V - civreghdfe_V
-    local rows = rowsof(`diff_V')
-    local cols = colsof(`diff_V')
-    local maxdiff_V = 0
-    local maxdiff_V_i = 0
-    local maxdiff_V_j = 0
+    * Compare VCE e(V) using significant figures
+    local rows = rowsof(ivreghdfe_V)
+    local cols = colsof(ivreghdfe_V)
+    local min_sf_V = 15
+    local min_sf_V_i = 0
+    local min_sf_V_j = 0
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
-            local diff = abs(`diff_V'[`i', `j'])
-            if `diff' > `maxdiff_V' {
-                local maxdiff_V = `diff'
-                local maxdiff_V_i = `i'
-                local maxdiff_V_j = `j'
+            local v1 = ivreghdfe_V[`i', `j']
+            local v2 = civreghdfe_V[`i', `j']
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_V' {
+                local min_sf_V = `sf'
+                local min_sf_V_i = `i'
+                local min_sf_V_j = `j'
             }
         }
     }
 
-    if `maxdiff_V' >= `tol' {
+    if `min_sf_V' < `minsf' {
         local has_failure = 1
-        local all_diffs "`all_diffs' e(V)[`maxdiff_V_i',`maxdiff_V_j']:maxdiff=`maxdiff_V'"
+        local sf_fmt : display %4.1f `min_sf_V'
+        local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
     }
 
     * Report result

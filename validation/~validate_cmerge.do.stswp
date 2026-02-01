@@ -15,10 +15,6 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
-quietly {
-
-noi di as text "Running validation tests for cmerge..."
-
 * Basic 1:1 merge tests
 
 * Numeric key
@@ -2943,5 +2939,4 @@ else {
 }
 
 * End of cmerge validation
-noi print_summary "cmerge"
 }

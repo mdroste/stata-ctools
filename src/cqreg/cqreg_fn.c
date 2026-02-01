@@ -1198,13 +1198,153 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     IPM_LOG("Final beta (=-y_d): [");
     for (j = 0; j < K; j++) IPM_LOG("%.6f ", beta[j]);
     IPM_LOG("]\n");
-    ipm_debug_close();
 
     /* Store results in ipm state */
     ipm->iterations = iter;
     ipm->converged = (gap < ipm_tol) ? 1 : 0;
 
-    /* Compute final residuals */
+    /* Compute residuals from IPM solution */
+    blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
+    for (i = 0; i < N; i++) {
+        ipm->r_primal[i] = Y[i] - ipm->r_primal[i];
+    }
+
+    /*
+     * Crossover: Convert IPM interior-point solution to exact LP vertex.
+     *
+     * The IPM gives an approximate solution in the interior of the optimal
+     * face. The exact LP vertex has exactly K observations with residual = 0
+     * (the "basis"). We identify these by selecting observations with the
+     * smallest absolute residuals, solve the exact K×K system, and verify
+     * the solution by checking the QR objective value doesn't increase.
+     */
+    {
+        /* Compute IPM objective value: sum_i rho_tau(r_i) */
+        ST_double obj_ipm = 0.0;
+        for (i = 0; i < N; i++) {
+            ST_double ri = ipm->r_primal[i];
+            obj_ipm += (ri >= 0) ? tau * ri : (tau - 1.0) * ri;
+        }
+
+        /* Find K observations with smallest |residual| using partial selection */
+        ST_int *idx = (ST_int *)malloc(N * sizeof(ST_int));
+        ST_double *ar = (ST_double *)malloc(N * sizeof(ST_double));
+
+        if (idx != NULL && ar != NULL) {
+            for (i = 0; i < N; i++) {
+                idx[i] = i;
+                ar[i] = fabs(ipm->r_primal[i]);
+            }
+
+            /* Partial sort: find K smallest */
+            for (ST_int k_sel = 0; k_sel < K; k_sel++) {
+                ST_int mi = k_sel;
+                for (i = k_sel + 1; i < N; i++) {
+                    if (ar[i] < ar[mi]) mi = i;
+                }
+                if (mi != k_sel) {
+                    ST_double td = ar[k_sel]; ar[k_sel] = ar[mi]; ar[mi] = td;
+                    ST_int ti = idx[k_sel]; idx[k_sel] = idx[mi]; idx[mi] = ti;
+                }
+            }
+
+            /* Build and solve K×K system X_b * beta = y_b directly.
+             * Using Gaussian elimination with partial pivoting instead of
+             * normal equations (X'X) to avoid squaring the condition number.
+             * This gives better numerical precision for the vertex solution.
+             */
+            ST_double *Ab = (ST_double *)malloc(K * (K + 1) * sizeof(ST_double));
+            ST_double *beta_cross = (ST_double *)malloc(K * sizeof(ST_double));
+
+            if (Ab && beta_cross) {
+                /* Build augmented matrix [X_b | y_b] in row-major order.
+                 * X is stored column-major as X[col * N + row], so
+                 * X_b[row=bi, col=j] = X[j * N + idx[bi]].
+                 * We need row-major for Gaussian elimination:
+                 * Ab[bi * (K+1) + j] = X_b[bi, j]
+                 */
+                for (ST_int bi = 0; bi < K; bi++) {
+                    for (j = 0; j < K; j++)
+                        Ab[bi * (K + 1) + j] = X[j * N + idx[bi]];
+                    Ab[bi * (K + 1) + K] = Y[idx[bi]];
+                }
+
+                /* Gaussian elimination with partial pivoting */
+                ST_int solve_ok = 1;
+                for (j = 0; j < K; j++) {
+                    /* Find pivot */
+                    ST_int pivot = j;
+                    ST_double max_val = fabs(Ab[j * (K + 1) + j]);
+                    for (ST_int bi = j + 1; bi < K; bi++) {
+                        ST_double val = fabs(Ab[bi * (K + 1) + j]);
+                        if (val > max_val) {
+                            max_val = val;
+                            pivot = bi;
+                        }
+                    }
+                    if (max_val < 1e-15) {
+                        solve_ok = 0;
+                        break;
+                    }
+                    /* Swap rows */
+                    if (pivot != j) {
+                        for (ST_int c = j; c <= K; c++) {
+                            ST_double tmp_val = Ab[j * (K + 1) + c];
+                            Ab[j * (K + 1) + c] = Ab[pivot * (K + 1) + c];
+                            Ab[pivot * (K + 1) + c] = tmp_val;
+                        }
+                    }
+                    /* Eliminate below */
+                    ST_double diag = Ab[j * (K + 1) + j];
+                    for (ST_int bi = j + 1; bi < K; bi++) {
+                        ST_double factor = Ab[bi * (K + 1) + j] / diag;
+                        Ab[bi * (K + 1) + j] = 0.0;
+                        for (ST_int c = j + 1; c <= K; c++)
+                            Ab[bi * (K + 1) + c] -= factor * Ab[j * (K + 1) + c];
+                    }
+                }
+
+                if (solve_ok) {
+                    /* Back substitution */
+                    for (ST_int bi = K - 1; bi >= 0; bi--) {
+                        ST_double sum = Ab[bi * (K + 1) + K];
+                        for (ST_int c = bi + 1; c < K; c++)
+                            sum -= Ab[bi * (K + 1) + c] * beta_cross[c];
+                        beta_cross[bi] = sum / Ab[bi * (K + 1) + bi];
+                    }
+
+                    /* Compute crossover objective */
+                    ST_double obj_cross = 0.0;
+                    for (i = 0; i < N; i++) {
+                        ST_double xb = 0.0;
+                        for (j = 0; j < K; j++)
+                            xb += X[j * N + i] * beta_cross[j];
+                        ST_double ri = Y[i] - xb;
+                        obj_cross += (ri >= 0) ? tau * ri : (tau - 1.0) * ri;
+                    }
+
+                    /* Accept only if objective is no worse (within small tolerance) */
+                    ST_double obj_tol = fabs(obj_ipm) * 1e-8 + 1e-10;
+                    if (obj_cross <= obj_ipm + obj_tol) {
+                        IPM_LOG("Crossover: accepted (obj %.6e -> %.6e)\n", obj_ipm, obj_cross);
+                        memcpy(beta, beta_cross, K * sizeof(ST_double));
+                    } else {
+                        IPM_LOG("Crossover: rejected (obj %.6e -> %.6e)\n", obj_ipm, obj_cross);
+                    }
+                }
+            }
+
+            free(Ab); free(beta_cross);
+        }
+        free(idx); free(ar);
+    }
+
+    IPM_LOG("Final beta: [");
+    for (j = 0; j < K; j++) IPM_LOG("%.6f ", beta[j]);
+    IPM_LOG("]\n");
+    ipm_debug_close();
+
+    /* Recompute residuals with final beta */
     blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
     for (i = 0; i < N; i++) {
         ipm->r_primal[i] = Y[i] - ipm->r_primal[i];  /* r = Y - X*beta */

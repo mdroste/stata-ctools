@@ -183,11 +183,24 @@ For valid 2SLS estimation:
 
 ## Performance
 
-`civreghdfe` achieves its speed through:
-- **C implementation**: All computation in optimized C code
-- **OpenMP parallelization**: Parallel matrix operations
-- **Efficient HDFE**: CG solver with Kaczmarz sweeping
-- **Single-pass operations**: Minimizes data traversals
+`civreghdfe` achieves its speed through the following tricks:
+
+**HDFE Absorption (shared with `creghdfe`):**
+- **CG solver with symmetric Kaczmarz transform**: Forward + backward sweep per iteration doubles convergence rate
+- **Pre-computed inverse group counts**: Multiplies instead of divides in the inner demeaning loop
+- **Counting sort for CSR construction**: O(N+L) sparse index builds
+- **Thread-local buffers**: Eliminates contention during parallel demeaning
+
+**2SLS Estimation:**
+- **Cholesky-based normal equations**: Exploits symmetric positive-definiteness of Z'Z and X'P_Z X for efficient inversion
+- **Fused project-subtract**: Single-pass FE projection reduces memory traffic
+- **K-way unrolled dot product**: 8/16-element unrolling for inner products in both stages
+
+**Data I/O and Infrastructure:**
+- **SIMD bulk load/store**: AVX2/SSE2/NEON with 16x unrolling via `ctools_data_io`
+- **OpenMP parallelization**: Parallel matrix operations and data loading
+- **Cache-line aligned allocations**: 64-byte boundaries prevent false sharing
+- **Persistent thread pool**: Threads reused across first stage, second stage, and HDFE iterations
 
 Typical speedup: 5-10x over `ivreghdfe`.
 

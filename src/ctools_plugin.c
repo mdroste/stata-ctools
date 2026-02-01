@@ -18,6 +18,7 @@
     - cwinsor: C-accelerated winsorization (replaces winsor2)
     - cdestring: C-accelerated string to numeric conversion (replaces destring)
     - cdecode: C-accelerated numeric to string decoding (replaces decode)
+    - crangestat: C-accelerated range statistics (replaces rangestat)
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
@@ -149,6 +150,7 @@ static int parse_threads_arg(char *cmd_args)
 #include "cdecode_impl.h"
 #include "csample_impl.h"
 #include "cbsample_impl.h"
+#include "crangestat_impl.h"
 
 /*
     Main plugin entry point.
@@ -258,6 +260,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cbsample") == 0) {
         rc = cbsample_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "crangestat") == 0) {
+        rc = crangestat_main(cmd_args);
     }
     else {
         char msg[256];
