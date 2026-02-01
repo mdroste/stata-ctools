@@ -31,7 +31,7 @@ command.
 {synoptline}
 {syntab:Options}
 {synopt:{opt alg:orithm(name)}}sorting algorithm (see below){p_end}
-{synopt:{opt str:eam}}streaming mode for reduced memory usage{p_end}
+{synopt:{opt str:eam(#)}}streaming mode, loading {it:#} variables at a time (1-16){p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nosort:edby}}do not set Stata's sortedby attribute{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
@@ -68,12 +68,17 @@ performance for common Stata workloads without manual tuning. See
 {help csort##algorithms:Algorithms} for details on manual algorithm selection.
 
 {phang}
-{opt stream} enables streaming mode, which reduces memory usage for wide datasets.
+{opt stream(#)} enables streaming mode, which reduces memory usage for wide datasets.
 In streaming mode, only the sort key variables are loaded into C memory. After
-sorting, the permutation is applied to non-key variables one at a time using
-sequential Stata I/O. This is useful when sorting datasets with many columns
-that would otherwise exceed available memory. Performance is comparable to
-standard mode for most datasets.
+sorting, the permutation is applied to non-key variables using sequential Stata
+I/O. This is useful when sorting datasets with many columns that would otherwise
+exceed available memory.
+
+{pmore}
+The argument {it:#} specifies how many variables to process at a time (1-16).
+Higher values use more memory but may improve performance by allowing better
+parallelization. For example, {cmd:stream(4)} processes 4 variables simultaneously,
+using approximately 4× the buffer memory of {cmd:stream(1)}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
@@ -186,7 +191,10 @@ lexicographic (ASCII) order.
 {phang2}{cmd:. csort price mpg, verbose}{p_end}
 
 {pstd}Use streaming mode for wide datasets with limited memory:{p_end}
-{phang2}{cmd:. csort idcode, stream}{p_end}
+{phang2}{cmd:. csort idcode, stream(1)}{p_end}
+
+{pstd}Use streaming mode with 4 variables processed at a time:{p_end}
+{phang2}{cmd:. csort idcode, stream(4)}{p_end}
 
 {pstd}Limit parallelism to 4 threads:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}

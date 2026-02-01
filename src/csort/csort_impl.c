@@ -25,7 +25,7 @@
 
 /*
     Parse streaming mode option from argument string.
-    Looks for "stream" to enable streaming mode.
+    Looks for "stream" or "stream(#)" to enable streaming mode.
 
     Streaming mode:
     - Only loads key (sort) variables into C memory
@@ -33,11 +33,15 @@
     - Reduces memory usage for wide datasets
     - Best when: many non-key columns, limited memory
 
-    Returns 1 if streaming mode enabled, 0 otherwise.
+    The optional number specifies how many variables to load at a time
+    (1-16, default 1). Higher values use more memory but may be faster.
+
+    Returns 0 if disabled, 1-16 for the batch size.
 */
 static int parse_stream_option(const char *args)
 {
     const char *p;
+    int batch_size = 1;  /* Default: process 1 variable at a time */
 
     /* Look for "stream" in the arguments */
     p = strstr(args, "stream");
@@ -50,7 +54,25 @@ static int parse_stream_option(const char *args)
         return 0;
     }
 
-    return 1;
+    /* Check for "stream(#)" format */
+    if (p[6] == '(') {
+        char *endptr;
+        long val = strtol(p + 7, &endptr, 10);
+
+        /* Validate: must be followed by ')' and be a positive integer */
+        if (endptr != p + 7 && *endptr == ')') {
+            if (val < 1) {
+                batch_size = 1;
+            } else if (val > 16) {
+                batch_size = 16;  /* Cap at 16 */
+            } else {
+                batch_size = (int)val;
+            }
+        }
+        /* If parsing fails, use default of 1 */
+    }
+
+    return batch_size;
 }
 
 /*
@@ -100,12 +122,12 @@ static sort_algorithm_t parse_algorithm(const char *args)
 }
 
 /* Parse the sort variable indices from the argument string.
-   Only parse numbers that appear before "alg=" to avoid picking up
-   numbers from algorithm names like "ips4o". */
+   Only parse numbers that appear before options (alg=, stream, threads) to avoid
+   picking up numbers from option values. */
 static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 {
     const char *p;
-    const char *alg_start;
+    const char *opts_start;
     char *endptr;
     size_t count = 0;
     size_t capacity = 16;
@@ -117,13 +139,23 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
         return -1;
     }
 
-    /* Find where options start (at "alg=") to stop parsing numbers there */
-    alg_start = strstr(args, "alg=");
+    /* Find where options start - stop at any of: alg=, stream, threads */
+    opts_start = strstr(args, "alg=");
+    const char *stream_start = strstr(args, "stream");
+    const char *threads_start = strstr(args, "threads");
+
+    /* Use the earliest option as the stopping point */
+    if (stream_start != NULL && (opts_start == NULL || stream_start < opts_start)) {
+        opts_start = stream_start;
+    }
+    if (threads_start != NULL && (opts_start == NULL || threads_start < opts_start)) {
+        opts_start = threads_start;
+    }
 
     p = args;
     while (*p != '\0') {
-        /* Stop if we've reached the algorithm option */
-        if (alg_start != NULL && p >= alg_start) {
+        /* Stop if we've reached options */
+        if (opts_start != NULL && p >= opts_start) {
             break;
         }
 
@@ -131,8 +163,8 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
         while (*p == ' ' || *p == '\t') p++;
         if (*p == '\0') break;
 
-        /* Stop if we've reached the algorithm option after skipping spaces */
-        if (alg_start != NULL && p >= alg_start) {
+        /* Stop if we've reached options after skipping spaces */
+        if (opts_start != NULL && p >= opts_start) {
             break;
         }
 
@@ -218,14 +250,14 @@ ST_retcode csort_main(const char *args)
         return 2000;
     }
 
-    /* Check for streaming mode option */
-    int use_stream = parse_stream_option(args);
+    /* Check for streaming mode option (returns 0 if disabled, 1-16 for batch size) */
+    int stream_batch_size = parse_stream_option(args);
 
     /* ================================================================
        MEMORY-EFFICIENT MODE: For large datasets with many columns
        Only loads key variables, streams permutation to non-keys
        ================================================================ */
-    if (use_stream) {
+    if (stream_batch_size > 0) {
         csort_stream_timings stream_timings = {0};
 
         /* Build array of all variable indices (1-based) */
@@ -239,9 +271,9 @@ ST_retcode csort_main(const char *args)
             all_var_indices[j] = (int)(j + 1);
         }
 
-        /* Call streaming sort */
+        /* Call streaming sort with batch size */
         rc = csort_stream_sort(sort_vars, nsort, all_var_indices, nvars,
-                                algorithm, 0, &stream_timings);
+                                algorithm, 0, stream_batch_size, &stream_timings);
 
         free(all_var_indices);
         free(sort_vars);

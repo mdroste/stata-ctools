@@ -219,13 +219,15 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
     if (bw <= 0) return 0.0;
     if (j > bw) return 0.0;  /* No weight beyond bandwidth */
 
-    /* Use bw+1 in denominator so lag=bw gets positive weight */
-    ST_double x = (ST_double)j / (ST_double)(bw + 1);
+    /* Match ivreg2/livreg2 formula: karg = tau / bw
+       This means lag=bw gets weight 0 for Bartlett (intentional).
+       See livreg2.do m_calckw() function. */
+    ST_double x = (ST_double)j / (ST_double)bw;
 
     switch (kernel_type) {
         case 1:  /* Bartlett / Newey-West */
-            if (x <= 1.0) return 1.0 - x;
-            return 0.0;
+            /* kw = 1 - karg, same as livreg2 */
+            return 1.0 - x;
 
         case 2:  /* Parzen */
             if (x <= 0.5) {
@@ -246,15 +248,13 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
             }
 
         case 4:  /* Truncated */
-            if (x <= 1.0) return 1.0;
-            return 0.0;
+            return 1.0;
 
         case 5:  /* Tukey-Hanning */
-            if (x <= 1.0) {
+            {
                 ST_double pi = 3.14159265358979323846;
-                return 0.5 * (1.0 + cos(pi * x));
+                return 0.5 + 0.5 * cos(pi * x);
             }
-            return 0.0;
 
         default:
             return 0.0;

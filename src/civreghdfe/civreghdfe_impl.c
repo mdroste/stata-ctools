@@ -31,6 +31,7 @@
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_unroll.h"
+#include "../creghdfe/creghdfe_utils.h"  /* For count_connected_components */
 
 /* Shared OLS functions */
 #define cholesky ctools_cholesky
@@ -677,9 +678,14 @@ static ST_retcode do_iv_regression(void)
     t_hdfe_setup = ctools_timer_seconds() - t_hdfe_setup_start;
     double t_fwl_start = ctools_timer_seconds();
 
-    /* FWL partialling: partial out specified exogenous variables before FE absorption */
+    /* FWL partialling: read partial indices now, but do partialling AFTER HDFE.
+       This is because FWL theorem requires partialling on the same data as the final
+       regression (i.e., after FE absorption), not before. */
     ST_double dval_partial;
     ST_int n_partial = 0;
+    ST_int *partial_indices = NULL;
+    ST_int *is_partial = NULL;
+
     if (SF_scal_use("__civreghdfe_n_partial", &dval_partial) == 0) {
         n_partial = (ST_int)dval_partial;
     }
@@ -687,13 +693,13 @@ static ST_retcode do_iv_regression(void)
     if (n_partial > 0 && K_exog > 0) {
         if (verbose) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: Partialling out %d exogenous variable(s) via FWL...\n", (int)n_partial);
+            snprintf(buf, sizeof(buf), "civreghdfe: Will partial out %d exogenous variable(s) via FWL after HDFE...\n", (int)n_partial);
             SF_display(buf);
         }
 
         /* Read partial variable indices (1-based indices into X_exog) */
-        ST_int *partial_indices = (ST_int *)malloc(n_partial * sizeof(ST_int));
-        ST_int *is_partial = (ST_int *)calloc(K_exog, sizeof(ST_int));  /* Mask for partial vars */
+        partial_indices = (ST_int *)malloc(n_partial * sizeof(ST_int));
+        is_partial = (ST_int *)calloc(K_exog, sizeof(ST_int));  /* Mask for partial vars */
         ST_double dval_idx;
 
         for (ST_int pi = 0; pi < n_partial; pi++) {
@@ -706,171 +712,7 @@ static ST_retcode do_iv_regression(void)
                 }
             }
         }
-
-        /* Build matrix P of partial variables (N x n_partial) */
-        ST_double *P = (ST_double *)malloc((size_t)N * n_partial * sizeof(ST_double));
-        for (ST_int pi = 0; pi < n_partial; pi++) {
-            ST_int idx = partial_indices[pi] - 1;  /* Convert to 0-based */
-            memcpy(P + pi * N, X_exog_c + idx * N, N * sizeof(ST_double));
-        }
-
-        /* Compute P'P and invert */
-        ST_double *PtP = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
-        ST_double *PtP_inv = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
-
-        civreghdfe_matmul_atb(P, P, N, n_partial, n_partial, PtP);
-        memcpy(PtP_inv, PtP, n_partial * n_partial * sizeof(ST_double));
-
-        if (cholesky(PtP_inv, n_partial) == 0 && invert_from_cholesky(PtP_inv, n_partial, PtP_inv) == 0) {
-            /* Residualize y: y = y - P(P'P)^{-1}P'y */
-            ST_double *Pty = (ST_double *)calloc(n_partial, sizeof(ST_double));
-            for (ST_int p = 0; p < n_partial; p++) {
-                ST_double sum = 0.0;
-                for (ST_int i = 0; i < N; i++) {
-                    sum += P[p * N + i] * y_c[i];
-                }
-                Pty[p] = sum;
-            }
-
-            ST_double *coef = (ST_double *)calloc(n_partial, sizeof(ST_double));
-            for (ST_int p = 0; p < n_partial; p++) {
-                ST_double sum = 0.0;
-                for (ST_int q = 0; q < n_partial; q++) {
-                    sum += PtP_inv[q * n_partial + p] * Pty[q];
-                }
-                coef[p] = sum;
-            }
-
-            for (ST_int i = 0; i < N; i++) {
-                ST_double fitted = 0.0;
-                for (ST_int p = 0; p < n_partial; p++) {
-                    fitted += P[p * N + i] * coef[p];
-                }
-                y_c[i] -= fitted;
-            }
-
-            /* Residualize X_endog */
-            for (ST_int k = 0; k < K_endog; k++) {
-                ST_double *Ptx = Pty;  /* Reuse */
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int i = 0; i < N; i++) {
-                        sum += P[p * N + i] * X_endog_c[k * N + i];
-                    }
-                    Ptx[p] = sum;
-                }
-
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int q = 0; q < n_partial; q++) {
-                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
-                    }
-                    coef[p] = sum;
-                }
-
-                for (ST_int i = 0; i < N; i++) {
-                    ST_double fitted = 0.0;
-                    for (ST_int p = 0; p < n_partial; p++) {
-                        fitted += P[p * N + i] * coef[p];
-                    }
-                    X_endog_c[k * N + i] -= fitted;
-                }
-            }
-
-            /* Residualize remaining X_exog (those not being partialled) */
-            for (ST_int k = 0; k < K_exog; k++) {
-                if (is_partial[k]) continue;  /* Skip partial vars themselves */
-
-                ST_double *Ptx = Pty;
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int i = 0; i < N; i++) {
-                        sum += P[p * N + i] * X_exog_c[k * N + i];
-                    }
-                    Ptx[p] = sum;
-                }
-
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int q = 0; q < n_partial; q++) {
-                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
-                    }
-                    coef[p] = sum;
-                }
-
-                for (ST_int i = 0; i < N; i++) {
-                    ST_double fitted = 0.0;
-                    for (ST_int p = 0; p < n_partial; p++) {
-                        fitted += P[p * N + i] * coef[p];
-                    }
-                    X_exog_c[k * N + i] -= fitted;
-                }
-            }
-
-            /* Residualize Z */
-            for (ST_int k = 0; k < K_iv; k++) {
-                ST_double *Ptx = Pty;
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int i = 0; i < N; i++) {
-                        sum += P[p * N + i] * Z_c[k * N + i];
-                    }
-                    Ptx[p] = sum;
-                }
-
-                for (ST_int p = 0; p < n_partial; p++) {
-                    ST_double sum = 0.0;
-                    for (ST_int q = 0; q < n_partial; q++) {
-                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
-                    }
-                    coef[p] = sum;
-                }
-
-                for (ST_int i = 0; i < N; i++) {
-                    ST_double fitted = 0.0;
-                    for (ST_int p = 0; p < n_partial; p++) {
-                        fitted += P[p * N + i] * coef[p];
-                    }
-                    Z_c[k * N + i] -= fitted;
-                }
-            }
-
-            free(Pty);
-            free(coef);
-
-            /* Build reduced X_exog with partialled variables removed */
-            ST_int K_exog_new = K_exog - n_partial;
-            if (K_exog_new > 0) {
-                ST_double *X_exog_reduced = (ST_double *)malloc((size_t)N * K_exog_new * sizeof(ST_double));
-                ST_int new_idx = 0;
-                for (ST_int k = 0; k < K_exog; k++) {
-                    if (!is_partial[k]) {
-                        memcpy(X_exog_reduced + new_idx * N, X_exog_c + k * N, N * sizeof(ST_double));
-                        new_idx++;
-                    }
-                }
-                free(X_exog_c);
-                X_exog_c = X_exog_reduced;
-            } else {
-                free(X_exog_c);
-                X_exog_c = NULL;
-            }
-            K_exog = K_exog_new;
-
-            if (verbose) {
-                char buf[256];
-                snprintf(buf, sizeof(buf), "civreghdfe: FWL partialling complete, K_exog reduced to %d\n", (int)K_exog);
-                SF_display(buf);
-            }
-        } else {
-            SF_error("civreghdfe: Warning - FWL partialling failed (P'P singular)\n");
-        }
-
-        free(partial_indices);
-        free(is_partial);
-        free(P);
-        free(PtP);
-        free(PtP_inv);
+        /* NOTE: Don't do FWL partialling here - wait until after HDFE absorption */
     }
 
     /* End FWL timing, start partial out timing */
@@ -950,11 +792,196 @@ static ST_retcode do_iv_regression(void)
     ST_double *X_exog_dem = (K_exog > 0) ? all_data + N * (1 + K_endog) : NULL;
     ST_double *Z_dem = all_data + N * (1 + K_endog + K_exog);
 
-    /* Compute df_a (absorbed degrees of freedom) */
-    /* Single FE: df_a = num_levels (constant absorbed by FE)
-       Multi-FE: df_a = sum(num_levels) - (G - 1) for redundant levels */
+    /* FWL partialling: now do it on the FE-demeaned data.
+       This ensures FWL theorem holds: coefficients on non-partialled vars
+       are identical whether we include or exclude partialled vars. */
+    if (n_partial > 0 && K_exog > 0 && partial_indices && is_partial) {
+        if (verbose) {
+            SF_display("civreghdfe: Applying FWL partialling on FE-demeaned data...\n");
+        }
+
+        /* Build matrix P of partial variables from demeaned X_exog (N x n_partial) */
+        ST_double *P = (ST_double *)malloc((size_t)N * n_partial * sizeof(ST_double));
+        for (ST_int pi = 0; pi < n_partial; pi++) {
+            ST_int idx = partial_indices[pi] - 1;  /* Convert to 0-based */
+            memcpy(P + pi * N, X_exog_dem + idx * N, N * sizeof(ST_double));
+        }
+
+        /* Compute P'P and invert */
+        ST_double *PtP = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
+        ST_double *PtP_inv = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
+
+        civreghdfe_matmul_atb(P, P, N, n_partial, n_partial, PtP);
+        memcpy(PtP_inv, PtP, n_partial * n_partial * sizeof(ST_double));
+
+        if (cholesky(PtP_inv, n_partial) == 0 && invert_from_cholesky(PtP_inv, n_partial, PtP_inv) == 0) {
+            /* Residualize y_dem: y = y - P(P'P)^{-1}P'y */
+            ST_double *Pty = (ST_double *)calloc(n_partial, sizeof(ST_double));
+            for (ST_int p = 0; p < n_partial; p++) {
+                ST_double sum = 0.0;
+                for (ST_int i = 0; i < N; i++) {
+                    sum += P[p * N + i] * y_dem[i];
+                }
+                Pty[p] = sum;
+            }
+
+            ST_double *coef = (ST_double *)calloc(n_partial, sizeof(ST_double));
+            for (ST_int p = 0; p < n_partial; p++) {
+                ST_double sum = 0.0;
+                for (ST_int q = 0; q < n_partial; q++) {
+                    sum += PtP_inv[q * n_partial + p] * Pty[q];
+                }
+                coef[p] = sum;
+            }
+
+            for (ST_int i = 0; i < N; i++) {
+                ST_double fitted = 0.0;
+                for (ST_int p = 0; p < n_partial; p++) {
+                    fitted += P[p * N + i] * coef[p];
+                }
+                y_dem[i] -= fitted;
+            }
+
+            /* Residualize X_endog_dem */
+            for (ST_int k = 0; k < K_endog; k++) {
+                ST_double *Ptx = Pty;  /* Reuse */
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int i = 0; i < N; i++) {
+                        sum += P[p * N + i] * X_endog_dem[k * N + i];
+                    }
+                    Ptx[p] = sum;
+                }
+
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int q = 0; q < n_partial; q++) {
+                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
+                    }
+                    coef[p] = sum;
+                }
+
+                for (ST_int i = 0; i < N; i++) {
+                    ST_double fitted = 0.0;
+                    for (ST_int p = 0; p < n_partial; p++) {
+                        fitted += P[p * N + i] * coef[p];
+                    }
+                    X_endog_dem[k * N + i] -= fitted;
+                }
+            }
+
+            /* Residualize remaining X_exog_dem (those not being partialled) */
+            for (ST_int k = 0; k < K_exog; k++) {
+                if (is_partial[k]) continue;  /* Skip partial vars themselves */
+
+                ST_double *Ptx = Pty;
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int i = 0; i < N; i++) {
+                        sum += P[p * N + i] * X_exog_dem[k * N + i];
+                    }
+                    Ptx[p] = sum;
+                }
+
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int q = 0; q < n_partial; q++) {
+                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
+                    }
+                    coef[p] = sum;
+                }
+
+                for (ST_int i = 0; i < N; i++) {
+                    ST_double fitted = 0.0;
+                    for (ST_int p = 0; p < n_partial; p++) {
+                        fitted += P[p * N + i] * coef[p];
+                    }
+                    X_exog_dem[k * N + i] -= fitted;
+                }
+            }
+
+            /* Residualize Z_dem */
+            for (ST_int k = 0; k < K_iv; k++) {
+                ST_double *Ptx = Pty;
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int i = 0; i < N; i++) {
+                        sum += P[p * N + i] * Z_dem[k * N + i];
+                    }
+                    Ptx[p] = sum;
+                }
+
+                for (ST_int p = 0; p < n_partial; p++) {
+                    ST_double sum = 0.0;
+                    for (ST_int q = 0; q < n_partial; q++) {
+                        sum += PtP_inv[q * n_partial + p] * Ptx[q];
+                    }
+                    coef[p] = sum;
+                }
+
+                for (ST_int i = 0; i < N; i++) {
+                    ST_double fitted = 0.0;
+                    for (ST_int p = 0; p < n_partial; p++) {
+                        fitted += P[p * N + i] * coef[p];
+                    }
+                    Z_dem[k * N + i] -= fitted;
+                }
+            }
+
+            free(Pty);
+            free(coef);
+
+            /* Build reduced X_exog_dem with partialled variables removed */
+            ST_int K_exog_new = K_exog - n_partial;
+            if (K_exog_new > 0) {
+                /* Shift columns in-place to remove partialled vars */
+                ST_int new_idx = 0;
+                for (ST_int k = 0; k < K_exog; k++) {
+                    if (!is_partial[k]) {
+                        if (new_idx != k) {
+                            memcpy(X_exog_dem + new_idx * N, X_exog_dem + k * N, N * sizeof(ST_double));
+                        }
+                        new_idx++;
+                    }
+                }
+            }
+            K_exog = K_exog_new;
+            X_exog_dem = (K_exog > 0) ? all_data + N * (1 + K_endog) : NULL;
+
+            if (verbose) {
+                char buf[256];
+                snprintf(buf, sizeof(buf), "civreghdfe: FWL partialling complete, K_exog reduced to %d\n", (int)K_exog);
+                SF_display(buf);
+            }
+        } else {
+            SF_error("civreghdfe: Warning - FWL partialling failed (P'P singular on demeaned data)\n");
+        }
+
+        free(P);
+        free(PtP);
+        free(PtP_inv);
+        free(partial_indices);
+        free(is_partial);
+        partial_indices = NULL;
+        is_partial = NULL;
+    } else if (partial_indices) {
+        /* Clean up if n_partial was 0 but arrays were allocated */
+        free(partial_indices);
+        free(is_partial);
+        partial_indices = NULL;
+        is_partial = NULL;
+    }
+
+    /* Compute df_a (absorbed degrees of freedom) using connected components
+       This matches creghdfe's algorithm:
+       1. Sum all FE levels
+       2. For G >= 2, count connected components (mobility groups)
+       3. Subtract mobility groups from df_a
+       4. For G > 2, subtract (G-2) for additional FE dimensions */
     ST_int df_a = 0;
     ST_int df_a_nested = 0;  /* Levels from FE nested within cluster */
+    ST_int mobility_groups = 0;
+
     for (ST_int g = 0; g < G; g++) {
         df_a += state->factors[g].num_levels;
         /* Check if this FE is nested in cluster (1-indexed) */
@@ -966,7 +993,38 @@ static ST_retcode do_iv_regression(void)
         snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_num_levels_%d", (int)(g + 1));
         SF_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
     }
-    if (G > 1) df_a -= (G - 1);  /* Subtract redundant levels for multi-way FE */
+
+    /* Compute connected components for multi-way FEs (same algorithm as creghdfe) */
+    if (G >= 2) {
+        /* Count connected components between first two FEs */
+        mobility_groups = count_connected_components(
+            state->factors[0].levels,
+            state->factors[1].levels,
+            N,
+            state->factors[0].num_levels,
+            state->factors[1].num_levels
+        );
+
+        if (mobility_groups < 0) mobility_groups = 1;  /* Fallback on error */
+        df_a -= mobility_groups;
+
+        /* For G > 2, add (G-2) for additional FE dimensions */
+        if (G > 2) {
+            ST_int extra_mobility = G - 2;
+            df_a -= extra_mobility;
+            mobility_groups += extra_mobility;
+        }
+
+        if (verbose) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "civreghdfe: mobility_groups=%d (connected components)\n",
+                     (int)mobility_groups);
+            SF_display(buf);
+        }
+    }
+
+    /* Save mobility groups for absorbed DOF table display */
+    SF_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups);
 
     /* For VCE calculation when FE is nested in cluster:
        - nested FE levels don't contribute to df_a for VCE

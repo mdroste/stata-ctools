@@ -69,6 +69,7 @@ program define cbinscatter, eclass sortpreserve
     local linetype_num = 1   // Default to linear
     if "`linetype'" == "" {
         local linetype = "linear"
+        local linetype_lower = "linear"
         local linetype_num = 1
     }
     else {
@@ -450,6 +451,16 @@ program define cbinscatter, eclass sortpreserve
             local colors "`colorlist'"
         }
 
+        * Set marker colors and line colors (binscatter uses separate defaults)
+        * For single y-var with single by-group (no connect): mcolors=color1, lcolors=color2
+        * Otherwise: both use the same color sequence
+        local mcolors "`colors'"
+        local lcolors "`colors'"
+        if `actual_num_groups' == 1 & "`linetype_lower'" != "connect" {
+            local mcolors : word 1 of `colors'
+            local lcolors : word 2 of `colors'
+        }
+
         * Get bin data from matrix
         tempname binmat
         matrix `binmat' = __cbinscatter_bins
@@ -487,10 +498,12 @@ program define cbinscatter, eclass sortpreserve
                 }
             }
 
-            * Get color for this series
-            local thiscolor : word 1 of `colors'
+            * Get marker and line colors (binscatter uses different colors for single series)
+            local thismcolor : word 1 of `mcolors'
+            local thislcolor : word 1 of `lcolors'
 
-            local scatters "(scatteri `coords', mcolor(`thiscolor') msymbol(O))"
+            * Build scatter with mcolor and lcolor (lcolor for connect mode)
+            local scatters "(scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor'))"
 
             * Add fit line if requested
             if `linetype_num' > 0 {
@@ -499,16 +512,16 @@ program define cbinscatter, eclass sortpreserve
 
                 if `linetype_num' == 1 {
                     * Linear fit using function
-                    local fits "(function `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
+                    local fits "(function `coef_linear'*x+`coef_const', range(`x_min' `x_max') lcolor(`thislcolor'))"
                 }
                 else if `linetype_num' >= 2 {
                     local coef_quad = __cbinscatter_coefs[1, 3]
                     if `linetype_num' == 2 {
-                        local fits "(function `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
+                        local fits "(function `coef_quad'*x^2+`coef_linear'*x+`coef_const', range(`x_min' `x_max') lcolor(`thislcolor'))"
                     }
                     else {
                         local coef_cubic = __cbinscatter_coefs[1, 4]
-                        local fits "(function `coef_cubic'*x^3 + `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`x_min' `x_max') lcolor(`thiscolor'))"
+                        local fits "(function `coef_cubic'*x^3+`coef_quad'*x^2+`coef_linear'*x+`coef_const', range(`x_min' `x_max') lcolor(`thislcolor'))"
                     }
                 }
             }
@@ -543,13 +556,17 @@ program define cbinscatter, eclass sortpreserve
                     }
                 }
 
-                * Get color for this series
-                local thiscolor : word `g' of `colors'
-                if "`thiscolor'" == "" {
-                    local thiscolor "navy"
+                * Get marker and line colors for this series
+                local thismcolor : word `g' of `mcolors'
+                local thislcolor : word `g' of `lcolors'
+                if "`thismcolor'" == "" {
+                    local thismcolor "navy"
+                }
+                if "`thislcolor'" == "" {
+                    local thislcolor "navy"
                 }
 
-                local scatters "`scatters' (scatteri `coords', mcolor(`thiscolor') msymbol(O))"
+                local scatters "`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor'))"
                 local legend_labels `"`legend_labels' label(`legend_idx' "`by'==`g'")"'
                 local legend_order "`legend_order' `legend_idx'"
                 local legend_idx = `legend_idx' + 1
@@ -560,16 +577,16 @@ program define cbinscatter, eclass sortpreserve
                     local coef_linear = __cbinscatter_coefs[`g', 2]
 
                     if `linetype_num' == 1 {
-                        local fits "`fits' (function `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
+                        local fits "`fits' (function `coef_linear'*x+`coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thislcolor'))"
                     }
                     else if `linetype_num' >= 2 {
                         local coef_quad = __cbinscatter_coefs[`g', 3]
                         if `linetype_num' == 2 {
-                            local fits "`fits' (function `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
+                            local fits "`fits' (function `coef_quad'*x^2+`coef_linear'*x+`coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thislcolor'))"
                         }
                         else {
                             local coef_cubic = __cbinscatter_coefs[`g', 4]
-                            local fits "`fits' (function `coef_cubic'*x^3 + `coef_quad'*x^2 + `coef_linear'*x + `coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thiscolor'))"
+                            local fits "`fits' (function `coef_cubic'*x^3+`coef_quad'*x^2+`coef_linear'*x+`coef_const', range(`grp_x_min' `grp_x_max') lcolor(`thislcolor'))"
                         }
                     }
                 }

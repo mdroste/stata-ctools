@@ -151,6 +151,7 @@ static int parse_threads_arg(char *cmd_args)
 #include "csample_impl.h"
 #include "cbsample_impl.h"
 #include "crangestat_impl.h"
+#include "cpsmatch_impl.h"
 
 /*
     Main plugin entry point.
@@ -263,6 +264,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "crangestat") == 0) {
         rc = crangestat_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cpsmatch") == 0) {
+        rc = cpsmatch_main(cmd_args);
     }
     else {
         char msg[256];

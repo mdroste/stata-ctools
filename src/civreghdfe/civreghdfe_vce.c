@@ -880,41 +880,42 @@ void ivvce_compute_full(
         }
 
     } else if (kernel_type > 0 && bw > 0) {
-        /* HAC VCE - Panel-aware if cluster info available */
-        ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
-        if (!u) {
+        /* HAC VCE - Compute in Z-space like ivreg2, then transform to X-space
+           Following livreg2.do m_omega() exactly:
+           1. Score vectors in Z-space: uZ[l,i] = Z[l,i] * e[i]
+           2. Compute shat_ZZ using HAC formula with kernel weights
+           3. Transform: meat_X = A' * shat_ZZ * A where A = (Z'Z)^{-1} * Z'X
+           4. V = (X'PzX)^{-1} * meat_X * (X'PzX)^{-1} * (N / df_r)
+         */
+
+        /* Allocate shat_ZZ (K_iv x K_iv) and score vectors */
+        ST_double *shat_ZZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        ST_double *uZ = (ST_double *)calloc(N * K_iv, sizeof(ST_double));
+        if (!shat_ZZ || !uZ) {
+            if (shat_ZZ) free(shat_ZZ);
+            if (uZ) free(uZ);
             free(PzX); free(meat);
             return;
         }
 
-        /* Compute u_i = PzX_i * e_i */
+        /* Compute Z-space score vectors: uZ[l,i] = Z[l,i] * e[i] */
         for (i = 0; i < N; i++) {
             ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
             ST_double we = w * resid[i];
-            for (j = 0; j < K_total; j++) {
-                u[j * N + i] = PzX[j * N + i] * we;
+            for (ST_int l = 0; l < K_iv; l++) {
+                uZ[l * N + i] = Z[l * N + i] * we;
             }
         }
 
+        /* Compute HAC meat in Z-space: shat_ZZ = Σ kw(|t-s|) * uZ_t * uZ_s' */
         if (hac_panel_ids && num_hac_panels > 0) {
-            /*
-               Panel-aware HAC: Only compute autocorrelation within panels.
-               For each panel, compute HAC using time position within panel.
-
-               This matches ivreghdfe's behavior when kernel/bw is used with
-               panel fixed effects (absorb).
-
-               hac_panel_ids contains the panel ID for each observation.
-               Observations within the same panel are consecutive (sorted by time).
-            */
-
-            /* Build panel membership lists for efficient iteration */
+            /* Panel-aware HAC in Z-space */
             ST_int *panel_counts = (ST_int *)calloc(num_hac_panels, sizeof(ST_int));
             ST_int *panel_starts = (ST_int *)calloc(num_hac_panels + 1, sizeof(ST_int));
             ST_int *obs_by_panel = (ST_int *)calloc(N, sizeof(ST_int));
 
             if (!panel_counts || !panel_starts || !obs_by_panel) {
-                free(u);
+                free(uZ); free(shat_ZZ);
                 if (panel_counts) free(panel_counts);
                 if (panel_starts) free(panel_starts);
                 if (obs_by_panel) free(obs_by_panel);
@@ -922,89 +923,74 @@ void ivvce_compute_full(
                 return;
             }
 
-            /* Count observations per panel */
             for (i = 0; i < N; i++) {
                 ST_int p = hac_panel_ids[i] - 1;
-                if (p >= 0 && p < num_hac_panels) {
-                    panel_counts[p]++;
-                }
+                if (p >= 0 && p < num_hac_panels) panel_counts[p]++;
             }
-
-            /* Compute start indices */
             panel_starts[0] = 0;
             for (ST_int p = 0; p < num_hac_panels; p++) {
                 panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
             }
-
-            /* Reset counts to use as insertion indices */
             memset(panel_counts, 0, num_hac_panels * sizeof(ST_int));
-
-            /* Fill obs_by_panel */
             for (i = 0; i < N; i++) {
                 ST_int p = hac_panel_ids[i] - 1;
                 if (p >= 0 && p < num_hac_panels) {
-                    ST_int idx = panel_starts[p] + panel_counts[p];
-                    obs_by_panel[idx] = i;
-                    panel_counts[p]++;
+                    obs_by_panel[panel_starts[p] + panel_counts[p]++] = i;
                 }
             }
 
-            /* Compute meat: for each panel, sum HAC contributions */
             for (ST_int p = 0; p < num_hac_panels; p++) {
                 ST_int start = panel_starts[p];
                 ST_int end = panel_starts[p + 1];
                 ST_int T_p = end - start;
 
-                /* For each pair (t1, t2) within this panel, use time lag */
                 for (ST_int t1 = 0; t1 < T_p; t1++) {
                     ST_int i1 = obs_by_panel[start + t1];
                     for (ST_int t2 = 0; t2 < T_p; t2++) {
                         ST_int i2 = obs_by_panel[start + t2];
                         ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
-
-                        /* Apply kernel weight based on time lag within panel */
                         ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
                         if (kw < 1e-10) continue;
 
-                        /* Add u_i1 * u_i2' contribution */
-                        for (j = 0; j < K_total; j++) {
-                            for (k = 0; k <= j; k++) {
-                                ST_double contrib = kw * u[j * N + i1] * u[k * N + i2];
-                                meat[j * K_total + k] += contrib;
-                                if (k != j) meat[k * K_total + j] += contrib;
+                        for (ST_int l = 0; l < K_iv; l++) {
+                            for (ST_int m = 0; m <= l; m++) {
+                                ST_double contrib = kw * uZ[l * N + i1] * uZ[m * N + i2];
+                                shat_ZZ[l * K_iv + m] += contrib;
+                                if (m != l) shat_ZZ[m * K_iv + l] += contrib;
                             }
                         }
                     }
                 }
             }
-
-            free(panel_counts);
-            free(panel_starts);
-            free(obs_by_panel);
+            free(panel_counts); free(panel_starts); free(obs_by_panel);
 
         } else {
-            /* Standard (non-panel) HAC: treat all observations as time series */
+            /* Standard (non-panel) HAC in Z-space */
             for (ST_int lag = 0; lag <= bw; lag++) {
                 ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
                 if (kw < 1e-10) continue;
 
                 if (lag == 0) {
+                    /* Gamma(0) = Σ_i uZ_i * uZ_i' */
                     for (i = 0; i < N; i++) {
-                        for (j = 0; j < K_total; j++) {
-                            for (k = 0; k <= j; k++) {
-                                ST_double contrib = kw * u[j * N + i] * u[k * N + i];
-                                meat[j * K_total + k] += contrib;
-                                if (k != j) meat[k * K_total + j] += contrib;
+                        for (ST_int l = 0; l < K_iv; l++) {
+                            for (ST_int m = 0; m <= l; m++) {
+                                ST_double contrib = kw * uZ[l * N + i] * uZ[m * N + i];
+                                shat_ZZ[l * K_iv + m] += contrib;
+                                if (m != l) shat_ZZ[m * K_iv + l] += contrib;
                             }
                         }
                     }
                 } else {
+                    /* Gamma(lag) + Gamma(lag)': add contributions for both directions */
                     for (i = 0; i < N - lag; i++) {
-                        for (j = 0; j < K_total; j++) {
-                            for (k = 0; k < K_total; k++) {
-                                ST_double contrib = kw * (u[j * N + i] * u[k * N + (i + lag)] +
-                                                          u[j * N + (i + lag)] * u[k * N + i]);
-                                meat[k * K_total + j] += contrib;
+                        for (ST_int l = 0; l < K_iv; l++) {
+                            for (ST_int m = 0; m < K_iv; m++) {
+                                /* ghat[l,m] = uZ[l,i] * uZ[m,i+lag]
+                                   (ghat + ghat')[l,m] = uZ[l,i]*uZ[m,i+lag] + uZ[l,i+lag]*uZ[m,i] */
+                                ST_double contrib = kw * (uZ[l * N + i] * uZ[m * N + (i + lag)] +
+                                                          uZ[l * N + (i + lag)] * uZ[m * N + i]);
+                                shat_ZZ[m * K_iv + l] += contrib;
                             }
                         }
                     }
@@ -1012,24 +998,34 @@ void ivvce_compute_full(
             }
         }
 
-        free(u);
+        free(uZ);
+
+        /* Transform shat_ZZ to X-space:
+           meat_X = A' * shat_ZZ * A where A = temp_kiv_ktotal = (Z'Z)^{-1} * Z'X
+           This is equivalent to: (Z'X)' * (Z'Z)^{-1} * shat_ZZ * (Z'Z)^{-1} * (Z'X)
+         */
+        ST_double *temp_kk = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
+        if (temp_kk) {
+            /* temp_kk = shat_ZZ * A  (K_iv x K_total) */
+            civreghdfe_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
+            /* meat = A' * temp_kk  (K_total x K_total) */
+            civreghdfe_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
+            free(temp_kk);
+        }
+        free(shat_ZZ);
 
         /* HAC VCE sandwich: V = XkX_inv * meat * XkX_inv * dof_adj
-
-           ivreghdfe uses: V = (1/N) * aux5 * omega * aux5' * (N-dofminus)/(N-K-dofminus-sdofminus)
-           After simplification: V = N * sandwich * small_sample_adj
-
-           The civreghdfe meat is unnormalized, so we need:
-           V = (1/N) * XkX_inv * meat * XkX_inv * N * small_sample_adj
-             = XkX_inv * meat * XkX_inv * small_sample_adj
-
-           where small_sample_adj = (N-df_a) / df_r for fixed effects.
+           ivreghdfe applies small-sample adjustment: V = V * N / (N - K - G)
+           where K = number of regressors and G = absorbed FE count.
+           This is equivalent to V = V * N / df_r.
          */
-        ST_double dof_adj = (ST_double)(N - df_a) / (ST_double)df_r;
+        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
             civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
             civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            /* Small-sample adjustment */
             for (i = 0; i < K_total * K_total; i++) {
                 V[i] *= dof_adj;
             }

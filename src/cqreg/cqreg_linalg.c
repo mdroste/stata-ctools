@@ -7,6 +7,7 @@
 
 #include "cqreg_linalg.h"
 #include "../ctools_unroll.h"
+#include "../ctools_select.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>

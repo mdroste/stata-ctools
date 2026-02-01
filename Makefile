@@ -170,8 +170,11 @@ CBSAMPLE_SRCS = $(SRC_DIR)/cbsample/cbsample_impl.c
 # crangestat module
 CRANGESTAT_SRCS = $(SRC_DIR)/crangestat/crangestat_impl.c
 
+# cpsmatch module
+CPSMATCH_SRCS = $(SRC_DIR)/cpsmatch/cpsmatch_impl.c
+
 # All sources
-SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS) $(CSAMPLE_SRCS) $(CBSAMPLE_SRCS) $(CRANGESTAT_SRCS)
+SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS) $(CSAMPLE_SRCS) $(CBSAMPLE_SRCS) $(CRANGESTAT_SRCS) $(CPSMATCH_SRCS)
 
 # Headers (for dependency tracking)
 CORE_HEADERS = $(SRC_DIR)/stplugin.h \
@@ -264,8 +267,10 @@ CBSAMPLE_HEADERS = $(SRC_DIR)/cbsample/cbsample_impl.h
 
 CRANGESTAT_HEADERS = $(SRC_DIR)/crangestat/crangestat_impl.h
 
+CPSMATCH_HEADERS = $(SRC_DIR)/cpsmatch/cpsmatch_impl.h
+
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cimport/miniz -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample -I$(SRC_DIR)/crangestat
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cimport/miniz -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample -I$(SRC_DIR)/crangestat -I$(SRC_DIR)/cpsmatch
 
 # ------------------------------------------------------------------------------
 # Output Configuration

@@ -5,11 +5,15 @@
 *! Replaces Stata's built-in decode command with a high-performance
 *! C implementation.
 *!
-*! Syntax: cdecode varname [if] [in], generate(newvar) [maxlength(#) Verbose THReads(integer)]
+*! Syntax: cdecode varlist [if] [in], generate(newvarlist) | replace [maxlength(#) Verbose THReads(integer)]
 *!
 *! The cdecode command inherits the same syntax and functionality as Stata's
 *! built-in decode command, producing identical results but with better
 *! performance on large datasets.
+*!
+*! ctools extensions (not in Stata's decode):
+*!   - varlist support: decode multiple numeric variables at once
+*!   - replace option: replace original variables with decoded versions
 
 * Mata function to parse label save file and write labels to output file
 * This avoids Stata's command line length limits when there are many labels
@@ -113,41 +117,63 @@ void _cdecode_parse_labels_to_file(string scalar filename, string scalar lblname
 }
 end
 
-program define cdecode
+program define cdecode, rclass
     version 14.0
 
-    syntax varname(numeric) [if] [in], Generate(name) [MAXLength(integer 0) Verbose THReads(integer 0)]
+    syntax varlist(numeric) [if] [in], [Generate(string) replace MAXLength(integer 0) Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
     * =========================================================================
 
-    * Check that source variable is numeric
-    capture confirm numeric variable `varlist'
-    if _rc != 0 {
-        di as error "cdecode: `varlist' must be a numeric variable"
+    * Check that either generate or replace is specified, but not both
+    if "`generate'" == "" & "`replace'" == "" {
+        di as error "cdecode: must specify either generate() or replace option"
+        exit 198
+    }
+    if "`generate'" != "" & "`replace'" != "" {
+        di as error "cdecode: cannot specify both generate() and replace options"
         exit 198
     }
 
-    * Check that generate variable doesn't already exist
-    capture confirm new variable `generate'
-    if _rc != 0 {
-        capture confirm variable `generate'
-        if _rc == 0 {
-            di as error "cdecode: variable `generate' already exists"
-            exit 110
-        }
-        else {
-            di as error "cdecode: invalid variable name `generate'"
+    * Count input variables
+    local n_vars : word count `varlist'
+
+    * Handle replace vs generate
+    local __do_replace = 0
+    if "`replace'" != "" {
+        local __do_replace = 1
+    }
+    else {
+        * Check generate list has same number of variables
+        local n_gen : word count `generate'
+        if `n_gen' != `n_vars' {
+            di as error "cdecode: generate() must specify `n_vars' variable(s) to match varlist"
             exit 198
+        }
+        * Check that none of the generate variables already exist
+        forvalues i = 1/`n_gen' {
+            local gvar : word `i' of `generate'
+            capture confirm variable `gvar'
+            if _rc == 0 {
+                di as error "cdecode: variable `gvar' already exists"
+                exit 110
+            }
         }
     }
 
-    * Get value label name attached to source variable
-    local lblname : value label `varlist'
-    if "`lblname'" == "" {
-        di as error "cdecode: `varlist' has no value label attached"
-        exit 182
+    * Check that all source variables are numeric and have value labels
+    foreach v of local varlist {
+        capture confirm numeric variable `v'
+        if _rc != 0 {
+            di as error "cdecode: `v' must be a numeric variable"
+            exit 198
+        }
+        local lblname : value label `v'
+        if "`lblname'" == "" {
+            di as error "cdecode: `v' has no value label attached"
+            exit 182
+        }
     }
 
     * =========================================================================
@@ -158,11 +184,7 @@ program define cdecode
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
-        timer clear 91
-        timer clear 92
-        timer clear 93
         timer on 90
-        timer on 91
     }
 
     * Mark sample
@@ -226,167 +248,148 @@ program define cdecode
     * Reset _rc
     capture confirm number 1
 
-    * Get variable index
-    unab allvars : *
-    local var_idx = 0
-    local idx = 1
-    foreach v of local allvars {
-        if ("`v'" == "`varlist'") {
-            local var_idx = `idx'
-            continue, break
-        }
-        local ++idx
-    }
-
-    if `var_idx' == 0 {
-        di as error "cdecode: could not find variable `varlist'"
-        exit 111
-    }
-
-    * =========================================================================
-    * Extract value labels and encode for C plugin
-    * =========================================================================
-
-    * Use label save to preserve trailing spaces in labels
-    * (The `: label` extended macro function strips trailing spaces)
-    tempfile __lblfile
-    quietly label save `lblname' using `__lblfile', replace
-
-    * Build encoded label string: "value|label||value|label||..."
-    * We need to escape | and \ in label text
-    local labels_encoded ""
-    local max_label_len = 0
-
-    * Create temp file for labels (used when label string is too long)
-    tempfile __labelsfile
-
-    * Parse the label save file using Mata for reliable string handling
-    * Format: label define lblname value `"text"', modify
-    * Mata writes labels to temp file to avoid command line length limits
-    mata: _cdecode_parse_labels_to_file("`__lblfile'", "`lblname'", "`__labelsfile'")
-
-    * Determine string variable width
-    if `maxlength' > 0 {
-        local strwidth = `maxlength'
-    }
-    else {
-        local strwidth = `max_label_len'
-        if `strwidth' < 1 {
-            local strwidth = 1
-        }
-    }
-
-    * Cap at max string length
-    if `strwidth' > 2045 {
-        local strwidth = 2045
-    }
-
-    * Create the destination string variable
-    quietly generate str`strwidth' `generate' = ""
-
-    * Get index of new variable
-    unab allvars : *
-    local gen_idx = 0
-    local idx = 1
-    foreach v of local allvars {
-        if ("`v'" == "`generate'") {
-            local gen_idx = `idx'
-            continue, break
-        }
-        local ++idx
-    }
-
     * Build threads option
     local threads_code ""
     if `threads' > 0 {
         local threads_code "threads(`threads')"
     }
 
-    * Build maxlen option
-    local maxlen_code "maxlen=`strwidth'"
+    * =========================================================================
+    * Process each variable
+    * =========================================================================
 
-    if `__do_timing' {
-        timer off 91
-        timer on 92
+    forvalues i = 1/`n_vars' {
+        local srcvar : word `i' of `varlist'
+
+        * Determine destination variable name
+        if `__do_replace' {
+            tempvar __tempgen
+            local destvar "`__tempgen'"
+            local __final_name "`srcvar'"
+        }
+        else {
+            local destvar : word `i' of `generate'
+            local __final_name "`destvar'"
+        }
+
+        * Get value label name attached to source variable
+        local lblname : value label `srcvar'
+
+        * Get variable index for source
+        unab allvars : *
+        local var_idx = 0
+        local idx = 1
+        foreach v of local allvars {
+            if ("`v'" == "`srcvar'") {
+                local var_idx = `idx'
+                continue, break
+            }
+            local ++idx
+        }
+
+        if `var_idx' == 0 {
+            di as error "cdecode: could not find variable `srcvar'"
+            exit 111
+        }
+
+        * =====================================================================
+        * Extract value labels and encode for C plugin
+        * =====================================================================
+
+        * Use label save to preserve trailing spaces in labels
+        tempfile __lblfile
+        quietly label save `lblname' using `__lblfile', replace
+
+        * Create temp file for labels
+        tempfile __labelsfile
+
+        * Parse the label save file using Mata for reliable string handling
+        mata: _cdecode_parse_labels_to_file("`__lblfile'", "`lblname'", "`__labelsfile'")
+
+        * Determine string variable width
+        if `maxlength' > 0 {
+            local strwidth = `maxlength'
+        }
+        else {
+            local strwidth = `max_label_len'
+            if `strwidth' < 1 {
+                local strwidth = 1
+            }
+        }
+
+        * Cap at max string length
+        if `strwidth' > 2045 {
+            local strwidth = 2045
+        }
+
+        * Create the destination string variable
+        quietly generate str`strwidth' `destvar' = ""
+
+        * Get index of new variable
+        unab allvars : *
+        local gen_idx = 0
+        local idx = 1
+        foreach v of local allvars {
+            if ("`v'" == "`destvar'") {
+                local gen_idx = `idx'
+                continue, break
+            }
+            local ++idx
+        }
+
+        * Build maxlen option
+        local maxlen_code "maxlen=`strwidth'"
+
+        * Call the C plugin
+        plugin call ctools_plugin `srcvar' `destvar' `if' `in', ///
+            `"cdecode `threads_code' `maxlen_code' labelsfile=`__labelsfile'"'
+
+        local plugin_rc = _rc
+
+        if `plugin_rc' != 0 {
+            exit `plugin_rc'
+        }
+
+        * Handle replace option: drop original var and rename temp var
+        if `__do_replace' {
+            capture drop `srcvar'
+            rename `destvar' `srcvar'
+        }
     }
 
-    * Call the C plugin (pass labels file path to avoid command line length limits)
-    plugin call ctools_plugin `varlist' `generate' `if' `in', ///
-        `"cdecode `threads_code' `maxlen_code' labelsfile=`__labelsfile'"'
-
-    local plugin_rc = _rc
+    * Store rclass results
+    return scalar N_vars = `n_vars'
 
     if `__do_timing' {
-        timer off 92
-        timer on 93
-    }
-
-    * Get results
-    local n_decoded = _cdecode_n_decoded
-    local n_missing = _cdecode_n_missing
-    local n_unlabeled = _cdecode_n_unlabeled
-
-    if `__do_timing' {
-        timer off 93
         timer off 90
 
         * Extract timer values
         quietly timer list 90
         local __time_total = r(t90)
-        quietly timer list 91
-        local __time_preplugin = r(t91)
-        quietly timer list 92
-        local __time_plugin = r(t92)
-        quietly timer list 93
-        local __time_postplugin = r(t93)
-
-        * Calculate plugin call overhead
-        capture local __plugin_time_total = _cdecode_time_total
-        if _rc != 0 local __plugin_time_total = 0
-        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
         di as text ""
         di as text "{hline 55}"
         di as text "cdecode timing breakdown:"
         di as text "{hline 55}"
-        di as text "  C plugin internals:"
-        di as text "    Argument parsing:       " as result %8.4f _cdecode_time_parse " sec"
-        di as text "    Decode values:          " as result %8.4f _cdecode_time_decode " sec"
-        di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _cdecode_time_total " sec"
-        di as text "  {hline 53}"
-        di as text "  Stata overhead:"
-        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
-        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
-        di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
+        di as text "  Variables decoded:        " as result `n_vars'
+        di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
-        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
-        di as text "{hline 55}"
-        di as text ""
-        di as text "  Values decoded:           " as result `n_decoded'
-        di as text "  Missing values:           " as result `n_missing'
-        if `n_unlabeled' > 0 {
-            di as text "  Unlabeled values:         " as result `n_unlabeled'
-        }
-        di as text "  Max label length:         " as result `max_label_len'
-        di as text "  String variable width:    " as result `strwidth'
 
         * Display thread diagnostics
-        capture local __threads_max = _cdecode_threads_max
+        capture confirm scalar __cdecode_threads_max
         if _rc == 0 {
-            capture local __openmp_enabled = _cdecode_openmp_enabled
+            local __threads_max = scalar(__cdecode_threads_max)
+            capture local __openmp_enabled = scalar(__cdecode_openmp_enabled)
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
             di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
+
+            * Clean up scalars
+            capture scalar drop __cdecode_threads_max
+            capture scalar drop __cdecode_openmp_enabled
         }
     }
-
-    if `plugin_rc' != 0 {
-        exit `plugin_rc'
-    }
-
-    exit 0
 end

@@ -392,7 +392,8 @@ else {
 }
 
 * Test locale option alone (without parselocale) - should not affect parsing
-capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) clear
+* Note: use asdouble for precise comparison against literal value
+capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) asdouble clear
 if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "locale without parselocale (no effect)"
 }

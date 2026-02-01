@@ -178,7 +178,51 @@ including timing for each stage of the computation.
 {title:Stored results}
 
 {pstd}
-{cmd:creghdfe} stores results in {cmd:e()} similar to {help reghdfe:reghdfe}.
+{cmd:creghdfe} stores the following in {cmd:e()}:
+
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Scalars}{p_end}
+{synopt:{cmd:e(N)}}number of observations{p_end}
+{synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
+{synopt:{cmd:e(df_r)}}residual degrees of freedom{p_end}
+{synopt:{cmd:e(r2)}}R-squared{p_end}
+{synopt:{cmd:e(r2_within)}}within R-squared{p_end}
+{synopt:{cmd:e(r2_a)}}adjusted R-squared{p_end}
+{synopt:{cmd:e(rmse)}}root mean squared error{p_end}
+{synopt:{cmd:e(rss)}}residual sum of squares{p_end}
+{synopt:{cmd:e(mss)}}model sum of squares{p_end}
+{synopt:{cmd:e(tss)}}total sum of squares{p_end}
+{synopt:{cmd:e(tss_within)}}within total sum of squares{p_end}
+{synopt:{cmd:e(df_a)}}absorbed degrees of freedom (adjusted){p_end}
+{synopt:{cmd:e(df_a_initial)}}absorbed degrees of freedom (before nested adjustment){p_end}
+{synopt:{cmd:e(df_a_nested)}}degrees of freedom from nested FEs{p_end}
+{synopt:{cmd:e(F)}}F-statistic{p_end}
+{synopt:{cmd:e(rank)}}rank of e(V){p_end}
+{synopt:{cmd:e(N_hdfe)}}number of absorbed FE groups{p_end}
+{synopt:{cmd:e(N_hdfe_extended)}}number of mobility groups{p_end}
+{synopt:{cmd:e(num_singletons)}}number of singleton observations dropped{p_end}
+{synopt:{cmd:e(N_clust)}}number of clusters (if {cmd:vce(cluster)}){p_end}
+
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Macros}{p_end}
+{synopt:{cmd:e(cmd)}}{cmd:creghdfe}{p_end}
+{synopt:{cmd:e(cmdline)}}command as typed{p_end}
+{synopt:{cmd:e(depvar)}}name of dependent variable{p_end}
+{synopt:{cmd:e(indepvars)}}names of independent variables{p_end}
+{synopt:{cmd:e(absorb)}}absorbed fixed effect variables{p_end}
+{synopt:{cmd:e(vce)}}VCE type: {cmd:unadjusted}, {cmd:robust}, or {cmd:cluster}{p_end}
+{synopt:{cmd:e(clustvar)}}name of cluster variable (if {cmd:vce(cluster)}){p_end}
+{synopt:{cmd:e(resid)}}name of residual variable (if {cmd:resid} or {cmd:resid2()} specified){p_end}
+{synopt:{cmd:e(predict)}}program used to implement {cmd:predict}{p_end}
+
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Matrices}{p_end}
+{synopt:{cmd:e(b)}}coefficient vector{p_end}
+{synopt:{cmd:e(V)}}variance-covariance matrix of the estimators{p_end}
+
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Functions}{p_end}
+{synopt:{cmd:e(sample)}}marks estimation sample{p_end}
 
 
 {title:Author}

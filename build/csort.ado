@@ -28,7 +28,7 @@
 program define csort, rclass
     version 14.0
 
-    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam THReads(integer 0) NOSORTedby]
+    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby]
 
     * =========================================================================
     * UPFRONT VALIDATION - check all options before any data manipulation
@@ -180,9 +180,15 @@ program define csort, rclass
     }
 
     * Build stream option string
+    * stream(#) enables streaming mode with # variables loaded at a time (1-16)
     local stream_code ""
-    if "`stream'" != "" {
-        local stream_code "stream"
+    if `stream' > 0 {
+        * Validate and constrain batch size
+        local batch_size = `stream'
+        if `batch_size' > 16 {
+            local batch_size = 16
+        }
+        local stream_code "stream(`batch_size')"
     }
 
     * Build threads option string

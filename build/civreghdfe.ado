@@ -394,19 +394,21 @@ program define civreghdfe, eclass
 
     * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)
     * This needs to happen before verbose output to show correct VCE type
-    * Also detect panel-aware HAC for kernel/bw with tsset panel data
     local panel_aware_hac = 0
     if "`kernel'" != "" & `bw' > 0 & `vce_type' == 0 & `dkraay' == 0 & "`kiefer'" == "" {
         local vce_type = 1
-        * Check if data is tsset panel - enable panel-aware HAC
-        if "`absorb'" != "" {
-            qui tsset
-            if _rc == 0 {
-                local tsset_ivar `r(panelvar)'
-                local tsset_tvar `r(timevar)'
-                if "`tsset_ivar'" != "" & "`tsset_tvar'" != "" {
-                    local panel_aware_hac = 1
-                }
+    }
+
+    * Detect panel-aware HAC for kernel/bw with tsset panel data
+    * This is separate from vce_type check because user may specify robust explicitly
+    * Note: bw > 0 implies HAC even without explicit kernel (defaults to Bartlett later)
+    if ("`kernel'" != "" | `bw' > 0) & `dkraay' == 0 & "`kiefer'" == "" & "`absorb'" != "" {
+        capture qui tsset
+        if _rc == 0 {
+            local tsset_ivar `r(panelvar)'
+            local tsset_tvar `r(timevar)'
+            if "`tsset_ivar'" != "" & "`tsset_tvar'" != "" {
+                local panel_aware_hac = 1
             }
         }
     }
@@ -916,6 +918,12 @@ program define civreghdfe, eclass
             capture local fe_nested_`g' = __civreghdfe_fe_nested_`g'
             if _rc != 0 local fe_nested_`g' = 0
         }
+    }
+
+    * Read mobility groups (connected components) for multi-way FE redundancy
+    capture local mobility_groups = scalar(__civreghdfe_mobility_groups)
+    if _rc != 0 | "`mobility_groups'" == "" | "`mobility_groups'" == "." {
+        local mobility_groups = 0
     }
 
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
@@ -1560,36 +1568,38 @@ program define civreghdfe, eclass
     di as text "{hline 13}{c +}{hline 39}{c RT}"
 
     * Display each FE with its components
+    * Redundancy calculation uses connected components (mobility groups) from C:
+    * - G == 1: no redundancy (0)
+    * - G >= 2: second FE gets mobility_groups redundant (from connected components)
+    * - G > 2: each additional FE gets 1 redundant
+    * - Nested FEs: all levels are redundant
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`G' {
         local fevar : word `g' of `absorb'
         local cats = `fe_levels_`g''
         * For nested FEs: all levels are redundant
-        * For first non-nested FE: no redundant
-        * For subsequent non-nested FEs: 1 redundant (identification)
         if `fe_nested_`g'' == 1 {
             local redundant = `cats'
             local has_nested = 1
             local nested_marker "*"
         }
         else {
-            if `g' == 1 | (`has_nested' == 0 & `g' == 1) {
-                * First non-nested FE: check if any prior FE was nested
-                local first_nonnested = 1
-                forval prev = 1/`=`g'-1' {
-                    if `fe_nested_`prev'' == 0 {
-                        local first_nonnested = 0
-                    }
-                }
-                if `first_nonnested' {
-                    local redundant = 0
-                }
-                else {
-                    local redundant = 1
+            if `g' == 1 {
+                * First FE: no redundancy
+                local redundant = 0
+            }
+            else if `g' == 2 {
+                * Second FE: redundancy = mobility_groups (connected components)
+                local redundant = `mobility_groups'
+                * For G > 2, mobility_groups includes (G-2) extra, but we want
+                * the second FE to show only the base mobility groups
+                if `G' > 2 {
+                    local redundant = `mobility_groups' - (`G' - 2)
                 }
             }
             else {
+                * Third+ FE: 1 redundant each
                 local redundant = 1
             }
             local nested_marker " "

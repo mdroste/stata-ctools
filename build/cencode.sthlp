@@ -21,15 +21,16 @@ command.
 
 {p 8 17 2}
 {cmdab:cencode}
-{varname}
+{varlist}
 {ifin}
-{cmd:,} {opth gen:erate(newvar)} [{it:options}]
+{cmd:,} {opth gen:erate(newvarlist)} | {opt replace} [{it:options}]
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
 {synoptline}
-{syntab:Required}
-{synopt:{opth gen:erate(newvar)}}name of new numeric variable{p_end}
+{syntab:Required (one of)}
+{synopt:{opth gen:erate(newvarlist)}}names of new numeric variables{p_end}
+{synopt:{opt replace}}replace {it:varlist} with the encoded variables (ctools only){p_end}
 
 {syntab:Options}
 {synopt:{opth lab:el(name)}}name for value label (default: same as {it:newvar}){p_end}
@@ -44,36 +45,58 @@ command.
 
 {pstd}
 {cmd:cencode} is a high-performance drop-in replacement for Stata's {help encode:encode}
-command. It converts a string variable to a numeric variable with a corresponding
-value label, using parallel algorithms for significantly improved performance
+command. It converts string variables to numeric variables with corresponding
+value labels, using parallel algorithms for significantly improved performance
 on large datasets.
 
 {pstd}
-{cmd:cencode} creates a new variable named {it:newvar} of type {cmd:long} that contains
-an integer code for each unique string value in {varname}. Integer codes are assigned
-in alphabetical order of the string values (1, 2, 3, ...). A value label with the
-same name as {it:newvar} (or specified by {opt label()}) is created that maps
+{cmd:cencode} creates new variables of type {cmd:long} that contain
+integer codes for each unique string value in the source variables. Integer codes are assigned
+in alphabetical order of the string values (1, 2, 3, ...). Value labels with the
+same names as the new variables (or specified by {opt label()}) are created that map
 integer codes back to the original string values.
 
 {pstd}
-Missing values (empty strings and extended missing values) in {varname} become
-system missing values in {it:newvar}.
+Missing values (empty strings and extended missing values) in the source variables become
+system missing values in the new variables.
+
+{pstd}
+{bf:ctools extensions:} Unlike Stata's built-in {cmd:encode}, {cmd:cencode} supports:
+
+{p 8 12 2}{bf:varlist support:} Encode multiple string variables in a single command.
+When using {opt generate()}, you must provide the same number of new variable names
+as there are variables in {it:varlist}.{p_end}
+
+{p 8 12 2}{bf:replace option:} Replace the original string variables with their
+encoded numeric versions instead of creating new variables.{p_end}
 
 
 {marker options}{...}
 {title:Options}
 
-{dlgtab:Required}
+{dlgtab:Required (one of)}
 
 {phang}
-{opth generate(newvar)} specifies the name of the new numeric variable to be
-created. This option is required.
+{opth generate(newvarlist)} specifies the names of the new numeric variables to be
+created. The number of names must match the number of variables in {it:varlist}.
+
+{phang}
+{opt replace} specifies that the variables in {it:varlist} should be replaced with their
+encoded numeric versions instead of creating new variables. This is a ctools-specific
+extension not available in Stata's built-in {cmd:encode}. When {opt replace}
+is specified, each original string variable is dropped and replaced with the
+new numeric variable using the same name.
+
+{pstd}
+You must specify either {opt generate()} or {opt replace}, but not both.
 
 {dlgtab:Options}
 
 {phang}
 {opth label(name)} specifies the name of the value label to be created or
-extended. If not specified, the value label is named the same as {it:newvar}.
+extended. If not specified, the value label is named the same as the new variable.
+When encoding multiple variables, this option applies to all variables (each
+variable will have a separate value label with this base name).
 
 {phang}
 {opt noextend} specifies that if the value label already exists, it should not
@@ -86,9 +109,7 @@ operations. By default, {cmd:cencode} uses all available CPU cores as reported b
 OpenMP. Use this option to limit parallelism.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent in each phase of
-the encoding: loading strings, collecting unique values, sorting, encoding,
-and storing value labels.
+{opt verbose} displays a timing breakdown showing time spent encoding the variables.
 
 
 {marker remarks}{...}
@@ -145,6 +166,15 @@ faster than the native {cmd:encode} command.
 {pstd}Encode only for certain observations:{p_end}
 {phang2}{cmd:. cencode make if foreign == 1, generate(foreign_make)}{p_end}
 
+{pstd}Replace the original variable with the encoded version (ctools-specific):{p_end}
+{phang2}{cmd:. cencode make, replace}{p_end}
+
+{pstd}Encode multiple variables at once (ctools-specific):{p_end}
+{phang2}{cmd:. cencode var1 var2 var3, generate(var1_code var2_code var3_code)}{p_end}
+
+{pstd}Replace multiple variables at once (ctools-specific):{p_end}
+{phang2}{cmd:. cencode var1 var2 var3, replace}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -154,19 +184,8 @@ faster than the native {cmd:encode} command.
 
 {synoptset 24 tabbed}{...}
 {p2col 5 24 28 2: Scalars}{p_end}
-{synopt:{cmd:_cencode_n_unique}}number of unique string values encoded{p_end}
-
-{pstd}
-When the {opt verbose} option is specified, {cmd:cencode} additionally stores:
-
-{synopt:{cmd:_cencode_time_load}}time to load strings from Stata (seconds){p_end}
-{synopt:{cmd:_cencode_time_collect}}time to collect unique values (seconds){p_end}
-{synopt:{cmd:_cencode_time_sort}}time to sort unique values (seconds){p_end}
-{synopt:{cmd:_cencode_time_encode}}time to encode values (seconds){p_end}
-{synopt:{cmd:_cencode_time_labels}}time to store label mapping (seconds){p_end}
-{synopt:{cmd:_cencode_time_total}}total C plugin time (seconds){p_end}
-{synopt:{cmd:_cencode_openmp_enabled}}1 if OpenMP is enabled, 0 otherwise{p_end}
-{synopt:{cmd:_cencode_threads_max}}maximum available threads{p_end}
+{synopt:{cmd:r(N_unique)}}number of unique string values encoded (for last variable){p_end}
+{synopt:{cmd:r(N_vars)}}number of variables encoded{p_end}
 
 
 {title:Author}

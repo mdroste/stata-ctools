@@ -7,12 +7,11 @@
  * Usage: runstata validation/validate_all.do
  ******************************************************************************/
 
-version 14.0
-clear all
-set more off
-set trace off
 
 quietly {
+	
+clear all 
+set more off
 
 * Track overall results
 local total_passed = 0
@@ -26,13 +25,13 @@ local all_failure_count = 0
 capture mkdir "temp"
 
 * Define list of validation scripts and their names
-local scripts "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter"
-local script_names "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter"
+local scripts "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch"
+local script_names "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch"
 local num_scripts : word count `scripts'
 
 * Count total validations (number of scripts)
 noi di as text ""
-noi di as text "Running `num_scripts' validations..."
+noi di as text "Running all validation scripts..."
 noi di as text ""
 
 * Initialize storage for per-script results

@@ -1757,7 +1757,7 @@ ST_retcode ivest_compute_2sls(
         X_endog, Z, ZtZ, ZtZ_inv, temp1, first_stage_F,
         weights, weight_type, N, K_exog, K_endog, K_iv, df_a,
         vce_type, cluster_ids, num_clusters,
-        kernel_type, bw,
+        kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
@@ -1775,7 +1775,8 @@ ST_retcode ivest_compute_2sls(
         resid, Z, ZtZ_inv, rss,
         weights, weight_type, N, K_exog, K_endog, K_iv,
         vce_type, cluster_ids, num_clusters,
-        kernel_type, bw,
+        kernel_type, bw, kiefer,
+        hac_panel_ids, num_hac_panels,
         &sargan_stat, &overid_df
     );
 

@@ -299,13 +299,16 @@ static ST_retcode load_data(
 
     /* Read absorb variables (as integers) */
     /* NOTE: Check for Stata missings before casting - missings are large positive doubles
-       that would become huge ints and cause OOM in init_factor allocations */
+       that would become huge ints and cause OOM in init_factor allocations.
+       Also, HDFE code expects 1-based FE levels, so add 1 to convert 0-based variables
+       like foreign (0=Domestic, 1=Foreign) to 1-based (1=Domestic, 2=Foreign). */
     if (fe_vars) {
         for (j = 0; j < config->num_absorb; j++) {
             for (i = 0; i < N; i++) {
                 SF_vdata(var_idx, i + in1, &val);
-                /* Set missings to 0 so they're filtered by the <= 0 check later */
-                fe_vars[j * N + i] = SF_is_missing(val) ? 0 : (ST_int)val;
+                /* Set missings to 0, add 1 to valid values to make them 1-based.
+                 * The < 1 check later will filter out missings (value 0). */
+                fe_vars[j * N + i] = SF_is_missing(val) ? 0 : (ST_int)val + 1;
             }
             var_idx++;
         }
@@ -370,10 +373,10 @@ static ST_retcode load_data(
             }
         }
 
-        /* Check absorb variables */
+        /* Check absorb variables - filter out values < 1 (missings set to 0) */
         if (valid && fe_vars) {
             for (j = 0; j < config->num_absorb; j++) {
-                if (fe_vars[j * N + i] <= 0) {
+                if (fe_vars[j * N + i] < 1) {
                     valid = 0;
                     break;
                 }
