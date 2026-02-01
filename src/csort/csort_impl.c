@@ -62,7 +62,8 @@ static int parse_stream_option(const char *args)
       3 or "sample"   -> SORT_ALG_SAMPLE
       4 or "counting" -> SORT_ALG_COUNTING
       5 or "merge"    -> SORT_ALG_MERGE
-      6 or "ips4o"    -> SORT_ALG_IPS4O (default)
+      6 or "ips4o"    -> SORT_ALG_IPS4O
+      7 or "auto"     -> SORT_ALG_AUTO (default)
 */
 static sort_algorithm_t parse_algorithm(const char *args)
 {
@@ -71,7 +72,7 @@ static sort_algorithm_t parse_algorithm(const char *args)
     /* Look for "alg=" in the arguments */
     p = strstr(args, "alg=");
     if (p == NULL) {
-        return SORT_ALG_IPS4O;  /* Default */
+        return SORT_ALG_AUTO;  /* Default: auto-select best algorithm */
     }
 
     p += 4;  /* Skip "alg=" */
@@ -91,9 +92,11 @@ static sort_algorithm_t parse_algorithm(const char *args)
         return SORT_ALG_MERGE;
     } else if (*p == '6' || strncmp(p, "ips4o", 5) == 0) {
         return SORT_ALG_IPS4O;
+    } else if (*p == '7' || strncmp(p, "auto", 4) == 0) {
+        return SORT_ALG_AUTO;
     }
 
-    return SORT_ALG_IPS4O;  /* Default for unrecognized */
+    return SORT_ALG_AUTO;  /* Default for unrecognized */
 }
 
 /* Parse the sort variable indices from the argument string.

@@ -204,6 +204,14 @@ ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double
 
 /*
     HAC Kernel weight functions
+
+    Kernel weights for HAC (Newey-West style) estimators.
+    bw = number of lags to include (truncation lag)
+    j = lag index (0, 1, ..., bw)
+
+    For Bartlett/Newey-West: w(j) = 1 - j/(bw+1)
+    This gives positive weights for all lags 0 through bw.
+    At j=bw: w(bw) = 1 - bw/(bw+1) = 1/(bw+1) > 0
 */
 ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
 {
@@ -211,7 +219,8 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
     if (bw <= 0) return 0.0;
     if (j > bw) return 0.0;  /* No weight beyond bandwidth */
 
-    ST_double x = (ST_double)j / (ST_double)bw;  /* ivreg2 uses j/bw, not j/(bw+1) */
+    /* Use bw+1 in denominator so lag=bw gets positive weight */
+    ST_double x = (ST_double)j / (ST_double)(bw + 1);
 
     switch (kernel_type) {
         case 1:  /* Bartlett / Newey-West */

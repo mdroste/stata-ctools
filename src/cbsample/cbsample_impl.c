@@ -94,82 +94,111 @@ typedef struct {
     size_t count;
 } group_info;
 
-typedef struct {
-    double **by_data;
-    size_t nby;
-} sort_context;
+/* Check if two adjacent observations are in the same group */
+static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
+    for (size_t b = 0; b < nvars; b++) {
+        double prev = data->vars[b].data.dbl[i - 1];
+        double curr = data->vars[b].data.dbl[i];
 
-static sort_context g_sort_ctx;
+        int prev_miss = (prev >= miss);
+        int curr_miss = (curr >= miss);
 
-static int compare_by_indices(const void *a, const void *b) {
-    size_t ia = *(const size_t *)a;
-    size_t ib = *(const size_t *)b;
-    const double miss = SV_missval;
-
-    for (size_t k = 0; k < g_sort_ctx.nby; k++) {
-        double va = g_sort_ctx.by_data[k][ia];
-        double vb = g_sort_ctx.by_data[k][ib];
-
-        int ma = (va >= miss);
-        int mb = (vb >= miss);
-
-        if (ma && mb) continue;
-        if (ma) return 1;
-        if (mb) return -1;
-
-        if (va < vb) return -1;
-        if (va > vb) return 1;
+        if (prev_miss && curr_miss) continue;
+        if (prev_miss || curr_miss || prev != curr) {
+            return 0;
+        }
     }
-    return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+    return 1;
 }
 
-static void argsort_by_vars(double **by_data, size_t nobs, size_t nby, size_t *indices) {
-    for (size_t i = 0; i < nobs; i++) {
-        indices[i] = i;
-    }
-    g_sort_ctx.by_data = by_data;
-    g_sort_ctx.nby = nby;
-    qsort(indices, nobs, sizeof(size_t), compare_by_indices);
-}
-
-static void detect_groups(double **by_data, size_t nobs, size_t nby,
-                          group_info *groups, size_t *ngroups) {
+/* Detect groups from sorted stata_data (data must already be sorted/permuted)
+   Parallelized for large datasets using boundary detection */
+static void detect_groups_from_data(stata_data *data, size_t nvars,
+                                     group_info *groups, size_t *ngroups) {
+    size_t nobs = data->nobs;
     if (nobs == 0) {
         *ngroups = 0;
         return;
     }
 
     const double miss = SV_missval;
-    size_t g = 0;
-    groups[0].start = 0;
-    groups[0].count = 1;
 
-    for (size_t i = 1; i < nobs; i++) {
-        int same_group = 1;
+    #ifdef _OPENMP
+    int num_threads = omp_get_max_threads();
 
-        for (size_t b = 0; b < nby && same_group; b++) {
-            double prev = by_data[b][i - 1];
-            double curr = by_data[b][i];
+    /* For small datasets or few threads, use sequential version */
+    if (nobs < 10000 || num_threads <= 1) {
+    #endif
+        /* Sequential version */
+        size_t g = 0;
+        groups[0].start = 0;
+        groups[0].count = 1;
 
-            int prev_miss = (prev >= miss);
-            int curr_miss = (curr >= miss);
-
-            if (prev_miss && curr_miss) continue;
-            if (prev_miss || curr_miss || prev != curr) {
-                same_group = 0;
+        for (size_t i = 1; i < nobs; i++) {
+            if (same_group_check(data, nvars, i, miss)) {
+                groups[g].count++;
+            } else {
+                g++;
+                groups[g].start = i;
+                groups[g].count = 1;
             }
         }
+        *ngroups = g + 1;
+        return;
+    #ifdef _OPENMP
+    }
 
-        if (same_group) {
-            groups[g].count++;
-        } else {
-            g++;
-            groups[g].start = i;
-            groups[g].count = 1;
+    /* Parallel version: first find all group boundaries */
+    /* Use a bitmap to mark boundaries (where new group starts) */
+    uint8_t *boundaries = (uint8_t *)calloc(nobs, sizeof(uint8_t));
+    if (!boundaries) {
+        /* Fallback to sequential */
+        size_t g = 0;
+        groups[0].start = 0;
+        groups[0].count = 1;
+        for (size_t i = 1; i < nobs; i++) {
+            if (same_group_check(data, nvars, i, miss)) {
+                groups[g].count++;
+            } else {
+                g++;
+                groups[g].start = i;
+                groups[g].count = 1;
+            }
+        }
+        *ngroups = g + 1;
+        return;
+    }
+
+    boundaries[0] = 1;  /* First obs is always a boundary */
+
+    /* Phase 1: Parallel boundary detection */
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 1; i < nobs; i++) {
+        if (!same_group_check(data, nvars, i, miss)) {
+            boundaries[i] = 1;
         }
     }
 
-    *ngroups = g + 1;
+    /* Phase 2: Sequential group construction (must be sequential for ordering) */
+    size_t g = 0;
+    for (size_t i = 0; i < nobs; i++) {
+        if (boundaries[i]) {
+            if (g > 0) {
+                /* Finalize previous group's count */
+                groups[g - 1].count = i - groups[g - 1].start;
+            }
+            groups[g].start = i;
+            g++;
+        }
+    }
+    /* Finalize last group */
+    if (g > 0) {
+        groups[g - 1].count = nobs - groups[g - 1].start;
+    }
+
+    free(boundaries);
+    *ngroups = g;
+    #endif
 }
 
 /* ===========================================================================
@@ -226,15 +255,18 @@ ST_retcode cbsample_main(const char *args) {
     double t_start, t_load, t_sort_cluster, t_sample, t_store;
     int *cluster_indices = NULL;
     int *strata_indices = NULL;
-    double **cluster_data = NULL;
-    double **strata_data = NULL;
+    int *combined_indices = NULL;
+    int *sort_vars = NULL;
     double *freq_weights = NULL;
     group_info *clusters = NULL;
     group_info *strata = NULL;
-    size_t *sort_indices = NULL;
+    perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
+    stata_data by_data;
+    stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
 
+    stata_data_init(&by_data);
     t_start = ctools_timer_seconds();
     t_sort_cluster = 0.0;
 
@@ -329,7 +361,7 @@ ST_retcode cbsample_main(const char *args) {
         config.seed = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32);
     }
 
-    /* === Load Phase === */
+    /* === Load Phase using ctools_data_load_selective === */
     double load_start = ctools_timer_seconds();
 
     freq_weights = (double *)calloc(nobs, sizeof(double));
@@ -340,46 +372,14 @@ ST_retcode cbsample_main(const char *args) {
         return 920;
     }
 
-    /* Load cluster variables */
-    if (ncluster > 0) {
-        cluster_data = (double **)malloc(ncluster * sizeof(double *));
-        if (!cluster_data) {
-            free(freq_weights);
-            if (cluster_indices) free(cluster_indices);
-            if (strata_indices) free(strata_indices);
-            ctools_error_alloc(CBSAMPLE_MODULE);
-            return 920;
-        }
+    size_t total_by = nstrata + ncluster;
+    size_t nclusters = 1;
+    size_t nstrata_groups = 1;
 
-        for (size_t c = 0; c < ncluster; c++) {
-            cluster_data[c] = (double *)malloc(nobs * sizeof(double));
-            if (!cluster_data[c]) {
-                for (size_t j = 0; j < c; j++) free(cluster_data[j]);
-                free(cluster_data);
-                free(freq_weights);
-                if (cluster_indices) free(cluster_indices);
-                if (strata_indices) free(strata_indices);
-                ctools_error_alloc(CBSAMPLE_MODULE);
-                return 920;
-            }
-
-            int idx = cluster_indices[c];
-            for (size_t i = 0; i < nobs; i++) {
-                double val;
-                if (SF_vdata(idx, (ST_int)(obs1 + i), &val) != 0) val = SV_missval;
-                cluster_data[c][i] = val;
-            }
-        }
-    }
-
-    /* Load strata variables */
-    if (nstrata > 0) {
-        strata_data = (double **)malloc(nstrata * sizeof(double *));
-        if (!strata_data) {
-            if (cluster_data) {
-                for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-                free(cluster_data);
-            }
+    if (total_by > 0) {
+        /* Build combined indices array: strata first, then cluster */
+        combined_indices = (int *)malloc(total_by * sizeof(int));
+        if (!combined_indices) {
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
@@ -388,37 +388,28 @@ ST_retcode cbsample_main(const char *args) {
         }
 
         for (size_t s = 0; s < nstrata; s++) {
-            strata_data[s] = (double *)malloc(nobs * sizeof(double));
-            if (!strata_data[s]) {
-                for (size_t j = 0; j < s; j++) free(strata_data[j]);
-                free(strata_data);
-                if (cluster_data) {
-                    for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-                    free(cluster_data);
-                }
-                free(freq_weights);
-                if (cluster_indices) free(cluster_indices);
-                if (strata_indices) free(strata_indices);
-                ctools_error_alloc(CBSAMPLE_MODULE);
-                return 920;
-            }
+            combined_indices[s] = strata_indices[s];
+        }
+        for (size_t c = 0; c < ncluster; c++) {
+            combined_indices[nstrata + c] = cluster_indices[c];
+        }
 
-            int idx = strata_indices[s];
-            for (size_t i = 0; i < nobs; i++) {
-                double val;
-                if (SF_vdata(idx, (ST_int)(obs1 + i), &val) != 0) val = SV_missval;
-                strata_data[s][i] = val;
-            }
+        /* Load data using standard ctools function */
+        rc = ctools_data_load_selective(&by_data, combined_indices, total_by, 0, 0);
+        if (rc != STATA_OK) {
+            free(combined_indices);
+            free(freq_weights);
+            if (cluster_indices) free(cluster_indices);
+            if (strata_indices) free(strata_indices);
+            ctools_error(CBSAMPLE_MODULE, "failed to load data");
+            return 920;
         }
     }
 
     t_load = ctools_timer_seconds() - load_start;
 
-    /* === Sort and Detect Groups Phase === */
+    /* === Sort and Detect Groups Phase using ctools_sort_dispatch === */
     double sort_start = ctools_timer_seconds();
-
-    size_t nclusters = 1;
-    size_t nstrata_groups = 1;
 
     /* Allocate groups */
     clusters = (group_info *)malloc((nobs + 1) * sizeof(group_info));
@@ -426,13 +417,9 @@ ST_retcode cbsample_main(const char *args) {
     if (!clusters || !strata) {
         if (clusters) free(clusters);
         if (strata) free(strata);
-        if (strata_data) {
-            for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-            free(strata_data);
-        }
-        if (cluster_data) {
-            for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-            free(cluster_data);
+        if (total_by > 0) {
+            stata_data_free(&by_data);
+            free(combined_indices);
         }
         free(freq_weights);
         if (cluster_indices) free(cluster_indices);
@@ -441,112 +428,99 @@ ST_retcode cbsample_main(const char *args) {
         return 920;
     }
 
-    /* Sort by combined (strata, cluster) to detect nested groups */
-    /* First, sort by strata + cluster together */
-    size_t total_by = nstrata + ncluster;
-    double **combined_data = NULL;
-
     if (total_by > 0) {
-        combined_data = (double **)malloc(total_by * sizeof(double *));
-        if (!combined_data) {
+        /* Build sort_vars array (1-based indices into loaded data) */
+        sort_vars = (int *)malloc(total_by * sizeof(int));
+        if (!sort_vars) {
             free(clusters);
             free(strata);
-            if (strata_data) {
-                for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-                free(strata_data);
-            }
-            if (cluster_data) {
-                for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-                free(cluster_data);
-            }
+            stata_data_free(&by_data);
+            free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
             ctools_error_alloc(CBSAMPLE_MODULE);
             return 920;
         }
-
-        /* Strata first, then cluster */
-        for (size_t s = 0; s < nstrata; s++) {
-            combined_data[s] = strata_data[s];
-        }
-        for (size_t c = 0; c < ncluster; c++) {
-            combined_data[nstrata + c] = cluster_data[c];
+        for (size_t i = 0; i < total_by; i++) {
+            sort_vars[i] = (int)(i + 1);  /* 1-based */
         }
 
-        sort_indices = (size_t *)malloc(nobs * sizeof(size_t));
-        if (!sort_indices) {
-            free(combined_data);
+        /* Sort using counting sort for integer group variables (optimal for ties),
+           fall back to LSD radix if data isn't suitable for counting sort */
+        rc = ctools_sort_dispatch(&by_data, sort_vars, total_by, SORT_ALG_COUNTING);
+        if (rc != STATA_OK) {
+            free(sort_vars);
             free(clusters);
             free(strata);
-            if (strata_data) {
-                for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-                free(strata_data);
-            }
-            if (cluster_data) {
-                for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-                free(cluster_data);
-            }
+            stata_data_free(&by_data);
+            free(combined_indices);
+            free(freq_weights);
+            if (cluster_indices) free(cluster_indices);
+            if (strata_indices) free(strata_indices);
+            ctools_error(CBSAMPLE_MODULE, "sort failed");
+            return 920;
+        }
+
+        /* Save the sort permutation before applying (for mapping back to original indices) */
+        sort_perm = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (!sort_perm) {
+            free(sort_vars);
+            free(clusters);
+            free(strata);
+            stata_data_free(&by_data);
+            free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
             ctools_error_alloc(CBSAMPLE_MODULE);
             return 920;
         }
+        memcpy(sort_perm, by_data.sort_order, nobs * sizeof(perm_idx_t));
 
-        argsort_by_vars(combined_data, nobs, total_by, sort_indices);
-
-        /* Reorder all by_data arrays */
-        double *temp = (double *)malloc(nobs * sizeof(double));
-        if (!temp) {
-            free(sort_indices);
-            free(combined_data);
+        /* Apply permutation to physically reorder the data */
+        rc = ctools_apply_permutation(&by_data);
+        if (rc != STATA_OK) {
+            free(sort_perm);
+            free(sort_vars);
             free(clusters);
             free(strata);
-            if (strata_data) {
-                for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-                free(strata_data);
-            }
-            if (cluster_data) {
-                for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-                free(cluster_data);
-            }
+            stata_data_free(&by_data);
+            free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
-            ctools_error_alloc(CBSAMPLE_MODULE);
+            ctools_error(CBSAMPLE_MODULE, "permutation failed");
             return 920;
         }
 
-        for (size_t s = 0; s < nstrata; s++) {
-            for (size_t i = 0; i < nobs; i++) {
-                temp[i] = strata_data[s][sort_indices[i]];
-            }
-            memcpy(strata_data[s], temp, nobs * sizeof(double));
-        }
-        for (size_t c = 0; c < ncluster; c++) {
-            for (size_t i = 0; i < nobs; i++) {
-                temp[i] = cluster_data[c][sort_indices[i]];
-            }
-            memcpy(cluster_data[c], temp, nobs * sizeof(double));
-        }
-        free(temp);
-        free(combined_data);
+        free(sort_vars);
     }
 
-    /* Detect strata groups (using only strata variables) */
+    /* Detect strata groups (using first nstrata variables) */
     if (nstrata > 0) {
-        detect_groups(strata_data, nobs, nstrata, strata, &nstrata_groups);
+        /* Create a temporary view with just strata vars for group detection */
+        stata_data strata_view;
+        strata_view.nobs = by_data.nobs;
+        strata_view.nvars = nstrata;
+        strata_view.vars = by_data.vars;  /* First nstrata vars are strata */
+        strata_view.sort_order = NULL;
+        detect_groups_from_data(&strata_view, nstrata, strata, &nstrata_groups);
     } else {
         strata[0].start = 0;
         strata[0].count = nobs;
         nstrata_groups = 1;
     }
 
-    /* Detect clusters within each stratum (using cluster variables) */
+    /* Detect clusters (using cluster variables at offset nstrata) */
     if (ncluster > 0) {
-        /* Since data is sorted by (strata, cluster), we detect clusters globally */
-        detect_groups(cluster_data, nobs, ncluster, clusters, &nclusters);
+        /* Create a temporary view with just cluster vars */
+        stata_data cluster_view;
+        cluster_view.nobs = by_data.nobs;
+        cluster_view.nvars = ncluster;
+        cluster_view.vars = &by_data.vars[nstrata];  /* Cluster vars start after strata */
+        cluster_view.sort_order = NULL;
+        detect_groups_from_data(&cluster_view, ncluster, clusters, &nclusters);
     } else {
         /* No clustering: each observation is its own "cluster" */
         for (size_t i = 0; i < nobs; i++) {
@@ -564,16 +538,12 @@ ST_retcode cbsample_main(const char *args) {
     /* Allocate thread-local RNGs */
     thread_rngs = (xoshiro256_state *)malloc(num_threads * sizeof(xoshiro256_state));
     if (!thread_rngs) {
-        if (sort_indices) free(sort_indices);
+        if (sort_perm) free(sort_perm);
         free(clusters);
         free(strata);
-        if (strata_data) {
-            for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-            free(strata_data);
-        }
-        if (cluster_data) {
-            for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-            free(cluster_data);
+        if (total_by > 0) {
+            stata_data_free(&by_data);
+            free(combined_indices);
         }
         free(freq_weights);
         if (cluster_indices) free(cluster_indices);
@@ -635,7 +605,7 @@ ST_retcode cbsample_main(const char *args) {
 
                 /* Increment frequency weight for all obs in this cluster */
                 for (size_t j = 0; j < cl_count; j++) {
-                    size_t obs_idx = sort_indices ? sort_indices[cl_start + j] : (cl_start + j);
+                    size_t obs_idx = sort_perm ? sort_perm[cl_start + j] : (cl_start + j);
                     freq_weights[obs_idx] += 1.0;
                 }
             }
@@ -677,7 +647,7 @@ ST_retcode cbsample_main(const char *args) {
 
                     for (size_t draw = 0; draw < my_draws; draw++) {
                         size_t local_idx = xoshiro256_uniform(rng, nobs);
-                        size_t obs_idx = sort_indices ? sort_indices[local_idx] : local_idx;
+                        size_t obs_idx = sort_perm ? sort_perm[local_idx] : local_idx;
                         local_weights[obs_idx] += 1.0;
                     }
                 }
@@ -715,7 +685,7 @@ ST_retcode cbsample_main(const char *args) {
 
                 for (size_t draw = 0; draw < target_n; draw++) {
                     size_t local_idx = xoshiro256_uniform(rng, st_count);
-                    size_t obs_idx = sort_indices ? sort_indices[st_start + local_idx] : (st_start + local_idx);
+                    size_t obs_idx = sort_perm ? sort_perm[st_start + local_idx] : (st_start + local_idx);
 
                     #pragma omp atomic
                     freq_weights[obs_idx] += 1.0;
@@ -735,7 +705,7 @@ ST_retcode cbsample_main(const char *args) {
 
             for (size_t draw = 0; draw < target_n; draw++) {
                 size_t local_idx = xoshiro256_uniform(rng, st_count);
-                size_t obs_idx = sort_indices ? sort_indices[st_start + local_idx] : (st_start + local_idx);
+                size_t obs_idx = sort_perm ? sort_perm[st_start + local_idx] : (st_start + local_idx);
                 freq_weights[obs_idx] += 1.0;
             }
         }
@@ -789,16 +759,12 @@ ST_retcode cbsample_main(const char *args) {
 
     /* === Cleanup === */
     free(thread_rngs);
-    if (sort_indices) free(sort_indices);
+    if (sort_perm) free(sort_perm);
     free(clusters);
     free(strata);
-    if (strata_data) {
-        for (size_t s = 0; s < nstrata; s++) free(strata_data[s]);
-        free(strata_data);
-    }
-    if (cluster_data) {
-        for (size_t c = 0; c < ncluster; c++) free(cluster_data[c]);
-        free(cluster_data);
+    if (total_by > 0) {
+        stata_data_free(&by_data);
+        free(combined_indices);
     }
     free(freq_weights);
     if (cluster_indices) free(cluster_indices);

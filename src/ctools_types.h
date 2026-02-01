@@ -244,7 +244,8 @@ typedef enum {
     SORT_ALG_SAMPLE = 3,   // Sample sort - best for large datasets with many cores
     SORT_ALG_COUNTING = 4, // Counting sort - best for integer data with small range
     SORT_ALG_MERGE = 5,    // Parallel merge sort - stable, predictable O(n log n)
-    SORT_ALG_IPS4O = 6     // IPS4o (default) - in-place parallel super scalar samplesort
+    SORT_ALG_IPS4O = 6,    // IPS4o - in-place parallel super scalar samplesort
+    SORT_ALG_AUTO = 7      // Auto-select best algorithm based on data characteristics
 } sort_algorithm_t;
 
 /*

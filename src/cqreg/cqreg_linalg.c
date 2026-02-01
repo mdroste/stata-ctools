@@ -113,9 +113,23 @@ void cqreg_vaxpy(ST_double *y,
                  ST_int N)
 {
     ST_int i;
+    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
 
-    /* Simple loop - no unrolling to avoid compiler issues */
-    for (i = 0; i < N; i++) {
+    /* 8x unrolled loop for better vectorization and ILP */
+    #pragma omp simd
+    for (i = 0; i < N8; i += 8) {
+        y[i]     += alpha * x[i];
+        y[i + 1] += alpha * x[i + 1];
+        y[i + 2] += alpha * x[i + 2];
+        y[i + 3] += alpha * x[i + 3];
+        y[i + 4] += alpha * x[i + 4];
+        y[i + 5] += alpha * x[i + 5];
+        y[i + 6] += alpha * x[i + 6];
+        y[i + 7] += alpha * x[i + 7];
+    }
+
+    /* Remainder */
+    for (; i < N; i++) {
         y[i] += alpha * x[i];
     }
 }
@@ -179,16 +193,33 @@ ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N)
 ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N)
 {
     ST_int i;
-    ST_double max_val = 0.0;
+    ST_int N4 = N - (N & 3);
+    ST_double max0 = 0.0, max1 = 0.0, max2 = 0.0, max3 = 0.0;
 
-    for (i = 0; i < N; i++) {
-        ST_double abs_val = fabs(x[i]);
-        if (abs_val > max_val) {
-            max_val = abs_val;
-        }
+    /* 4-way unrolled loop for better ILP */
+    for (i = 0; i < N4; i += 4) {
+        ST_double abs0 = fabs(x[i]);
+        ST_double abs1 = fabs(x[i + 1]);
+        ST_double abs2 = fabs(x[i + 2]);
+        ST_double abs3 = fabs(x[i + 3]);
+        if (abs0 > max0) max0 = abs0;
+        if (abs1 > max1) max1 = abs1;
+        if (abs2 > max2) max2 = abs2;
+        if (abs3 > max3) max3 = abs3;
     }
 
-    return max_val;
+    /* Remainder */
+    for (; i < N; i++) {
+        ST_double abs_val = fabs(x[i]);
+        if (abs_val > max0) max0 = abs_val;
+    }
+
+    /* Reduce */
+    if (max1 > max0) max0 = max1;
+    if (max2 > max0) max0 = max2;
+    if (max3 > max0) max0 = max3;
+
+    return max0;
 }
 
 /* ============================================================================
@@ -274,7 +305,7 @@ void cqreg_matvec_t_col(ST_double * CQREG_RESTRICT y,
 
     /* y[j] = A[:,j]' * x = dot(A[:,j], x) */
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(N > 4)
+    #pragma omp parallel for schedule(static) if(N >= 2 && M > 500)
     #endif
     for (j = 0; j < N; j++) {
         y[j] = cqreg_dot(&A[j * M], x, M);
@@ -299,7 +330,7 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
      */
 
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(dynamic) if(K > 2)
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
     #endif
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
@@ -356,7 +387,7 @@ void cqreg_xtv(ST_double * CQREG_RESTRICT result,
 
     /* result[j] = X[:,j]' * v */
     #ifdef _OPENMP
-    #pragma omp parallel for schedule(static) if(K > 2)
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
     #endif
     for (j = 0; j < K; j++) {
         result[j] = cqreg_dot(&X[j * N], v, N);

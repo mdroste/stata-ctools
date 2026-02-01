@@ -1014,10 +1014,18 @@ void ivvce_compute_full(
 
         free(u);
 
-        /* HAC VCE sandwich: V = XkX_inv * meat * XkX_inv
-           Standard HAC (Newey-West) does not use DOF adjustment,
-           but ivreghdfe applies N/(N-K) for consistency with robust. */
-        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+        /* HAC VCE sandwich: V = XkX_inv * meat * XkX_inv * dof_adj
+
+           ivreghdfe uses: V = (1/N) * aux5 * omega * aux5' * (N-dofminus)/(N-K-dofminus-sdofminus)
+           After simplification: V = N * sandwich * small_sample_adj
+
+           The civreghdfe meat is unnormalized, so we need:
+           V = (1/N) * XkX_inv * meat * XkX_inv * N * small_sample_adj
+             = XkX_inv * meat * XkX_inv * small_sample_adj
+
+           where small_sample_adj = (N-df_a) / df_r for fixed effects.
+         */
+        ST_double dof_adj = (ST_double)(N - df_a) / (ST_double)df_r;
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
             civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);

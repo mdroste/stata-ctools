@@ -2,14 +2,19 @@
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!
-*! Supports multiple sort algorithms:
-*!   algorithm(ips4o)    - IPS4o (default) - in-place parallel super scalar samplesort
-*!   algorithm(lsd)      - LSD radix sort - best for fixed-width keys
-*!   algorithm(msd)      - MSD radix sort - best for variable-length strings
-*!   algorithm(timsort)  - Timsort - best for partially sorted data
-*!   algorithm(sample)   - Sample sort - best for large datasets with many cores
-*!   algorithm(counting) - Counting sort - best for integer data with small range
-*!   algorithm(merge)    - Parallel merge sort - stable, predictable O(n log n)
+*! By default, csort auto-selects the optimal algorithm based on data type:
+*!   - String variables: MSD radix sort
+*!   - Numeric variables: Counting sort (falls back to LSD radix for large ranges)
+*!
+*! Explicit algorithm options:
+*!   algorithm(auto)     - Auto-select (default)
+*!   algorithm(counting) - Counting sort - optimal for small-range integers
+*!   algorithm(lsd)      - LSD radix sort - for fixed-width numeric keys
+*!   algorithm(msd)      - MSD radix sort - for string variables
+*!   algorithm(ips4o)    - IPS4o - parallel samplesort
+*!   algorithm(timsort)  - Timsort - for partially sorted data
+*!   algorithm(sample)   - Sample sort - for very large datasets
+*!   algorithm(merge)    - Parallel merge sort - stable O(n log n)
 *!
 *! Streaming mode (stream option):
 *!   Only loads sort key variables into C memory, then streams the permutation
@@ -20,7 +25,7 @@
 *!   Skips setting Stata's internal sort order metadata after sorting.
 *!   Use when you don't need Stata to recognize the data as sorted (faster).
 
-program define csort
+program define csort, rclass
     version 14.0
 
     syntax varlist [if] [in], [Verbose ALGorithm(string) STReam THReads(integer 0) NOSORTedby]
@@ -37,33 +42,46 @@ program define csort
     }
 
     * Validate algorithm option early (before any data operations)
+    * Default is "auto" which intelligently selects based on data characteristics
     local alg_code ""
+    local alg_name "auto"
     if "`algorithm'" != "" {
         local algorithm = lower("`algorithm'")
         if "`algorithm'" == "lsd" | "`algorithm'" == "0" {
             local alg_code "alg=lsd"
+            local alg_name "lsd"
         }
         else if "`algorithm'" == "msd" | "`algorithm'" == "1" {
             local alg_code "alg=msd"
+            local alg_name "msd"
         }
         else if "`algorithm'" == "timsort" | "`algorithm'" == "tim" | "`algorithm'" == "2" {
             local alg_code "alg=timsort"
+            local alg_name "timsort"
         }
         else if "`algorithm'" == "sample" | "`algorithm'" == "3" {
             local alg_code "alg=sample"
+            local alg_name "sample"
         }
         else if "`algorithm'" == "counting" | "`algorithm'" == "count" | "`algorithm'" == "4" {
             local alg_code "alg=counting"
+            local alg_name "counting"
         }
         else if "`algorithm'" == "merge" | "`algorithm'" == "5" {
             local alg_code "alg=merge"
+            local alg_name "merge"
         }
         else if "`algorithm'" == "ips4o" | "`algorithm'" == "6" {
             local alg_code "alg=ips4o"
+            local alg_name "ips4o"
+        }
+        else if "`algorithm'" == "auto" | "`algorithm'" == "7" {
+            local alg_code "alg=auto"
+            local alg_name "auto"
         }
         else {
             di as error "csort: invalid algorithm '`algorithm''"
-            di as error "Valid options: ips4o (default), lsd, msd, timsort, sample, counting, merge"
+            di as error "Valid options: auto (default), lsd, msd, timsort, sample, counting, merge, ips4o"
             exit 198
         }
     }
@@ -303,4 +321,52 @@ program define csort
             di as text "{hline 55}"
         }
     }
+
+    * =========================================================================
+    * STORE RESULTS IN r()
+    * =========================================================================
+
+    * Get values from scalars set by C plugin
+    capture local __time_load = _csort_time_load
+    if _rc != 0 local __time_load = .
+    capture local __time_sort = _csort_time_sort
+    if _rc != 0 local __time_sort = .
+    capture local __time_permute = _csort_time_permute
+    if _rc != 0 local __time_permute = .
+    capture local __time_store = _csort_time_store
+    if _rc != 0 local __time_store = .
+    capture local __time_stream = _csort_time_stream
+    if _rc != 0 local __time_stream = .
+    capture local __time_cleanup = _csort_time_cleanup
+    if _rc != 0 local __time_cleanup = .
+    capture local __time_total_c = _csort_time_total
+    if _rc != 0 local __time_total_c = .
+    capture local __is_stream = _csort_stream
+    if _rc != 0 local __is_stream = 0
+    capture local __threads_max = _csort_threads_max
+    if _rc != 0 local __threads_max = .
+    capture local __openmp_enabled = _csort_openmp_enabled
+    if _rc != 0 local __openmp_enabled = .
+
+    * Count observations in sample
+    quietly count `if' `in'
+    local __nobs = r(N)
+
+    * Post r() results
+    return scalar N = `__nobs'
+    return scalar time_load = `__time_load'
+    return scalar time_sort = `__time_sort'
+    return scalar time_permute = `__time_permute'
+    return scalar time_store = `__time_store'
+    return scalar time_stream = `__time_stream'
+    return scalar time_cleanup = `__time_cleanup'
+    return scalar time_total = `__time_total_c'
+    return scalar stream = `__is_stream'
+    return scalar threads_max = `__threads_max'
+    return scalar openmp_enabled = `__openmp_enabled'
+
+    return local algorithm "`alg_name'"
+    return local sortvars "`varlist'"
+    return local cmd "csort"
+
 end

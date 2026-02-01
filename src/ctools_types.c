@@ -598,10 +598,46 @@ stata_retcode ctools_apply_permutation(stata_data *data)
    Unified Sort Dispatcher
    =========================================================================== */
 
+/*
+    Auto-select the best sort algorithm based on data characteristics.
+
+    Selection logic:
+    1. If any sort key is a string variable → MSD radix (optimized for strings)
+    2. For numeric-only data → Counting sort with LSD radix fallback
+       - Counting sort: O(n+k), optimal for small-range integers (dates, codes)
+       - LSD radix fallback: O(n*d), still faster than comparison sorts
+
+    This provides massive speedups for common Stata workloads:
+    - Panel data with date/time keys: counting sort is often 100x+ faster
+    - ID variables with moderate range: counting sort or LSD radix
+    - String keys (names, codes): MSD radix handles variable-length efficiently
+*/
+static sort_algorithm_t auto_select_algorithm(stata_data *data, int *sort_vars, size_t nsort)
+{
+    /* Check if any sort variable is a string */
+    for (size_t i = 0; i < nsort; i++) {
+        int var_idx = sort_vars[i] - 1;  /* Convert to 0-based */
+        if (var_idx >= 0 && (size_t)var_idx < data->nvars) {
+            if (data->vars[var_idx].type == STATA_TYPE_STRING) {
+                /* String variable detected - use MSD radix */
+                return SORT_ALG_MSD;
+            }
+        }
+    }
+
+    /* All numeric - use counting sort (with automatic LSD radix fallback) */
+    return SORT_ALG_COUNTING;
+}
+
 stata_retcode ctools_sort_dispatch(stata_data *data, int *sort_vars, size_t nsort,
                                     sort_algorithm_t algorithm)
 {
     stata_retcode rc;
+
+    /* Handle auto-selection */
+    if (algorithm == SORT_ALG_AUTO) {
+        algorithm = auto_select_algorithm(data, sort_vars, nsort);
+    }
 
     switch (algorithm) {
         case SORT_ALG_MSD:
