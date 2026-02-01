@@ -692,15 +692,18 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     /* Compute (X'DX)^{-1} using Cholesky */
     memcpy(L, XDX, kk_size);
 
-    /* Add regularization for numerical stability */
-    for (j = 0; j < K; j++) {
-        L[j * K + j] += 1e-10;
-    }
-
     if (cqreg_cholesky(L, K) != 0) {
-        vce_debug_log("  ERROR: Cholesky of XDX failed\n");
-        rc = -1;
-        goto cleanup;
+        /* Try again with regularization for numerical stability */
+        vce_debug_log("  Cholesky failed, retrying with regularization...\n");
+        memcpy(L, XDX, kk_size);
+        for (j = 0; j < K; j++) {
+            L[j * K + j] += 1e-10;
+        }
+        if (cqreg_cholesky(L, K) != 0) {
+            vce_debug_log("  ERROR: Cholesky of XDX failed even with regularization\n");
+            rc = -1;
+            goto cleanup;
+        }
     }
 
     cqreg_invert_cholesky(XDX_inv, L, K);
