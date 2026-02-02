@@ -981,12 +981,17 @@ file write fh "1,Alpha,100" _n
 file write fh `"2,"Beta"'
 file close fh
 
+* Compare behavior with Stata's import delimited
+capture import delimited using "temp/malformed_unterminated_quote.csv", clear
+local stata_rc = _rc
+local stata_n = _N
 capture cimport delimited using "temp/malformed_unterminated_quote.csv", clear
-if _rc == 0 {
-    test_pass "unterminated quote - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] unterminated quote - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "unterminated quote - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] unterminated quote" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Quote in middle of unquoted field
@@ -996,12 +1001,15 @@ file write fh "1,Al" _char(34) "pha,100" _n
 file write fh "2,Beta,200" _n
 file close fh
 
+capture import delimited using "temp/malformed_mid_quote.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_mid_quote.csv", clear
-if _rc == 0 {
-    test_pass "mid-field quote - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] mid-field quote - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "mid-field quote - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] mid-field quote" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Very inconsistent column counts
@@ -1013,12 +1021,15 @@ file write fh "1,2,3,4,5,6,7,8,9,10" _n
 file write fh "1,2,3" _n
 file close fh
 
+capture import delimited using "temp/malformed_very_inconsistent.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_very_inconsistent.csv", clear
-if _rc == 0 {
-    test_pass "very inconsistent cols - imported (N=`=_N', K=`=c(k)')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] very inconsistent cols - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "very inconsistent cols - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] very inconsistent cols" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Only commas (no actual data)
@@ -1028,12 +1039,15 @@ file write fh ",,,," _n
 file write fh ",,,," _n
 file close fh
 
+capture import delimited using "temp/malformed_only_commas.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_only_commas.csv", clear
-if _rc == 0 {
-    test_pass "only commas - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] only commas - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "only commas - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] only commas" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Random binary-like data
@@ -1042,12 +1056,15 @@ file write fh "id,data" _n
 file write fh _char(1) _char(2) _char(3) ",value" _n
 file close fh
 
+capture import delimited using "temp/malformed_binary.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_binary.csv", clear
-if _rc == 0 {
-    test_pass "binary chars - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] binary chars - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "binary chars - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] binary chars" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Null bytes
@@ -1057,12 +1074,15 @@ file write fh "1,te" _char(0) "st" _n
 file write fh "2,normal" _n
 file close fh
 
+capture import delimited using "temp/malformed_nulls.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_nulls.csv", clear
-if _rc == 0 {
-    test_pass "null bytes - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] null bytes - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "null bytes - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] null bytes" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Very long line (>10K chars)
@@ -1073,12 +1093,15 @@ file write fh "1,`verylong'" _n
 file write fh "2,short" _n
 file close fh
 
+capture import delimited using "temp/malformed_very_long_line.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_very_long_line.csv", clear
-if _rc == 0 {
-    test_pass "very long line (2K chars) - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] very long line (2K chars) - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "very long line - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] very long line" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Headers with invalid Stata varname chars
@@ -1088,14 +1111,16 @@ file write fh "1,2,3,4,5" _n
 file write fh "6,7,8,9,10" _n
 file close fh
 
+capture import delimited using "temp/malformed_bad_headers.csv", clear
+local stata_rc = _rc
+local stata_k = c(k)
 capture cimport delimited using "temp/malformed_bad_headers.csv", clear
-if _rc == 0 {
-    test_pass "invalid header chars - imported (N=`=_N', K=`=c(k)')"
-    ds
-    * (silent) "    Variables: `r(varlist)'"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0 & c(k) == `stata_k') | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] invalid header chars - matches Stata behavior (rc=`cimport_rc', K=`=c(k)')"
 }
 else {
-    test_pass "invalid header chars - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] invalid header chars" "cimport rc=`cimport_rc' K=`=c(k)' but Stata rc=`stata_rc' K=`stata_k'"
 }
 
 /*******************************************************************************

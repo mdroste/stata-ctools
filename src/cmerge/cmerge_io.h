@@ -16,8 +16,8 @@
 
 /* Forward declaration for using cache */
 typedef struct {
-    stata_data keys;
-    stata_data keepusing;
+    ctools_filtered_data keys;
+    ctools_filtered_data keepusing;
     size_t nobs;
     int nkeys;
     int n_keepusing;

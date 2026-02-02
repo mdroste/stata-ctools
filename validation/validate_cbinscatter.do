@@ -344,8 +344,8 @@ if `binscatter_installed' {
         }
     }
 
-    * Require at least 6 significant figures for bin means
-    if `min_sf_x' >= 6 & `min_sf_y' >= 6 {
+    * Require at least $DEFAULT_SIGFIGS significant figures for bin means
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
         test_pass "binscatter match: basic (x:`x_fmt', y:`y_fmt' sigfigs)"
@@ -353,7 +353,7 @@ if `binscatter_installed' {
     else {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
-        test_fail "binscatter match: basic" "x:`x_fmt', y:`y_fmt' sigfigs, need 6"
+        test_fail "binscatter match: basic" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
     }
     cap erase _bs_test.csv
     cap erase _bs_test.do
@@ -405,7 +405,7 @@ if `binscatter_installed' {
         }
     }
 
-    if `min_sf_x' >= 6 & `min_sf_y' >= 6 {
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
         test_pass "binscatter match: controls (x:`x_fmt', y:`y_fmt' sigfigs)"
@@ -413,7 +413,7 @@ if `binscatter_installed' {
     else {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
-        test_fail "binscatter match: controls" "x:`x_fmt', y:`y_fmt' sigfigs, need 6"
+        test_fail "binscatter match: controls" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
     }
     cap erase _bs_test.csv
     cap erase _bs_test.do
@@ -460,7 +460,7 @@ if `binscatter_installed' {
         }
     }
 
-    if `min_sf_x' >= 6 & `min_sf_y' >= 6 {
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
         test_pass "binscatter match: absorb (x:`x_fmt', y:`y_fmt' sigfigs)"
@@ -468,7 +468,7 @@ if `binscatter_installed' {
     else {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
-        test_fail "binscatter match: absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need 6"
+        test_fail "binscatter match: absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
     }
     cap erase _bs_test.csv
     cap erase _bs_test.do
@@ -514,7 +514,7 @@ if `binscatter_installed' {
         }
     }
 
-    if `min_sf_x' >= 6 & `min_sf_y' >= 6 {
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
         test_pass "binscatter match: controls+absorb (x:`x_fmt', y:`y_fmt' sigfigs)"
@@ -522,7 +522,7 @@ if `binscatter_installed' {
     else {
         local x_fmt : display %4.1f `min_sf_x'
         local y_fmt : display %4.1f `min_sf_y'
-        test_fail "binscatter match: controls+absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need 6"
+        test_fail "binscatter match: controls+absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
     }
     cap erase _bs_test.csv
     cap erase _bs_test.do
@@ -544,7 +544,7 @@ if `binsreg_installed' {
     * Use significant figures comparison for binsreg tests
     * This is more appropriate when comparing two independent implementations
     * as numerical precision can differ slightly due to algorithm differences
-    local min_sigfigs = 6  // Require 6 sig figs (allows for minor numerical differences)
+    local min_sigfigs = $DEFAULT_SIGFIGS
 
     * Test 1: controls only
     clear

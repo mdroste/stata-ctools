@@ -16,7 +16,7 @@
 #include "../ctools_error.h"
 #include "../ctools_timer.h"
 #include "../ctools_config.h"
-#include "../ctools_types.h"  /* For ctools_data_load_selective */
+#include "../ctools_types.h"  /* For ctools_data_load */
 
 #include <stdlib.h>
 #include <string.h>
@@ -113,71 +113,33 @@ static void store_scalar(const char *name, ST_double val)
  * ============================================================================ */
 
 /*
- * Load data using ctools_data_load_selective for efficient parallel loading.
+ * Load data using ctools_data_load for efficient parallel loading.
  *
- * Strategy (same as creghdfe):
- * 1. Load ALL rows using fast ctools parallel loader
- * 2. Copy selected rows using sel_idx (or direct copy if sel_is_identity)
+ * Uses ctools_data_load() which:
+ * - Handles if/in filtering at load time
+ * - Loads only filtered observations (memory efficient)
+ * - Returns obs_map for write-back operations
  *
- * The sel_is_identity optimization is CRITICAL for performance:
- * - When all observations are selected (common case), we use direct memcpy
- * - When filtering is needed, we use sel_idx indirection
+ * The filtered data is already compact, so we just copy directly.
  */
-static ST_int load_data(cqreg_state *state,
-                        ST_int depvar_idx,
-                        const ST_int *indepvar_idx,
-                        ST_int K_x,
-                        ST_int N,
-                        ST_int in1, ST_int in2,
-                        ST_int *sel_idx,
-                        ST_int sel_is_identity)  /* 1 = all obs selected, use direct copy */
+static ST_int load_data_filtered(cqreg_state *state,
+                                  ctools_filtered_data *filtered,
+                                  ST_int K_x)
 {
     ST_int K = K_x + 1;  /* +1 for constant */
     ST_int i, k;
-    (void)in2;  /* Used for debug logging only */
+    ST_int N = (ST_int)filtered->data.nobs;
 
-    main_debug_log("load_data: N=%d, K_x=%d, in1=%d, in2=%d, sel_is_identity=%d\n",
-                   N, K_x, in1, in2, sel_is_identity);
+    main_debug_log("load_data_filtered: N=%d, K_x=%d\n", N, K_x);
 
-    /* Step 1: Build variable index array for ctools_data_load_selective */
-    ST_int nvars_to_load = 1 + K_x;  /* depvar + indepvars */
-    int *var_indices = (int *)malloc((size_t)nvars_to_load * sizeof(int));
-    if (var_indices == NULL) {
-        ctools_error("cqreg", "Failed to allocate var_indices");
-        return -1;
-    }
-    var_indices[0] = depvar_idx;
-    for (k = 0; k < K_x; k++) {
-        var_indices[1 + k] = indepvar_idx[k];
-    }
-
-    /* Step 2: Load ALL rows using fast parallel ctools loader */
-    stata_data loaded_data;
-    stata_data_init(&loaded_data);
-
-    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices,
-                                                        (size_t)nvars_to_load,
-                                                        (size_t)in1, (size_t)in2);
-    free(var_indices);
-
-    if (load_rc != STATA_OK) {
-        ctools_error("cqreg", "ctools_data_load_selective failed");
-        return -1;
-    }
-
-    main_debug_log("load_data: loaded %zu rows x %zu vars via ctools\n",
-                   loaded_data.nobs, loaded_data.nvars);
-
-    /* Step 3: Allocate final y and X arrays */
+    /* Allocate final y and X arrays */
     size_t y_size;
     if (ctools_safe_mul_size((size_t)N, sizeof(ST_double), &y_size) != 0) {
-        stata_data_free(&loaded_data);
         ctools_error("cqreg", "Overflow computing y array size");
         return -1;
     }
     state->y = (ST_double *)cqreg_aligned_alloc(y_size, CQREG_CACHE_LINE);
     if (state->y == NULL) {
-        stata_data_free(&loaded_data);
         ctools_error("cqreg", "Failed to allocate y array");
         return -1;
     }
@@ -185,69 +147,46 @@ static ST_int load_data(cqreg_state *state,
 
     size_t x_size;
     if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &x_size) != 0) {
-        stata_data_free(&loaded_data);
         ctools_error("cqreg", "Overflow computing X matrix size");
         return -1;
     }
     state->X = (ST_double *)cqreg_aligned_alloc(x_size, CQREG_CACHE_LINE);
     if (state->X == NULL) {
-        stata_data_free(&loaded_data);
         ctools_error("cqreg", "Failed to allocate X matrix");
         return -1;
     }
 
-    /* Step 4: Copy data - use fast path if all observations selected */
-    if (sel_is_identity) {
-        /* FAST PATH: Direct copy without indirection (memcpy for each column) */
-        memcpy(state->y, loaded_data.vars[0].data.dbl, (size_t)N * sizeof(ST_double));
+    /* Direct copy - data is already filtered, no indirection needed */
+    memcpy(state->y, filtered->data.vars[0].data.dbl, (size_t)N * sizeof(ST_double));
 
-        /* Copy X columns in parallel - direct memcpy */
-        #pragma omp parallel for if(K_x >= 2)
-        for (k = 0; k < K_x; k++) {
-            memcpy(&state->X[k * N], loaded_data.vars[1 + k].data.dbl,
-                   (size_t)N * sizeof(ST_double));
-        }
-    } else {
-        /* SLOW PATH: Use sel_idx for filtered access */
-        const ST_double *src_y = loaded_data.vars[0].data.dbl;
-        for (i = 0; i < N; i++) {
-            state->y[i] = src_y[sel_idx[i]];
-        }
-
-        /* Copy X columns in parallel with indirection */
-        #pragma omp parallel for if(K_x >= 2 && N > 10000)
-        for (k = 0; k < K_x; k++) {
-            const ST_double *src_col = loaded_data.vars[1 + k].data.dbl;
-            ST_double *dst_col = &state->X[k * N];
-            for (ST_int row = 0; row < N; row++) {
-                dst_col[row] = src_col[sel_idx[row]];
-            }
-        }
+    /* Copy X columns in parallel - direct memcpy */
+    #pragma omp parallel for if(K_x >= 2)
+    for (k = 0; k < K_x; k++) {
+        memcpy(&state->X[k * N], filtered->data.vars[1 + k].data.dbl,
+               (size_t)N * sizeof(ST_double));
     }
 
-    stata_data_free(&loaded_data);
-
-    /* Step 5: Fill constant column */
+    /* Fill constant column */
     ST_double *const_col = &state->X[K_x * N];
     for (i = 0; i < N; i++) {
         const_col[i] = 1.0;
     }
 
-    main_debug_log("load_data: X matrix populated, constant added\n");
+    main_debug_log("load_data_filtered: X matrix populated, constant added\n");
 
     return 0;
 }
 
 /* ============================================================================
- * Helper: Load cluster variable
+ * Helper: Load cluster variable using obs_map for filtering
  * ============================================================================ */
 
 static ST_int load_clusters(cqreg_state *state,
                             ST_int cluster_var_idx,
                             ST_int N,
-                            ST_int in1, ST_int in2)
+                            perm_idx_t *obs_map)
 {
-    ST_int idx, obs;
+    ST_int idx;
 
     /* Use cqreg_aligned_alloc to match cqreg_aligned_free in cqreg_state_free */
     state->cluster_ids = (ST_int *)cqreg_aligned_alloc(N * sizeof(ST_int), CQREG_CACHE_LINE);
@@ -255,18 +194,14 @@ static ST_int load_clusters(cqreg_state *state,
         return -1;
     }
 
-    /* Load cluster IDs, filtering by if condition */
-    idx = 0;
-    for (obs = in1; obs <= in2; obs++) {
-        if (!SF_ifobs(obs)) continue;
-
+    /* Load cluster IDs using obs_map (already filtered) */
+    for (idx = 0; idx < N; idx++) {
         ST_double val;
-        if (SF_vdata(cluster_var_idx, obs, &val) != 0) {
-            ctools_error("cqreg", "Failed to read cluster var at obs %d", obs);
+        if (SF_vdata(cluster_var_idx, (ST_int)obs_map[idx], &val) != 0) {
+            ctools_error("cqreg", "Failed to read cluster var at obs %d", (int)obs_map[idx]);
             return -1;
         }
         state->cluster_ids[idx] = (ST_int)val;
-        idx++;
     }
 
     /* Count unique clusters */
@@ -758,76 +693,63 @@ ST_retcode cqreg_full_regression(const char *args)
         return 198;
     }
 
-    /* Get observation range */
-    ST_int in1 = SF_in1();
-    ST_int in2 = SF_in2();
-    ST_int N_range = in2 - in1 + 1;
+    /* Build variable index array for filtered loading */
+    ST_int depvar_idx = 1;  /* First variable */
+    ST_int K_x = K_total - 1;  /* Number of indepvars */
+    ST_int K = K_x + 1;  /* Including constant */
 
-    /* Build selection index array from SF_ifobs() - same approach as creghdfe.
-     * This is the ONLY place we call SF_ifobs - all subsequent code uses sel_idx.
-     * Optimization: If all observations selected (common case), use direct indexing. */
-    ST_int *sel_idx = (ST_int *)malloc((size_t)N_range * sizeof(ST_int));
-    ST_int sel_is_identity = 0;  /* 1 if sel_idx[i] == i for all i (no filtering) */
+    ST_int nvars_to_load = 1 + K_x;  /* depvar + indepvars */
+    int *var_indices = (int *)malloc((size_t)nvars_to_load * sizeof(int));
+    if (var_indices == NULL) {
+        ctools_error("cqreg", "Memory allocation failed for var_indices");
+        return 920;
+    }
+    var_indices[0] = depvar_idx;
+    for (ST_int k = 0; k < K_x; k++) {
+        var_indices[1 + k] = k + 2;  /* Variables 2 to K_total */
+    }
 
-    if (sel_idx == NULL) {
-        ctools_error("cqreg", "Memory allocation failed for sel_idx");
+    /* Load data with if/in filtering using ctools_data_load.
+     * This handles SF_ifobs internally and returns only filtered observations. */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+                                                       (size_t)nvars_to_load, 0, 0, 0);
+    free(var_indices);
+    var_indices = NULL;
+
+    if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
+        ctools_error("cqreg", "Failed to load data");
         return 920;
     }
 
-    ST_int N = 0;
-    for (ST_int obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) {
-            sel_idx[N] = obs - in1;  /* 0-based index into loaded data */
-            N++;
-        }
-    }
+    ST_int N = (ST_int)filtered.data.nobs;
+    perm_idx_t *obs_map = filtered.obs_map;  /* Keep for cluster loading */
 
     if (N <= 0) {
-        free(sel_idx);
+        ctools_filtered_data_free(&filtered);
         ctools_error("cqreg", "No observations");
         return 2000;
     }
 
-    /* If all observations selected, we can use direct indexing (much faster) */
-    if (N == N_range) {
-        sel_is_identity = 1;
-    }
-
-    main_debug_log("cqreg_full_regression: N_range=%d, N_valid=%d, sel_is_identity=%d\n",
-                   N_range, N, sel_is_identity);
+    main_debug_log("cqreg_full_regression: N_filtered=%d\n", N);
 
     /* Number of variables passed to plugin (for validation if needed) */
     (void)SF_nvars();
 
     /* Parse variable indices:
-     *   vars 1 to K_total: depvar, indepvars
+     *   vars 1 to K_total: depvar, indepvars (already loaded with filtering)
      *   vars K_total+1 to K_total+G: FE variables
      *   var K_total+G+1: cluster variable (if vce_type == cluster)
      */
-    ST_int depvar_idx = 1;  /* First variable */
-    ST_int K_x = K_total - 1;  /* Number of indepvars */
-    ST_int K = K_x + 1;  /* Including constant */
-
-    ST_int *indepvar_idx = NULL;
     ST_int *fe_var_idx = NULL;
     ST_int cluster_var_idx = 0;
-
-    /* Allocate index arrays */
-    if (K_x > 0) {
-        indepvar_idx = (ST_int *)malloc(K_x * sizeof(ST_int));
-        if (indepvar_idx == NULL) {
-            ctools_error("cqreg", "Memory allocation failed");
-            return 920;
-        }
-        for (ST_int k = 0; k < K_x; k++) {
-            indepvar_idx[k] = k + 2;  /* Variables 2 to K_total */
-        }
-    }
 
     if (G > 0) {
         fe_var_idx = (ST_int *)malloc(G * sizeof(ST_int));
         if (fe_var_idx == NULL) {
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             ctools_error("cqreg", "Memory allocation failed");
             return 920;
         }
@@ -849,8 +771,7 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("Step 2: Creating state...\n");
     state = cqreg_state_create(N, K);
     if (state == NULL) {
-        free(sel_idx);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create state");
         return 920;
@@ -864,20 +785,15 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("State created. Loading data...\n");
 
-    /* Load data using sel_idx for filtering (same approach as creghdfe) */
-    if (load_data(state, depvar_idx, indepvar_idx, K_x, N, in1, in2, sel_idx, sel_is_identity) != 0) {
-        main_debug_log("ERROR: load_data failed\n");
+    /* Load data from filtered structure (already loaded with if/in filtering) */
+    if (load_data_filtered(state, &filtered, K_x) != 0) {
+        main_debug_log("ERROR: load_data_filtered failed\n");
         cqreg_state_free(state);
-        free(sel_idx);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         main_debug_close();
         return 198;
     }
-
-    /* sel_idx no longer needed after load_data */
-    free(sel_idx);
-    sel_idx = NULL;
 
     main_debug_log("Data loaded successfully\n");
 
@@ -896,7 +812,7 @@ ST_retcode cqreg_full_regression(const char *args)
         if (y_max - y_min < 1e-12) {
             ctools_error("cqreg", "Dependent variable has no variation (constant)");
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             main_debug_close();
             return 198;
@@ -912,11 +828,11 @@ ST_retcode cqreg_full_regression(const char *args)
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
-    /* Load cluster variable if needed (filtering by if condition) */
+    /* Load cluster variable if needed (uses obs_map for filtering) */
     if (vce_type == CQREG_VCE_CLUSTER) {
-        if (load_clusters(state, cluster_var_idx, N, in1, in2) != 0) {
+        if (load_clusters(state, cluster_var_idx, N, obs_map) != 0) {
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             return 198;
         }
@@ -929,10 +845,13 @@ ST_retcode cqreg_full_regression(const char *args)
     if (G > 0) {
         double hdfe_start = ctools_timer_seconds();
 
-        /* Initialize HDFE with filtered observation count */
+        /* Initialize HDFE with filtered observation count
+         * Note: cqreg_hdfe_init still uses SF_ifobs internally for FE loading */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
         if (cqreg_hdfe_init(state, fe_var_idx, G, N, in1, in2, 10000, 1e-8) != 0) {
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             ctools_error("cqreg", "HDFE initialization failed");
             return 198;
@@ -942,7 +861,7 @@ ST_retcode cqreg_full_regression(const char *args)
         if (cqreg_hdfe_partial_out(state, state->y, state->X, N, K) != 0) {
             cqreg_hdfe_cleanup(state);
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             ctools_error("cqreg", "HDFE partial out failed");
             return 198;
@@ -978,7 +897,7 @@ ST_retcode cqreg_full_regression(const char *args)
         main_debug_log("ERROR: cqreg_ipm_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create IPM solver");
         main_debug_close();
@@ -1042,7 +961,7 @@ ST_retcode cqreg_full_regression(const char *args)
         main_debug_log("ERROR: cqreg_sparsity_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create sparsity estimator");
         main_debug_close();
@@ -1137,7 +1056,7 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("HDFE cleaned up\n");
     cqreg_state_free(state);
     main_debug_log("State freed\n");
-    free(indepvar_idx);
+    ctools_filtered_data_free(&filtered);
     main_debug_log("indepvar_idx freed\n");
     free(fe_var_idx);
     main_debug_log("fe_var_idx freed\n");

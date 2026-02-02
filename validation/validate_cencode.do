@@ -225,27 +225,13 @@ else {
     test_fail "two observations" "order wrong"
 }
 
-* Test 2.9: verbose option
+* Test 2.9: verbose option - verify correctness with verbose enabled
 sysuse auto, clear
-capture cencode make, generate(make_code) verbose
-if _rc == 0 {
-    test_pass "verbose option"
-}
-else {
-    test_fail "verbose option" "rc=`=_rc'"
-}
-capture drop make_code
+benchmark_encode make, testname("[syntax] verbose option") cencodeopts(verbose)
 
-* Test 2.10: threads option
+* Test 2.10: threads option - verify correctness with threads(2)
 sysuse auto, clear
-capture cencode make, generate(make_code) threads(2)
-if _rc == 0 {
-    test_pass "threads(2) option"
-}
-else {
-    test_fail "threads option" "rc=`=_rc'"
-}
-capture drop make_code
+benchmark_encode make, testname("[syntax] threads(2) option") cencodeopts(threads(2))
 
 /*******************************************************************************
  * SECTION 3: Missing values (10 tests)
@@ -818,17 +804,11 @@ else {
     test_fail "100k obs" "wrong unique count"
 }
 
-* Test 7.2: 500k observations
+* Test 7.2: 500k observations - verify correctness
 clear
 set obs 500000
 gen str20 category = "cat" + string(mod(_n, 500))
-capture cencode category, generate(cat_code)
-if _rc == 0 {
-    test_pass "500k observations"
-}
-else {
-    test_fail "500k obs" "rc=`=_rc'"
-}
+benchmark_encode category, testname("500k observations")
 
 * Test 7.3: 10k unique values
 clear

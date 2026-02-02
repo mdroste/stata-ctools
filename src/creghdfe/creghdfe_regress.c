@@ -14,7 +14,7 @@
 #include "creghdfe_vce.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
-#include "../ctools_types.h"  /* For ctools_data_load_selective */
+#include "../ctools_types.h"  /* For ctools_data_load */
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -41,7 +41,7 @@
 ST_retcode do_full_regression(int argc, char *argv[])
 {
     ST_int K, G, N_orig, N, in1, in2;
-    ST_int k, g, i, j, obs, idx;
+    ST_int k, g, i, j, idx;
     ST_double val;
     ST_int drop_singletons, verbose, compute_dof;
     ST_int num_singletons;
@@ -70,6 +70,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int *cluster_ids = NULL;
     ST_int num_clusters = 0;
     ST_int t;
+    perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
 
     (void)argc;  /* Unused */
     (void)argv;  /* Unused */
@@ -166,38 +167,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         SF_display(msg);
     }
 
-    /* Count valid observations AND build selection index array.
-     * This is the ONLY place we call SF_ifobs - all subsequent code uses sel_idx.
-     * Optimization: If all observations selected (common case), use direct indexing. */
-    ST_int N_range = in2 - in1 + 1;
-    ST_int *sel_idx = (ST_int *)malloc(N_range * sizeof(ST_int));
-    ST_int sel_is_identity = 0;  /* 1 if sel_idx[i] == i for all i (no filtering) */
-
-    if (!sel_idx) {
-        SF_error("creghdfe: memory allocation failed\n");
-        return 1;
-    }
-
-    N_orig = 0;
-    for (obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) {
-            sel_idx[N_orig] = obs - in1;
-            N_orig++;
-        }
-    }
-
-    if (N_orig <= 0) {
-        free(sel_idx);
-        SF_error("creghdfe: no observations\n");
-        return 198;
-    }
-
-    /* If all observations selected, sel_idx is identity - can use direct indexing */
-    if (N_orig == N_range) {
-        sel_is_identity = 1;
-        /* Keep sel_idx allocated but we'll use direct idx in hot loops */
-    }
-
     /* Determine threads */
 #ifdef _OPENMP
     num_threads = omp_get_max_threads();
@@ -207,15 +176,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
     num_threads = 1;
 #endif
 
-    if (verbose >= 1) {
-        sprintf(msg, "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
-                N_orig, K, G, num_threads);
-        SF_display(msg);
-    }
-
     /* ================================================================
-     * STEP 1: PARALLEL data loading using ctools_data_load_selective
-     * This replaces the sequential SF_vdata loop with parallel column loading
+     * STEP 1: PARALLEL data loading using ctools_data_load
+     * This handles if/in filtering at load time, loading only filtered observations.
      * ================================================================ */
 
     /* Calculate total variables to load:
@@ -225,7 +188,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Build variable indices array (1-based for Stata) */
     int *var_indices = (int *)malloc(total_vars * sizeof(int));
     if (!var_indices) {
-        free(sel_idx);
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -235,60 +197,63 @@ ST_retcode do_full_regression(int argc, char *argv[])
         var_indices[i] = i + 1;
     }
 
-    /* Load all variables in parallel using thread pool */
-    stata_data loaded_data;
-    stata_data_init(&loaded_data);
+    /* Load all variables in parallel with if/in filtering */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
 
-    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices, total_vars, 0, 0);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
-        stata_data_free(&loaded_data);
-        free(sel_idx);
+        ctools_filtered_data_free(&filtered);
         SF_error("creghdfe: parallel data load failed\n");
         return 920;
+    }
+
+    /* Get filtered observation count and obs_map */
+    N_orig = (ST_int)filtered.data.nobs;
+    obs_map = filtered.obs_map;
+
+    if (N_orig <= 0) {
+        ctools_filtered_data_free(&filtered);
+        SF_error("creghdfe: no observations\n");
+        return 198;
+    }
+
+    if (verbose >= 1) {
+        sprintf(msg, "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
+                N_orig, K, G, num_threads);
+        SF_display(msg);
     }
 
     /* Debug output after load */
     if (verbose) {
         char msg[256];
-        snprintf(msg, sizeof(msg), "creghdfe: loaded total_vars=%d, loaded_data.nvars=%zu, loaded_data.nobs=%zu\n",
-                 total_vars, loaded_data.nvars, loaded_data.nobs);
-        SF_display(msg);
-        snprintf(msg, sizeof(msg), "creghdfe: N_orig=%d, N_range=%d, sel_is_identity=%d\n",
-                 N_orig, N_range, sel_is_identity);
+        snprintf(msg, sizeof(msg), "creghdfe: loaded total_vars=%d, filtered.data.nvars=%zu, N_orig=%d\n",
+                 total_vars, filtered.data.nvars, N_orig);
         SF_display(msg);
     }
 
-    /* Verify all variables were loaded successfully (defensive check).
-     * Each variable with nobs > 0 should have non-NULL data pointer. */
+    /* Verify all variables were loaded successfully (defensive check) */
     for (i = 0; i < total_vars; i++) {
-        if (loaded_data.vars[i].nobs > 0) {
-            if (loaded_data.vars[i].type == STATA_TYPE_DOUBLE && loaded_data.vars[i].data.dbl == NULL) {
+        if (filtered.data.vars[i].nobs > 0) {
+            if (filtered.data.vars[i].type == STATA_TYPE_DOUBLE && filtered.data.vars[i].data.dbl == NULL) {
                 char errmsg[128];
                 snprintf(errmsg, sizeof(errmsg), "creghdfe: variable %d failed to load (NULL data pointer, nobs=%zu)\n",
-                         i + 1, loaded_data.vars[i].nobs);
+                         i + 1, filtered.data.vars[i].nobs);
                 SF_error(errmsg);
-                stata_data_free(&loaded_data);
-                free(sel_idx);
+                ctools_filtered_data_free(&filtered);
                 return 920;
             }
-            if (loaded_data.vars[i].type == STATA_TYPE_STRING && loaded_data.vars[i].data.str == NULL) {
+            if (filtered.data.vars[i].type == STATA_TYPE_STRING && filtered.data.vars[i].data.str == NULL) {
                 char errmsg[128];
                 snprintf(errmsg, sizeof(errmsg), "creghdfe: string variable %d failed to load (NULL data pointer, nobs=%zu)\n",
-                         i + 1, loaded_data.vars[i].nobs);
+                         i + 1, filtered.data.vars[i].nobs);
                 SF_error(errmsg);
-                stata_data_free(&loaded_data);
-                free(sel_idx);
+                ctools_filtered_data_free(&filtered);
                 return 920;
             }
         }
-    }
-
-    /* Verify we got the expected number of observations */
-    if ((ST_int)loaded_data.nobs != N_orig) {
-        /* N_orig was computed from SF_ifobs, loaded_data.nobs is the full range */
-        /* This is OK - we'll handle the if/in filtering below */
     }
 
     /* Allocate factor structures (no hash tables needed with sort-based remapping) */
@@ -316,8 +281,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         if (stdevs) free(stdevs);
         if (tss) free(tss);
         if (weights) free(weights);
-        stata_data_free(&loaded_data);
-        free(sel_idx);
+        ctools_filtered_data_free(&filtered);
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -340,78 +304,26 @@ ST_retcode do_full_regression(int argc, char *argv[])
             free(factors); free(mask);
             free(data); free(means); free(stdevs); free(tss);
             if (weights) free(weights);
-            stata_data_free(&loaded_data);
-            free(sel_idx);
+            ctools_filtered_data_free(&filtered);
             return 1;
         }
     }
 
-    /* Copy numeric data from loaded_data to column-major data array.
-     * Also compute means. Optimize for identity case (no if/in filtering). */
-    if (sel_is_identity) {
-        /* Fast path: direct copy without indirection */
-        /* Bounds check: ensure loaded_data has enough observations */
-        if ((size_t)N_orig > loaded_data.nobs) {
-            char errmsg[256];
-            snprintf(errmsg, sizeof(errmsg),
-                     "creghdfe: observation count mismatch (N_orig=%d > loaded_data.nobs=%zu)\n",
-                     N_orig, loaded_data.nobs);
-            SF_error(errmsg);
-            stata_data_free(&loaded_data);
-            free(sel_idx);
-            for (g = 0; g < G; g++) {
-                if (factors[g].levels) free(factors[g].levels);
-            }
-            free(factors); free(mask);
-            free(data); free(means); free(stdevs); free(tss);
-            if (weights) free(weights);
-            return 920;
-        }
-        for (k = 0; k < K; k++) {
-            double *src = loaded_data.vars[k].data.dbl;
-            double *dst = &data[k * N_orig];
-            double sum = 0.0;
-            for (idx = 0; idx < N_orig; idx++) {
-                dst[idx] = src[idx];
-                sum += src[idx];
-            }
-            means[k] = sum;
-        }
-        if (has_weights) {
-            ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
-            memcpy(weights, loaded_data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
-        }
-    } else {
-        /* Slow path: use sel_idx for filtered access */
+    /* Copy numeric data from filtered.data to column-major data array.
+     * Data is already filtered, so use direct copy. */
+    for (k = 0; k < K; k++) {
+        double *src = filtered.data.vars[k].data.dbl;
+        double *dst = &data[k * N_orig];
+        double sum = 0.0;
         for (idx = 0; idx < N_orig; idx++) {
-            ST_int src_idx = sel_idx[idx];
-            /* Bounds check: ensure src_idx is within loaded_data range */
-            if (src_idx < 0 || (size_t)src_idx >= loaded_data.nobs) {
-                char errmsg[256];
-                snprintf(errmsg, sizeof(errmsg),
-                         "creghdfe: sel_idx[%d]=%d out of bounds (loaded_data.nobs=%zu)\n",
-                         (int)idx, (int)src_idx, loaded_data.nobs);
-                SF_error(errmsg);
-                stata_data_free(&loaded_data);
-                free(sel_idx);
-                for (g = 0; g < G; g++) {
-                    if (factors[g].levels) free(factors[g].levels);
-                }
-                free(factors); free(mask);
-                free(data); free(means); free(stdevs); free(tss);
-                if (weights) free(weights);
-                return 920;
-            }
-            for (k = 0; k < K; k++) {
-                val = loaded_data.vars[k].data.dbl[src_idx];
-                data[k * N_orig + idx] = val;
-                means[k] += val;
-            }
-            if (has_weights) {
-                ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
-                weights[idx] = loaded_data.vars[weight_var_pos].data.dbl[src_idx];
-            }
+            dst[idx] = src[idx];
+            sum += src[idx];
         }
+        means[k] = sum;
+    }
+    if (has_weights) {
+        ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
+        memcpy(weights, filtered.data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
     }
 
     /* Compute means */
@@ -420,62 +332,34 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Use sort-based remapping for FE variables (much faster than hash tables).
-     * Optimize for identity case (no if/in filtering). */
+     * Data is already filtered, use direct access. */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
     #endif
     for (g = 0; g < G; g++) {
-        /* Remap to contiguous levels using radix sort.
-         * For identity case, pass loaded_data directly to avoid extra copy. */
         ST_int num_levels_g = 0;
-
-        if (sel_is_identity) {
-            /* Fast path: use loaded_data directly */
-            if (remap_values_sorted(loaded_data.vars[K + g].data.dbl, N_orig,
-                                    factors[g].levels, &num_levels_g) == 0) {
-                factors[g].num_levels = num_levels_g;
-            }
-        } else {
-            /* Slow path: extract filtered values first */
-            double *fe_values = (double *)malloc(N_orig * sizeof(double));
-            if (!fe_values) continue;
-
-            for (ST_int local_idx = 0; local_idx < N_orig; local_idx++) {
-                ST_int src_idx = sel_idx[local_idx];
-                fe_values[local_idx] = loaded_data.vars[K + g].data.dbl[src_idx];
-            }
-
-            if (remap_values_sorted(fe_values, N_orig, factors[g].levels, &num_levels_g) == 0) {
-                factors[g].num_levels = num_levels_g;
-            }
-
-            free(fe_values);
+        if (remap_values_sorted(filtered.data.vars[K + g].data.dbl, N_orig,
+                                factors[g].levels, &num_levels_g) == 0) {
+            factors[g].num_levels = num_levels_g;
         }
     }
 
-    /* Save cluster variable raw values BEFORE freeing loaded_data (if clustering).
+    /* Save cluster variable raw values BEFORE freeing filtered data (if clustering).
      * Also check if cluster variable matches any FE variable (common optimization). */
     double *cluster_raw_values = NULL;
     ST_int cluster_matches_fe = -1;  /* -1 = no match, 0..G-1 = which FE it matches */
 
     if (vcetype == 2) {
-        /* Cluster variable is at position K+G in loaded_data */
+        /* Cluster variable is at position K+G in filtered.data */
         cluster_raw_values = (double *)malloc(N_orig * sizeof(double));
         if (cluster_raw_values) {
-            /* Extract cluster values - optimize for identity case */
-            if (sel_is_identity) {
-                memcpy(cluster_raw_values, loaded_data.vars[K + G].data.dbl, N_orig * sizeof(double));
-            } else {
-                for (idx = 0; idx < N_orig; idx++) {
-                    cluster_raw_values[idx] = loaded_data.vars[K + G].data.dbl[sel_idx[idx]];
-                }
-            }
+            /* Extract cluster values - direct copy since data is filtered */
+            memcpy(cluster_raw_values, filtered.data.vars[K + G].data.dbl, N_orig * sizeof(double));
 
-            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)).
-             * Quick rejection using sample values, then memcmp for identity case. */
-            double *cluster_data = loaded_data.vars[K + G].data.dbl;
+            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)). */
+            double *cluster_data = filtered.data.vars[K + G].data.dbl;
             for (g = 0; g < G; g++) {
-                double *fe_data = loaded_data.vars[K + g].data.dbl;
+                double *fe_data = filtered.data.vars[K + g].data.dbl;
 
                 /* Quick rejection: check first, middle, and last values */
                 if ((ST_int)cluster_data[0] != (ST_int)fe_data[0] ||
@@ -484,21 +368,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
                     continue;
                 }
 
-                /* Full comparison - fast path for identity case */
+                /* Full comparison - data is already filtered, compare directly */
                 ST_int all_match = 1;
-                if (sel_is_identity) {
-                    /* Can compare arrays directly */
-                    for (idx = 0; idx < N_orig && all_match; idx++) {
-                        if ((ST_int)cluster_data[idx] != (ST_int)fe_data[idx]) {
-                            all_match = 0;
-                        }
-                    }
-                } else {
-                    for (idx = 0; idx < N_orig && all_match; idx++) {
-                        ST_int src_idx = sel_idx[idx];
-                        if ((ST_int)cluster_data[src_idx] != (ST_int)fe_data[src_idx]) {
-                            all_match = 0;
-                        }
+                for (idx = 0; idx < N_orig && all_match; idx++) {
+                    if ((ST_int)cluster_data[idx] != (ST_int)fe_data[idx]) {
+                        all_match = 0;
                     }
                 }
 
@@ -510,9 +384,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    /* Free loaded_data and sel_idx - we've extracted what we need */
-    stata_data_free(&loaded_data);
-    free(sel_idx);
+    /* Free filtered.data but keep obs_map for write-back operations */
+    stata_data_free(&filtered.data);
+    /* obs_map kept for write-back of residuals/groupvar/savefe */
 
     /* Verify FE remapping succeeded */
     for (g = 0; g < G; g++) {
@@ -1806,44 +1680,23 @@ ST_retcode do_full_regression(int argc, char *argv[])
         beta_keep[K_keep] = means[0] - xb_mean;
     }
 
-    /* Store residuals back to Stata if requested */
+    /* Store residuals back to Stata if requested.
+     * Uses obs_map to write to correct Stata observations. */
     if (compute_resid && resid_var_idx > 0 && resid) {
         if (verbose) {
-            sprintf(msg, "{txt}   Storing residuals: resid_var_idx=%d, nvars=%d, N=%d, N_orig=%d, in1=%d, in2=%d\n",
-                    resid_var_idx, SF_nvars(), N, N_orig, in1, in2);
+            sprintf(msg, "{txt}   Storing residuals: resid_var_idx=%d, N=%d, N_orig=%d\n",
+                    resid_var_idx, N, N_orig);
             SF_display(msg);
-        }
-
-        /* DEBUG: Try storing to variable 1 (price) to verify SF_vstore works at all */
-        if (verbose) {
-            ST_double orig_val;
-            SF_vdata(1, 1, &orig_val);
-            sprintf(msg, "{txt}   DEBUG: var1 obs1 before = %g\n", orig_val);
-            SF_display(msg);
-
-            ST_retcode rc = SF_vstore(1, 1, 99999.0);
-            ST_double new_val;
-            SF_vdata(1, 1, &new_val);
-            sprintf(msg, "{txt}   DEBUG: store 99999 to var1 obs1, rc=%d, readback=%g\n", rc, new_val);
-            SF_display(msg);
-
-            /* Restore */
-            SF_vstore(1, 1, orig_val);
         }
 
         ST_int stored_count = 0;
         idx = 0;
-        i = 0;
-        for (obs = in1; obs <= in2; obs++) {
-            if (!SF_ifobs(obs)) {
-                continue;
-            }
+        for (i = 0; i < N_orig; i++) {
             if (mask[i]) {
-                ST_retcode rc = SF_vstore(resid_var_idx, obs, resid[idx]);
+                ST_retcode rc = SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
                 if (rc == 0) stored_count++;
                 idx++;
             }
-            i++;
         }
         if (verbose) {
             sprintf(msg, "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
@@ -1854,16 +1707,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Store groupvar (mobility group assignments) back to Stata if requested */
     if (compute_groupvar && groupvar_var_idx > 0 && group_assignments) {
         idx = 0;
-        i = 0;
-        for (obs = in1; obs <= in2; obs++) {
-            if (!SF_ifobs(obs)) {
-                continue;
-            }
+        for (i = 0; i < N_orig; i++) {
             if (mask[i]) {
-                SF_vstore(groupvar_var_idx, obs, (ST_double)group_assignments[idx]);
+                SF_vstore(groupvar_var_idx, (ST_int)obs_map[i], (ST_double)group_assignments[idx]);
                 idx++;
             }
-            i++;
         }
     }
 
@@ -1902,22 +1750,17 @@ ST_retcode do_full_regression(int argc, char *argv[])
                     fe_coefs[lev] -= grand_mean;
                 }
 
-                /* Store FE estimates back to Stata variable */
+                /* Store FE estimates back to Stata variable using obs_map */
                 ST_int fe_var_idx = savefe_var_idx + g;
                 idx = 0;
-                i = 0;
-                for (obs = in1; obs <= in2; obs++) {
-                    if (!SF_ifobs(obs)) {
-                        continue;
-                    }
+                for (i = 0; i < N_orig; i++) {
                     if (mask[i]) {
                         ST_int level = g_state->factors[g].levels[idx] - 1;
                         if (level >= 0 && level < num_levels_g) {
-                            SF_vstore(fe_var_idx, obs, fe_coefs[level]);
+                            SF_vstore(fe_var_idx, (ST_int)obs_map[i], fe_coefs[level]);
                         }
                         idx++;
                     }
-                    i++;
                 }
 
                 free(fe_coefs);
@@ -2001,6 +1844,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     free(data_keep); free(xtx_keep); free(xty_keep); free(beta_keep);
     free(inv_xx_keep); free(V_keep); free(keep_idx); free(xtx); free(is_collinear);
     if (cluster_ids) free(cluster_ids);
+    if (obs_map) free(obs_map);
 
     /* Clean up local factor data */
     for (g = 0; g < G; g++) {

@@ -147,23 +147,13 @@ benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K robust")
  ******************************************************************************/
 print_section "tolerance/maxiter Options"
 
+* Verify tolerance option produces correct results
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) tolerance(1e-10)
-if _rc == 0 {
-    test_pass "tolerance(1e-10) accepted"
-}
-else {
-    test_fail "tolerance option" "returned error `=_rc'"
-}
+benchmark_reghdfe price mpg weight, absorb(foreign) tolerance(1e-10) testname("[syntax] tolerance(1e-10)")
 
+* Verify iterate option produces correct results
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) iterate(1000)
-if _rc == 0 {
-    test_pass "iterate(1000) accepted"
-}
-else {
-    test_fail "iterate option" "returned error `=_rc'"
-}
+benchmark_reghdfe price mpg weight, absorb(foreign) iterate(1000) testname("[syntax] iterate(1000)")
 
 /*******************************************************************************
  * SECTION 9: resid option

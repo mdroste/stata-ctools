@@ -272,12 +272,13 @@ ST_retcode csample_main(const char *args) {
     group_info *groups = NULL;
     perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
     size_t *work_indices = NULL;
-    stata_data by_data;
+    ctools_filtered_data by_filtered;
+    perm_idx_t *obs_map = NULL;
     stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
 
-    stata_data_init(&by_data);
+    ctools_filtered_data_init(&by_filtered);
     t_start = ctools_timer_seconds();
     t_sort = 0.0;
 
@@ -336,16 +337,6 @@ ST_retcode csample_main(const char *args) {
         }
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        if (by_indices) free(by_indices);
-        ctools_error(CSAMPLE_MODULE, "no observations");
-        return 2000;
-    }
-
     #ifdef _OPENMP
     num_threads = omp_get_max_threads();
     #endif
@@ -355,28 +346,71 @@ ST_retcode csample_main(const char *args) {
         config.seed = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32);
     }
 
-    /* === Load Phase using ctools_data_load_selective === */
+    /* === Load Phase using ctools_data_load === */
     double load_start = ctools_timer_seconds();
 
-    /* Allocate keep flags */
-    keep_flags = (uint8_t *)calloc(nobs, sizeof(uint8_t));
-    if (!keep_flags) {
-        if (by_indices) free(by_indices);
-        ctools_error_alloc(CSAMPLE_MODULE);
-        return 920;
-    }
-
+    size_t nobs;
     size_t ngroups = 1;
 
-    /* Load by-variables if specified using standard ctools function */
+    /* Load by-variables if specified using filtered loading */
     if (nby > 0) {
-        rc = ctools_data_load_selective(&by_data, by_indices, nby, 0, 0);
+        rc = ctools_data_load(&by_filtered, by_indices, nby, 0, 0, 0);
         if (rc != STATA_OK) {
-            free(keep_flags);
             free(by_indices);
             ctools_error(CSAMPLE_MODULE, "failed to load data");
             return 920;
         }
+        nobs = by_filtered.data.nobs;
+        obs_map = by_filtered.obs_map;
+    } else {
+        /* No by-variables - build obs_map directly from SF_ifobs */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
+
+        /* First pass: count filtered observations */
+        nobs = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) nobs++;
+        }
+
+        if (nobs == 0) {
+            if (by_indices) free(by_indices);
+            ctools_error(CSAMPLE_MODULE, "no observations");
+            return 2000;
+        }
+
+        /* Allocate and build obs_map */
+        obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (!obs_map) {
+            if (by_indices) free(by_indices);
+            ctools_error_alloc(CSAMPLE_MODULE);
+            return 920;
+        }
+
+        size_t idx = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) {
+                obs_map[idx++] = (perm_idx_t)obs;
+            }
+        }
+    }
+
+    if (nobs == 0) {
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
+        if (by_indices) free(by_indices);
+        ctools_error(CSAMPLE_MODULE, "no observations");
+        return 2000;
+    }
+
+    /* Allocate keep flags */
+    keep_flags = (uint8_t *)calloc(nobs, sizeof(uint8_t));
+    if (!keep_flags) {
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
+        if (by_indices) free(by_indices);
+        ctools_error_alloc(CSAMPLE_MODULE);
+        return 920;
     }
 
     t_load = ctools_timer_seconds() - load_start;
@@ -386,7 +420,8 @@ ST_retcode csample_main(const char *args) {
 
     groups = (group_info *)malloc((nobs + 1) * sizeof(group_info));
     if (!groups) {
-        if (nby > 0) stata_data_free(&by_data);
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -398,7 +433,7 @@ ST_retcode csample_main(const char *args) {
         sort_vars = (int *)malloc(nby * sizeof(int));
         if (!sort_vars) {
             free(groups);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error_alloc(CSAMPLE_MODULE);
@@ -410,11 +445,11 @@ ST_retcode csample_main(const char *args) {
 
         /* Sort using counting sort for integer group variables (optimal for ties),
            fall back to LSD radix if data isn't suitable for counting sort */
-        rc = ctools_sort_dispatch(&by_data, sort_vars, nby, SORT_ALG_COUNTING);
+        rc = ctools_sort_dispatch(&by_filtered.data, sort_vars, nby, SORT_ALG_COUNTING);
         if (rc != STATA_OK) {
             free(sort_vars);
             free(groups);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error(CSAMPLE_MODULE, "sort failed");
@@ -426,21 +461,21 @@ ST_retcode csample_main(const char *args) {
         if (!sort_perm) {
             free(sort_vars);
             free(groups);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error_alloc(CSAMPLE_MODULE);
             return 920;
         }
-        memcpy(sort_perm, by_data.sort_order, nobs * sizeof(perm_idx_t));
+        memcpy(sort_perm, by_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
 
         /* Apply permutation to physically reorder the data */
-        rc = ctools_apply_permutation(&by_data);
+        rc = ctools_apply_permutation(&by_filtered.data);
         if (rc != STATA_OK) {
             free(sort_perm);
             free(sort_vars);
             free(groups);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error(CSAMPLE_MODULE, "permutation failed");
@@ -450,7 +485,7 @@ ST_retcode csample_main(const char *args) {
         free(sort_vars);
 
         /* Detect groups from sorted data */
-        detect_groups_from_data(&by_data, nby, groups, &ngroups);
+        detect_groups_from_data(&by_filtered.data, nby, groups, &ngroups);
     } else {
         groups[0].start = 0;
         groups[0].count = nobs;
@@ -466,16 +501,11 @@ ST_retcode csample_main(const char *args) {
     if (!thread_rngs) {
         if (sort_perm) free(sort_perm);
         free(groups);
-        if (nby > 0) stata_data_free(&by_data);
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
         return 920;
-    }
-
-    /* Seed each thread's RNG uniquely */
-    for (int t = 0; t < num_threads; t++) {
-        xoshiro256_seed(&thread_rngs[t], config.seed + (uint64_t)t * 0x9e3779b97f4a7c15ULL);
     }
 
     /* Allocate work indices (max group size needed) */
@@ -490,7 +520,7 @@ ST_retcode csample_main(const char *args) {
         free(thread_rngs);
         if (sort_perm) free(sort_perm);
         free(groups);
-        if (nby > 0) stata_data_free(&by_data);
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -541,8 +571,11 @@ ST_retcode csample_main(const char *args) {
                 indices[i] = i;
             }
 
-            /* Fisher-Yates partial shuffle */
+            /* Seed RNG based on group index (not thread) for reproducibility */
+            xoshiro256_seed(&thread_rngs[tid], config.seed + (uint64_t)g * 0x9e3779b97f4a7c15ULL);
             xoshiro256_state *rng = &thread_rngs[tid];
+
+            /* Fisher-Yates partial shuffle */
             for (size_t i = 0; i < keep_count; i++) {
                 size_t j = i + xoshiro256_uniform(rng, count - i);
                 size_t tmp = indices[i];
@@ -561,16 +594,13 @@ ST_retcode csample_main(const char *args) {
 
     t_sample = ctools_timer_seconds() - sample_start;
 
-    /* === Store Phase === */
+    /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    /* Write keep flags to Stata */
-    size_t obs_idx = 0;
-    for (ST_int obs = obs1; obs <= obs2; obs++) {
-        if (!SF_ifobs(obs)) continue;
-        double val = keep_flags[obs_idx] ? 1.0 : 0.0;
-        SF_vstore(keep_idx, obs, val);
-        obs_idx++;
+    /* Write keep flags to Stata using obs_map */
+    for (size_t i = 0; i < nobs; i++) {
+        double val = keep_flags[i] ? 1.0 : 0.0;
+        SF_vstore(keep_idx, (ST_int)obs_map[i], val);
     }
 
     t_store = ctools_timer_seconds() - store_start;
@@ -590,7 +620,11 @@ ST_retcode csample_main(const char *args) {
     free(thread_rngs);
     if (sort_perm) free(sort_perm);
     free(groups);
-    if (nby > 0) stata_data_free(&by_data);
+    if (nby > 0) {
+        ctools_filtered_data_free(&by_filtered);
+    } else if (obs_map) {
+        free(obs_map);
+    }
     free(keep_flags);
     if (by_indices) free(by_indices);
 

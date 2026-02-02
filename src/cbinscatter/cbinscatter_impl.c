@@ -153,7 +153,7 @@ static ST_retcode read_config(BinscatterConfig *config) {
 }
 
 /* ========================================================================
- * Load Data from Stata using ctools_data_load_selective()
+ * Load Data from Stata using ctools_data_load()
  * ======================================================================== */
 
 static ST_retcode load_data(
@@ -167,9 +167,6 @@ static ST_retcode load_data(
     ST_int *N_out,
     ST_int *N_valid_out
 ) {
-    ST_int in1 = SF_in1();
-    ST_int in2 = SF_in2();
-    ST_int N = in2 - in1 + 1;
     ST_int i, j;
     ST_double val;
 
@@ -231,16 +228,32 @@ static ST_retcode load_data(
         var_indices[vidx++] = w_var;
     }
 
-    /* Load all variables using ctools infrastructure */
-    stata_data loaded_data;
-    stata_data_init(&loaded_data);
-    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices,
-                                                        num_vars_to_load, in1, in2);
+    /* Load all variables with if/in filtering using ctools_data_load().
+     * This eliminates the need to call SF_ifobs() during the validation loop. */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+                                                       num_vars_to_load, 0, 0, 0);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
-        stata_data_free(&loaded_data);
+        ctools_filtered_data_free(&filtered);
         return CBINSCATTER_ERR_MEMORY;
+    }
+
+    ST_int N = (ST_int)filtered.data.nobs;  /* Number of if/in filtered observations */
+
+    if (N == 0) {
+        ctools_filtered_data_free(&filtered);
+        *y_out = NULL;
+        *x_out = NULL;
+        *controls_out = NULL;
+        *fe_vars_out = NULL;
+        *by_groups_out = NULL;
+        *weights_out = NULL;
+        *N_out = 0;
+        *N_valid_out = 0;
+        return CBINSCATTER_OK;
     }
 
     /* Allocate and copy y and x */
@@ -248,23 +261,23 @@ static ST_retcode load_data(
     x = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
     if (!y || !x) {
         free(y); free(x);
-        stata_data_free(&loaded_data);
+        ctools_filtered_data_free(&filtered);
         return CBINSCATTER_ERR_MEMORY;
     }
-    memcpy(y, loaded_data.vars[y_data_idx].data.dbl, N * sizeof(ST_double));
-    memcpy(x, loaded_data.vars[x_data_idx].data.dbl, N * sizeof(ST_double));
+    memcpy(y, filtered.data.vars[y_data_idx].data.dbl, N * sizeof(ST_double));
+    memcpy(x, filtered.data.vars[x_data_idx].data.dbl, N * sizeof(ST_double));
 
     /* Handle controls - need to reorganize to column-major layout expected by cbinscatter */
     if (config->has_controls && config->num_controls > 0) {
         controls = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)config->num_controls, sizeof(ST_double));
         if (!controls) {
             free(y); free(x);
-            stata_data_free(&loaded_data);
+            ctools_filtered_data_free(&filtered);
             return CBINSCATTER_ERR_MEMORY;
         }
-        /* Copy from stata_data (contiguous per var) to column-major layout */
+        /* Copy from filtered data (contiguous per var) to column-major layout */
         for (j = 0; j < config->num_controls; j++) {
-            ST_double *src = loaded_data.vars[controls_data_idx + j].data.dbl;
+            ST_double *src = filtered.data.vars[controls_data_idx + j].data.dbl;
             ST_double *dst = &controls[j * N];
             memcpy(dst, src, N * sizeof(ST_double));
         }
@@ -275,12 +288,12 @@ static ST_retcode load_data(
         fe_vars = (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)config->num_absorb, sizeof(ST_int));
         if (!fe_vars) {
             free(y); free(x); free(controls);
-            stata_data_free(&loaded_data);
+            ctools_filtered_data_free(&filtered);
             return CBINSCATTER_ERR_MEMORY;
         }
         /* Convert loaded doubles to 1-based integers, setting missings to 0 */
         for (j = 0; j < config->num_absorb; j++) {
-            ST_double *src = loaded_data.vars[absorb_data_idx + j].data.dbl;
+            ST_double *src = filtered.data.vars[absorb_data_idx + j].data.dbl;
             for (i = 0; i < N; i++) {
                 val = src[i];
                 /* Set missings to 0, add 1 to valid values to make them 1-based.
@@ -295,10 +308,10 @@ static ST_retcode load_data(
         by_groups = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
         if (!by_groups) {
             free(y); free(x); free(controls); free(fe_vars);
-            stata_data_free(&loaded_data);
+            ctools_filtered_data_free(&filtered);
             return CBINSCATTER_ERR_MEMORY;
         }
-        ST_double *src = loaded_data.vars[by_data_idx].data.dbl;
+        ST_double *src = filtered.data.vars[by_data_idx].data.dbl;
         for (i = 0; i < N; i++) {
             val = src[i];
             /* Set missings to -1 so they're filtered by the < 0 check later */
@@ -311,35 +324,30 @@ static ST_retcode load_data(
         weights = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
         if (!weights) {
             free(y); free(x); free(controls); free(fe_vars); free(by_groups);
-            stata_data_free(&loaded_data);
+            ctools_filtered_data_free(&filtered);
             return CBINSCATTER_ERR_MEMORY;
         }
-        memcpy(weights, loaded_data.vars[weights_data_idx].data.dbl, N * sizeof(ST_double));
+        memcpy(weights, filtered.data.vars[weights_data_idx].data.dbl, N * sizeof(ST_double));
     }
+
+    /* Done with filtered data */
+    ctools_filtered_data_free(&filtered);
 
     /* Allocate valid_idx array */
     valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
     if (!valid_idx) {
         free(y); free(x); free(controls); free(fe_vars); free(by_groups); free(weights);
-        stata_data_free(&loaded_data);
         return CBINSCATTER_ERR_MEMORY;
     }
 
-    /* Free loaded_data - we've copied what we need */
-    stata_data_free(&loaded_data);
-
-    /* Build valid index array (streaming - single pass) */
+    /* Build valid index array - check for missing values in variables.
+     * Note: SF_ifobs is already handled by ctools_data_load(). */
     N_valid = 0;
     for (i = 0; i < N; i++) {
         int valid = 1;
 
-        /* Check Stata's if condition - CRITICAL for proper filtering */
-        if (SF_ifobs(i + in1) == 0) {
-            valid = 0;
-        }
-
-        /* Check y and x */
-        if (valid && (SF_is_missing(y[i]) || SF_is_missing(x[i]))) {
+        /* Check y and x for missing values */
+        if (SF_is_missing(y[i]) || SF_is_missing(x[i])) {
             valid = 0;
         }
 

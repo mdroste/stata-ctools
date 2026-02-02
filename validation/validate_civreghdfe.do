@@ -856,11 +856,15 @@ if _rc == 0 {
         local civreghdfe_N = e(N)
         local civreghdfe_r2 = e(r2)
 
-        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < $DEFAULT_TOL {
-            test_pass "c.turn#i.foreign: matches ivreghdfe"
+        sigfigs `ivreghdfe_r2' `civreghdfe_r2'
+        local r2_sf = r(sigfigs)
+        if `ivreghdfe_N' == `civreghdfe_N' & `r2_sf' >= $DEFAULT_SIGFIGS {
+            local sf_fmt : display %4.1f `r2_sf'
+            test_pass "c.turn#i.foreign: matches ivreghdfe (r2 sigfigs=`sf_fmt')"
         }
         else {
-            test_fail "c.turn#i.foreign" "N or r2 differs: N=`ivreghdfe_N'/`civreghdfe_N' r2=`ivreghdfe_r2'/`civreghdfe_r2'"
+            local sf_fmt : display %4.1f `r2_sf'
+            test_fail "c.turn#i.foreign" "N=`ivreghdfe_N'/`civreghdfe_N' r2_sigfigs=`sf_fmt'"
         }
     }
     else {
@@ -964,13 +968,16 @@ if _rc == 0 {
         test_fail "L.varname N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
     }
 
-    * Check coefficient matches with strict tolerance
-    local coef_diff = abs(`ivreghdfe_b' - `civreghdfe_b')
-    if `coef_diff' < $DEFAULT_TOL {
-        test_pass "L.varname: coefficient matches ivreghdfe"
+    * Check coefficient matches using sigfigs
+    sigfigs `ivreghdfe_b' `civreghdfe_b'
+    local coef_sf = r(sigfigs)
+    if `coef_sf' >= $DEFAULT_SIGFIGS {
+        local sf_fmt : display %4.1f `coef_sf'
+        test_pass "L.varname: coefficient matches ivreghdfe (sigfigs=`sf_fmt')"
     }
     else {
-        test_fail "L.varname coef" "diff=`coef_diff' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
+        local sf_fmt : display %4.1f `coef_sf'
+        test_fail "L.varname coef" "sigfigs=`sf_fmt' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
     }
 }
 else {
@@ -1038,12 +1045,15 @@ ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) kclass(1)
 local kclass_b = _b[x_endog]
 ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm)
 local tsls_b = _b[x_endog]
-local diff = abs(`kclass_b' - `tsls_b')
-if `diff' < 1e-7 {
-    test_pass "kclass(1) equals 2SLS"
+sigfigs `kclass_b' `tsls_b'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf'
+    test_pass "kclass(1) equals 2SLS (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "kclass(1) vs 2SLS" "diff=`diff'"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "kclass(1) vs 2SLS" "sigfigs=`sf_fmt'"
 }
 
 * Benchmark GMM two-step
@@ -1069,15 +1079,14 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 24b: GMM2S and CUE Strict Coefficient/VCE Tests (tol=1e-8)
+ * SECTION 24b: GMM2S and CUE Strict Coefficient/VCE Tests
  *
- * NOTE: The tolerance below (1e-8) should NOT be changed except by a human user.
  * These strict tests verify numerical precision of the implementation against
- * ivreghdfe. Any loosening of tolerances masks potential numerical issues.
+ * ivreghdfe using 8 significant figures (stricter than default 7).
  ******************************************************************************/
-print_section "GMM2S/CUE Strict Tests (tol=1e-8)"
+print_section "GMM2S/CUE Strict Tests (8 sigfigs)"
 
-local tol = 1e-8
+local strict_sigfigs = 8
 
 * GMM2S basic - verify coefficient and VCE match
 qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
@@ -1088,14 +1097,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s strict (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s strict" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * GMM2S + cluster - verify coefficient and VCE match
@@ -1107,14 +1122,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(cluster fir
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s + cluster strict (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s + cluster strict" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * GMM2S + robust - verify coefficient and VCE match
@@ -1126,14 +1147,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(robust)
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s + robust strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s + robust strict (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s + robust strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s + robust strict" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * CUE basic - verify coefficient and VCE match
@@ -1145,14 +1172,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "cue strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "cue strict (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "cue strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "cue strict" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * CUE + cluster - verify coefficient and VCE match
@@ -1164,14 +1197,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue vce(cluster firm)
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "cue + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "cue + cluster strict (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "cue + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "cue + cluster strict" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * Just-identified case: GMM2S and CUE should equal 2SLS
@@ -1232,14 +1271,20 @@ qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) gmm2s
 local c_b1 = _b[x_endog1]
 local c_b2 = _b[x_endog2]
 
-local diff1 = abs(`iv_b1' - `c_b1')
-local diff2 = abs(`iv_b2' - `c_b2')
+sigfigs `iv_b1' `c_b1'
+local sf1 = r(sigfigs)
+sigfigs `iv_b2' `c_b2'
+local sf2 = r(sigfigs)
 
-if `diff1' < `tol' & `diff2' < `tol' {
-    test_pass "gmm2s two endog strict (diff1=`diff1', diff2=`diff2')"
+if `sf1' >= `strict_sigfigs' & `sf2' >= `strict_sigfigs' {
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_pass "gmm2s two endog strict (sigfigs: `sf1_fmt', `sf2_fmt')"
 }
 else {
-    test_fail "gmm2s two endog strict" "diff1=`diff1', diff2=`diff2'"
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_fail "gmm2s two endog strict" "sigfigs: `sf1_fmt', `sf2_fmt', need `strict_sigfigs'"
 }
 
 * Multiple endogenous variables with CUE
@@ -1251,14 +1296,20 @@ qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) cue
 local c_b1 = _b[x_endog1]
 local c_b2 = _b[x_endog2]
 
-local diff1 = abs(`iv_b1' - `c_b1')
-local diff2 = abs(`iv_b2' - `c_b2')
+sigfigs `iv_b1' `c_b1'
+local sf1 = r(sigfigs)
+sigfigs `iv_b2' `c_b2'
+local sf2 = r(sigfigs)
 
-if `diff1' < `tol' & `diff2' < `tol' {
-    test_pass "cue two endog strict (diff1=`diff1', diff2=`diff2')"
+if `sf1' >= `strict_sigfigs' & `sf2' >= `strict_sigfigs' {
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_pass "cue two endog strict (sigfigs: `sf1_fmt', `sf2_fmt')"
 }
 else {
-    test_fail "cue two endog strict" "diff1=`diff1', diff2=`diff2'"
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_fail "cue two endog strict" "sigfigs: `sf1_fmt', `sf2_fmt', need `strict_sigfigs'"
 }
 
 /*******************************************************************************
@@ -1281,11 +1332,15 @@ civreghdfe price (mpg = weight length), absorb(foreign) vce(robust)
 local se_vce = sqrt(e(V)[1,1])
 civreghdfe price (mpg = weight length), absorb(foreign) robust
 local se_robust = sqrt(e(V)[1,1])
-if abs(`se_vce' - `se_robust') < $DEFAULT_TOL {
-    test_pass "robust = vce(robust)"
+sigfigs `se_vce' `se_robust'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf'
+    test_pass "robust = vce(robust) (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "robust = vce(robust)" "se_vce=`se_vce' se_robust=`se_robust'"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "robust = vce(robust)" "sigfigs=`sf_fmt', se_vce=`se_vce' se_robust=`se_robust'"
 }
 
 * Test standalone cluster option

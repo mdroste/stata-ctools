@@ -200,7 +200,8 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
 */
 ST_retcode csort_main(const char *args)
 {
-    stata_data data;
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
     stata_timer timer;
     stata_retcode rc;
     int *sort_vars = NULL;
@@ -321,14 +322,14 @@ ST_retcode csort_main(const char *args)
 #endif
     timer.load_time = ctools_timer_seconds();
 
-    rc = ctools_data_load(&data, nvars);
+    rc = ctools_data_load(&filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
 
     timer.load_time = ctools_timer_seconds() - timer.load_time;
 
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: failed to load data (error %d)\n", rc);
         SF_error(msg);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(sort_vars);
         return 920;
     }
@@ -340,7 +341,7 @@ ST_retcode csort_main(const char *args)
     {
         char dbg[512];
         snprintf(dbg, sizeof(dbg), "csort debug: nobs=%zu nvars=%zu nsort=%zu\n",
-                 data.nobs, data.nvars, nsort);
+                 filtered.data.nobs, filtered.data.nvars, nsort);
         SF_display(dbg);
         snprintf(dbg, sizeof(dbg), "csort debug: sort_vars = [");
         SF_display(dbg);
@@ -351,17 +352,17 @@ ST_retcode csort_main(const char *args)
         SF_display("]\n");
 
         /* Show first 5 observations of first string var (make) */
-        if (data.vars[0].type == STATA_TYPE_STRING) {
+        if (filtered.data.vars[0].type == STATA_TYPE_STRING) {
             SF_display("csort debug: First 5 make values (before sort):\n");
-            for (size_t i = 0; i < 5 && i < data.nobs; i++) {
-                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, data.vars[0].data.str[i]);
+            for (size_t i = 0; i < 5 && i < filtered.data.nobs; i++) {
+                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, filtered.data.vars[0].data.str[i]);
                 SF_display(dbg);
             }
         }
 
         /* Show initial sort_order */
         SF_display("csort debug: Initial sort_order (first 10): ");
-        for (size_t i = 0; i < 10 && i < data.nobs; i++) {
+        for (size_t i = 0; i < 10 && i < filtered.data.nobs; i++) {
             snprintf(dbg, sizeof(dbg), "%zu ", data.sort_order[i]);
             SF_display(dbg);
         }
@@ -373,7 +374,7 @@ ST_retcode csort_main(const char *args)
     double t_permute = 0.0;  /* Permutation time */
 
     /* Call unified sort dispatcher (computes sort_order only) */
-    rc = ctools_sort_dispatch(&data, sort_vars, nsort, algorithm);
+    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, algorithm);
 
     /* Record sort computation time */
     timer.sort_time = ctools_timer_seconds() - timer.sort_time;
@@ -381,14 +382,14 @@ ST_retcode csort_main(const char *args)
     /* Apply permutation separately (timed) */
     if (rc == STATA_OK) {
         t_permute = ctools_timer_seconds();
-        rc = ctools_apply_permutation(&data);
+        rc = ctools_apply_permutation(&filtered.data);
         t_permute = ctools_timer_seconds() - t_permute;
     }
 
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: sort failed (error %d)\n", rc);
         SF_error(msg);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(sort_vars);
         return 920;
     }
@@ -398,17 +399,17 @@ ST_retcode csort_main(const char *args)
         char dbg[512];
         /* Show sort_order after sort */
         SF_display("csort debug: Final sort_order (first 10): ");
-        for (size_t i = 0; i < 10 && i < data.nobs; i++) {
+        for (size_t i = 0; i < 10 && i < filtered.data.nobs; i++) {
             snprintf(dbg, sizeof(dbg), "%zu ", data.sort_order[i]);
             SF_display(dbg);
         }
         SF_display("\n");
 
         /* Show first 5 make values after sort (data is now permuted) */
-        if (data.vars[0].type == STATA_TYPE_STRING) {
+        if (filtered.data.vars[0].type == STATA_TYPE_STRING) {
             SF_display("csort debug: First 5 make values (after sort):\n");
-            for (size_t i = 0; i < 5 && i < data.nobs; i++) {
-                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, data.vars[0].data.str[i]);
+            for (size_t i = 0; i < 5 && i < filtered.data.nobs; i++) {
+                snprintf(dbg, sizeof(dbg), "  [%zu] %s\n", i, filtered.data.vars[0].data.str[i]);
                 SF_display(dbg);
             }
         }
@@ -420,21 +421,21 @@ ST_retcode csort_main(const char *args)
        ================================================================ */
     timer.store_time = ctools_timer_seconds();
 
-    rc = ctools_data_store(&data, obs1);
+    rc = ctools_data_store(&filtered.data, obs1);
 
     timer.store_time = ctools_timer_seconds() - timer.store_time;
 
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "csort: failed to store data (error %d)\n", rc);
         SF_error(msg);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(sort_vars);
         return 920;
     }
 
     /* Clean up C memory (this can be slow for large datasets!) */
     double t_cleanup = ctools_timer_seconds();
-    stata_data_free(&data);
+    ctools_filtered_data_free(&filtered);
     free(sort_vars);
     t_cleanup = ctools_timer_seconds() - t_cleanup;
 

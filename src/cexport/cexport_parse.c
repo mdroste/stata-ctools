@@ -21,7 +21,7 @@
 void cexport_context_init(cexport_context *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));
-    stata_data_init(&ctx->data);
+    ctools_filtered_data_init(&ctx->filtered);
 
     /* Set defaults */
     ctx->delimiter = ',';
@@ -74,7 +74,7 @@ void cexport_context_cleanup(cexport_context *ctx)
         ctx->vartypes = NULL;
     }
 
-    stata_data_free(&ctx->data);
+    ctools_filtered_data_free(&ctx->filtered);
 }
 
 /* ========================================================================

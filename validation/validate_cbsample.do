@@ -229,6 +229,338 @@ else {
     test_fail "n > nobs bootstrap" "total weight=`total'"
 }
 
+/*******************************************************************************
+ * SECTION 8: If/In Conditions
+ ******************************************************************************/
+print_section "If/In Conditions"
+
+* if condition test
+clear
+set obs 200
+gen id = _n
+gen bsweight = .
+gen keep_flag = id <= 100
+
+set seed 12345
+cbsample if keep_flag == 1, weight(bsweight)
+
+* All 200 obs should remain, but only first 100 should have non-zero weight
+count if bsweight > 0 & id > 100
+local n_wrong = r(N)
+count if bsweight > 0 & id <= 100
+local n_sampled = r(N)
+
+if `n_wrong' == 0 & `n_sampled' > 0 {
+    test_pass "if condition respected (weights only in valid range)"
+}
+else {
+    test_fail "if condition respected" "n_wrong=`n_wrong', n_sampled=`n_sampled'"
+}
+
+* in condition test
+clear
+set obs 200
+gen id = _n
+gen bsweight = .
+
+set seed 12345
+cbsample in 1/100, weight(bsweight)
+
+* Only first 100 should have non-zero weight
+count if bsweight > 0 & id > 100
+local n_wrong = r(N)
+count if bsweight > 0 & id <= 100
+local n_sampled = r(N)
+
+if `n_wrong' == 0 & `n_sampled' > 0 {
+    test_pass "in condition respected (weights only in valid range)"
+}
+else {
+    test_fail "in condition respected" "n_wrong=`n_wrong', n_sampled=`n_sampled'"
+}
+
+* Combined if/in test
+clear
+set obs 300
+gen id = _n
+gen bsweight = .
+gen group = mod(_n, 3)
+
+set seed 12345
+cbsample if group == 1 in 1/200, weight(bsweight)
+
+* Only obs with id<=200 and group==1 should have non-zero weight
+count if bsweight > 0 & id > 200
+local n_wrong_in = r(N)
+count if bsweight > 0 & group != 1
+local n_wrong_if = r(N)
+count if bsweight > 0 & id <= 200 & group == 1
+local n_sampled = r(N)
+
+if `n_wrong_in' == 0 & `n_wrong_if' == 0 & `n_sampled' > 0 {
+    test_pass "combined if/in conditions"
+}
+else {
+    test_fail "combined if/in conditions" "n_sampled=`n_sampled', wrong_in=`n_wrong_in', wrong_if=`n_wrong_if'"
+}
+
+/*******************************************************************************
+ * SECTION 9: Multiple strata/cluster variables
+ ******************************************************************************/
+print_section "Multiple Strata/Cluster Variables"
+
+* Multiple strata variables
+clear
+set obs 1000
+gen strata1 = mod(_n, 5)
+gen strata2 = mod(_n, 4)
+gen id = _n
+gen bsweight = .
+set seed 12345
+
+cbsample, strata(strata1 strata2) weight(bsweight)
+
+* Check each stratum combination has weight
+local all_ok = 1
+forvalues s1 = 0/4 {
+    forvalues s2 = 0/3 {
+        summarize bsweight if strata1 == `s1' & strata2 == `s2', meanonly
+        if r(sum) == 0 | r(sum) == . {
+            local all_ok = 0
+        }
+    }
+}
+if `all_ok' {
+    test_pass "multiple strata variables: all combinations sampled"
+}
+else {
+    test_fail "multiple strata variables" "some combinations have zero weight"
+}
+
+* Multiple cluster variables (treated as compound cluster ID)
+clear
+set obs 1000
+gen cluster1 = ceil(_n / 20)   /* 50 first-level clusters */
+gen cluster2 = mod(_n, 2)       /* 2 second-level clusters within each */
+gen id = _n
+gen bsweight = .
+set seed 12345
+
+cbsample, cluster(cluster1 cluster2) weight(bsweight)
+
+* Within each compound cluster, weights should be uniform
+local all_ok = 1
+forvalues c1 = 1/50 {
+    forvalues c2 = 0/1 {
+        summarize bsweight if cluster1 == `c1' & cluster2 == `c2'
+        if r(sd) > 0.001 & r(sd) != . {
+            local all_ok = 0
+        }
+    }
+}
+if `all_ok' {
+    test_pass "multiple cluster variables: uniform weights within compound clusters"
+}
+else {
+    test_fail "multiple cluster variables" "weights vary within some compound clusters"
+}
+
+/*******************************************************************************
+ * SECTION 10: Combined strata and cluster
+ ******************************************************************************/
+print_section "Combined Strata and Cluster"
+
+* Create data where clusters are NESTED within strata
+* 4 strata, each with 25 clusters of 20 obs each = 2000 obs
+clear
+set obs 2000
+gen stratum = floor((_n - 1) / 500)           /* 4 strata of 500 obs each */
+gen cluster_id = floor((_n - 1) / 20)          /* 100 clusters of 20 obs each */
+gen id = _n
+gen bsweight = .
+set seed 12345
+
+cbsample, strata(stratum) cluster(cluster_id) weight(bsweight)
+
+* Within each cluster, weights should be uniform
+local cluster_ok = 1
+levelsof cluster_id, local(clusters)
+foreach cl of local clusters {
+    summarize bsweight if cluster_id == `cl'
+    if r(sd) > 0.001 & r(sd) != . {
+        local cluster_ok = 0
+    }
+}
+
+* Each stratum should have some weight
+local strata_ok = 1
+forvalues s = 0/3 {
+    summarize bsweight if stratum == `s', meanonly
+    if r(sum) == 0 | r(sum) == . {
+        local strata_ok = 0
+    }
+}
+
+if `cluster_ok' & `strata_ok' {
+    test_pass "combined strata+cluster: both respected"
+}
+else {
+    test_fail "combined strata+cluster" "cluster_ok=`cluster_ok', strata_ok=`strata_ok'"
+}
+
+/*******************************************************************************
+ * SECTION 11: Without weight option (expand behavior)
+ ******************************************************************************/
+print_section "Without Weight Option (Expand)"
+
+clear
+set obs 100
+gen id = _n
+set seed 12345
+local N_before = _N
+
+cbsample
+
+* Without weight(), data should be expanded/contracted via expand
+* Total obs should be approximately equal to N_before (may differ due to sampling)
+local N_after = _N
+if `N_after' > 0 {
+    test_pass "without weight(): data modified (N went from `N_before' to `N_after')"
+}
+else {
+    test_fail "without weight(): data modified" "N_after=`N_after'"
+}
+
+* With explicit n, expanded data should sum to approximately n
+clear
+set obs 100
+gen id = _n
+set seed 12345
+cbsample 150
+
+local N_after = _N
+* Should have approximately 150 obs (some variance expected)
+if `N_after' > 100 & `N_after' < 200 {
+    test_pass "without weight() n=150: expanded to ~150 (got `N_after')"
+}
+else {
+    test_fail "without weight() n=150: expanded to ~150" "got `N_after'"
+}
+
+/*******************************************************************************
+ * SECTION 12: Strata independence verification
+ ******************************************************************************/
+print_section "Strata Independence Verification"
+
+* Verify that strata are truly sampled independently
+* Each stratum should have total weight approximately equal to its size
+clear
+set obs 1000
+gen stratum = cond(_n <= 200, 0, cond(_n <= 600, 1, 2))
+* Stratum 0: 200 obs, Stratum 1: 400 obs, Stratum 2: 400 obs
+gen id = _n
+gen bsweight = .
+set seed 12345
+
+cbsample, strata(stratum) weight(bsweight)
+
+* Total weight per stratum should be close to stratum size
+local all_ok = 1
+summarize bsweight if stratum == 0, meanonly
+if abs(r(sum) - 200) > 30 {
+    local all_ok = 0
+}
+summarize bsweight if stratum == 1, meanonly
+if abs(r(sum) - 400) > 50 {
+    local all_ok = 0
+}
+summarize bsweight if stratum == 2, meanonly
+if abs(r(sum) - 400) > 50 {
+    local all_ok = 0
+}
+
+if `all_ok' {
+    test_pass "strata independence: each stratum weighted ~proportionally"
+}
+else {
+    test_fail "strata independence" "stratum weights not proportional to size"
+}
+
+/*******************************************************************************
+ * SECTION 13: Cluster sampling verification
+ ******************************************************************************/
+print_section "Cluster Sampling Verification"
+
+* Verify clusters are sampled as units (all or nothing within cluster)
+clear
+set obs 500
+gen cluster_id = ceil(_n / 5)  /* 100 clusters of 5 each */
+gen id = _n
+gen bsweight = .
+set seed 12345
+
+cbsample, cluster(cluster_id) weight(bsweight)
+
+* For each cluster, either all have same weight or all have zero
+* (With bootstrap, a cluster may be sampled multiple times, so weight can vary
+*  but within a cluster, all obs should have the same weight)
+local all_ok = 1
+forvalues cl = 1/100 {
+    summarize bsweight if cluster_id == `cl'
+    if r(sd) > 0.001 & r(sd) != . {
+        local all_ok = 0
+    }
+}
+if `all_ok' {
+    test_pass "cluster sampling: all obs in cluster have same weight"
+}
+else {
+    test_fail "cluster sampling" "weights vary within some clusters"
+}
+
+* Verify some clusters have zero weight (weren't selected)
+count if bsweight == 0
+local n_zero = r(N)
+if `n_zero' > 0 {
+    test_pass "cluster sampling: some obs have zero weight (clusters not selected)"
+}
+else {
+    test_fail "cluster sampling" "all obs have non-zero weight (unlikely for n=100 clusters)"
+}
+
+/*******************************************************************************
+ * SECTION 14: Verbose and threads options
+ ******************************************************************************/
+print_section "Verbose and Threads Options"
+
+* Verbose option should not crash
+clear
+set obs 100
+gen id = _n
+gen bsweight = .
+set seed 12345
+capture noisily cbsample, weight(bsweight) verbose
+if _rc == 0 {
+    test_pass "verbose option runs without error"
+}
+else {
+    test_fail "verbose option runs without error" "rc=`=_rc'"
+}
+
+* Threads option should not crash
+clear
+set obs 100
+gen id = _n
+gen bsweight = .
+set seed 12345
+capture cbsample, weight(bsweight) threads(2)
+if _rc == 0 {
+    test_pass "threads option runs without error"
+}
+else {
+    test_fail "threads option runs without error" "rc=`=_rc'"
+}
+
 * End of cbsample validation
 noi print_summary "cbsample"
 }

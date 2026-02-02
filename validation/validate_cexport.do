@@ -121,8 +121,7 @@ program define benchmark_export
 
     local all_match = 1
     local fail_reason ""
-    local tol = $DEFAULT_TOL
-    local overall_max_diff = 0
+    local min_sigfigs = 99
 
     foreach v of local allvars {
         * Check if string or numeric
@@ -137,30 +136,39 @@ program define benchmark_export
             }
         }
         else {
-            * Numeric variable - compare values using ABSOLUTE tolerance only
+            * Numeric variable - compare values using significant figures
             * Create double copies to avoid type mismatch issues
             quietly gen double _v1 = `v'_stata
             quietly gen double _v2 = `v'_cexport
-            quietly gen double _diff = abs(_v1 - _v2) if !missing(_v1) & !missing(_v2)
 
-            * Track max differences across all variables
-            quietly summarize _diff
-            if r(max) != . & r(max) > `overall_max_diff' {
-                local overall_max_diff = r(max)
+            * Check each non-missing pair using sigfigs
+            local var_min_sf = 99
+            quietly count if !missing(_v1) & !missing(_v2)
+            local n_pairs = r(N)
+            if `n_pairs' > 0 {
+                * Use vectorized comparison via assert_var_equal logic
+                quietly gen double _rel_err = abs(_v1 - _v2) / max(abs(_v1), abs(_v2), 1e-300) if !missing(_v1) & !missing(_v2)
+                quietly summarize _rel_err
+                if r(max) != . & r(max) > 0 {
+                    * Convert max relative error to approximate sigfigs
+                    local max_rel_err = r(max)
+                    local var_min_sf = -log10(`max_rel_err')
+                    if `var_min_sf' < `min_sigfigs' {
+                        local min_sigfigs = `var_min_sf'
+                    }
+                }
+                drop _rel_err
             }
 
-            * Use ABSOLUTE tolerance only
-            quietly count if _diff > `tol'
-            if r(N) > 0 {
+            * Check if sigfigs meets threshold
+            if `var_min_sf' < $DEFAULT_SIGFIGS {
                 local all_match = 0
-                quietly summarize _diff, detail
-                local diff_mean = r(mean)
-                local diff_max = r(max)
-                local fail_reason "numeric variable `v' has `r(N)' values exceeding tolerance (mean_diff=`diff_mean', max_diff=`diff_max')"
-                drop _v1 _v2 _diff
+                local sf_fmt : display %4.1f `var_min_sf'
+                local fail_reason "numeric variable `v' has only `sf_fmt' significant figures agreement"
+                drop _v1 _v2
                 continue, break
             }
-            drop _v1 _v2 _diff
+            drop _v1 _v2
             * Check missing values match
             quietly count if missing(`v'_stata) != missing(`v'_cexport)
             if r(N) > 0 {
@@ -174,8 +182,9 @@ program define benchmark_export
     restore
 
     if `all_match' == 1 {
-        if `overall_max_diff' > 0 {
-            test_pass "`testname' (max_diff=`overall_max_diff')"
+        if `min_sigfigs' < 99 {
+            local sf_fmt : display %4.1f `min_sigfigs'
+            test_pass "`testname' (min_sigfigs=`sf_fmt')"
         }
         else {
             test_pass "`testname'"
@@ -696,7 +705,7 @@ replace huge = 999999999 in 4
 replace huge = 0 in 5
 benchmark_export, testname("very large numbers")
 
-* Extreme numeric range - test export only (very large/small values may differ in CSV representation)
+* Extreme numeric range - compare behavior with Stata's export delimited
 clear
 set obs 6
 gen double extreme = .
@@ -706,12 +715,15 @@ replace extreme = 1e-308 in 3
 replace extreme = -1e-308 in 4
 replace extreme = 0 in 5
 replace extreme = . in 6
+capture export delimited using "temp/extreme_range_stata.csv", replace
+local stata_rc = _rc
 capture cexport delimited using "temp/extreme_range.csv", replace
-if _rc == 0 {
-    test_pass "extreme numeric range - exported"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    test_pass "extreme numeric range - matches Stata behavior (rc=`cexport_rc')"
 }
 else {
-    test_pass "extreme numeric range - handled gracefully (rc=`=_rc')"
+    test_fail "extreme numeric range" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 * All numeric types
@@ -1164,69 +1176,35 @@ benchmark_export, testname("special characters")
  ******************************************************************************/
 print_section "Large Datasets"
 
-* 10K rows export
+* 10K rows export - full comparison
 clear
+set seed 12345
 set obs 10000
 gen id = _n
 gen value = runiform()
 gen str20 name = "item_" + string(_n)
 
-capture cexport delimited using "temp/large_10k.csv", replace
-if _rc == 0 {
-    test_pass "10K rows export"
-}
-else {
-    test_fail "10K rows" "rc=`=_rc'"
-}
+benchmark_export, testname("10K rows export")
 
-* Compare with export delimited
-export delimited using "temp/large_10k_stata.csv", replace
-cexport delimited using "temp/large_10k_cexport.csv", replace
-
-file open f1 using "temp/large_10k_stata.csv", read
-file read f1 line1_stata
-file close f1
-
-file open f2 using "temp/large_10k_cexport.csv", read
-file read f2 line1_cexport
-file close f2
-
-if "`line1_stata'" == "`line1_cexport'" {
-    test_pass "large export matches Stata header"
-}
-else {
-    test_fail "large match" "headers differ"
-}
-
-* 50K rows
+* 50K rows - full comparison
 clear
+set seed 54321
 set obs 50000
 gen id = _n
 gen x = runiform()
 gen y = runiform()
 
-capture cexport delimited using "temp/large_50k.csv", replace
-if _rc == 0 {
-    test_pass "50K rows export"
-}
-else {
-    test_fail "50K rows" "rc=`=_rc'"
-}
+benchmark_export, testname("50K rows export")
 
-* Many columns (20)
+* Many columns (20) - full comparison
 clear
+set seed 11111
 set obs 1000
 forvalues i = 1/20 {
     gen var`i' = runiform()
 }
 
-capture cexport delimited using "temp/many_cols.csv", replace
-if _rc == 0 {
-    test_pass "20 columns export"
-}
-else {
-    test_fail "20 columns" "rc=`=_rc'"
-}
+benchmark_export, testname("20 columns export")
 
 /*******************************************************************************
  * SECTION: Pathological Data (Original)

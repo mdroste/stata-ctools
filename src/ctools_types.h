@@ -108,16 +108,6 @@ void stata_data_free(stata_data *data);
    Data I/O Operations
    --------------------------------------------------------------------------- */
 
-// Load all variables from Stata into C memory
-stata_retcode ctools_data_load(stata_data *data, size_t nvars);
-
-// Load only specified variables from Stata into C memory
-// var_indices: array of 1-based Stata variable indices to load
-// nvars: number of variables to load
-// obs_start, obs_end: observation range (1-based, inclusive), 0 means use SF_in1/SF_in2
-stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
-                                          size_t nvars, size_t obs_start, size_t obs_end);
-
 // Write all variables from C memory back to Stata
 stata_retcode ctools_data_store(stata_data *data, size_t obs1);
 
@@ -545,5 +535,111 @@ static inline bool ctools_safe_atof(const char *str, double *result)
     *result = val;
     return true;
 }
+
+/* ---------------------------------------------------------------------------
+   Filtered Data Loading
+
+   Unified data loading with if/in filtering at load time. Eliminates per-command
+   filtering code and reduces memory allocation to only filtered observations.
+   --------------------------------------------------------------------------- */
+
+/*
+    Filtered dataset structure.
+
+    Contains the standard stata_data plus observation mapping for write-back.
+    Memory is allocated only for N_filtered observations, not the full in-range.
+
+    Usage:
+    1. Call ctools_data_load() to load only observations passing SF_ifobs()
+    2. Access data directly: fd.data.vars[k].data.dbl[i] (no indirection needed)
+    3. For write-back: ctools_store_filtered(values, N, var_idx, fd.obs_map)
+    4. Call ctools_filtered_data_free() when done
+*/
+typedef struct {
+    stata_data data;              /* Standard data structure (N = N_filtered) */
+    perm_idx_t *obs_map;          /* obs_map[i] = 1-based Stata obs for filtered index i */
+    size_t n_range;               /* Original range size (before filtering) */
+    int was_filtered;             /* 1 if any filtering occurred, 0 if identity */
+} ctools_filtered_data;
+
+/*
+    Initialize filtered data structure to safe empty state.
+    Sets all pointers to NULL, all counts to 0.
+*/
+void ctools_filtered_data_init(ctools_filtered_data *fd);
+
+/*
+    Free all memory associated with filtered data.
+    Safe to call multiple times; resets structure to empty state.
+*/
+void ctools_filtered_data_free(ctools_filtered_data *fd);
+
+/*
+    Flags for ctools_data_load()
+*/
+#define CTOOLS_LOAD_CHECK_IF    0x00  /* Default: check SF_ifobs for each observation */
+#define CTOOLS_LOAD_SKIP_IF     0x01  /* Skip SF_ifobs checks, assume all observations pass */
+
+/*
+    Load variables with if/in filtering applied at load time.
+
+    This is the PRIMARY data loading function for ctools. It handles:
+    - Selective loading of specific variables
+    - "Load all" mode when var_indices is NULL
+    - If/in filtering at load time (or skip with CTOOLS_LOAD_SKIP_IF)
+
+    Performs two-pass loading:
+    1. Count observations passing SF_ifobs() and build obs_map
+    2. Load only filtered observations (memory = O(N_filtered × K))
+
+    Special modes:
+    - If var_indices is NULL: loads ALL variables (equivalent to old ctools_data_load)
+    - If CTOOLS_LOAD_SKIP_IF flag is set: skips SF_ifobs() checks entirely
+
+    @param result       [out] Filtered data structure to populate (caller frees)
+    @param var_indices  [in]  Array of 1-based Stata variable indices to load,
+                              or NULL to load all variables
+    @param nvars        [in]  Number of variables (ignored if var_indices is NULL)
+    @param obs_start    [in]  First observation (1-based), 0 = use SF_in1()
+    @param obs_end      [in]  Last observation (1-based), 0 = use SF_in2()
+    @param flags        [in]  CTOOLS_LOAD_CHECK_IF (0) or CTOOLS_LOAD_SKIP_IF
+
+    @return STATA_OK on success, or:
+            STATA_ERR_INVALID_INPUT if result is NULL
+            STATA_ERR_MEMORY on allocation failure
+*/
+stata_retcode ctools_data_load(ctools_filtered_data *result,
+                                         int *var_indices, size_t nvars,
+                                         size_t obs_start, size_t obs_end,
+                                         int flags);
+
+/*
+    Write filtered variable values back to Stata using obs_map.
+
+    For each filtered index i, writes values[i] to Stata observation obs_map[i].
+    This enables write-back after processing without maintaining full-range arrays.
+
+    @param values       [in] Array of values to store (length n_filtered)
+    @param n_filtered   [in] Number of filtered observations
+    @param var_idx      [in] 1-based Stata variable index to store to
+    @param obs_map      [in] Observation mapping from filtered to Stata indices
+
+    @return STATA_OK on success, STATA_ERR_INVALID_INPUT if parameters invalid
+*/
+stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
+                                     int var_idx, perm_idx_t *obs_map);
+
+/*
+    Write filtered string values back to Stata using obs_map.
+
+    @param strings      [in] Array of strings to store (length n_filtered)
+    @param n_filtered   [in] Number of filtered observations
+    @param var_idx      [in] 1-based Stata variable index to store to
+    @param obs_map      [in] Observation mapping from filtered to Stata indices
+
+    @return STATA_OK on success, STATA_ERR_INVALID_INPUT if parameters invalid
+*/
+stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
+                                         int var_idx, perm_idx_t *obs_map);
 
 #endif /* CTOOLS_TYPES_H */

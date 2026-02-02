@@ -7,7 +7,7 @@
  * Algorithm:
  * 1. Parse value-label mappings passed from Stata
  * 2. Build hash table mapping integer values to string labels
- * 3. Bulk load numeric source variable via ctools_data_load_selective()
+ * 3. Bulk load numeric source variable via ctools_data_load()
  * 4. For each observation:
  *    a. Look up corresponding label in hash table (from loaded data)
  *    b. Write label string to destination variable (must be sequential)
@@ -218,19 +218,6 @@ ST_retcode cdecode_main(const char *args)
         return 198;
     }
 
-    /* Get observation range */
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        free(args_copy);
-        SF_scal_save("_cdecode_n_decoded", 0);
-        SF_scal_save("_cdecode_n_missing", 0);
-        SF_scal_save("_cdecode_n_unlabeled", 0);
-        return 0;
-    }
-
     t_parse = ctools_timer_seconds();
 
     /* Build hash table from labels file */
@@ -260,48 +247,43 @@ ST_retcode cdecode_main(const char *args)
     }
 
     /* ========================================================================
-     * Bulk load source numeric variable using ctools_data_load_selective()
+     * Bulk load source numeric variable with if/in filtering
+     * Uses ctools_data_load() to load only filtered observations.
      * ======================================================================== */
     int var_indices[1] = { src_idx };
-    stata_data src_data;
-    stata_data_init(&src_data);
-    stata_retcode load_rc = ctools_data_load_selective(&src_data, var_indices, 1, obs1, obs2);
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, 1, 0, 0, 0);
 
     if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
         cdecode_hash_free(&ht);
         SF_error("cdecode: failed to load source data\n");
         return 920;
     }
 
-    double *src_values = src_data.vars[0].data.dbl;
+    nobs = filtered.data.nobs;
+    perm_idx_t *obs_map = filtered.obs_map;
 
-    /* Build if-condition mask (sequential — SPI calls) */
-    unsigned char *if_mask = malloc(nobs);
-    if (!if_mask) {
-        stata_data_free(&src_data);
+    if (nobs == 0) {
+        ctools_filtered_data_free(&filtered);
         cdecode_hash_free(&ht);
-        SF_error("cdecode: memory allocation failed\n");
-        return 920;
+        SF_scal_save("_cdecode_n_decoded", 0);
+        SF_scal_save("_cdecode_n_missing", 0);
+        SF_scal_save("_cdecode_n_unlabeled", 0);
+        return 0;
     }
-    for (size_t i = 0; i < nobs; i++) {
-        if_mask[i] = SF_ifobs((ST_int)(obs1 + (ST_int)i)) ? 1 : 0;
-    }
+
+    double *src_values = filtered.data.vars[0].data.dbl;
 
     /* Counters */
     int n_decoded = 0;
     int n_missing = 0;
     int n_unlabeled = 0;
 
-    /* Process observations - lookups from loaded data, string writes must be sequential */
+    /* Process filtered observations - lookups from loaded data, string writes use obs_map */
     for (size_t i = 0; i < nobs; i++) {
-        ST_int obs = obs1 + (ST_int)i;
-
-        /* Check if observation is in the sample (respects if/in conditions) */
-        if (!if_mask[i]) {
-            /* Not in sample - store empty string */
-            SF_sstore(dst_idx, obs, "");
-            continue;
-        }
+        ST_int obs = (ST_int)obs_map[i];  /* Get Stata observation from obs_map */
 
         double dval = src_values[i];
 
@@ -335,9 +317,8 @@ ST_retcode cdecode_main(const char *args)
         }
     }
 
-    /* Free loaded data and if_mask */
-    free(if_mask);
-    stata_data_free(&src_data);
+    /* Free loaded data */
+    ctools_filtered_data_free(&filtered);
 
     t_decode = ctools_timer_seconds();
     t_total = t_decode - t_start;

@@ -1117,7 +1117,8 @@ ST_retcode crangestat_main(const char *args)
     stat_spec *specs = NULL;
     group_info *groups = NULL;
     size_t *inv_perm = NULL;
-    stata_data data;
+    ctools_filtered_data filtered;
+    perm_idx_t *obs_map = NULL;
     int num_threads = 1;
 
     t_start = ctools_timer_seconds();
@@ -1278,26 +1279,13 @@ ST_retcode crangestat_main(const char *args)
         specs[i].source_var_idx = src_idx;
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        free(source_indices);
-        free(result_indices);
-        free(specs);
-        if (by_indices) free(by_indices);
-        ctools_error(CRANGESTAT_MODULE, "no observations");
-        return 2000;
-    }
-
     #ifdef _OPENMP
     num_threads = omp_get_max_threads();
     #endif
 
     /*
      * === Load Phase ===
-     * Use ctools_data_load_selective for optimized parallel data loading.
+     * Use ctools_data_load for optimized parallel data loading with if/in filtering.
      *
      * Variable layout in loaded data:
      *   [0..nby-1]           = by-variables (for grouping)
@@ -1327,10 +1315,10 @@ ST_retcode crangestat_main(const char *args)
         load_indices[idx++] = source_indices[v];
     }
 
-    /* Load data using optimized ctools infrastructure */
-    stata_data_init(&data);
+    /* Load data using filtered loading (handles if/in at load time) */
+    ctools_filtered_data_init(&filtered);
 
-    stata_retcode rc = ctools_data_load_selective(&data, load_indices, nvars_to_load, 0, 0);
+    stata_retcode rc = ctools_data_load(&filtered, load_indices, nvars_to_load, 0, 0, 0);
     if (rc != STATA_OK) {
         free(load_indices);
         free(source_indices);
@@ -1339,6 +1327,21 @@ ST_retcode crangestat_main(const char *args)
         if (by_indices) free(by_indices);
         ctools_error(CRANGESTAT_MODULE, "failed to load data");
         return 920;
+    }
+
+    /* Get filtered observation count and obs_map */
+    size_t nobs = filtered.data.nobs;
+    obs_map = filtered.obs_map;
+
+    if (nobs == 0) {
+        ctools_filtered_data_free(&filtered);
+        free(load_indices);
+        free(source_indices);
+        free(result_indices);
+        free(specs);
+        if (by_indices) free(by_indices);
+        ctools_error(CRANGESTAT_MODULE, "no observations");
+        return 2000;
     }
 
     t_load = ctools_timer_seconds() - load_start;
@@ -1361,7 +1364,7 @@ ST_retcode crangestat_main(const char *args)
     size_t nsort = nby + 1;
     int *sort_vars = (int *)malloc(nsort * sizeof(int));
     if (!sort_vars) {
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1376,10 +1379,10 @@ ST_retcode crangestat_main(const char *args)
     }
 
     /* Sort using counting sort (with LSD radix fallback for large ranges) */
-    rc = ctools_sort_dispatch(&data, sort_vars, nsort, SORT_ALG_COUNTING);
+    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, SORT_ALG_COUNTING);
     if (rc != STATA_OK) {
         free(sort_vars);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1399,7 +1402,7 @@ ST_retcode crangestat_main(const char *args)
     inv_perm = (size_t *)malloc(nobs * sizeof(size_t));
     if (!inv_perm) {
         free(sort_vars);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1411,15 +1414,15 @@ ST_retcode crangestat_main(const char *args)
 
     /* Compute inverse: inv_perm[original_idx] = sorted_idx */
     for (size_t i = 0; i < nobs; i++) {
-        inv_perm[data.sort_order[i]] = i;
+        inv_perm[filtered.data.sort_order[i]] = i;
     }
 
     /* Apply permutation to sort data in place */
-    rc = ctools_apply_permutation(&data);
+    rc = ctools_apply_permutation(&filtered.data);
     if (rc != STATA_OK) {
         free(inv_perm);
         free(sort_vars);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1436,17 +1439,17 @@ ST_retcode crangestat_main(const char *args)
     /*
      * Set up pointers to sorted data for computation.
      * Data layout after loading:
-     *   data.vars[0..nby-1] = by-variables
-     *   data.vars[nby] = key variable
-     *   data.vars[nby+1..nby+nsource] = source variables
+     *   filtered.data.vars[0..nby-1] = by-variables
+     *   filtered.data.vars[nby] = key variable
+     *   filtered.data.vars[nby+1..nby+nsource] = source variables
      */
-    key_data = data.vars[nby].data.dbl;
+    key_data = filtered.data.vars[nby].data.dbl;
 
     /* Set up source_data pointers (don't allocate, just point into stata_data) */
     source_data = (double **)malloc(nsource * sizeof(double *));
     if (!source_data) {
         free(inv_perm);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1456,7 +1459,7 @@ ST_retcode crangestat_main(const char *args)
         return 920;
     }
     for (size_t v = 0; v < nsource; v++) {
-        source_data[v] = data.vars[nby + 1 + v].data.dbl;
+        source_data[v] = filtered.data.vars[nby + 1 + v].data.dbl;
     }
 
     /* Set up by_data pointers */
@@ -1465,7 +1468,7 @@ ST_retcode crangestat_main(const char *args)
         if (!by_data) {
             free(source_data);
             free(inv_perm);
-            stata_data_free(&data);
+            ctools_filtered_data_free(&filtered);
             free(load_indices);
             free(source_indices);
             free(result_indices);
@@ -1475,7 +1478,7 @@ ST_retcode crangestat_main(const char *args)
             return 920;
         }
         for (size_t b = 0; b < nby; b++) {
-            by_data[b] = data.vars[b].data.dbl;
+            by_data[b] = filtered.data.vars[b].data.dbl;
         }
     }
 
@@ -1485,7 +1488,7 @@ ST_retcode crangestat_main(const char *args)
         if (by_data) free(by_data);
         free(source_data);
         free(inv_perm);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1503,7 +1506,7 @@ ST_retcode crangestat_main(const char *args)
             if (by_data) free(by_data);
             free(source_data);
             free(inv_perm);
-            stata_data_free(&data);
+            ctools_filtered_data_free(&filtered);
             free(load_indices);
             free(source_indices);
             free(result_indices);
@@ -1529,7 +1532,7 @@ ST_retcode crangestat_main(const char *args)
         free(result_data);
         if (by_data) free(by_data);
         free(source_data);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1561,7 +1564,7 @@ ST_retcode crangestat_main(const char *args)
         free(result_data);
         if (by_data) free(by_data);
         free(source_data);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free(load_indices);
         free(source_indices);
         free(result_indices);
@@ -1582,7 +1585,7 @@ ST_retcode crangestat_main(const char *args)
             free(result_data);
             if (by_data) free(by_data);
             free(source_data);
-            stata_data_free(&data);
+            ctools_filtered_data_free(&filtered);
             free(load_indices);
             free(source_indices);
             free(result_indices);
@@ -1987,7 +1990,7 @@ standard_obs_loop:;
 
         for (size_t i = 0; i < nobs; i++) {
             /* inv_perm[i] gives position in sorted array for original obs i */
-            SF_vstore(result_idx, (ST_int)(obs1 + i), data[inv_perm[i]]);
+            SF_vstore(result_idx, (ST_int)obs_map[i], data[inv_perm[i]]);
         }
     }
 
@@ -2010,7 +2013,7 @@ standard_obs_loop:;
     free(source_data);
 
     /* Free the main data structure (includes key_data, source vars, by vars) */
-    stata_data_free(&data);
+    ctools_filtered_data_free(&filtered);
     free(load_indices);
 
     /* Store timing scalars */

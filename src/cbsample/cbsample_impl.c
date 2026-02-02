@@ -261,12 +261,13 @@ ST_retcode cbsample_main(const char *args) {
     group_info *clusters = NULL;
     group_info *strata = NULL;
     perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
-    stata_data by_data;
+    ctools_filtered_data by_filtered;
+    perm_idx_t *obs_map = NULL;
     stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
 
-    stata_data_init(&by_data);
+    ctools_filtered_data_init(&by_filtered);
     t_start = ctools_timer_seconds();
     t_sort_cluster = 0.0;
 
@@ -337,22 +338,6 @@ ST_retcode cbsample_main(const char *args) {
         }
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        if (cluster_indices) free(cluster_indices);
-        if (strata_indices) free(strata_indices);
-        ctools_error(CBSAMPLE_MODULE, "no observations");
-        return 2000;
-    }
-
-    /* Default n to nobs if not specified */
-    if (config.n == 0) {
-        config.n = nobs;
-    }
-
     #ifdef _OPENMP
     num_threads = omp_get_max_threads();
     #endif
@@ -361,26 +346,18 @@ ST_retcode cbsample_main(const char *args) {
         config.seed = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32);
     }
 
-    /* === Load Phase using ctools_data_load_selective === */
+    /* === Load Phase using ctools_data_load === */
     double load_start = ctools_timer_seconds();
-
-    freq_weights = (double *)calloc(nobs, sizeof(double));
-    if (!freq_weights) {
-        if (cluster_indices) free(cluster_indices);
-        if (strata_indices) free(strata_indices);
-        ctools_error_alloc(CBSAMPLE_MODULE);
-        return 920;
-    }
 
     size_t total_by = nstrata + ncluster;
     size_t nclusters = 1;
     size_t nstrata_groups = 1;
+    size_t nobs;
 
     if (total_by > 0) {
         /* Build combined indices array: strata first, then cluster */
         combined_indices = (int *)malloc(total_by * sizeof(int));
         if (!combined_indices) {
-            free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
             ctools_error_alloc(CBSAMPLE_MODULE);
@@ -394,16 +371,76 @@ ST_retcode cbsample_main(const char *args) {
             combined_indices[nstrata + c] = cluster_indices[c];
         }
 
-        /* Load data using standard ctools function */
-        rc = ctools_data_load_selective(&by_data, combined_indices, total_by, 0, 0);
+        /* Load data using filtered loading */
+        rc = ctools_data_load(&by_filtered, combined_indices, total_by, 0, 0, 0);
         if (rc != STATA_OK) {
             free(combined_indices);
-            free(freq_weights);
             if (cluster_indices) free(cluster_indices);
             if (strata_indices) free(strata_indices);
             ctools_error(CBSAMPLE_MODULE, "failed to load data");
             return 920;
         }
+        nobs = by_filtered.data.nobs;
+        obs_map = by_filtered.obs_map;
+    } else {
+        /* No strata/cluster - build obs_map directly from SF_ifobs */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
+
+        /* First pass: count filtered observations */
+        nobs = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) nobs++;
+        }
+
+        if (nobs == 0) {
+            if (cluster_indices) free(cluster_indices);
+            if (strata_indices) free(strata_indices);
+            ctools_error(CBSAMPLE_MODULE, "no observations");
+            return 2000;
+        }
+
+        /* Allocate and build obs_map */
+        obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (!obs_map) {
+            if (cluster_indices) free(cluster_indices);
+            if (strata_indices) free(strata_indices);
+            ctools_error_alloc(CBSAMPLE_MODULE);
+            return 920;
+        }
+
+        size_t idx = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) {
+                obs_map[idx++] = (perm_idx_t)obs;
+            }
+        }
+    }
+
+    if (nobs == 0) {
+        if (total_by > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
+        if (combined_indices) free(combined_indices);
+        if (cluster_indices) free(cluster_indices);
+        if (strata_indices) free(strata_indices);
+        ctools_error(CBSAMPLE_MODULE, "no observations");
+        return 2000;
+    }
+
+    /* Default n to nobs if not specified */
+    if (config.n == 0) {
+        config.n = nobs;
+    }
+
+    freq_weights = (double *)calloc(nobs, sizeof(double));
+    if (!freq_weights) {
+        if (total_by > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
+        if (combined_indices) free(combined_indices);
+        if (cluster_indices) free(cluster_indices);
+        if (strata_indices) free(strata_indices);
+        ctools_error_alloc(CBSAMPLE_MODULE);
+        return 920;
     }
 
     t_load = ctools_timer_seconds() - load_start;
@@ -418,7 +455,7 @@ ST_retcode cbsample_main(const char *args) {
         if (clusters) free(clusters);
         if (strata) free(strata);
         if (total_by > 0) {
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
         }
         free(freq_weights);
@@ -434,7 +471,7 @@ ST_retcode cbsample_main(const char *args) {
         if (!sort_vars) {
             free(clusters);
             free(strata);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
@@ -448,12 +485,12 @@ ST_retcode cbsample_main(const char *args) {
 
         /* Sort using counting sort for integer group variables (optimal for ties),
            fall back to LSD radix if data isn't suitable for counting sort */
-        rc = ctools_sort_dispatch(&by_data, sort_vars, total_by, SORT_ALG_COUNTING);
+        rc = ctools_sort_dispatch(&by_filtered.data, sort_vars, total_by, SORT_ALG_COUNTING);
         if (rc != STATA_OK) {
             free(sort_vars);
             free(clusters);
             free(strata);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
@@ -468,7 +505,7 @@ ST_retcode cbsample_main(const char *args) {
             free(sort_vars);
             free(clusters);
             free(strata);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
@@ -476,16 +513,16 @@ ST_retcode cbsample_main(const char *args) {
             ctools_error_alloc(CBSAMPLE_MODULE);
             return 920;
         }
-        memcpy(sort_perm, by_data.sort_order, nobs * sizeof(perm_idx_t));
+        memcpy(sort_perm, by_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
 
         /* Apply permutation to physically reorder the data */
-        rc = ctools_apply_permutation(&by_data);
+        rc = ctools_apply_permutation(&by_filtered.data);
         if (rc != STATA_OK) {
             free(sort_perm);
             free(sort_vars);
             free(clusters);
             free(strata);
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
             free(freq_weights);
             if (cluster_indices) free(cluster_indices);
@@ -501,9 +538,9 @@ ST_retcode cbsample_main(const char *args) {
     if (nstrata > 0) {
         /* Create a temporary view with just strata vars for group detection */
         stata_data strata_view;
-        strata_view.nobs = by_data.nobs;
+        strata_view.nobs = by_filtered.data.nobs;
         strata_view.nvars = nstrata;
-        strata_view.vars = by_data.vars;  /* First nstrata vars are strata */
+        strata_view.vars = by_filtered.data.vars;  /* First nstrata vars are strata */
         strata_view.sort_order = NULL;
         detect_groups_from_data(&strata_view, nstrata, strata, &nstrata_groups);
     } else {
@@ -516,9 +553,9 @@ ST_retcode cbsample_main(const char *args) {
     if (ncluster > 0) {
         /* Create a temporary view with just cluster vars */
         stata_data cluster_view;
-        cluster_view.nobs = by_data.nobs;
+        cluster_view.nobs = by_filtered.data.nobs;
         cluster_view.nvars = ncluster;
-        cluster_view.vars = &by_data.vars[nstrata];  /* Cluster vars start after strata */
+        cluster_view.vars = &by_filtered.data.vars[nstrata];  /* Cluster vars start after strata */
         cluster_view.sort_order = NULL;
         detect_groups_from_data(&cluster_view, ncluster, clusters, &nclusters);
     } else {
@@ -542,7 +579,7 @@ ST_retcode cbsample_main(const char *args) {
         free(clusters);
         free(strata);
         if (total_by > 0) {
-            stata_data_free(&by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(combined_indices);
         }
         free(freq_weights);
@@ -552,11 +589,7 @@ ST_retcode cbsample_main(const char *args) {
         return 920;
     }
 
-    for (int t = 0; t < num_threads; t++) {
-        xoshiro256_seed(&thread_rngs[t], config.seed + (uint64_t)t * 0x9e3779b97f4a7c15ULL);
-    }
-
-    /* Process each stratum */
+    /* Process each stratum - use stratum-based seeding for reproducibility */
     if (ncluster > 0) {
         /* Cluster bootstrap: resample clusters with replacement within each stratum */
         /* For each stratum, identify which clusters are in it and sample from those */
@@ -593,8 +626,9 @@ ST_retcode cbsample_main(const char *args) {
             size_t target_n = (size_t)round((double)config.n * (double)st_count / (double)nobs);
             if (target_n == 0) target_n = 1;
 
-            /* Sample clusters with replacement */
-            xoshiro256_state *rng = &thread_rngs[0];  /* Use single thread for now */
+            /* Seed RNG based on stratum index for reproducibility */
+            xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
+            xoshiro256_state *rng = &thread_rngs[0];
 
             /* We need to sample enough clusters to get target_n observations */
             /* Simple approach: sample n_clusters_in_stratum clusters */
@@ -612,88 +646,7 @@ ST_retcode cbsample_main(const char *args) {
         }
     } else {
         /* No clustering: simple bootstrap of observations */
-        #ifdef _OPENMP
-        if (nstrata_groups == 1 && num_threads > 1 && config.n >= 1000) {
-            /* Single stratum with many draws: use thread-local arrays to avoid atomics */
-            /* Each thread accumulates into its own array, then we merge */
-            double **thread_weights = (double **)malloc(num_threads * sizeof(double *));
-            if (!thread_weights) {
-                /* Fallback to atomic version */
-                goto atomic_fallback;
-            }
-
-            int alloc_ok = 1;
-            for (int t = 0; t < num_threads; t++) {
-                thread_weights[t] = (double *)calloc(nobs, sizeof(double));
-                if (!thread_weights[t]) {
-                    for (int j = 0; j < t; j++) free(thread_weights[j]);
-                    free(thread_weights);
-                    alloc_ok = 0;
-                    break;
-                }
-            }
-
-            if (alloc_ok) {
-                size_t target_n = config.n;
-                size_t draws_per_thread = target_n / num_threads;
-                size_t remainder = target_n % num_threads;
-
-                #pragma omp parallel
-                {
-                    int tid = omp_get_thread_num();
-                    xoshiro256_state *rng = &thread_rngs[tid];
-                    double *local_weights = thread_weights[tid];
-                    size_t my_draws = draws_per_thread + (tid < (int)remainder ? 1 : 0);
-
-                    for (size_t draw = 0; draw < my_draws; draw++) {
-                        size_t local_idx = xoshiro256_uniform(rng, nobs);
-                        size_t obs_idx = sort_perm ? sort_perm[local_idx] : local_idx;
-                        local_weights[obs_idx] += 1.0;
-                    }
-                }
-
-                /* Merge thread-local arrays into freq_weights */
-                #pragma omp parallel for
-                for (size_t i = 0; i < nobs; i++) {
-                    double sum = 0.0;
-                    for (int t = 0; t < num_threads; t++) {
-                        sum += thread_weights[t][i];
-                    }
-                    freq_weights[i] = sum;
-                }
-
-                for (int t = 0; t < num_threads; t++) {
-                    free(thread_weights[t]);
-                }
-                free(thread_weights);
-            } else {
-                goto atomic_fallback;
-            }
-        } else {
-            atomic_fallback:
-            /* Multiple strata or single thread: process strata in parallel with atomics */
-            #pragma omp parallel for schedule(dynamic, 1)
-            for (size_t st = 0; st < nstrata_groups; st++) {
-                int tid = omp_get_thread_num();
-                size_t st_start = strata[st].start;
-                size_t st_count = strata[st].count;
-
-                size_t target_n = (size_t)round((double)config.n * (double)st_count / (double)nobs);
-                if (target_n == 0) target_n = 1;
-
-                xoshiro256_state *rng = &thread_rngs[tid];
-
-                for (size_t draw = 0; draw < target_n; draw++) {
-                    size_t local_idx = xoshiro256_uniform(rng, st_count);
-                    size_t obs_idx = sort_perm ? sort_perm[st_start + local_idx] : (st_start + local_idx);
-
-                    #pragma omp atomic
-                    freq_weights[obs_idx] += 1.0;
-                }
-            }
-        }
-        #else
-        /* No OpenMP: simple sequential sampling */
+        /* For reproducibility, use sequential processing with stratum-based seeding */
         for (size_t st = 0; st < nstrata_groups; st++) {
             size_t st_start = strata[st].start;
             size_t st_count = strata[st].count;
@@ -701,6 +654,8 @@ ST_retcode cbsample_main(const char *args) {
             size_t target_n = (size_t)round((double)config.n * (double)st_count / (double)nobs);
             if (target_n == 0) target_n = 1;
 
+            /* Seed RNG based on stratum index for reproducibility */
+            xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
             xoshiro256_state *rng = &thread_rngs[0];
 
             for (size_t draw = 0; draw < target_n; draw++) {
@@ -709,42 +664,16 @@ ST_retcode cbsample_main(const char *args) {
                 freq_weights[obs_idx] += 1.0;
             }
         }
-        #endif
     }
 
     t_sample = ctools_timer_seconds() - sample_start;
 
-    /* === Store Phase === */
+    /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    /* Write frequency weights to Stata - use batched writes for speed */
-    /* Check if we have contiguous observations (no if condition filtering) */
-    /* If nobs == range size, then no observations were filtered by if condition */
-    int contiguous = (nobs == (size_t)(obs2 - obs1 + 1));
-
-    if (contiguous) {
-        /* Fast path: no if condition, use batched writes */
-        ST_int stata_var = (ST_int)freq_idx;
-        size_t i = 0;
-        size_t i_end_16 = nobs - (nobs % 16);
-
-        /* Batched writes of 16 values */
-        for (; i < i_end_16; i += 16) {
-            SF_VSTORE_BATCH16(stata_var, obs1 + i, &freq_weights[i]);
-        }
-
-        /* Handle remaining elements */
-        for (; i < nobs; i++) {
-            SF_vstore(stata_var, (ST_int)(obs1 + i), freq_weights[i]);
-        }
-    } else {
-        /* Slow path: if condition present, check each observation */
-        size_t obs_idx = 0;
-        for (ST_int obs = obs1; obs <= obs2; obs++) {
-            if (!SF_ifobs(obs)) continue;
-            SF_vstore(freq_idx, obs, freq_weights[obs_idx]);
-            obs_idx++;
-        }
+    /* Write frequency weights to Stata using obs_map */
+    for (size_t i = 0; i < nobs; i++) {
+        SF_vstore(freq_idx, (ST_int)obs_map[i], freq_weights[i]);
     }
 
     t_store = ctools_timer_seconds() - store_start;
@@ -763,8 +692,10 @@ ST_retcode cbsample_main(const char *args) {
     free(clusters);
     free(strata);
     if (total_by > 0) {
-        stata_data_free(&by_data);
+        ctools_filtered_data_free(&by_filtered);
         free(combined_indices);
+    } else if (obs_map) {
+        free(obs_map);
     }
     free(freq_weights);
     if (cluster_indices) free(cluster_indices);

@@ -5,7 +5,7 @@
  * Part of the ctools suite
  *
  * Algorithm (3-phase parallel pipeline):
- * 1. Bulk load (parallel across variables): Use ctools_data_load_selective()
+ * 1. Bulk load (parallel across variables): Use ctools_data_load()
  *    to load all source string variables from Stata into C memory.
  * 2. Parse (parallel across observations): OpenMP parallel loop converts
  *    strings to doubles in pure C memory with no SPI calls.
@@ -287,18 +287,6 @@ ST_retcode cdestring_main(const char *args)
 
     t_parse = ctools_timer_seconds();
 
-    /* Get observation range */
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        free_options(&opts);
-        SF_scal_save("_cdestring_n_converted", 0);
-        SF_scal_save("_cdestring_n_failed", 0);
-        return 0;
-    }
-
     int nvars = opts.nvars;
 
     /* Determine decimal and group separators */
@@ -306,40 +294,43 @@ ST_retcode cdestring_main(const char *args)
     char grp_sep = opts.dpcomma ? '.' : '\0';
 
     /* ====================================================================
-     * Phase 1: Bulk load source string variables (parallel across vars)
+     * Phase 1: Bulk load source string variables with if/in filtering
+     * Uses ctools_data_load() to load only filtered observations.
      * ==================================================================== */
 
-    stata_data data;
-    stata_retcode load_rc = ctools_data_load_selective(&data, opts.src_indices,
-                                                        (size_t)nvars, (size_t)obs1, (size_t)obs2);
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices,
+                                                       (size_t)nvars, 0, 0, 0);
     if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
         free_options(&opts);
         SF_error("cdestring: failed to load string data\n");
         return 920;
+    }
+
+    size_t nobs = filtered.data.nobs;
+    perm_idx_t *obs_map = filtered.obs_map;
+
+    if (nobs == 0) {
+        ctools_filtered_data_free(&filtered);
+        free_options(&opts);
+        SF_scal_save("_cdestring_n_converted", 0);
+        SF_scal_save("_cdestring_n_failed", 0);
+        return 0;
     }
 
     t_load = ctools_timer_seconds();
 
     /* ====================================================================
      * Phase 2: Parse strings to doubles (parallel across observations)
+     * Note: No if_mask needed since data is pre-filtered.
      * ==================================================================== */
 
-    /* Build if-condition mask (sequential — SPI calls) */
-    unsigned char *if_mask = malloc(nobs);
-    if (!if_mask) {
-        stata_data_free(&data);
-        free_options(&opts);
-        SF_error("cdestring: memory allocation failed\n");
-        return 920;
-    }
-    for (size_t i = 0; i < nobs; i++) {
-        if_mask[i] = SF_ifobs((ST_int)(obs1 + (ST_int)i)) ? 1 : 0;
-    }
-
-    /* Allocate result arrays: one double array per variable */
+    /* Allocate result arrays: one double array per variable (sized for filtered obs) */
     double **results = malloc((size_t)nvars * sizeof(double *));
     if (!results) {
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free_options(&opts);
         SF_error("cdestring: memory allocation failed\n");
         return 920;
@@ -350,7 +341,7 @@ ST_retcode cdestring_main(const char *args)
         if (!results[v]) {
             for (int j = 0; j < v; j++) free(results[j]);
             free(results);
-            stata_data_free(&data);
+            ctools_filtered_data_free(&filtered);
             free_options(&opts);
             SF_error("cdestring: memory allocation failed\n");
             return 920;
@@ -365,15 +356,16 @@ ST_retcode cdestring_main(const char *args)
         free(results);
         free(var_converted);
         free(var_failed);
-        stata_data_free(&data);
+        ctools_filtered_data_free(&filtered);
         free_options(&opts);
         SF_error("cdestring: memory allocation failed\n");
         return 920;
     }
 
-    /* Process each variable: parallel over observations */
+    /* Process each variable: parallel over observations.
+     * Note: All observations are valid (passed if/in filter). */
     for (int v = 0; v < nvars; v++) {
-        char **str_data = data.vars[v].data.str;
+        char **str_data = filtered.data.vars[v].data.str;
         double *res = results[v];
         int local_converted = 0;
         int local_failed = 0;
@@ -381,12 +373,6 @@ ST_retcode cdestring_main(const char *args)
 
         #pragma omp parallel for reduction(+:local_converted,local_failed,local_nonnumeric) schedule(static)
         for (size_t i = 0; i < nobs; i++) {
-            /* Skip observations that don't meet the if/in condition */
-            if (!if_mask[i]) {
-                res[i] = SV_missval;
-                continue;
-            }
-
             const char *src = str_data[i];
 
             /* Empty or NULL string -> missing */
@@ -448,14 +434,11 @@ ST_retcode cdestring_main(const char *args)
         if (local_nonnumeric) had_nonnumeric = 1;
     }
 
-    /* Free loaded string data and if-mask — no longer needed */
-    stata_data_free(&data);
-    free(if_mask);
-
     t_convert = ctools_timer_seconds();
 
     /* ====================================================================
      * Phase 3: Store results back to Stata (parallel across variables)
+     * Uses obs_map to write to correct Stata observations.
      * ==================================================================== */
 
     /* Each thread writes one variable's results via SF_vstore.
@@ -465,9 +448,12 @@ ST_retcode cdestring_main(const char *args)
         int dst_idx = opts.dst_indices[v];
         double *res = results[v];
         for (size_t i = 0; i < nobs; i++) {
-            SF_vstore(dst_idx, (ST_int)(obs1 + (ST_int)i), res[i]);
+            SF_vstore(dst_idx, (ST_int)obs_map[i], res[i]);
         }
     }
+
+    /* Free loaded string data — no longer needed after store */
+    ctools_filtered_data_free(&filtered);
 
     t_store = ctools_timer_seconds();
 

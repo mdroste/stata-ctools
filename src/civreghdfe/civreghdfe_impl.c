@@ -24,7 +24,7 @@
 #include "../ctools_config.h"
 #include "../ctools_timer.h"
 #include "../ctools_ols.h"
-#include "../ctools_types.h"  /* For ctools_data_load_selective */
+#include "../ctools_types.h"  /* For ctools_data_load */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
@@ -140,7 +140,8 @@ static ST_retcode do_iv_regression(void)
     double t_load_start = ctools_timer_seconds();
 
     /* ================================================================
-     * PARALLEL DATA LOADING using ctools_data_load_selective
+     * PARALLEL DATA LOADING using ctools_data_load
+     * This handles if/in filtering at load time, loading only filtered observations.
      * ================================================================ */
 
     /* Calculate total variables to load */
@@ -157,47 +158,27 @@ static ST_retcode do_iv_regression(void)
         var_indices[i] = i + 1;  /* 1-based Stata variable indices */
     }
 
-    /* Load all variables in parallel using thread pool */
-    stata_data loaded_data;
-    stata_data_init(&loaded_data);
+    /* Load all variables in parallel with if/in filtering */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
 
-    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices, total_vars, 0, 0);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
-        stata_data_free(&loaded_data);
+        ctools_filtered_data_free(&filtered);
         SF_error("civreghdfe: Parallel data load failed\n");
         return 920;
     }
 
-    /* Build selection index for if/in filtering */
-    ST_int N_range = in2 - in1 + 1;
-    ST_int *sel_idx = (ST_int *)malloc(N_range * sizeof(ST_int));
-    if (!sel_idx) {
-        stata_data_free(&loaded_data);
-        SF_error("civreghdfe: Memory allocation failed\n");
-        return 920;
-    }
+    /* Get filtered observation count - data is already filtered */
+    N_total = (ST_int)filtered.data.nobs;
 
-    ST_int N_ifobs = 0;
-    for (ST_int obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) {
-            sel_idx[N_ifobs] = obs - in1;  /* 0-based index into loaded_data */
-            N_ifobs++;
-        }
-    }
-
-    if (N_ifobs == 0) {
+    if (N_total == 0) {
         SF_error("civreghdfe: No observations selected\n");
-        free(sel_idx);
-        stata_data_free(&loaded_data);
+        ctools_filtered_data_free(&filtered);
         return 2001;
     }
-
-    /* Check if selection is identity (no filtering needed) */
-    ST_int sel_is_identity = (N_ifobs == N_range) ? 1 : 0;
-
-    N_total = N_ifobs;
 
     /* Allocate output arrays (with overflow-safe multiplication) */
     ST_double *y = (ST_double *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_double));
@@ -230,104 +211,50 @@ static ST_retcode do_iv_regression(void)
             for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
             free(fe_levels);
         }
-        free(sel_idx);
-        stata_data_free(&loaded_data);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
 
-    /* Extract data from loaded_data into output arrays with if/in filtering */
+    /* Extract data from filtered.data - data is already filtered, use direct copy */
     ST_int i;
-    if (sel_is_identity) {
-        /* Fast path: direct copy */
-        memcpy(y, loaded_data.vars[var_y_idx].data.dbl, N_total * sizeof(ST_double));
+    memcpy(y, filtered.data.vars[var_y_idx].data.dbl, N_total * sizeof(ST_double));
 
-        for (ST_int k = 0; k < K_endog; k++) {
-            memcpy(X_endog + k * N_total, loaded_data.vars[var_endog_start_idx + k].data.dbl,
-                   N_total * sizeof(ST_double));
-        }
-        for (ST_int k = 0; k < K_exog; k++) {
-            memcpy(X_exog + k * N_total, loaded_data.vars[var_exog_start_idx + k].data.dbl,
-                   N_total * sizeof(ST_double));
-        }
-        for (ST_int k = 0; k < K_iv; k++) {
-            memcpy(Z + k * N_total, loaded_data.vars[var_iv_start_idx + k].data.dbl,
-                   N_total * sizeof(ST_double));
-        }
-        for (ST_int g = 0; g < G; g++) {
-            double *src = loaded_data.vars[var_fe_start_idx + g].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                fe_levels[g][i] = (ST_int)src[i];
-            }
-        }
-        if (has_cluster) {
-            double *src = loaded_data.vars[var_cluster_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster_ids[i] = (ST_int)src[i];
-            }
-        }
-        if (has_cluster2) {
-            double *src = loaded_data.vars[var_cluster2_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster2_ids[i] = (ST_int)src[i];
-            }
-        }
-        if (has_weights) {
-            memcpy(weights, loaded_data.vars[var_weight_idx].data.dbl, N_total * sizeof(ST_double));
-        }
-    } else {
-        /* Slow path: selective copy using sel_idx */
-        double *src_y = loaded_data.vars[var_y_idx].data.dbl;
+    for (ST_int k = 0; k < K_endog; k++) {
+        memcpy(X_endog + k * N_total, filtered.data.vars[var_endog_start_idx + k].data.dbl,
+               N_total * sizeof(ST_double));
+    }
+    for (ST_int k = 0; k < K_exog; k++) {
+        memcpy(X_exog + k * N_total, filtered.data.vars[var_exog_start_idx + k].data.dbl,
+               N_total * sizeof(ST_double));
+    }
+    for (ST_int k = 0; k < K_iv; k++) {
+        memcpy(Z + k * N_total, filtered.data.vars[var_iv_start_idx + k].data.dbl,
+               N_total * sizeof(ST_double));
+    }
+    for (ST_int g = 0; g < G; g++) {
+        double *src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
         for (i = 0; i < N_total; i++) {
-            y[i] = src_y[sel_idx[i]];
-        }
-
-        for (ST_int k = 0; k < K_endog; k++) {
-            double *src = loaded_data.vars[var_endog_start_idx + k].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                X_endog[k * N_total + i] = src[sel_idx[i]];
-            }
-        }
-        for (ST_int k = 0; k < K_exog; k++) {
-            double *src = loaded_data.vars[var_exog_start_idx + k].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                X_exog[k * N_total + i] = src[sel_idx[i]];
-            }
-        }
-        for (ST_int k = 0; k < K_iv; k++) {
-            double *src = loaded_data.vars[var_iv_start_idx + k].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                Z[k * N_total + i] = src[sel_idx[i]];
-            }
-        }
-        for (ST_int g = 0; g < G; g++) {
-            double *src = loaded_data.vars[var_fe_start_idx + g].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                fe_levels[g][i] = (ST_int)src[sel_idx[i]];
-            }
-        }
-        if (has_cluster) {
-            double *src = loaded_data.vars[var_cluster_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster_ids[i] = (ST_int)src[sel_idx[i]];
-            }
-        }
-        if (has_cluster2) {
-            double *src = loaded_data.vars[var_cluster2_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster2_ids[i] = (ST_int)src[sel_idx[i]];
-            }
-        }
-        if (has_weights) {
-            double *src = loaded_data.vars[var_weight_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                weights[i] = src[sel_idx[i]];
-            }
+            fe_levels[g][i] = (ST_int)src[i];
         }
     }
+    if (has_cluster) {
+        double *src = filtered.data.vars[var_cluster_idx].data.dbl;
+        for (i = 0; i < N_total; i++) {
+            cluster_ids[i] = (ST_int)src[i];
+        }
+    }
+    if (has_cluster2) {
+        double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
+        for (i = 0; i < N_total; i++) {
+            cluster2_ids[i] = (ST_int)src[i];
+        }
+    }
+    if (has_weights) {
+        memcpy(weights, filtered.data.vars[var_weight_idx].data.dbl, N_total * sizeof(ST_double));
+    }
 
-    /* Free loaded_data and sel_idx - we've extracted what we need */
-    stata_data_free(&loaded_data);
-    free(sel_idx);
+    /* Free filtered data - we've extracted what we need */
+    ctools_filtered_data_free(&filtered);
 
     /* End data load, start missing value check timing */
     t_load = ctools_timer_seconds() - t_load_start;

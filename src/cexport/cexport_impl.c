@@ -721,7 +721,8 @@ ST_retcode cexport_main(const char *args)
         return 920;
     }
 
-    rc = ctools_data_load(&g_ctx.data, nvars);
+    ctools_filtered_data_init(&g_ctx.filtered);
+    rc = ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
         SF_error(msg);
@@ -731,12 +732,14 @@ ST_retcode cexport_main(const char *args)
 
     g_ctx.time_load = ctools_timer_seconds() - t_phase;
 
-    /* Detect if all variables are numeric */
+    /* Detect if all variables are numeric (only if vars array was allocated) */
     g_ctx.all_numeric = true;
-    for (size_t j = 0; j < nvars; j++) {
-        if (g_ctx.data.vars[j].type != STATA_TYPE_DOUBLE) {
-            g_ctx.all_numeric = false;
-            break;
+    if (g_ctx.filtered.data.vars != NULL) {
+        for (size_t j = 0; j < nvars; j++) {
+            if (g_ctx.filtered.data.vars[j].type != STATA_TYPE_DOUBLE) {
+                g_ctx.all_numeric = false;
+                break;
+            }
         }
     }
 

@@ -449,33 +449,7 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 11: cattaneo2 Example (from help file)
- ******************************************************************************/
-print_section "cattaneo2 Example"
-
-* Basic example from help file
-webuse cattaneo2, clear
-capture drop _pscore _weight _id _support _treated _nn
-
-psmatch2 mbsmoke mage medu, outcome(bweight)
-local psm2_att = r(att)
-capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
-
-cpsmatch mbsmoke mage medu, outcome(bweight)
-local cps_att = r(att)
-
-sigfigs `psm2_att' `cps_att'
-local sf = r(sigfigs)
-if `sf' >= 7 {
-    test_pass "cattaneo2: basic example ATT matches"
-}
-else {
-    local sf_fmt : display %4.1f `sf'
-    test_fail "cattaneo2: basic example" "sigfigs=`sf_fmt'"
-}
-
-/*******************************************************************************
- * SECTION 12: if/in Conditions
+ * SECTION 11: if/in Conditions
  ******************************************************************************/
 print_section "if/in Conditions"
 

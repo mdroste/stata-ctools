@@ -463,18 +463,21 @@ if _rc == 0 {
  ******************************************************************************/
 print_section "Pathological - Empty/Minimal Datasets"
 
-* Empty dataset (0 observations)
+* Empty dataset (0 observations) - compare behavior with Stata's sort
 clear
 set obs 1
 gen x = .
 drop in 1
 
+capture sort x
+local stata_rc = _rc
 capture csort x
-if _rc == 0 {
-    test_pass "empty dataset (0 obs)"
+local csort_rc = _rc
+if `stata_rc' == `csort_rc' {
+    test_pass "empty dataset (0 obs) - matches Stata behavior (rc=`csort_rc')"
 }
 else {
-    test_pass "empty dataset (0 obs) - handled gracefully (rc=`=_rc')"
+    test_fail "empty dataset (0 obs)" "csort rc=`csort_rc' but Stata rc=`stata_rc'"
 }
 
 * Single observation - all algorithms
@@ -1154,11 +1157,24 @@ foreach alg in lsd msd timsort merge {
  ******************************************************************************/
 print_section "Option Tests"
 
-* Test verbose option (just verify it doesn't error)
+* Test verbose option - syntax check and verify sort correctness
 sysuse auto, clear
 capture csort price, verbose
 if _rc == 0 {
-    test_pass "verbose option accepted"
+    * Verify sort still produces correct result with verbose
+    sort, stable price
+    tempfile expected
+    save `expected', replace
+
+    sysuse auto, clear
+    csort price, verbose
+    capture cf _all using `expected'
+    if _rc == 0 {
+        test_pass "[syntax] verbose option accepted and sort correct"
+    }
+    else {
+        test_fail "verbose option" "sort result incorrect with verbose"
+    }
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
@@ -1169,24 +1185,24 @@ else {
  ******************************************************************************/
 print_section "Stability and Consistency"
 
-* Sort same data twice - should be identical
+* csort same data twice - should be identical
 clear
 set obs 1000
 set seed 12345
 gen x = runiform()
-sort x
+csort x
 tempfile sorted1
 save `sorted1', replace
-sort x
+csort x
 tempfile sorted2
 save `sorted2', replace
 use `sorted1', clear
 capture cf _all using `sorted2'
 if _rc == 0 {
-    test_pass "double sort identical"
+    test_pass "double csort identical"
 }
 else {
-    test_fail "double sort" "results differ"
+    test_fail "double csort" "results differ"
 }
 
 * csort then sort should match

@@ -3,7 +3,7 @@
     High-performance winsorization for Stata
 
     Performance approach:
-    - Uses ctools_data_load_selective() for parallel data loading
+    - Uses ctools_data_load() for parallel data loading with if/in filtering
     - Uses ctools_sort_dispatch() for by-variable sorting
     - O(n) quickselect with single extraction per group
     - Parallel over (variable, group) pairs for by() operations
@@ -220,6 +220,7 @@ ST_retcode cwinsor_main(const char *args)
     size_t *sort_indices = NULL;
     double *temp_buffer = NULL;
     size_t *inv_perm = NULL;
+    perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
     int num_threads = 1;
 
     t_start = ctools_timer_seconds();
@@ -293,29 +294,18 @@ ST_retcode cwinsor_main(const char *args)
         }
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        free(var_indices);
-        if (by_indices) free(by_indices);
-        ctools_error(CWINSOR_MODULE, "no observations");
-        return 2000;
-    }
-
     #ifdef _OPENMP
     num_threads = omp_get_max_threads();
     #endif
 
-    /* === Load Phase using ctools_data_load_selective() === */
+    /* === Load Phase using ctools_data_load() === */
     double load_start = ctools_timer_seconds();
 
-    /* Load target variables using ctools infrastructure */
-    stata_data target_data;
-    stata_data_init(&target_data);
-    stata_retcode load_rc = ctools_data_load_selective(&target_data, var_indices,
-                                                        nvars, obs1, obs2);
+    /* Load target variables using filtered loading (handles if/in at load time) */
+    ctools_filtered_data target_filtered;
+    ctools_filtered_data_init(&target_filtered);
+    stata_retcode load_rc = ctools_data_load(&target_filtered, var_indices,
+                                                       nvars, 0, 0, 0);
     if (load_rc != STATA_OK) {
         free(var_indices);
         if (by_indices) free(by_indices);
@@ -323,28 +313,40 @@ ST_retcode cwinsor_main(const char *args)
         return 920;
     }
 
-    /* Create var_data pointer array to point to stata_data arrays */
+    /* Get filtered observation count and obs_map */
+    size_t nobs = target_filtered.data.nobs;
+    obs_map = target_filtered.obs_map;
+
+    if (nobs == 0) {
+        ctools_filtered_data_free(&target_filtered);
+        free(var_indices);
+        if (by_indices) free(by_indices);
+        ctools_error(CWINSOR_MODULE, "no observations");
+        return 2000;
+    }
+
+    /* Create var_data pointer array to point to filtered data arrays */
     var_data = (double **)malloc(nvars * sizeof(double *));
     if (!var_data) {
-        stata_data_free(&target_data);
+        ctools_filtered_data_free(&target_filtered);
         free(var_indices);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
     for (size_t v = 0; v < nvars; v++) {
-        var_data[v] = target_data.vars[v].data.dbl;
+        var_data[v] = target_filtered.data.vars[v].data.dbl;
     }
 
     /* Load by-variables if specified */
-    stata_data by_data_struct;
-    stata_data_init(&by_data_struct);
+    ctools_filtered_data by_filtered;
+    ctools_filtered_data_init(&by_filtered);
 
     if (nby > 0) {
-        load_rc = ctools_data_load_selective(&by_data_struct, by_indices,
-                                              nby, obs1, obs2);
+        load_rc = ctools_data_load(&by_filtered, by_indices,
+                                             nby, 0, 0, 0);
         if (load_rc != STATA_OK) {
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&target_filtered);
             free(var_data);
             free(var_indices);
             free(by_indices);
@@ -355,8 +357,8 @@ ST_retcode cwinsor_main(const char *args)
         /* Create by_data pointer array */
         by_data = (double **)malloc(nby * sizeof(double *));
         if (!by_data) {
-            stata_data_free(&by_data_struct);
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&by_filtered);
+            ctools_filtered_data_free(&target_filtered);
             free(var_data);
             free(var_indices);
             free(by_indices);
@@ -364,7 +366,7 @@ ST_retcode cwinsor_main(const char *args)
             return 920;
         }
         for (size_t b = 0; b < nby; b++) {
-            by_data[b] = by_data_struct.vars[b].data.dbl;
+            by_data[b] = by_filtered.data.vars[b].data.dbl;
         }
     }
 
@@ -374,38 +376,38 @@ ST_retcode cwinsor_main(const char *args)
     double sort_start = ctools_timer_seconds();
 
     if (nby > 0) {
-        /* Build 1-based sort key indices for by-variables within by_data_struct */
+        /* Build 1-based sort key indices for by-variables within by_filtered.data */
         int *sort_keys = (int *)malloc(nby * sizeof(int));
         if (!sort_keys) {
             if (by_data) free(by_data);
-            stata_data_free(&by_data_struct);
+            ctools_filtered_data_free(&by_filtered);
             free(var_data);
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&target_filtered);
             free(var_indices);
             free(by_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
         for (size_t b = 0; b < nby; b++) {
-            sort_keys[b] = (int)(b + 1);  /* 1-based indices into by_data_struct */
+            sort_keys[b] = (int)(b + 1);  /* 1-based indices into by_filtered.data */
         }
 
         /* Sort by-variables using ctools infrastructure (order only) */
-        stata_retcode sort_rc = ctools_sort_dispatch(&by_data_struct, sort_keys, nby, SORT_ALG_AUTO);
+        stata_retcode sort_rc = ctools_sort_dispatch(&by_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
         free(sort_keys);
 
         if (sort_rc != STATA_OK) {
             if (by_data) free(by_data);
-            stata_data_free(&by_data_struct);
+            ctools_filtered_data_free(&by_filtered);
             free(var_data);
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&target_filtered);
             free(var_indices);
             free(by_indices);
             ctools_error(CWINSOR_MODULE, "sort failed");
             return 920;
         }
 
-        /* Allocate sort_indices and inv_perm based on by_data_struct.sort_order */
+        /* Allocate sort_indices and inv_perm based on by_filtered.data.sort_order */
         sort_indices = (size_t *)malloc(nobs * sizeof(size_t));
         temp_buffer = (double *)malloc(nobs * sizeof(double));
         inv_perm = (size_t *)malloc(nobs * sizeof(size_t));
@@ -415,18 +417,18 @@ ST_retcode cwinsor_main(const char *args)
             if (temp_buffer) free(temp_buffer);
             if (inv_perm) free(inv_perm);
             if (by_data) free(by_data);
-            stata_data_free(&by_data_struct);
+            ctools_filtered_data_free(&by_filtered);
             free(var_data);
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&target_filtered);
             free(var_indices);
             free(by_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
 
-        /* Copy sort_order from by_data_struct (converting perm_idx_t to size_t) */
+        /* Copy sort_order from by_filtered.data (converting perm_idx_t to size_t) */
         for (size_t i = 0; i < nobs; i++) {
-            sort_indices[i] = (size_t)by_data_struct.sort_order[i];
+            sort_indices[i] = (size_t)by_filtered.data.sort_order[i];
         }
 
         /* Compute inverse permutation for later un-sorting */
@@ -458,8 +460,8 @@ ST_retcode cwinsor_main(const char *args)
         if (inv_perm) free(inv_perm);
         if (by_data) free(by_data);
         free(var_data);
-        stata_data_free(&by_data_struct);
-        stata_data_free(&target_data);
+        ctools_filtered_data_free(&by_filtered);
+        ctools_filtered_data_free(&target_filtered);
         free(var_indices);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CWINSOR_MODULE);
@@ -493,8 +495,8 @@ ST_retcode cwinsor_main(const char *args)
         if (inv_perm) free(inv_perm);
         if (by_data) free(by_data);
         free(var_data);
-        stata_data_free(&by_data_struct);
-        stata_data_free(&target_data);
+        ctools_filtered_data_free(&by_filtered);
+        ctools_filtered_data_free(&target_filtered);
         free(var_indices);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CWINSOR_MODULE);
@@ -512,8 +514,8 @@ ST_retcode cwinsor_main(const char *args)
             if (inv_perm) free(inv_perm);
             if (by_data) free(by_data);
             free(var_data);
-            stata_data_free(&by_data_struct);
-            stata_data_free(&target_data);
+            ctools_filtered_data_free(&by_filtered);
+            ctools_filtered_data_free(&target_filtered);
             free(var_indices);
             if (by_indices) free(by_indices);
             ctools_error_alloc(CWINSOR_MODULE);
@@ -603,11 +605,11 @@ ST_retcode cwinsor_main(const char *args)
 
     t_winsor = ctools_timer_seconds() - winsor_start;
 
-    /* === Store Phase === */
+    /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
     if (nby > 0 && inv_perm != NULL) {
-        /* Store in original order using inverse permutation */
+        /* Store in original order using inverse permutation and obs_map */
         #ifdef _OPENMP
         #pragma omp parallel for schedule(static)
         #endif
@@ -616,7 +618,7 @@ ST_retcode cwinsor_main(const char *args)
             double *data = var_data[v];
             for (size_t i = 0; i < nobs; i++) {
                 /* inv_perm[i] gives the position in sorted array for original obs i */
-                SF_vstore(idx, (ST_int)(obs1 + i), data[inv_perm[i]]);
+                SF_vstore(idx, (ST_int)obs_map[i], data[inv_perm[i]]);
             }
         }
     } else {
@@ -627,7 +629,7 @@ ST_retcode cwinsor_main(const char *args)
             int idx = var_indices[v];
             double *data = var_data[v];
             for (size_t i = 0; i < nobs; i++) {
-                SF_vstore(idx, (ST_int)(obs1 + i), data[i]);
+                SF_vstore(idx, (ST_int)obs_map[i], data[i]);
             }
         }
     }
@@ -647,8 +649,8 @@ ST_retcode cwinsor_main(const char *args)
     if (by_data) free(by_data);
     free(var_data);
     /* Free stata_data structures (which own the actual data arrays) */
-    stata_data_free(&by_data_struct);
-    stata_data_free(&target_data);
+    ctools_filtered_data_free(&by_filtered);
+    ctools_filtered_data_free(&target_filtered);
     free(var_indices);
     if (by_indices) free(by_indices);
 

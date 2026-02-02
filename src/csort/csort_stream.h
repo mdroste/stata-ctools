@@ -169,7 +169,7 @@ int csort_stream_recommended(size_t nobs, size_t nvars, size_t nkeys);
     @param nobs              [in] Number of observations
     @param nonkey_var_indices[in] 1-based Stata indices of non-key variables
     @param nvars_nonkey      [in] Number of non-key variables
-    @param obs1              [in] First observation in Stata (1-based)
+    @param obs_map           [in] Maps filtered index to 1-based Stata obs
     @param block_size        [in] Unused (kept for API compatibility)
     @param vars_per_batch    [in] Number of variables to process at a time (1-16)
     @param timings           [out] Optional timing breakdown (can be NULL)
@@ -181,7 +181,7 @@ stata_retcode csort_stream_apply_permutation(
     size_t nobs,
     int *nonkey_var_indices,
     size_t nvars_nonkey,
-    size_t obs1,
+    const perm_idx_t *obs_map,
     size_t block_size,
     int vars_per_batch,
     csort_stream_timings *timings

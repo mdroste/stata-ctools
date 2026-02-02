@@ -393,13 +393,13 @@ int cexport_format_row_numeric(const cexport_context *ctx, size_t row_idx,
                                char *buf, size_t buf_size)
 {
     size_t pos = 0;
-    size_t nvars = ctx->data.nvars;
+    size_t nvars = ctx->filtered.data.nvars;
     char delimiter = ctx->delimiter;
     const char *line_end = ctx->line_ending;
     int line_end_len = ctx->line_ending_len;
 
     for (size_t j = 0; j < nvars; j++) {
-        double val = ctx->data.vars[j].data.dbl[row_idx];
+        double val = ctx->filtered.data.vars[j].data.dbl[row_idx];
         vartype_t vtype = ctx->vartypes[j];
 
         /* Check buffer space (assume max 32 chars for number + delimiter/newline) */
@@ -429,13 +429,13 @@ int cexport_format_row(const cexport_context *ctx, size_t row_idx,
 {
     char field_buf[256];  /* Small buffer - most fields are <50 chars */
     size_t pos = 0;
-    size_t nvars = ctx->data.nvars;
+    size_t nvars = ctx->filtered.data.nvars;
     char delimiter = ctx->delimiter;
     const char *line_end = ctx->line_ending;
     int line_end_len = ctx->line_ending_len;
 
     for (size_t j = 0; j < nvars; j++) {
-        const stata_variable *var = &ctx->data.vars[j];
+        const stata_variable *var = &ctx->filtered.data.vars[j];
         int field_len;
 
         if (var->type == STATA_TYPE_DOUBLE) {

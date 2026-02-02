@@ -406,46 +406,7 @@ static void *load_variable_thread(void *arg)
 
 /* ===========================================================================
    Internal Helper Functions
-   Reduce code duplication across load/store functions
    =========================================================================== */
-
-/*
-    Observation range resolution helper.
-    Returns the starting observation and count for the range.
-*/
-typedef struct {
-    size_t obs1;    /* First observation (1-based) */
-    size_t nobs;    /* Number of observations */
-    int valid;      /* Non-zero if range is valid */
-} obs_range_t;
-
-static obs_range_t resolve_obs_range(size_t obs_start, size_t obs_end)
-{
-    obs_range_t range;
-
-    if (obs_start == 0 || obs_end == 0) {
-        /* Use Stata's in-range bounds */
-        ST_int in1 = SF_in1();
-        ST_int in2 = SF_in2();
-        if (in1 < 1 || in2 < in1) {
-            /* Invalid range - treat as zero rows */
-            range.obs1 = 1;
-            range.nobs = 0;
-            range.valid = 1;  /* Empty but valid */
-        } else {
-            range.obs1 = (size_t)in1;
-            range.nobs = (size_t)(in2 - in1 + 1);
-            range.valid = 1;
-        }
-    } else {
-        /* Use specified bounds */
-        range.obs1 = obs_start;
-        range.nobs = obs_end - obs_start + 1;
-        range.valid = 1;
-    }
-
-    return range;
-}
 
 /*
     Data structure initialization helper.
@@ -569,68 +530,6 @@ static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
     }
 
     return 0;
-}
-
-/*
-    Load all variables from Stata's data space into C memory.
-
-    This is the core data transfer function - it performs pure data loading
-    without any sort-specific setup. Use this for general-purpose data transfer
-    between Stata and C.
-
-    @param data   [out] stata_data structure to populate (caller frees)
-    @param nvars  [in]  Total number of variables in dataset
-
-    @return STATA_OK on success, or:
-            STATA_ERR_INVALID_INPUT if data is NULL or nvars is 0
-            STATA_ERR_MEMORY on allocation failure
-
-    Memory Layout After Return:
-    - data->vars[j].data.dbl: contiguous array of nobs doubles (numeric)
-    - data->vars[j].data.str: array of nobs char* pointers (string)
-    - data->sort_order: identity permutation [0, 1, 2, ..., nobs-1]
-*/
-stata_retcode ctools_data_load(stata_data *data, size_t nvars)
-{
-    ctools_var_io_args *thread_args = NULL;
-    stata_retcode rc;
-
-    if (data == NULL || nvars == 0) {
-        return STATA_ERR_INVALID_INPUT;
-    }
-
-    /* Resolve observation range */
-    obs_range_t range = resolve_obs_range(0, 0);
-
-    /* Initialize data structure */
-    rc = init_data_structure(data, nvars, range.nobs);
-    if (rc != STATA_OK) {
-        return rc;
-    }
-
-    /* Allocate thread arguments */
-    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
-    if (thread_args == NULL) {
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
-
-    /* Initialize thread arguments */
-    init_io_thread_args(thread_args, data, NULL, nvars, range.obs1, range.nobs, IO_MODE_LOAD);
-
-    /* Execute parallel/sequential load */
-    if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
-        free(thread_args);
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
-
-    free(thread_args);
-
-    /* Memory barrier to ensure all thread-side effects are visible */
-    ctools_memory_barrier();
-
-    return STATA_OK;
 }
 
 /* ===========================================================================
@@ -780,69 +679,6 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
 
     /* Execute parallel/sequential store (no error checking for store) */
     execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
-
-    free(thread_args);
-
-    /* Memory barrier to ensure all thread-side effects are visible */
-    ctools_memory_barrier();
-
-    return STATA_OK;
-}
-
-/* ===========================================================================
-   Selective Data Loading (Stata -> C) - Load only specified variables
-   =========================================================================== */
-
-/*
-    Load only specified variables from Stata into C memory.
-
-    This function loads a subset of variables, identified by their 1-based
-    Stata indices. This is more memory-efficient when only specific columns
-    are needed (e.g., key variables for merge operations).
-
-    @param data        [out] stata_data structure to populate
-    @param var_indices [in]  Array of 1-based Stata variable indices
-    @param nvars       [in]  Number of variables to load
-    @param obs_start   [in]  First observation (1-based), 0 = use SF_in1()
-    @param obs_end     [in]  Last observation (1-based), 0 = use SF_in2()
-
-    @return STATA_OK on success, error code otherwise
-*/
-stata_retcode ctools_data_load_selective(stata_data *data, int *var_indices,
-                                          size_t nvars, size_t obs_start, size_t obs_end)
-{
-    ctools_var_io_args *thread_args = NULL;
-    stata_retcode rc;
-
-    if (data == NULL || var_indices == NULL || nvars == 0) {
-        return STATA_ERR_INVALID_INPUT;
-    }
-
-    /* Resolve observation range */
-    obs_range_t range = resolve_obs_range(obs_start, obs_end);
-
-    /* Initialize data structure */
-    rc = init_data_structure(data, nvars, range.nobs);
-    if (rc != STATA_OK) {
-        return rc;
-    }
-
-    /* Allocate thread arguments */
-    thread_args = (ctools_var_io_args *)ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
-    if (thread_args == NULL) {
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
-
-    /* Initialize thread arguments with specified variable indices */
-    init_io_thread_args(thread_args, data, var_indices, nvars, range.obs1, range.nobs, IO_MODE_LOAD);
-
-    /* Execute parallel/sequential load */
-    if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
-        free(thread_args);
-        stata_data_free(data);
-        return STATA_ERR_MEMORY;
-    }
 
     free(thread_args);
 
@@ -1063,6 +899,521 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         }
 
         ctools_aligned_free(buf);
+    }
+
+    return STATA_OK;
+}
+
+/* ===========================================================================
+   Filtered Data Loading (Stata -> C with if/in filtering)
+   =========================================================================== */
+
+/*
+    Initialize filtered data structure to safe empty state.
+*/
+void ctools_filtered_data_init(ctools_filtered_data *fd)
+{
+    if (fd == NULL) return;
+    stata_data_init(&fd->data);
+    fd->obs_map = NULL;
+    fd->n_range = 0;
+    fd->was_filtered = 0;
+}
+
+/*
+    Free all memory associated with filtered data.
+*/
+void ctools_filtered_data_free(ctools_filtered_data *fd)
+{
+    if (fd == NULL) return;
+    stata_data_free(&fd->data);
+    if (fd->obs_map != NULL) {
+        ctools_aligned_free(fd->obs_map);
+        fd->obs_map = NULL;
+    }
+    fd->n_range = 0;
+    fd->was_filtered = 0;
+}
+
+/*
+    Quick identity detection: probe first and last observations.
+    Returns 1 if likely no filtering needed, 0 if filtering detected.
+*/
+static int probe_for_identity(ST_int obs1, ST_int obs2, size_t n_range)
+{
+    /* Probe size: 16 at each end, or full range if small */
+    size_t probe_size = 16;
+    if (n_range <= 32) {
+        /* Small range: check all observations */
+        for (ST_int obs = obs1; obs <= obs2; obs++) {
+            if (!SF_ifobs(obs)) {
+                return 0;  /* Filtering detected */
+            }
+        }
+        return 1;  /* Identity confirmed */
+    }
+
+    /* Probe first 16 observations */
+    for (size_t i = 0; i < probe_size; i++) {
+        if (!SF_ifobs(obs1 + (ST_int)i)) {
+            return 0;  /* Filtering detected */
+        }
+    }
+
+    /* Probe last 16 observations */
+    for (size_t i = 0; i < probe_size; i++) {
+        if (!SF_ifobs(obs2 - (ST_int)i)) {
+            return 0;  /* Filtering detected */
+        }
+    }
+
+    return 1;  /* Likely identity (will verify during full pass if needed) */
+}
+
+/*
+    Load a single variable from Stata for filtered observations only.
+    Uses obs_map to read only the observations that passed filtering.
+*/
+static int load_filtered_variable(stata_variable *var, int var_idx,
+                                   perm_idx_t *obs_map, size_t n_filtered,
+                                   int is_string)
+{
+    size_t i;
+    char strbuf[STATA_STR_MAXLEN + 1];
+
+    var->nobs = n_filtered;
+
+    /* Edge case: empty filtered set */
+    if (n_filtered == 0) {
+        if (is_string) {
+            var->type = STATA_TYPE_STRING;
+            var->str_maxlen = 0;
+            var->_arena = NULL;
+            var->data.str = (char **)calloc(1, sizeof(char *));
+            if (!var->data.str) return -1;
+        } else {
+            var->type = STATA_TYPE_DOUBLE;
+            var->_arena = NULL;
+            var->data.dbl = (double *)ctools_cacheline_alloc(sizeof(double));
+            if (!var->data.dbl) return -1;
+            var->data.dbl[0] = SV_missval;
+        }
+        return 0;
+    }
+
+    if (is_string) {
+        /* String variable - use arena allocator */
+        var->type = STATA_TYPE_STRING;
+        var->str_maxlen = STATA_STR_MAXLEN;
+        var->_arena = NULL;
+
+        /* Allocate pointer array */
+        size_t str_array_size;
+        if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
+            return -1;
+        }
+        var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
+        if (var->data.str == NULL) {
+            return -1;
+        }
+        memset(var->data.str, 0, str_array_size);
+
+        char **str_ptr = var->data.str;
+
+        /* Create arena for string storage */
+        ctools_string_arena *arena = NULL;
+        if (n_filtered <= SIZE_MAX / 64) {
+            size_t arena_capacity = n_filtered * 64;
+            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
+        }
+        if (arena != NULL) {
+            var->_arena = arena;
+        }
+
+        /* Load strings using obs_map */
+        for (i = 0; i < n_filtered; i++) {
+            SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+            str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
+            if (str_ptr[i] == NULL) {
+                /* Cleanup on failure */
+                if (arena != NULL) {
+                    for (size_t j = 0; j < i; j++) {
+                        if (str_ptr[j] != NULL && !ctools_string_arena_owns(arena, str_ptr[j])) {
+                            free(str_ptr[j]);
+                        }
+                    }
+                    ctools_string_arena_free(arena);
+                    var->_arena = NULL;
+                } else {
+                    for (size_t j = 0; j < i; j++) {
+                        free(str_ptr[j]);
+                    }
+                }
+                ctools_aligned_free(var->data.str);
+                var->data.str = NULL;
+                return -1;
+            }
+        }
+    } else {
+        /* Numeric variable */
+        var->type = STATA_TYPE_DOUBLE;
+        var->_arena = NULL;
+
+        size_t dbl_array_size;
+        if (ctools_safe_mul_size(n_filtered, sizeof(double), &dbl_array_size) != 0) {
+            return -1;
+        }
+        var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
+        if (var->data.dbl == NULL) {
+            return -1;
+        }
+
+        double * restrict dbl_ptr = var->data.dbl;
+
+        /* Load using obs_map - obs_map contains 1-based Stata obs numbers */
+        for (i = 0; i < n_filtered; i++) {
+            SF_vdata((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+        }
+    }
+
+    return 0;
+}
+
+/*
+    Thread function for filtered variable loading.
+*/
+typedef struct {
+    stata_variable *var;
+    int var_idx;
+    perm_idx_t *obs_map;
+    size_t n_filtered;
+    int is_string;
+    int success;
+} filtered_var_io_args;
+
+static void *load_filtered_variable_thread(void *arg)
+{
+    filtered_var_io_args *args = (filtered_var_io_args *)arg;
+    args->success = 0;
+
+    if (load_filtered_variable(args->var, args->var_idx, args->obs_map,
+                                args->n_filtered, args->is_string) != 0) {
+        return (void *)1;
+    }
+
+    args->success = 1;
+    return NULL;
+}
+
+/*
+    Load variables with if/in filtering applied at load time.
+*/
+stata_retcode ctools_data_load(ctools_filtered_data *result,
+                                         int *var_indices, size_t nvars,
+                                         size_t obs_start, size_t obs_end,
+                                         int flags)
+{
+    ST_int obs1, obs2;
+    size_t n_range, n_filtered;
+    perm_idx_t *obs_map = NULL;
+    int is_identity = 0;
+    int skip_if_check = (flags & CTOOLS_LOAD_SKIP_IF) != 0;
+    int *auto_indices = NULL;  /* For "load all" mode when var_indices is NULL */
+
+    if (result == NULL) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    /* Initialize result structure */
+    ctools_filtered_data_init(result);
+
+    /*
+        "Load all variables" mode: if var_indices is NULL, build indices for all variables.
+        This replaces the old ctools_data_load() function.
+    */
+    if (var_indices == NULL) {
+        nvars = (size_t)SF_nvars();
+        if (nvars == 0) {
+            return STATA_OK;  /* No variables to load */
+        }
+        auto_indices = (int *)malloc(nvars * sizeof(int));
+        if (auto_indices == NULL) {
+            return STATA_ERR_MEMORY;
+        }
+        for (size_t i = 0; i < nvars; i++) {
+            auto_indices[i] = (int)(i + 1);  /* 1-based Stata indices */
+        }
+        var_indices = auto_indices;
+    } else if (nvars == 0) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    /* Resolve observation range */
+    if (obs_start == 0 || obs_end == 0) {
+        obs1 = SF_in1();
+        obs2 = SF_in2();
+        if (obs1 < 1 || obs2 < obs1) {
+            result->n_range = 0;
+            result->was_filtered = 0;
+            if (auto_indices) free(auto_indices);
+            return STATA_OK;  /* Empty but valid */
+        }
+    } else {
+        obs1 = (ST_int)obs_start;
+        obs2 = (ST_int)obs_end;
+    }
+
+    n_range = (size_t)(obs2 - obs1 + 1);
+    result->n_range = n_range;
+
+    /*
+        Fast path: skip SF_ifobs checks entirely when CTOOLS_LOAD_SKIP_IF is set.
+        This saves N SPI calls when there's no `if` condition.
+    */
+    if (skip_if_check) {
+        is_identity = 1;
+        n_filtered = n_range;
+        result->was_filtered = 0;
+
+        /* Build identity obs_map */
+        obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+        if (obs_map == NULL) {
+            if (auto_indices) free(auto_indices);
+            return STATA_ERR_MEMORY;
+        }
+        for (size_t i = 0; i < n_filtered; i++) {
+            obs_map[i] = (perm_idx_t)(obs1 + (ST_int)i);
+        }
+        result->obs_map = obs_map;
+    }
+    /* Quick identity detection for small ranges */
+    else if (n_range <= 32) {
+        is_identity = probe_for_identity(obs1, obs2, n_range);
+        if (is_identity) {
+            /* Small range confirmed as identity - use direct load */
+            result->was_filtered = 0;
+            n_filtered = n_range;
+
+            /* Allocate obs_map as identity for write-back consistency */
+            obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+            if (obs_map == NULL) {
+                if (auto_indices) free(auto_indices);
+                return STATA_ERR_MEMORY;
+            }
+            for (size_t i = 0; i < n_filtered; i++) {
+                obs_map[i] = (perm_idx_t)(obs1 + (ST_int)i);
+            }
+            result->obs_map = obs_map;
+        }
+    }
+
+    /*
+        Standard path: check SF_ifobs for each observation.
+        Two-pass approach: count filtered, then build obs_map.
+    */
+    if (!skip_if_check && !is_identity) {
+        /* Pass 1: Count filtered observations */
+        n_filtered = 0;
+        for (ST_int obs = obs1; obs <= obs2; obs++) {
+            if (SF_ifobs(obs)) {
+                n_filtered++;
+            }
+        }
+
+        if (n_filtered == 0) {
+            /* No observations pass filter */
+            result->was_filtered = 1;
+            result->obs_map = NULL;
+            /* Initialize empty data structure */
+            stata_retcode rc = init_data_structure(&result->data, nvars, 0);
+            if (auto_indices) free(auto_indices);
+            return rc;
+        }
+
+        /* Check if identity (all passed) */
+        is_identity = (n_filtered == n_range);
+        result->was_filtered = !is_identity;
+
+        /* Allocate obs_map */
+        obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+        if (obs_map == NULL) {
+            if (auto_indices) free(auto_indices);
+            return STATA_ERR_MEMORY;
+        }
+
+        /* Pass 2: build obs_map */
+        size_t idx = 0;
+        for (ST_int obs = obs1; obs <= obs2; obs++) {
+            if (SF_ifobs(obs)) {
+                obs_map[idx++] = (perm_idx_t)obs;
+            }
+        }
+
+        result->obs_map = obs_map;
+    }
+
+    /* Load variables - use different paths for identity vs filtered cases */
+    stata_retcode rc;
+
+    if (is_identity && n_filtered > 0) {
+        /*
+            Identity case: all observations pass, use standard contiguous load.
+            This is faster because it can use sequential memory access patterns.
+        */
+        rc = init_data_structure(&result->data, nvars, n_filtered);
+        if (rc != STATA_OK) {
+            ctools_aligned_free(obs_map);
+            result->obs_map = NULL;
+            if (auto_indices) free(auto_indices);
+            return rc;
+        }
+
+        /* Allocate and initialize thread arguments for contiguous load */
+        ctools_var_io_args *thread_args = (ctools_var_io_args *)
+            ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
+        if (thread_args == NULL) {
+            ctools_filtered_data_free(result);
+            if (auto_indices) free(auto_indices);
+            return STATA_ERR_MEMORY;
+        }
+
+        init_io_thread_args(thread_args, &result->data, var_indices, nvars, obs1, n_filtered, IO_MODE_LOAD);
+
+        if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
+            free(thread_args);
+            ctools_filtered_data_free(result);
+            if (auto_indices) free(auto_indices);
+            return STATA_ERR_MEMORY;
+        }
+        free(thread_args);
+    } else if (n_filtered > 0) {
+        /*
+            Filtered case: only some observations pass, use obs_map for gather.
+            This uses random access but only loads the filtered observations.
+        */
+        rc = init_data_structure(&result->data, nvars, n_filtered);
+        if (rc != STATA_OK) {
+            ctools_aligned_free(obs_map);
+            result->obs_map = NULL;
+            if (auto_indices) free(auto_indices);
+            return rc;
+        }
+
+        filtered_var_io_args *thread_args = (filtered_var_io_args *)
+            ctools_safe_malloc2(nvars, sizeof(filtered_var_io_args));
+        if (thread_args == NULL) {
+            ctools_filtered_data_free(result);
+            if (auto_indices) free(auto_indices);
+            return STATA_ERR_MEMORY;
+        }
+
+        /* Initialize thread arguments */
+        for (size_t j = 0; j < nvars; j++) {
+            thread_args[j].var = &result->data.vars[j];
+            thread_args[j].var_idx = var_indices[j];
+            thread_args[j].obs_map = obs_map;
+            thread_args[j].n_filtered = n_filtered;
+            thread_args[j].is_string = SF_var_is_string((ST_int)var_indices[j]);
+            thread_args[j].success = 0;
+        }
+
+        /* Execute load (parallel for multiple vars) */
+        int use_parallel = (nvars >= 2);
+
+        if (use_parallel) {
+            ctools_persistent_pool *pool = ctools_get_global_pool();
+
+            if (pool != NULL) {
+                if (ctools_persistent_pool_submit_batch(pool, load_filtered_variable_thread,
+                                                         thread_args, nvars,
+                                                         sizeof(filtered_var_io_args)) != 0) {
+                    free(thread_args);
+                    ctools_filtered_data_free(result);
+                    if (auto_indices) free(auto_indices);
+                    return STATA_ERR_MEMORY;
+                }
+
+                int pool_result = ctools_persistent_pool_wait(pool);
+                if (pool_result != 0) {
+                    free(thread_args);
+                    ctools_filtered_data_free(result);
+                    if (auto_indices) free(auto_indices);
+                    return STATA_ERR_MEMORY;
+                }
+            } else {
+                /* Fallback to sequential */
+                for (size_t j = 0; j < nvars; j++) {
+                    void *res = load_filtered_variable_thread(&thread_args[j]);
+                    if (res != NULL) {
+                        free(thread_args);
+                        ctools_filtered_data_free(result);
+                        if (auto_indices) free(auto_indices);
+                        return STATA_ERR_MEMORY;
+                    }
+                }
+            }
+        } else {
+            /* Sequential execution */
+            for (size_t j = 0; j < nvars; j++) {
+                void *res = load_filtered_variable_thread(&thread_args[j]);
+                if (res != NULL) {
+                    free(thread_args);
+                    ctools_filtered_data_free(result);
+                    if (auto_indices) free(auto_indices);
+                    return STATA_ERR_MEMORY;
+                }
+            }
+        }
+
+        free(thread_args);
+    }
+
+    /* Memory barrier */
+    ctools_memory_barrier();
+
+    if (auto_indices) free(auto_indices);
+    return STATA_OK;
+}
+
+/* ===========================================================================
+   Filtered Data Storing (C -> Stata with obs_map)
+   =========================================================================== */
+
+/*
+    Write filtered numeric values back to Stata using obs_map.
+*/
+stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
+                                     int var_idx, perm_idx_t *obs_map)
+{
+    if (values == NULL || obs_map == NULL || n_filtered == 0) {
+        return (values == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
+    }
+
+    ST_int stata_var = (ST_int)var_idx;
+
+    /* Write values using obs_map for indexing */
+    for (size_t i = 0; i < n_filtered; i++) {
+        SF_vstore(stata_var, (ST_int)obs_map[i], values[i]);
+    }
+
+    return STATA_OK;
+}
+
+/*
+    Write filtered string values back to Stata using obs_map.
+*/
+stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
+                                         int var_idx, perm_idx_t *obs_map)
+{
+    if (strings == NULL || obs_map == NULL || n_filtered == 0) {
+        return (strings == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
+    }
+
+    ST_int stata_var = (ST_int)var_idx;
+
+    /* Write strings using obs_map for indexing */
+    for (size_t i = 0; i < n_filtered; i++) {
+        SF_sstore(stata_var, (ST_int)obs_map[i], strings[i] ? strings[i] : "");
     }
 
     return STATA_OK;

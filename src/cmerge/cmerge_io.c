@@ -16,7 +16,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
     int update_mode = a->update_mode;
     int replace_mode = a->replace_mode;
     cmerge_output_spec_t *specs = a->specs;
-    stata_variable *src = &g_using_cache.keepusing.vars[a->keepusing_idx];
+    stata_variable *src = &g_using_cache.keepusing.data.vars[a->keepusing_idx];
 
     a->success = 0;
 

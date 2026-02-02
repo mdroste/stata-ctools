@@ -11,7 +11,7 @@
  * - Mahalanobis distance matching
  *
  * Algorithm Overview:
- * 1. Load treatment indicator and propensity scores from Stata using ctools_data_load_selective()
+ * 1. Load treatment indicator and propensity scores from Stata using ctools_data_load()
  * 2. Build index structure for control observations
  * 3. For each treated observation, find matches using specified method
  * 4. Compute matching weights
@@ -168,7 +168,7 @@ static int compare_by_pscore(const void *a, const void *b)
     const sorted_control_t *pb = (const sorted_control_t *)b;
     if (pa->pscore < pb->pscore) return -1;
     if (pa->pscore > pb->pscore) return 1;
-    /* Tie-breaker: sort by Stata observation index (ascending) for psmatch2 compatibility */
+    /* Tie-breaker: sort by Stata observation index (ascending) */
     if (pa->obs_idx < pb->obs_idx) return -1;
     if (pa->obs_idx > pb->obs_idx) return 1;
     return 0;
@@ -180,7 +180,7 @@ static int compare_by_pscore_desc(const void *a, const void *b)
     const sorted_control_t *pb = (const sorted_control_t *)b;
     if (pa->pscore > pb->pscore) return -1;
     if (pa->pscore < pb->pscore) return 1;
-    /* Tie-breaker: sort by Stata observation index (ascending) for psmatch2 compatibility */
+    /* Tie-breaker: sort by Stata observation index (ascending) */
     if (pa->obs_idx < pb->obs_idx) return -1;
     if (pa->obs_idx > pb->obs_idx) return 1;
     return 0;
@@ -751,7 +751,7 @@ static int find_kernel_matches_fast(
     /* Determine search range based on kernel type and caliper */
     double search_radius = bandwidth;  /* Most kernels have support [-1, 1] */
     if (kernel == KERNEL_NORMAL) {
-        search_radius = 4.0 * bandwidth;  /* Normal has infinite support, use 4 SD */
+        search_radius = 6.0 * bandwidth;  /* Normal has infinite support, use 6 SD for precision */
     }
     if (caliper > 0.0 && caliper < search_radius) {
         search_radius = caliper;
@@ -1014,13 +1014,14 @@ ST_retcode cpsmatch_main(const char *args)
         return 2000;
     }
 
-    /* Get observation range - use full in-range, we'll filter by if-condition */
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs_range = (size_t)(obs2 - obs1 + 1);
+    /* Get observation range bounds (used for ctools_data_load) */
+    (void)SF_in1();  /* obs1/obs2 handled by filtered load */
+    (void)SF_in2();
 
     /* ========================================================================
-     * PHASE 1: Load data from Stata using ctools_data_load_selective()
+     * PHASE 1: Load data with if/in filtering using ctools_data_load()
+     * This loads ONLY observations that pass the if-condition, reducing memory
+     * and eliminating the need for double iteration with SF_ifobs().
      * ======================================================================== */
     t_load = ctools_timer_seconds();
 
@@ -1037,50 +1038,50 @@ ST_retcode cpsmatch_main(const char *args)
         var_indices[2] = opts.outcome_idx;
     }
 
-    /* Load data using ctools infrastructure - load full in-range */
-    stata_data input_data;
-    stata_data_init(&input_data);
-    stata_retcode load_rc = ctools_data_load_selective(&input_data, var_indices,
-                                                        nvars_to_load, obs1, obs2);
+    /* Load filtered data - only observations passing if-condition are loaded */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+                                                       nvars_to_load, 0, 0, 0);
     free(var_indices);
 
     if (load_rc != STATA_OK) {
         SF_error("cpsmatch: failed to load data\n");
-        stata_data_free(&input_data);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
 
-    /* Get pointers to the loaded data arrays */
-    double *treatment = input_data.vars[0].data.dbl;
-    double *pscore = input_data.vars[1].data.dbl;
+    /* Get pointers to the filtered data arrays */
+    size_t n_filtered = filtered.data.nobs;
+    double *treatment = filtered.data.vars[0].data.dbl;
+    double *pscore = filtered.data.vars[1].data.dbl;
+    perm_idx_t *obs_map = filtered.obs_map;  /* Maps filtered index -> Stata obs */
     /* outcome is loaded for potential ATT/ATE computation but not currently used */
-    double *outcome __attribute__((unused)) = (opts.outcome_idx > 0) ? input_data.vars[2].data.dbl : NULL;
+    double *outcome __attribute__((unused)) = (opts.outcome_idx > 0) ? filtered.data.vars[2].data.dbl : NULL;
 
     t_load = ctools_timer_seconds() - t_load;
 
     /* ========================================================================
-     * PHASE 2: Separate treated and control groups (with if-condition check)
+     * PHASE 2: Separate treated and control groups (single pass, no SF_ifobs)
+     * Since data is already filtered, we just need to check treatment values.
      * ======================================================================== */
     t_setup = ctools_timer_seconds();
 
-    /* Count treated and controls - check SF_ifobs() for if-condition filtering */
+    /* Count treated and controls - no SF_ifobs needed, already filtered */
     size_t n_treated = 0, n_controls = 0;
-    for (size_t i = 0; i < nobs_range; i++) {
-        ST_int stata_obs = obs1 + (ST_int)i;
-        /* Check if this observation satisfies the if-condition */
-        if (!SF_ifobs(stata_obs)) continue;
+    for (size_t i = 0; i < n_filtered; i++) {
         if (SF_is_missing(treatment[i])) continue;
         if (treatment[i] != 0.0) n_treated++;
         else n_controls++;
     }
 
     if (n_treated == 0 || n_controls == 0) {
-        stata_data_free(&input_data);
+        ctools_filtered_data_free(&filtered);
         SF_error("cpsmatch: need both treated and control observations\n");
         return 198;
     }
 
-    /* Build index arrays */
+    /* Build index arrays - indices now refer to position in filtered array */
     size_t *treated_idx = malloc(n_treated * sizeof(size_t));
     size_t *control_idx = malloc(n_controls * sizeof(size_t));
     double *treated_pscore = malloc(n_treated * sizeof(double));
@@ -1097,7 +1098,7 @@ ST_retcode cpsmatch_main(const char *args)
     }
 
     if (!treated_idx || !control_idx || !treated_pscore || !control_pscore) {
-        stata_data_free(&input_data);
+        ctools_filtered_data_free(&filtered);
         free(treated_idx);
         free(control_idx);
         free(treated_pscore);
@@ -1108,17 +1109,14 @@ ST_retcode cpsmatch_main(const char *args)
     }
 
     size_t ti = 0, ci = 0;
-    for (size_t i = 0; i < nobs_range; i++) {
-        ST_int stata_obs = obs1 + (ST_int)i;
-        /* Check if this observation satisfies the if-condition */
-        if (!SF_ifobs(stata_obs)) continue;
+    for (size_t i = 0; i < n_filtered; i++) {
         if (SF_is_missing(treatment[i])) continue;
         if (treatment[i] != 0.0) {
-            treated_idx[ti] = i;
+            treated_idx[ti] = i;  /* Index in filtered array */
             treated_pscore[ti] = pscore[i];
             ti++;
         } else {
-            control_idx[ci] = i;
+            control_idx[ci] = i;  /* Index in filtered array */
             control_pscore[ci] = pscore[i];
             ci++;
         }
@@ -1145,26 +1143,29 @@ ST_retcode cpsmatch_main(const char *args)
         }
     }
 
-    double common_min = (ps_min_treated > ps_min_control) ? ps_min_treated : ps_min_control;
-    double common_max = (ps_max_treated < ps_max_control) ? ps_max_treated : ps_max_control;
+    /* Common support: psmatch2 restricts TREATED to be within control pscore range.
+     * Controls are not restricted - they're always on support for ATT estimation. */
+    double common_min = ps_min_control;
+    double common_max = ps_max_control;
 
     /* ========================================================================
      * PHASE 4: Perform matching
      * ======================================================================== */
 
-    /* Allocate output arrays - need full range size for all observations */
-    double *out_weight = calloc(nobs_range, sizeof(double));
-    double *out_match = malloc(nobs_range * sizeof(double));
-    double *out_support = malloc(nobs_range * sizeof(double));
+    /* Allocate output arrays - sized by n_filtered (not nobs_range) for memory efficiency.
+     * These are indexed by position in the filtered array, and use obs_map for write-back. */
+    double *out_weight = calloc(n_filtered, sizeof(double));
+    double *out_match = malloc(n_filtered * sizeof(double));
+    double *out_support = malloc(n_filtered * sizeof(double));
 
     /* Initialize to missing */
-    for (size_t i = 0; i < nobs_range; i++) {
+    for (size_t i = 0; i < n_filtered; i++) {
         out_match[i] = SV_missval;
         out_support[i] = SV_missval;
     }
 
     if (!out_weight || !out_match || !out_support) {
-        stata_data_free(&input_data);
+        ctools_filtered_data_free(&filtered);
         free(treated_idx);
         free(control_idx);
         free(treated_pscore);
@@ -1196,7 +1197,7 @@ ST_retcode cpsmatch_main(const char *args)
     /* Create sorted order for treated (by propensity score) */
     size_t *treated_order = malloc(n_treated * sizeof(size_t));
     if (!treated_order) {
-        stata_data_free(&input_data);
+        ctools_filtered_data_free(&filtered);
         free(treated_idx);
         free(control_idx);
         free(treated_pscore);
@@ -1215,7 +1216,7 @@ ST_retcode cpsmatch_main(const char *args)
     if (!opts.with_replace) {
         sorted_treated = malloc(n_treated * sizeof(sorted_control_t));
         if (!sorted_treated) {
-            stata_data_free(&input_data);
+            ctools_filtered_data_free(&filtered);
             free(treated_idx);
             free(control_idx);
             free(treated_pscore);
@@ -1270,7 +1271,7 @@ ST_retcode cpsmatch_main(const char *args)
         if (!sorted_controls || !sorted_available) {
             free(sorted_controls);
             free(sorted_available);
-            stata_data_free(&input_data);
+            ctools_filtered_data_free(&filtered);
             free(treated_idx);
             free(control_idx);
             free(treated_pscore);
@@ -1287,7 +1288,7 @@ ST_retcode cpsmatch_main(const char *args)
         /* Populate and sort control array */
         for (size_t i = 0; i < n_controls; i++) {
             sorted_controls[i].orig_idx = i;
-            sorted_controls[i].obs_idx = control_idx[i];  /* Stata observation index for stable sort */
+            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
             sorted_controls[i].pscore = control_pscore[i];
             sorted_available[i] = 1;
         }
@@ -1408,15 +1409,15 @@ ST_retcode cpsmatch_main(const char *args)
                 /* Mark control as used */
                 sorted_available[best_idx] = 0;
 
-                /* Get original control index */
+                /* Get original control index in filtered array */
                 size_t orig_ctrl_idx = sorted_controls[best_idx].orig_idx;
-                size_t match_obs_idx = control_idx[orig_ctrl_idx];
+                size_t match_filtered_idx = control_idx[orig_ctrl_idx];
 
-                /* Store match ID */
-                out_match[obs_idx] = (double)(match_obs_idx + 1);  /* 1-based */
+                /* Store match ID - use obs_map to get Stata observation number */
+                out_match[obs_idx] = (double)obs_map[match_filtered_idx];
 
-                /* Set weights */
-                out_weight[match_obs_idx] = 1.0;
+                /* Set weights - index by filtered position */
+                out_weight[match_filtered_idx] = 1.0;
                 out_weight[obs_idx] = 1.0;
             } else {
                 /* No match found (e.g., caliper constraint) - treated is off support */
@@ -1435,7 +1436,7 @@ ST_retcode cpsmatch_main(const char *args)
         /* Build sorted control index for O(log n) lookups */
         sorted_control_t *sorted_controls = malloc(n_controls * sizeof(sorted_control_t));
         if (!sorted_controls) {
-            stata_data_free(&input_data);
+            ctools_filtered_data_free(&filtered);
             free(treated_idx);
             free(control_idx);
             free(treated_pscore);
@@ -1452,7 +1453,7 @@ ST_retcode cpsmatch_main(const char *args)
         /* Populate sorted control array */
         for (size_t i = 0; i < n_controls; i++) {
             sorted_controls[i].orig_idx = i;
-            sorted_controls[i].obs_idx = control_idx[i];  /* Stata observation index for stable sort */
+            sorted_controls[i].obs_idx = obs_map[control_idx[i]];  /* Stata observation number for stable sort */
             sorted_controls[i].pscore = control_pscore[i];
         }
 
@@ -1475,11 +1476,11 @@ ST_retcode cpsmatch_main(const char *args)
             n_threads = omp_get_max_threads();
             #endif
 
-            /* Allocate thread-local weight buffers */
+            /* Allocate thread-local weight buffers - sized by n_filtered */
             double **thread_weights = malloc(n_threads * sizeof(double *));
             if (thread_weights) {
                 for (int i = 0; i < n_threads; i++) {
-                    thread_weights[i] = calloc(nobs_range, sizeof(double));
+                    thread_weights[i] = calloc(n_filtered, sizeof(double));
                 }
             }
 
@@ -1515,8 +1516,9 @@ ST_retcode cpsmatch_main(const char *args)
                     if (info.n_matches > 0) {
                         n_matched_treated++;
 
-                        /* Store first match ID */
-                        out_match[obs_idx] = (double)(control_idx[sorted_controls[info.start].orig_idx] + 1);
+                        /* Store first match ID - use obs_map for Stata observation number */
+                        size_t first_match_filtered = control_idx[sorted_controls[info.start].orig_idx];
+                        out_match[obs_idx] = (double)obs_map[first_match_filtered];
 
                         /* Accumulate weights - use local buffer if available */
                         double weight = 1.0 / info.n_matches;
@@ -1540,10 +1542,10 @@ ST_retcode cpsmatch_main(const char *args)
                 }
             }
 
-            /* Merge thread-local buffers in parallel */
+            /* Merge thread-local buffers in parallel - sized by n_filtered */
             if (thread_weights) {
                 #pragma omp parallel for schedule(static)
-                for (size_t j = 0; j < nobs_range; j++) {
+                for (size_t j = 0; j < n_filtered; j++) {
                     double sum = 0.0;
                     for (int i = 0; i < n_threads; i++) {
                         if (thread_weights[i]) {
@@ -1603,14 +1605,14 @@ ST_retcode cpsmatch_main(const char *args)
                 if (match_rc == 0 && result.n_matches > 0) {
                     n_matched_treated++;
 
-                    /* Store first match ID for this treated observation */
-                    out_match[obs_idx] = (double)(result.match_ids[0] + 1);  /* 1-based */
+                    /* Store first match ID - use obs_map for Stata observation number */
+                    out_match[obs_idx] = (double)obs_map[result.match_ids[0]];
 
-                    /* Accumulate weights for matched controls */
+                    /* Accumulate weights for matched controls (indexed by filtered position) */
                     for (int m = 0; m < result.n_matches; m++) {
-                        size_t match_idx = result.match_ids[m];
+                        size_t match_filtered_idx = result.match_ids[m];
                         #pragma omp atomic
-                        out_weight[match_idx] += result.match_weights[m];
+                        out_weight[match_filtered_idx] += result.match_weights[m];
                     }
 
                     /* Weight for treated observation = 1 */
@@ -1629,34 +1631,26 @@ ST_retcode cpsmatch_main(const char *args)
 
     free(treated_order);
 
-    /* Mark controls on support */
+    /* Mark controls on support - for psmatch2 compatibility, controls are always
+     * on support for ATT estimation. The common support restriction only applies
+     * to treated observations. */
     for (size_t i = 0; i < n_controls; i++) {
         size_t obs_idx = control_idx[i];
-        double ps = control_pscore[i];
-
-        if (opts.common_support) {
-            if (ps >= common_min && ps <= common_max) {
-                out_support[obs_idx] = 1.0;
-            } else {
-                out_support[obs_idx] = 0.0;
-            }
-        } else {
-            out_support[obs_idx] = 1.0;
-        }
+        out_support[obs_idx] = 1.0;
     }
 
     t_match = ctools_timer_seconds() - t_match;
 
     /* ========================================================================
-     * PHASE 5: Store results back to Stata
+     * PHASE 5: Store results back to Stata using obs_map
      * ======================================================================== */
     t_store = ctools_timer_seconds();
 
-    /* Store results - variable indices need +1 offset for SF_vstore
-     * This is because the indices from Stata count from 1, but SF_vstore
-     * uses a different indexing scheme in the plugin API context */
-    for (size_t i = 0; i < nobs_range; i++) {
-        ST_int obs = obs1 + (ST_int)i;
+    /* Store results - use obs_map to write to correct Stata observations.
+     * Output arrays are indexed by filtered position (0 to n_filtered-1).
+     * Variable indices need +1 offset for SF_vstore. */
+    for (size_t i = 0; i < n_filtered; i++) {
+        ST_int obs = (ST_int)obs_map[i];
 
         if (opts.out_weight_idx > 0) {
             SF_vstore(opts.out_weight_idx + 1, obs, out_weight[i]);
@@ -1697,7 +1691,7 @@ ST_retcode cpsmatch_main(const char *args)
     CTOOLS_SAVE_THREAD_INFO("_cpsmatch");
 
     /* Cleanup - use stata_data_free for input data (frees treatment, pscore, outcome) */
-    stata_data_free(&input_data);
+    ctools_filtered_data_free(&filtered);
     free(treated_idx);
     free(control_idx);
     free(treated_pscore);

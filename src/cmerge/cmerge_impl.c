@@ -132,8 +132,8 @@ static void cache_cleanup_on_error(void)
 {
     cache_lock_acquire();
     if (g_using_cache.loaded) {
-        stata_data_free(&g_using_cache.keys);
-        stata_data_free(&g_using_cache.keepusing);
+        ctools_filtered_data_free(&g_using_cache.keys);
+        ctools_filtered_data_free(&g_using_cache.keepusing);
         g_using_cache.loaded = 0;
     }
     g_cache_in_use = 0;
@@ -235,8 +235,8 @@ static ST_retcode cmerge_load_using(const char *args)
 
     /* Free any previous cache */
     if (g_using_cache.loaded) {
-        stata_data_free(&g_using_cache.keys);
-        stata_data_free(&g_using_cache.keepusing);
+        ctools_filtered_data_free(&g_using_cache.keys);
+        ctools_filtered_data_free(&g_using_cache.keepusing);
         g_using_cache.loaded = 0;
     }
 
@@ -250,36 +250,36 @@ static ST_retcode cmerge_load_using(const char *args)
     /* For merge_by_n, we don't need key variables - just keepusing */
     if (merge_by_n) {
         /* Initialize empty keys structure */
-        stata_data_init(&g_using_cache.keys);
-        g_using_cache.keys.nobs = SF_nobs();  /* Get nobs from Stata */
+        ctools_filtered_data_init(&g_using_cache.keys);
+        g_using_cache.keys.data.nobs = SF_nobs();  /* Get nobs from Stata */
 
         /* Load keepusing variables */
         if (n_keepusing > 0) {
             double t_load_keepusing_start = ctools_timer_ms();
-            rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+            rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
             if (rc != STATA_OK) {
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return 459;
             }
-            if (g_using_cache.keepusing.vars == NULL) {
+            if (g_using_cache.keepusing.data.vars == NULL) {
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
             t_load_keepusing = ctools_timer_ms() - t_load_keepusing_start;
-            g_using_cache.keys.nobs = g_using_cache.keepusing.nobs;
+            g_using_cache.keys.data.nobs = g_using_cache.keepusing.data.nobs;
         } else {
-            stata_data_init(&g_using_cache.keepusing);
+            ctools_filtered_data_init(&g_using_cache.keepusing);
         }
     } else {
         /* Standard merge: Load ONLY key variables */
         double t_load_keys_start = ctools_timer_ms();
-        rc = ctools_data_load_selective(&g_using_cache.keys, key_indices, nkeys, 0, 0);
+        rc = ctools_data_load(&g_using_cache.keys, key_indices, nkeys, 0, 0, CTOOLS_LOAD_SKIP_IF);
         if (rc != STATA_OK) {
             SF_error("cmerge: Failed to load using keys\n");
             return 459;
         }
         /* Critical null check - prevents crash if load failed silently */
-        if (g_using_cache.keys.vars == NULL) {
+        if (g_using_cache.keys.data.vars == NULL) {
             SF_error("cmerge: FATAL - keys.vars is NULL after load\n");
             return 920;
         }
@@ -288,25 +288,25 @@ static ST_retcode cmerge_load_using(const char *args)
         /* Load ONLY keepusing variables */
         if (n_keepusing > 0) {
             double t_load_keepusing_start = ctools_timer_ms();
-            rc = ctools_data_load_selective(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0);
+            rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
             if (rc != STATA_OK) {
-                stata_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keys);
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return 459;
             }
             /* Critical null check */
-            if (g_using_cache.keepusing.vars == NULL) {
-                stata_data_free(&g_using_cache.keys);
+            if (g_using_cache.keepusing.data.vars == NULL) {
+                ctools_filtered_data_free(&g_using_cache.keys);
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
             t_load_keepusing = ctools_timer_ms() - t_load_keepusing_start;
         } else {
-            stata_data_init(&g_using_cache.keepusing);
+            ctools_filtered_data_init(&g_using_cache.keepusing);
         }
     }
 
-    g_using_cache.nobs = g_using_cache.keys.nobs;
+    g_using_cache.nobs = g_using_cache.keys.data.nobs;
     g_using_cache.nkeys = nkeys;
     g_using_cache.n_keepusing = n_keepusing;
     g_using_cache.merge_by_n = merge_by_n;
@@ -320,8 +320,8 @@ static ST_retcode cmerge_load_using(const char *args)
 
         int *sort_vars = malloc(nkeys * sizeof(int));
         if (!sort_vars) {
-            stata_data_free(&g_using_cache.keys);
-            stata_data_free(&g_using_cache.keepusing);
+            ctools_filtered_data_free(&g_using_cache.keys);
+            ctools_filtered_data_free(&g_using_cache.keepusing);
             SF_error("cmerge: Memory allocation failed for sort_vars\n");
             return 920;
         }
@@ -334,19 +334,19 @@ static ST_retcode cmerge_load_using(const char *args)
         size_t *perm = ctools_safe_malloc2(nobs, sizeof(size_t));
         if (!perm) {
             free(sort_vars);
-            stata_data_free(&g_using_cache.keys);
-            stata_data_free(&g_using_cache.keepusing);
+            ctools_filtered_data_free(&g_using_cache.keys);
+            ctools_filtered_data_free(&g_using_cache.keepusing);
             SF_error("cmerge: Memory allocation failed for permutation\n");
             return 920;
         }
 
         /* Use _with_perm version to get permutation BEFORE it's reset to identity */
-        rc = ctools_sort_ips4o_with_perm(&g_using_cache.keys, sort_vars, nkeys, perm);
+        rc = ctools_sort_ips4o_with_perm(&g_using_cache.keys.data, sort_vars, nkeys, perm);
         if (rc != STATA_OK) {
             free(perm);
             free(sort_vars);
-            stata_data_free(&g_using_cache.keys);
-            stata_data_free(&g_using_cache.keepusing);
+            ctools_filtered_data_free(&g_using_cache.keys);
+            ctools_filtered_data_free(&g_using_cache.keepusing);
             SF_error("cmerge: Failed to sort using data\n");
             return 459;
         }
@@ -355,16 +355,16 @@ static ST_retcode cmerge_load_using(const char *args)
 
         /* Apply same permutation to keepusing */
         double t_apply_perm_start = ctools_timer_ms();
-        if (n_keepusing > 0 && g_using_cache.keepusing.vars != NULL) {
+        if (n_keepusing > 0 && g_using_cache.keepusing.data.vars != NULL) {
             for (int v = 0; v < n_keepusing; v++) {
-                stata_variable *var = &g_using_cache.keepusing.vars[v];
+                stata_variable *var = &g_using_cache.keepusing.data.vars[v];
                 if (var->type == STATA_TYPE_DOUBLE) {
                     double *new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
-                        stata_data_free(&g_using_cache.keys);
-                        stata_data_free(&g_using_cache.keepusing);
+                        ctools_filtered_data_free(&g_using_cache.keys);
+                        ctools_filtered_data_free(&g_using_cache.keepusing);
                         SF_error("cmerge: Memory allocation failed in permutation\n");
                         return 920;
                     }
@@ -374,8 +374,8 @@ static ST_retcode cmerge_load_using(const char *args)
                             ctools_aligned_free(new_data);
                             free(perm);
                             free(sort_vars);
-                            stata_data_free(&g_using_cache.keys);
-                            stata_data_free(&g_using_cache.keepusing);
+                            ctools_filtered_data_free(&g_using_cache.keys);
+                            ctools_filtered_data_free(&g_using_cache.keepusing);
                             SF_error("cmerge: Invalid permutation index\n");
                             return 459;
                         }
@@ -388,8 +388,8 @@ static ST_retcode cmerge_load_using(const char *args)
                     if (!new_data) {
                         free(perm);
                         free(sort_vars);
-                        stata_data_free(&g_using_cache.keys);
-                        stata_data_free(&g_using_cache.keepusing);
+                        ctools_filtered_data_free(&g_using_cache.keys);
+                        ctools_filtered_data_free(&g_using_cache.keepusing);
                         SF_error("cmerge: Memory allocation failed in permutation\n");
                         return 920;
                     }
@@ -399,8 +399,8 @@ static ST_retcode cmerge_load_using(const char *args)
                             ctools_aligned_free(new_data);
                             free(perm);
                             free(sort_vars);
-                            stata_data_free(&g_using_cache.keys);
-                            stata_data_free(&g_using_cache.keepusing);
+                            ctools_filtered_data_free(&g_using_cache.keys);
+                            ctools_filtered_data_free(&g_using_cache.keepusing);
                             SF_error("cmerge: Invalid permutation index\n");
                             return 459;
                         }
@@ -459,9 +459,9 @@ static ST_retcode cmerge_execute(const char *args)
 
     /* Critical null check - prevents crash if cache was corrupted
        Note: For merge_by_n mode, keys.vars is intentionally NULL */
-    if (g_using_cache.keys.vars == NULL && !g_using_cache.merge_by_n) {
+    if (g_using_cache.keys.data.vars == NULL && !g_using_cache.merge_by_n) {
         cache_lock_release();
-        SF_error("cmerge: FATAL - g_using_cache.keys.vars is NULL!\n");
+        SF_error("cmerge: FATAL - g_using_cache.keys.data.vars is NULL!\n");
         return 459;
     }
 
@@ -660,8 +660,9 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* Load all master variables using parallel I/O */
-    stata_data master_data;
-    rc = ctools_data_load_selective(&master_data, all_var_indices, master_nvars, 1, master_nobs);
+    ctools_filtered_data master_data;
+    ctools_filtered_data_init(&master_data);
+    rc = ctools_data_load(&master_data, all_var_indices, master_nvars, 1, master_nobs, CTOOLS_LOAD_SKIP_IF);
     if (rc != STATA_OK) {
         free(all_var_indices);
         cache_cleanup_on_error();
@@ -670,10 +671,10 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* Critical null check - prevents crash if load failed silently */
-    if (master_data.vars == NULL) {
+    if (master_data.data.vars == NULL) {
         free(all_var_indices);
         cache_cleanup_on_error();
-        SF_error("cmerge: FATAL - master_data.vars is NULL after load!\n");
+        SF_error("cmerge: FATAL - master_data.data.vars is NULL after load!\n");
         return 920;
     }
     double t_load = ctools_timer_ms() - t_start;
@@ -691,7 +692,7 @@ static ST_retcode cmerge_execute(const char *args)
         /* Build sort variable indices (within master_data, 1-based) */
         int *sort_vars = malloc(nkeys * sizeof(int));
         if (!sort_vars) {
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             SF_error("cmerge: Failed to allocate sort_vars\n");
@@ -706,18 +707,18 @@ static ST_retcode cmerge_execute(const char *args)
         sort_perm = ctools_safe_malloc2(master_nobs, sizeof(size_t));
         if (!sort_perm) {
             free(sort_vars);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return 920;
         }
 
-        rc = ctools_sort_ips4o_with_perm(&master_data, sort_vars, nkeys, sort_perm);
+        rc = ctools_sort_ips4o_with_perm(&master_data.data, sort_vars, nkeys, sort_perm);
         free(sort_vars);
 
         if (rc != STATA_OK) {
             free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return rc;
@@ -746,7 +747,7 @@ static ST_retcode cmerge_execute(const char *args)
         output_specs = ctools_safe_malloc2(max_nobs, sizeof(cmerge_output_spec_t));
         if (!output_specs) {
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return 920;
@@ -776,12 +777,12 @@ static ST_retcode cmerge_execute(const char *args)
         /* Standard merge: create keys view and perform sorted join */
         stata_data master_keys_view;
         stata_data_init(&master_keys_view);
-        master_keys_view.nobs = master_data.nobs;
+        master_keys_view.nobs = master_data.data.nobs;
         master_keys_view.nvars = nkeys;
         master_keys_view.vars = malloc(nkeys * sizeof(stata_variable));
         if (!master_keys_view.vars) {
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return 920;
@@ -792,21 +793,21 @@ static ST_retcode cmerge_execute(const char *args)
             int var_idx = master_key_indices[k] - 1;  /* Convert to 0-based */
 
             /* Critical bounds check - prevents crash from bad indices */
-            if (var_idx < 0 || (size_t)var_idx >= master_data.nvars) {
+            if (var_idx < 0 || (size_t)var_idx >= master_data.data.nvars) {
                 SF_error("cmerge: key variable index out of bounds\n");
                 free(master_keys_view.vars);
                 if (sort_perm) free(sort_perm);
-                stata_data_free(&master_data);
+                ctools_filtered_data_free(&master_data);
                 free(all_var_indices);
                 cache_cleanup_on_error();
                 return 459;
             }
 
-            master_keys_view.vars[k] = master_data.vars[var_idx];
+            master_keys_view.vars[k] = master_data.data.vars[var_idx];
         }
 
         int64_t output_nobs_signed = cmerge_sorted_join(
-            &master_keys_view, &g_using_cache.keys,
+            &master_keys_view, &g_using_cache.keys.data,
             nkeys, merge_type, &output_specs);
 
         /* Free the view (but not the underlying data which belongs to master_data) */
@@ -814,7 +815,7 @@ static ST_retcode cmerge_execute(const char *args)
 
         if (output_nobs_signed < 0) {
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             SF_error("cmerge: Merge join failed\n");
@@ -824,7 +825,7 @@ static ST_retcode cmerge_execute(const char *args)
         /* Stata max obs is 2^31-1; reject if exceeded */
         if (output_nobs_signed > INT32_MAX) {
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             SF_error("cmerge: Merge result exceeds Stata observation limit\n");
@@ -844,18 +845,18 @@ static ST_retcode cmerge_execute(const char *args)
     if (!master_orig_rows) {
         free(output_specs);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         return 920;
     }
 
-    /* _orig_row is at index orig_row_idx-1 in master_data.vars */
+    /* _orig_row is at index orig_row_idx-1 in master_data.data.vars */
     /* Bounds check for orig_row_idx */
-    if (orig_row_idx <= 0 || (size_t)(orig_row_idx - 1) >= master_data.nvars) {
+    if (orig_row_idx <= 0 || (size_t)(orig_row_idx - 1) >= master_data.data.nvars) {
         free(output_specs);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         free(master_orig_rows);
         cache_cleanup_on_error();
@@ -863,7 +864,7 @@ static ST_retcode cmerge_execute(const char *args)
         return 459;
     }
 
-    double *orig_row_data = master_data.vars[orig_row_idx - 1].data.dbl;
+    double *orig_row_data = master_data.data.vars[orig_row_idx - 1].data.dbl;
 
     for (size_t i = 0; i < output_nobs; i++) {
         if (output_specs[i].master_sorted_row >= 0) {
@@ -887,7 +888,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(output_specs);
             free(master_orig_rows);
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return 920;
@@ -914,7 +915,7 @@ static ST_retcode cmerge_execute(const char *args)
             free(output_specs);
             free(master_orig_rows);
             if (sort_perm) free(sort_perm);
-            stata_data_free(&master_data);
+            ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
             return 920;
@@ -981,7 +982,7 @@ static ST_retcode cmerge_execute(const char *args)
         free(output_specs);
         free(master_orig_rows);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         return 920;
@@ -1001,7 +1002,7 @@ static ST_retcode cmerge_execute(const char *args)
         }
         if (is_shared_keepusing) continue;
 
-        output_var_indices[n_output_vars] = (int)v;  /* Index in master_data.vars */
+        output_var_indices[n_output_vars] = (int)v;  /* Index in master_data.data.vars */
         output_var_stata_idx[n_output_vars] = stata_idx;
 
         /* Check if key variable */
@@ -1032,7 +1033,7 @@ static ST_retcode cmerge_execute(const char *args)
         free(output_specs);
         free(master_orig_rows);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         return 920;
@@ -1046,7 +1047,7 @@ static ST_retcode cmerge_execute(const char *args)
         free(output_specs);
         free(master_orig_rows);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         return 920;
@@ -1057,7 +1058,7 @@ static ST_retcode cmerge_execute(const char *args)
     size_t n_string_vars = 0;
     for (size_t vi = 0; vi < n_output_vars; vi++) {
         int src_var_idx = output_var_indices[vi];
-        if (master_data.vars[src_var_idx].type == STATA_TYPE_STRING) {
+        if (master_data.data.vars[src_var_idx].type == STATA_TYPE_STRING) {
             n_string_vars++;
         }
     }
@@ -1105,7 +1106,7 @@ static ST_retcode cmerge_execute(const char *args)
         if (local_alloc_failed) continue;
 
         int src_var_idx = output_var_indices[vi];
-        stata_variable *src_var = &master_data.vars[src_var_idx];
+        stata_variable *src_var = &master_data.data.vars[src_var_idx];
         stata_variable *dst_var = &output_data.vars[vi];
 
         dst_var->nobs = output_nobs;
@@ -1137,7 +1138,7 @@ static ST_retcode cmerge_execute(const char *args)
                 int is_key = output_var_is_key[vi];
                 int key_idx = output_var_key_idx[vi];
                 double *using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
-                                          g_using_cache.keys.vars[key_idx].data.dbl : NULL;
+                                          g_using_cache.keys.data.vars[key_idx].data.dbl : NULL;
 
                 /* Use master_sorted_row to index into sorted master_data */
                 for (size_t i = 0; i < output_nobs; i++) {
@@ -1179,7 +1180,7 @@ static ST_retcode cmerge_execute(const char *args)
                 int is_key = output_var_is_key[vi];
                 int key_idx = output_var_key_idx[vi];
                 char **using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
-                                         g_using_cache.keys.vars[key_idx].data.str : NULL;
+                                         g_using_cache.keys.data.vars[key_idx].data.str : NULL;
 
                 /* Use master_sorted_row to index into sorted master_data */
                 for (size_t i = 0; i < output_nobs; i++) {
@@ -1228,7 +1229,7 @@ static ST_retcode cmerge_execute(const char *args)
         free(output_specs);
         free(master_orig_rows);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         return 920;
@@ -1272,7 +1273,7 @@ static ST_retcode cmerge_execute(const char *args)
         free(output_specs);
         free(master_orig_rows);
         if (sort_perm) free(sort_perm);
-        stata_data_free(&master_data);
+        ctools_filtered_data_free(&master_data);
         free(all_var_indices);
         cache_cleanup_on_error();
         SF_error("cmerge: Failed to store output data\n");
@@ -1380,13 +1381,13 @@ static ST_retcode cmerge_execute(const char *args)
     free(output_specs);
     free(master_orig_rows);
     if (sort_perm) free(sort_perm);
-    stata_data_free(&master_data);
+    ctools_filtered_data_free(&master_data);
     free(all_var_indices);
 
     /* Free using cache (protected by lock) */
     cache_lock_acquire();
-    stata_data_free(&g_using_cache.keys);
-    stata_data_free(&g_using_cache.keepusing);
+    ctools_filtered_data_free(&g_using_cache.keys);
+    ctools_filtered_data_free(&g_using_cache.keepusing);
     g_using_cache.loaded = 0;
     g_cache_in_use = 0;
     cache_lock_release();
@@ -1434,8 +1435,8 @@ static ST_retcode cmerge_clear(void)
     }
 
     if (g_using_cache.loaded) {
-        stata_data_free(&g_using_cache.keys);
-        stata_data_free(&g_using_cache.keepusing);
+        ctools_filtered_data_free(&g_using_cache.keys);
+        ctools_filtered_data_free(&g_using_cache.keepusing);
         g_using_cache.loaded = 0;
     }
 

@@ -5,7 +5,7 @@
  * Part of the ctools suite
  *
  * Algorithm:
- * 1. Bulk load source string variable via ctools_data_load_selective()
+ * 1. Bulk load source string variable via ctools_data_load()
  * 2. Build hash table of unique values from loaded strings
  * 3. Sort unique strings alphabetically, assign codes 1, 2, 3, ...
  * 4. Map original strings to sorted codes, write numeric output
@@ -232,19 +232,40 @@ ST_retcode cencode_main(const char *args)
         return 198;
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    nobs = (size_t)(obs2 - obs1 + 1);
+    t_parse = ctools_timer_seconds();
+    double time_parse = t_parse - t_start;
+
+    /* ========================================================================
+     * Bulk load source string variable with if/in filtering
+     * Uses ctools_data_load() to load only filtered observations,
+     * eliminating the need for a separate if_mask array.
+     * ======================================================================== */
+    int src_var_indices[1] = { var_idx };
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, src_var_indices, 1, 0, 0, 0);
+
+    if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
+        if (have_existing) cencode_hash_free(&existing_ht);
+        free(args_copy);
+        SF_error("cencode: failed to load source string data\n");
+        return 920;
+    }
+
+    nobs = filtered.data.nobs;  /* Number of filtered observations */
+    perm_idx_t *obs_map = filtered.obs_map;  /* Maps filtered index -> Stata obs */
 
     if (nobs == 0) {
-        /* Empty dataset - match Stata's encode behavior (return success) */
+        /* No observations match if/in - match Stata's encode behavior (return success) */
+        ctools_filtered_data_free(&filtered);
         if (have_existing) cencode_hash_free(&existing_ht);
         free(args_copy);
         SF_scal_save("_cencode_n_unique", 0);
         SF_scal_save("_cencode_n_chunks", 1);
         SF_macro_save("_cencode_labels_0", "");
-        SF_scal_save("_cencode_time_parse", ctools_timer_seconds() - t_start);
-        SF_scal_save("_cencode_time_load", 0);
+        SF_scal_save("_cencode_time_parse", time_parse);
+        SF_scal_save("_cencode_time_load", ctools_timer_seconds() - t_parse);
         SF_scal_save("_cencode_time_collect", 0);
         SF_scal_save("_cencode_time_sort", 0);
         SF_scal_save("_cencode_time_encode", 0);
@@ -253,38 +274,7 @@ ST_retcode cencode_main(const char *args)
         return 0;
     }
 
-    t_parse = ctools_timer_seconds();
-    double time_parse = t_parse - t_start;
-
-    /* ========================================================================
-     * Bulk load source string variable using ctools_data_load_selective()
-     * ======================================================================== */
-    int src_var_indices[1] = { var_idx };
-    stata_data src_data;
-    stata_data_init(&src_data);
-    stata_retcode load_rc = ctools_data_load_selective(&src_data, src_var_indices, 1, obs1, obs2);
-
-    if (load_rc != STATA_OK) {
-        if (have_existing) cencode_hash_free(&existing_ht);
-        free(args_copy);
-        SF_error("cencode: failed to load source string data\n");
-        return 920;
-    }
-
-    char **src_strings = src_data.vars[0].data.str;
-
-    /* Build if-condition mask (sequential — SPI calls) */
-    unsigned char *if_mask = malloc(nobs);
-    if (!if_mask) {
-        stata_data_free(&src_data);
-        if (have_existing) cencode_hash_free(&existing_ht);
-        free(args_copy);
-        SF_error("cencode: memory allocation failed\n");
-        return 920;
-    }
-    for (size_t i = 0; i < nobs; i++) {
-        if_mask[i] = SF_ifobs((ST_int)(obs1 + (ST_int)i)) ? 1 : 0;
-    }
+    char **src_strings = filtered.data.vars[0].data.str;
 
     double time_load = ctools_timer_seconds() - t_parse;
 
@@ -296,8 +286,7 @@ ST_retcode cencode_main(const char *args)
     int need_ht = !have_existing;  /* Only need hash table if not using existing labels */
     if (need_ht) {
         if (cencode_hash_init(&ht, CENCODE_HASH_INIT_SIZE) != 0) {
-            free(if_mask);
-            stata_data_free(&src_data);
+            ctools_filtered_data_free(&filtered);
             if (have_existing) cencode_hash_free(&existing_ht);
             free(args_copy);
             SF_error("cencode: memory allocation failed for hash table\n");
@@ -305,12 +294,11 @@ ST_retcode cencode_main(const char *args)
         }
     }
 
-    /* Allocate array to store codes for each observation */
+    /* Allocate array to store codes for each filtered observation */
     int *obs_codes = malloc(nobs * sizeof(int));
     if (!obs_codes) {
         if (need_ht) cencode_hash_free(&ht);
-        free(if_mask);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         if (have_existing) cencode_hash_free(&existing_ht);
         free(args_copy);
         SF_error("cencode: memory allocation failed for observation codes\n");
@@ -320,13 +308,8 @@ ST_retcode cencode_main(const char *args)
 
     int collect_error = 0;
 
+    /* Process filtered observations - no if_mask check needed since data is pre-filtered */
     for (size_t i = 0; i < nobs && !collect_error; i++) {
-        /* Skip observations that don't meet the if condition */
-        if (!if_mask[i]) {
-            obs_codes[i] = 0;  /* not in sample */
-            continue;
-        }
-
         char *str_ptr = src_strings[i];
 
         /* Empty or NULL string -> missing */
@@ -351,13 +334,10 @@ ST_retcode cencode_main(const char *args)
         }
     }
 
-    /* Free if_mask - no longer needed */
-    free(if_mask);
-
     if (collect_error) {
         free(obs_codes);
         if (need_ht) cencode_hash_free(&ht);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         if (have_existing) cencode_hash_free(&existing_ht);
         free(args_copy);
         SF_error("cencode: memory allocation failed during collection\n");
@@ -372,9 +352,9 @@ ST_retcode cencode_main(const char *args)
      * ======================================================================== */
 
     if (have_existing) {
-        /* Write encoded values directly - obs_codes already contain final codes */
+        /* Write encoded values directly - use obs_map for Stata observation indexing */
         for (size_t i = 0; i < nobs; i++) {
-            ST_int obs = obs1 + (ST_int)i;
+            ST_int obs = (ST_int)obs_map[i];
             int code = obs_codes[i];
 
             if (code > 0) {
@@ -385,7 +365,7 @@ ST_retcode cencode_main(const char *args)
         }
 
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&existing_ht);
         free(args_copy);
 
@@ -422,15 +402,16 @@ ST_retcode cencode_main(const char *args)
     size_t n_unique = ht.count;
 
     if (n_unique == 0) {
+        /* All values were empty/missing - write all missing using obs_map */
         for (size_t i = 0; i < nobs; i++) {
-            SF_vstore(gen_idx, obs1 + (ST_int)i, SV_missval);
+            SF_vstore(gen_idx, (ST_int)obs_map[i], SV_missval);
         }
         SF_scal_save("_cencode_n_unique", 0);
         SF_scal_save("_cencode_n_chunks", 1);
         SF_macro_save("_cencode_labels_0", "");
 
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
 
@@ -451,7 +432,7 @@ ST_retcode cencode_main(const char *args)
                  n_unique, CENCODE_MAX_LABELS);
         SF_error(msg);
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
         return 198;
@@ -464,7 +445,7 @@ ST_retcode cencode_main(const char *args)
     cencode_string_entry *sorted_strings = malloc(n_unique * sizeof(cencode_string_entry));
     if (!sorted_strings) {
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
         SF_error("cencode: memory allocation failed\n");
@@ -486,7 +467,7 @@ ST_retcode cencode_main(const char *args)
     if (n_unique >= SIZE_MAX) {
         free(sorted_strings);
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
         SF_error("cencode: too many unique values\n");
@@ -498,7 +479,7 @@ ST_retcode cencode_main(const char *args)
     if (!code_map) {
         free(sorted_strings);
         free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
         SF_error("cencode: memory allocation failed\n");
@@ -517,10 +498,11 @@ ST_retcode cencode_main(const char *args)
     /* ========================================================================
      * Pass 2: Apply code_map to stored codes, write encoded values
      * No need to re-read strings - we stored the original codes in Pass 1
+     * Use obs_map for correct Stata observation indexing
      * ======================================================================== */
 
     for (size_t i = 0; i < nobs; i++) {
-        ST_int obs = obs1 + (ST_int)i;
+        ST_int obs = (ST_int)obs_map[i];
         int orig_code = obs_codes[i];
 
         if (orig_code > 0) {
@@ -550,8 +532,7 @@ ST_retcode cencode_main(const char *args)
     if (!macro_buf) {
         free(code_map);
         free(sorted_strings);
-        free(obs_codes);
-        stata_data_free(&src_data);
+        ctools_filtered_data_free(&filtered);
         cencode_hash_free(&ht);
         free(args_copy);
         SF_error("cencode: memory allocation failed\n");
@@ -617,7 +598,7 @@ ST_retcode cencode_main(const char *args)
 
     free(code_map);
     free(sorted_strings);
-    stata_data_free(&src_data);
+    ctools_filtered_data_free(&filtered);
     cencode_hash_free(&ht);
     free(args_copy);
 
