@@ -322,7 +322,7 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
                                             ST_double quantile,
                                             cqreg_bw_method bw_method,
                                             const cqreg_ipm_config *ipm_config,
-                                            const ST_double *main_beta,
+                                            const ST_double *main_beta __attribute__((unused)),
                                             ST_double precomputed_bw)
 {
     ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);

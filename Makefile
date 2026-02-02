@@ -70,6 +70,9 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_data_io.c \
               $(SRC_DIR)/ctools_hdfe_utils.c \
               $(SRC_DIR)/ctools_ols.c \
+              $(SRC_DIR)/ctools_parse.c \
+              $(SRC_DIR)/ctools_hash.c \
+              $(SRC_DIR)/ctools_sort_pairs.c \
               $(SRC_DIR)/ctools_sort_radix_lsd.c \
               $(SRC_DIR)/ctools_sort_radix_msd.c \
               $(SRC_DIR)/ctools_sort_timsort.c \
@@ -102,10 +105,9 @@ CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c \
                $(SRC_DIR)/cexport/cexport_parse.c \
                $(SRC_DIR)/cexport/cexport_xlsx.c
 
-# cmerge module
+# cmerge module (cmerge_radix_sort.c consolidated into ctools_sort_pairs.c)
 CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
               $(SRC_DIR)/cmerge/cmerge_memory.c \
-              $(SRC_DIR)/cmerge/cmerge_radix_sort.c \
               $(SRC_DIR)/cmerge/cmerge_keys.c \
               $(SRC_DIR)/cmerge/cmerge_group_search.c \
               $(SRC_DIR)/cmerge/cmerge_join.c \
@@ -186,7 +188,10 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_hdfe_utils.h \
                $(SRC_DIR)/ctools_ols.h \
                $(SRC_DIR)/ctools_config.h \
-               $(SRC_DIR)/ctools_spi.h
+               $(SRC_DIR)/ctools_spi.h \
+               $(SRC_DIR)/ctools_parse.h \
+               $(SRC_DIR)/ctools_hash.h \
+               $(SRC_DIR)/ctools_sort_pairs.h
 
 CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h \
                 $(SRC_DIR)/csort/csort_stream.h

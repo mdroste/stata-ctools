@@ -12,10 +12,6 @@
 {phang}
 {bf:csort} {hline 2} C-accelerated parallel sorting for Stata datasets
 
-{pstd}
-{cmd:csort} is a high-performance drop-in replacement for Stata's {help sort:sort}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}

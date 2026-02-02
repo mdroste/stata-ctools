@@ -19,7 +19,14 @@
 *!   - replace option: replace original variables with encoded versions
 
 program define cencode, rclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     syntax varlist(string) [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
 

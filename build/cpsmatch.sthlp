@@ -11,10 +11,6 @@
 {phang}
 {bf:cpsmatch} {hline 2} C-accelerated propensity score matching for Stata
 
-{pstd}
-{cmd:cpsmatch} is a high-performance implementation of propensity score matching,
-compatible with {help psmatch2:psmatch2} syntax and functionality.
-
 
 {marker syntax}{...}
 {title:Syntax}

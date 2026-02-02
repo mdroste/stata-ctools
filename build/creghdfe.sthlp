@@ -10,10 +10,6 @@
 {phang}
 {bf:creghdfe} {hline 2} C-accelerated high-dimensional fixed effects regression
 
-{pstd}
-{cmd:creghdfe} is a high-performance replacement for {cmd:reghdfe} version 6.0+
-by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe":sergiocorreia/reghdfe}).
-
 
 {marker syntax}{...}
 {title:Syntax}

@@ -11,10 +11,6 @@
 {phang}
 {bf:cencode} {hline 2} C-accelerated parallel string encoding for Stata
 
-{pstd}
-{cmd:cencode} is a high-performance drop-in replacement for Stata's {help encode:encode}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}

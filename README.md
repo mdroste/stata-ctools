@@ -1,8 +1,14 @@
-# ctools
+  ```
+   ██████╗████████╗ ██████╗  ██████╗ ██╗     ███████╗
+  ██╔════╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝  Fast drop-in replacements
+  ██║        ██║   ██║   ██║██║   ██║██║     ███████╗  for various Stata programs
+  ██║        ██║   ██║   ██║██║   ██║██║     ╚════██║
+  ╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║  
+   ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+  ```
 
-[![PluginsSome ](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-
-Very fast, C-accelerated drop-in replacements for a variety of Stata commands. Written with Claude Code. 
+[![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
+![Version](https://img.shields.io/badge/version-0.9.0_(February_2026)-blue)
 
 **This project is pre-release. It has not been exhaustively tested. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
@@ -28,15 +34,16 @@ Very fast, C-accelerated drop-in replacements for a variety of Stata commands. W
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
 | `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
-Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way (high-dimensional) fixed effects and the alternative procedure to control for covariates described in [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576); `csort` allows the user to select one of several different implemented parallelized sorting algorithms. Internal help files for each ctools program provide complete documentation.
+Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.MD](FEATURES.MD) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
 
-Speedups depend on a lot of factors. Most commands (e.g. `creghdfe`, `cbinscatter`) will be much faster on pretty much any dataset. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back); these commands can be *slower* than built-in `sort`/`merge` if your dataset is sufficiently wide (many variables). If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably be faster.
-
+Most ctools commands (e.g. `creghdfe`, `cbinscatter`) will be much faster on pretty much any dataset. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back), and themselves replace internal compiled Stata routines that are not terribly inefficient. As a result, it is possible for `csort` or `cmerge` to be *slower* than  `sort`/`merge` if your dataset is sufficiently wide (many variables). If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably be significantly faster.
 
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 16.0+. It does not require any dependencies.
+ctools is compatible with Stata 14.1+ (plugin interface version 3.0). It does not require any dependencies.
+
+**Note:** ctools does not support datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
 
 ## Installation
@@ -72,11 +79,10 @@ If you have a workstation/server CPU with lots of cache, you might want to try p
 See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
 
-## Usage Notes and Limitations
+## Usage Notes
 
 - All ctools programs follow a basic structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. *This means that ctools programs require more memory than the programs they replace.* In addition, some commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance,  `csort`'s runtime is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
 - The default options for `csort` and `cmerge` require a lot of memory. For `csort`, you probably require 2-3 times as much memory as your dataset. For `csort`, you can reduce this memory overhead with the optional argument `streaming`, which reads variables a handful at a time rather than all at once (at a modest cost to runtime).
-- ctools does not work with datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's API for C plugins and can only be addressed with an internal Stata update.
 
 
 ## Authorship

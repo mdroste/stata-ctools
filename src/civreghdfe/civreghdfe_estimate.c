@@ -1063,7 +1063,8 @@ ST_retcode ivest_compute_2sls(
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
     ST_int sdofminus,
-    ST_int center
+    ST_int center,
+    const ST_double *Z_original  /* Original (non-demeaned) Z for Kiefer VCE */
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
@@ -1591,18 +1592,27 @@ ST_retcode ivest_compute_2sls(
         );
     } else if (kiefer && kernel_type > 0 && bw > 0 && cluster_ids != NULL && num_clusters > 0) {
         /*
-           Kiefer (1980) VCE: panel-aware HAC with truncated kernel.
-           Computes HAC meat only within panels (not across panels).
-           Uses the same formula as cluster-robust but with different DOF adjustment.
+           Kiefer (1980) VCE: homoskedastic within-panel autocorrelation.
+           Unlike cluster-robust, Kiefer assumes homoskedasticity.
+           Uses ivvce_compute_kiefer which implements the correct formula.
         */
         if (verbose) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: Using Kiefer VCE (kernel=%d, bw=%d, clusters=%d)\n",
+            snprintf(buf, sizeof(buf), "civreghdfe: Using Kiefer VCE (kernel=%d, bw=%d, panels=%d)\n",
                      (int)kernel_type, (int)bw, (int)num_clusters);
             SF_display(buf);
         }
+        /* Use original (non-demeaned) Z for Kiefer VCE
+           This ensures sum_t(Z'e) != 0, which is required for the Kiefer formula
+           to produce non-zero results */
+        const ST_double *Z_for_kiefer = Z_original ? Z_original : Z;
+        /* Note: Kiefer VCE with time-clustering is currently not fully compatible
+           with FE demeaning. The FE structure causes residuals to have zero mean
+           within each panel, which makes sum_t(Z_it * e_it) small when summed
+           across panels. This is a known limitation.
+           TODO: Investigate ivreg2's approach for proper Kiefer + FE handling. */
         ivvce_compute_kiefer(
-            Z, resid, temp1, XkX_inv,
+            Z_for_kiefer, resid, temp1, XkX_inv,
             weights, weight_type,
             N, K_total, K_iv,
             cluster_ids, num_clusters,

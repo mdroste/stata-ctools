@@ -700,7 +700,6 @@ ST_retcode compute_quantile_cutpoints(
     ST_double *cutpoints
 ) {
     ST_int q, idx;
-    ST_double p;
 
     if (w_sorted == NULL) {
         /*

@@ -26,7 +26,14 @@
 *!   Use when you don't need Stata to recognize the data as sorted (faster).
 
 program define csort, rclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     syntax varlist [if] [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby]
 

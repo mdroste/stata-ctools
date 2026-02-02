@@ -16,7 +16,14 @@
 *! performance on large datasets.
 
 program define cdestring
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     * Parse syntax - note varlist is optional (defaults to all string vars)
     syntax [varlist(string)] [if] [in], [Generate(string) replace ///

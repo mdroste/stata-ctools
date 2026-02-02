@@ -11,7 +11,7 @@
  * - Mahalanobis distance matching
  *
  * Algorithm Overview:
- * 1. Load treatment indicator and propensity scores from Stata
+ * 1. Load treatment indicator and propensity scores from Stata using ctools_data_load_selective()
  * 2. Build index structure for control observations
  * 3. For each treated observation, find matches using specified method
  * 4. Compute matching weights
@@ -137,7 +137,7 @@ static double apply_kernel(double u, kernel_type_t kernel)
 }
 
 /* ============================================================================
- * Comparison function for sorting by distance
+ * Comparison functions for sorting
  * ============================================================================ */
 
 typedef struct {
@@ -152,6 +152,68 @@ static int compare_by_dist(const void *a, const void *b)
     if (pa->dist < pb->dist) return -1;
     if (pa->dist > pb->dist) return 1;
     return 0;
+}
+
+/* Structure for sorted control index */
+typedef struct {
+    size_t orig_idx;     /* Original index in control arrays */
+    size_t obs_idx;      /* Original Stata observation index (for stable sort) */
+    double pscore;       /* Propensity score for binary search */
+} sorted_control_t;
+
+/* Sort by pscore, then by observation index for stability (matches psmatch2 behavior) */
+static int compare_by_pscore(const void *a, const void *b)
+{
+    const sorted_control_t *pa = (const sorted_control_t *)a;
+    const sorted_control_t *pb = (const sorted_control_t *)b;
+    if (pa->pscore < pb->pscore) return -1;
+    if (pa->pscore > pb->pscore) return 1;
+    /* Tie-breaker: sort by Stata observation index (ascending) for psmatch2 compatibility */
+    if (pa->obs_idx < pb->obs_idx) return -1;
+    if (pa->obs_idx > pb->obs_idx) return 1;
+    return 0;
+}
+
+static int compare_by_pscore_desc(const void *a, const void *b)
+{
+    const sorted_control_t *pa = (const sorted_control_t *)a;
+    const sorted_control_t *pb = (const sorted_control_t *)b;
+    if (pa->pscore > pb->pscore) return -1;
+    if (pa->pscore < pb->pscore) return 1;
+    /* Tie-breaker: sort by Stata observation index (ascending) for psmatch2 compatibility */
+    if (pa->obs_idx < pb->obs_idx) return -1;
+    if (pa->obs_idx > pb->obs_idx) return 1;
+    return 0;
+}
+
+/* Binary search to find leftmost index where pscore >= target */
+static size_t binary_search_left(const sorted_control_t *sorted, size_t n, double target)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (sorted[mid].pscore < target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
+}
+
+/* Binary search to find rightmost index where pscore <= target */
+static size_t binary_search_right(const sorted_control_t *sorted, size_t n, double target)
+{
+    size_t lo = 0, hi = n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (sorted[mid].pscore <= target) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    return lo;
 }
 
 /* ============================================================================
@@ -321,9 +383,12 @@ static int parse_options(const char *args, cpsmatch_options *opts)
 }
 
 /* ============================================================================
- * Nearest Neighbor Matching
+ * Nearest Neighbor Matching (Original O(n) version for noreplacement)
+ * Note: Currently unused - replaced by binary search version.
+ *       Retained for potential future use with different matching algorithms.
  * ============================================================================ */
 
+__attribute__((unused))
 static int find_nearest_neighbors(
     double pscore_treated,
     double *control_pscores,
@@ -437,9 +502,338 @@ static int find_nearest_neighbors(
 }
 
 /* ============================================================================
- * Kernel Matching
+ * FAST Nearest Neighbor Matching using sorted index (O(log n) per treated)
  * ============================================================================ */
 
+static int find_nearest_neighbors_fast(
+    double pscore_treated,
+    const sorted_control_t *sorted_controls,
+    size_t *control_indices,
+    size_t n_controls,
+    int n_neighbors,
+    double caliper,
+    int handle_ties,
+    match_result *result)
+{
+    if (n_controls == 0) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        return 0;
+    }
+
+    /* Binary search to find insertion point */
+    size_t insert_pos = binary_search_left(sorted_controls, n_controls, pscore_treated);
+
+    /* For k-NN, we need to find k nearest neighbors around insert_pos
+     * Use two pointers expanding outward from insert_pos */
+
+    /* Pre-allocate for max possible matches (n_neighbors + ties) */
+    int max_alloc = n_neighbors * 2 + 10;  /* Some extra for ties */
+    if (max_alloc > (int)n_controls) max_alloc = (int)n_controls;
+
+    idx_dist_pair *candidates = malloc(max_alloc * sizeof(idx_dist_pair));
+    if (!candidates) return -1;
+
+    int n_candidates = 0;
+
+    /* Two-pointer expansion from insert_pos */
+    ssize_t left = (ssize_t)insert_pos - 1;
+    size_t right = insert_pos;
+
+    /* First, find the k nearest neighbors */
+    while (n_candidates < n_neighbors && (left >= 0 || right < n_controls)) {
+        double dist_left = (left >= 0) ? fabs(pscore_treated - sorted_controls[left].pscore) : DBL_MAX;
+        double dist_right = (right < n_controls) ? fabs(pscore_treated - sorted_controls[right].pscore) : DBL_MAX;
+
+        if (dist_left <= dist_right) {
+            if (caliper > 0.0 && dist_left > caliper) {
+                left = -1;  /* No more valid on left */
+            } else {
+                candidates[n_candidates].idx = sorted_controls[left].orig_idx;
+                candidates[n_candidates].dist = dist_left;
+                n_candidates++;
+                left--;
+            }
+        } else {
+            if (caliper > 0.0 && dist_right > caliper) {
+                right = n_controls;  /* No more valid on right */
+            } else {
+                candidates[n_candidates].idx = sorted_controls[right].orig_idx;
+                candidates[n_candidates].dist = dist_right;
+                n_candidates++;
+                right++;
+            }
+        }
+    }
+
+    if (n_candidates == 0) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        free(candidates);
+        return 0;
+    }
+
+    /* Handle ties: include all observations at the same distance as the k-th */
+    if (handle_ties && n_candidates >= n_neighbors) {
+        double last_dist = candidates[n_candidates - 1].dist;
+
+        /* Continue expanding to find ties */
+        while (left >= 0 || right < n_controls) {
+            double dist_left = (left >= 0) ? fabs(pscore_treated - sorted_controls[left].pscore) : DBL_MAX;
+            double dist_right = (right < n_controls) ? fabs(pscore_treated - sorted_controls[right].pscore) : DBL_MAX;
+
+            double min_dist = (dist_left < dist_right) ? dist_left : dist_right;
+            if (min_dist > last_dist + 1e-12) break;  /* No more ties */
+
+            /* Reallocate if needed */
+            if (n_candidates >= max_alloc) {
+                max_alloc *= 2;
+                idx_dist_pair *new_candidates = realloc(candidates, max_alloc * sizeof(idx_dist_pair));
+                if (!new_candidates) {
+                    free(candidates);
+                    return -1;
+                }
+                candidates = new_candidates;
+            }
+
+            if (dist_left <= dist_right && dist_left <= last_dist + 1e-12) {
+                candidates[n_candidates].idx = sorted_controls[left].orig_idx;
+                candidates[n_candidates].dist = dist_left;
+                n_candidates++;
+                left--;
+            } else if (dist_right <= last_dist + 1e-12) {
+                candidates[n_candidates].idx = sorted_controls[right].orig_idx;
+                candidates[n_candidates].dist = dist_right;
+                n_candidates++;
+                right++;
+            } else {
+                break;
+            }
+        }
+    }
+
+    /* Allocate result arrays */
+    result->match_ids = malloc(n_candidates * sizeof(size_t));
+    result->match_dists = malloc(n_candidates * sizeof(double));
+    result->match_weights = malloc(n_candidates * sizeof(double));
+
+    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+        free(candidates);
+        free(result->match_ids);
+        free(result->match_dists);
+        free(result->match_weights);
+        result->match_ids = NULL;
+        result->match_dists = NULL;
+        result->match_weights = NULL;
+        return -1;
+    }
+
+    double total_weight = (double)n_candidates;
+    for (int i = 0; i < n_candidates; i++) {
+        result->match_ids[i] = control_indices[candidates[i].idx];
+        result->match_dists[i] = candidates[i].dist;
+        result->match_weights[i] = 1.0 / total_weight;
+    }
+
+    result->n_matches = n_candidates;
+    result->on_support = 1;
+
+    free(candidates);
+    return 0;
+}
+
+/* ============================================================================
+ * FAST Radius Matching - returns range info only, no memory allocation
+ * ============================================================================ */
+
+typedef struct {
+    size_t start;       /* Start index in sorted_controls */
+    size_t end;         /* End index (exclusive) in sorted_controls */
+    int n_matches;      /* Number of matches = end - start */
+    int on_support;     /* 1 if any matches found */
+} radius_match_info;
+
+static void find_radius_range_fast(
+    double pscore_treated,
+    const sorted_control_t *sorted_controls,
+    size_t n_controls,
+    double radius,
+    radius_match_info *info)
+{
+    if (n_controls == 0 || radius <= 0.0) {
+        info->n_matches = 0;
+        info->on_support = 0;
+        return;
+    }
+
+    /* Binary search to find range [low_target, high_target] */
+    double low_target = pscore_treated - radius;
+    double high_target = pscore_treated + radius;
+
+    info->start = binary_search_left(sorted_controls, n_controls, low_target);
+    info->end = binary_search_right(sorted_controls, n_controls, high_target);
+    info->n_matches = (int)(info->end - info->start);
+    info->on_support = (info->n_matches > 0) ? 1 : 0;
+}
+
+/* Legacy wrapper for compatibility - currently unused */
+__attribute__((unused))
+static int find_radius_matches_fast(
+    double pscore_treated,
+    const sorted_control_t *sorted_controls,
+    size_t *control_indices,
+    size_t n_controls,
+    double radius,
+    match_result *result)
+{
+    radius_match_info info;
+    find_radius_range_fast(pscore_treated, sorted_controls, n_controls, radius, &info);
+
+    if (info.n_matches == 0) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        result->match_ids = NULL;
+        result->match_dists = NULL;
+        result->match_weights = NULL;
+        return 0;
+    }
+
+    /* Allocate result arrays */
+    result->match_ids = malloc(info.n_matches * sizeof(size_t));
+    result->match_dists = malloc(info.n_matches * sizeof(double));
+    result->match_weights = malloc(info.n_matches * sizeof(double));
+
+    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+        free(result->match_ids);
+        free(result->match_dists);
+        free(result->match_weights);
+        result->match_ids = NULL;
+        result->match_dists = NULL;
+        result->match_weights = NULL;
+        return -1;
+    }
+
+    /* Fill arrays */
+    double weight = 1.0 / info.n_matches;
+    for (size_t i = info.start; i < info.end; i++) {
+        size_t idx = i - info.start;
+        result->match_ids[idx] = control_indices[sorted_controls[i].orig_idx];
+        result->match_dists[idx] = fabs(pscore_treated - sorted_controls[i].pscore);
+        result->match_weights[idx] = weight;
+    }
+
+    result->n_matches = info.n_matches;
+    result->on_support = 1;
+
+    return 0;
+}
+
+/* ============================================================================
+ * FAST Kernel Matching using sorted index
+ * ============================================================================ */
+
+static int find_kernel_matches_fast(
+    double pscore_treated,
+    const sorted_control_t *sorted_controls,
+    size_t *control_indices,
+    size_t n_controls,
+    double bandwidth,
+    kernel_type_t kernel,
+    double caliper,
+    match_result *result)
+{
+    if (n_controls == 0 || bandwidth <= 0.0) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        return 0;
+    }
+
+    /* Determine search range based on kernel type and caliper */
+    double search_radius = bandwidth;  /* Most kernels have support [-1, 1] */
+    if (kernel == KERNEL_NORMAL) {
+        search_radius = 4.0 * bandwidth;  /* Normal has infinite support, use 4 SD */
+    }
+    if (caliper > 0.0 && caliper < search_radius) {
+        search_radius = caliper;
+    }
+
+    /* Binary search to find range */
+    double low_target = pscore_treated - search_radius;
+    double high_target = pscore_treated + search_radius;
+
+    size_t start = binary_search_left(sorted_controls, n_controls, low_target);
+    size_t end = binary_search_right(sorted_controls, n_controls, high_target);
+
+    if (start >= end) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        return 0;
+    }
+
+    /* First pass: count and compute total weight */
+    int n_matches = 0;
+    double total_weight = 0.0;
+
+    for (size_t i = start; i < end; i++) {
+        double dist = fabs(pscore_treated - sorted_controls[i].pscore);
+        if (caliper > 0.0 && dist > caliper) continue;
+
+        double u = dist / bandwidth;
+        double w = apply_kernel(u, kernel);
+        if (w > 0.0) {
+            n_matches++;
+            total_weight += w;
+        }
+    }
+
+    if (n_matches == 0) {
+        result->n_matches = 0;
+        result->on_support = 0;
+        return 0;
+    }
+
+    /* Allocate result arrays */
+    result->match_ids = malloc(n_matches * sizeof(size_t));
+    result->match_dists = malloc(n_matches * sizeof(double));
+    result->match_weights = malloc(n_matches * sizeof(double));
+
+    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+        free(result->match_ids);
+        free(result->match_dists);
+        free(result->match_weights);
+        result->match_ids = NULL;
+        result->match_dists = NULL;
+        result->match_weights = NULL;
+        return -1;
+    }
+
+    /* Second pass: fill arrays */
+    int idx = 0;
+    for (size_t i = start; i < end; i++) {
+        double dist = fabs(pscore_treated - sorted_controls[i].pscore);
+        if (caliper > 0.0 && dist > caliper) continue;
+
+        double u = dist / bandwidth;
+        double w = apply_kernel(u, kernel);
+        if (w > 0.0) {
+            result->match_ids[idx] = control_indices[sorted_controls[i].orig_idx];
+            result->match_dists[idx] = dist;
+            result->match_weights[idx] = w / total_weight;
+            idx++;
+        }
+    }
+
+    result->n_matches = n_matches;
+    result->on_support = 1;
+
+    return 0;
+}
+
+/* ============================================================================
+ * Kernel Matching - currently unused, retained for future kernel matching
+ * ============================================================================ */
+
+__attribute__((unused))
 static int find_kernel_matches(
     double pscore_treated,
     double *control_pscores,
@@ -524,9 +918,10 @@ static int find_kernel_matches(
 }
 
 /* ============================================================================
- * Radius Matching
+ * Radius Matching - currently unused, replaced by optimized binary search version
  * ============================================================================ */
 
+__attribute__((unused))
 static int find_radius_matches(
     double pscore_treated,
     double *control_pscores,
@@ -596,10 +991,12 @@ static int find_radius_matches(
 ST_retcode cpsmatch_main(const char *args)
 {
     cpsmatch_options opts;
-    double t_start, t_load, t_match, t_store, t_total;
+    double t_start, t_load, t_setup, t_sort, t_match, t_store, t_total;
     ST_retcode rc = 0;
 
     t_start = ctools_timer_seconds();
+    t_setup = 0.0;
+    t_sort = 0.0;
 
     /* Parse arguments */
     if (args == NULL || *args == '\0') {
@@ -617,72 +1014,68 @@ ST_retcode cpsmatch_main(const char *args)
         return 2000;
     }
 
-    /* Get observation range */
+    /* Get observation range - use full in-range, we'll filter by if-condition */
     ST_int obs1 = SF_in1();
     ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs != opts.nobs) {
-        /* Use the actual observation range */
-        nobs = opts.nobs;
-    }
+    size_t nobs_range = (size_t)(obs2 - obs1 + 1);
 
     /* ========================================================================
-     * PHASE 1: Load data from Stata
+     * PHASE 1: Load data from Stata using ctools_data_load_selective()
      * ======================================================================== */
     t_load = ctools_timer_seconds();
 
-    /* Allocate arrays */
-    double *treatment = malloc(nobs * sizeof(double));
-    double *pscore = malloc(nobs * sizeof(double));
-    double *outcome = NULL;
-
-    if (!treatment || !pscore) {
-        free(treatment);
-        free(pscore);
+    /* Build array of variable indices to load */
+    int nvars_to_load = (opts.outcome_idx > 0) ? 3 : 2;
+    int *var_indices = malloc(nvars_to_load * sizeof(int));
+    if (!var_indices) {
         SF_error("cpsmatch: memory allocation failed\n");
         return 920;
     }
-
+    var_indices[0] = opts.treat_idx;
+    var_indices[1] = opts.pscore_idx;
     if (opts.outcome_idx > 0) {
-        outcome = malloc(nobs * sizeof(double));
-        if (!outcome) {
-            free(treatment);
-            free(pscore);
-            SF_error("cpsmatch: memory allocation failed\n");
-            return 920;
-        }
+        var_indices[2] = opts.outcome_idx;
     }
 
-    /* Read data from Stata */
-    for (size_t i = 0; i < nobs; i++) {
-        ST_int obs = obs1 + (ST_int)i;
-        SF_vdata(opts.treat_idx, obs, &treatment[i]);
-        SF_vdata(opts.pscore_idx, obs, &pscore[i]);
-        if (outcome) {
-            SF_vdata(opts.outcome_idx, obs, &outcome[i]);
-        }
+    /* Load data using ctools infrastructure - load full in-range */
+    stata_data input_data;
+    stata_data_init(&input_data);
+    stata_retcode load_rc = ctools_data_load_selective(&input_data, var_indices,
+                                                        nvars_to_load, obs1, obs2);
+    free(var_indices);
+
+    if (load_rc != STATA_OK) {
+        SF_error("cpsmatch: failed to load data\n");
+        stata_data_free(&input_data);
+        return 920;
     }
+
+    /* Get pointers to the loaded data arrays */
+    double *treatment = input_data.vars[0].data.dbl;
+    double *pscore = input_data.vars[1].data.dbl;
+    /* outcome is loaded for potential ATT/ATE computation but not currently used */
+    double *outcome __attribute__((unused)) = (opts.outcome_idx > 0) ? input_data.vars[2].data.dbl : NULL;
 
     t_load = ctools_timer_seconds() - t_load;
 
     /* ========================================================================
-     * PHASE 2: Separate treated and control groups
+     * PHASE 2: Separate treated and control groups (with if-condition check)
      * ======================================================================== */
-    t_match = ctools_timer_seconds();
+    t_setup = ctools_timer_seconds();
 
-    /* Count treated and controls */
+    /* Count treated and controls - check SF_ifobs() for if-condition filtering */
     size_t n_treated = 0, n_controls = 0;
-    for (size_t i = 0; i < nobs; i++) {
+    for (size_t i = 0; i < nobs_range; i++) {
+        ST_int stata_obs = obs1 + (ST_int)i;
+        /* Check if this observation satisfies the if-condition */
+        if (!SF_ifobs(stata_obs)) continue;
         if (SF_is_missing(treatment[i])) continue;
         if (treatment[i] != 0.0) n_treated++;
         else n_controls++;
     }
 
     if (n_treated == 0 || n_controls == 0) {
-        free(treatment);
-        free(pscore);
-        free(outcome);
+        stata_data_free(&input_data);
         SF_error("cpsmatch: need both treated and control observations\n");
         return 198;
     }
@@ -704,9 +1097,7 @@ ST_retcode cpsmatch_main(const char *args)
     }
 
     if (!treated_idx || !control_idx || !treated_pscore || !control_pscore) {
-        free(treatment);
-        free(pscore);
-        free(outcome);
+        stata_data_free(&input_data);
         free(treated_idx);
         free(control_idx);
         free(treated_pscore);
@@ -717,7 +1108,10 @@ ST_retcode cpsmatch_main(const char *args)
     }
 
     size_t ti = 0, ci = 0;
-    for (size_t i = 0; i < nobs; i++) {
+    for (size_t i = 0; i < nobs_range; i++) {
+        ST_int stata_obs = obs1 + (ST_int)i;
+        /* Check if this observation satisfies the if-condition */
+        if (!SF_ifobs(stata_obs)) continue;
         if (SF_is_missing(treatment[i])) continue;
         if (treatment[i] != 0.0) {
             treated_idx[ti] = i;
@@ -758,21 +1152,19 @@ ST_retcode cpsmatch_main(const char *args)
      * PHASE 4: Perform matching
      * ======================================================================== */
 
-    /* Allocate output arrays */
-    double *out_weight = calloc(nobs, sizeof(double));
-    double *out_match = malloc(nobs * sizeof(double));
-    double *out_support = malloc(nobs * sizeof(double));
+    /* Allocate output arrays - need full range size for all observations */
+    double *out_weight = calloc(nobs_range, sizeof(double));
+    double *out_match = malloc(nobs_range * sizeof(double));
+    double *out_support = malloc(nobs_range * sizeof(double));
 
     /* Initialize to missing */
-    for (size_t i = 0; i < nobs; i++) {
+    for (size_t i = 0; i < nobs_range; i++) {
         out_match[i] = SV_missval;
         out_support[i] = SV_missval;
     }
 
     if (!out_weight || !out_match || !out_support) {
-        free(treatment);
-        free(pscore);
-        free(outcome);
+        stata_data_free(&input_data);
         free(treated_idx);
         free(control_idx);
         free(treated_pscore);
@@ -785,107 +1177,457 @@ ST_retcode cpsmatch_main(const char *args)
         return 920;
     }
 
-    /* Compute caliper in absolute units if needed */
+    /* Caliper is always in absolute units (propensity score scale) for psmatch2 compatibility */
     double caliper = opts.caliper;
-    if (caliper > 0.0) {
-        /* Compute SD of propensity score for treated */
-        double sum = 0.0, sumsq = 0.0;
-        size_t n_valid = 0;
-        for (size_t i = 0; i < n_treated; i++) {
-            if (!SF_is_missing(treated_pscore[i])) {
-                sum += treated_pscore[i];
-                sumsq += treated_pscore[i] * treated_pscore[i];
-                n_valid++;
-            }
-        }
-        if (n_valid > 1) {
-            double mean = sum / n_valid;
-            double var = (sumsq - n_valid * mean * mean) / (n_valid - 1);
-            double sd = sqrt(var);
-            /* If caliper < 1, treat as proportion of SD; else as absolute */
-            if (caliper < 1.0) {
-                caliper = caliper * sd;
-            }
-        }
-    }
 
     int n_matched_treated = 0;
     int n_off_support = 0;
 
-    /* Parallel matching for each treated observation */
-    #pragma omp parallel for reduction(+:n_matched_treated, n_off_support) schedule(dynamic)
-    for (size_t t = 0; t < n_treated; t++) {
-        size_t obs_idx = treated_idx[t];
-        double ps = treated_pscore[t];
+    /* End setup phase, start sort/index phase */
+    t_setup = ctools_timer_seconds() - t_setup;
+    t_sort = ctools_timer_seconds();
 
-        /* Check common support */
-        if (opts.common_support) {
-            if (ps < common_min || ps > common_max) {
+    /* For matching without replacement, we need to:
+     * 1. Sort treated by propensity score (descending by default, like psmatch2)
+     * 2. Process sequentially to avoid race conditions
+     * 3. Mark excess treated as off-support when controls run out
+     */
+
+    /* Create sorted order for treated (by propensity score) */
+    size_t *treated_order = malloc(n_treated * sizeof(size_t));
+    if (!treated_order) {
+        stata_data_free(&input_data);
+        free(treated_idx);
+        free(control_idx);
+        free(treated_pscore);
+        free(control_pscore);
+        free(control_available);
+        free(out_weight);
+        free(out_match);
+        free(out_support);
+        SF_error("cpsmatch: memory allocation failed\n");
+        return 920;
+    }
+
+    /* For noreplacement, we need to sort treated by propensity score.
+     * Use qsort with sorted_control_t structure for O(n log n) instead of O(n²) insertion sort */
+    sorted_control_t *sorted_treated = NULL;
+    if (!opts.with_replace) {
+        sorted_treated = malloc(n_treated * sizeof(sorted_control_t));
+        if (!sorted_treated) {
+            stata_data_free(&input_data);
+            free(treated_idx);
+            free(control_idx);
+            free(treated_pscore);
+            free(control_pscore);
+            free(control_available);
+            free(out_weight);
+            free(out_match);
+            free(out_support);
+            free(treated_order);
+            SF_error("cpsmatch: memory allocation failed\n");
+            return 920;
+        }
+
+        /* Populate and sort */
+        for (size_t i = 0; i < n_treated; i++) {
+            sorted_treated[i].orig_idx = i;
+            sorted_treated[i].pscore = treated_pscore[i];
+        }
+
+        /* Sort: ascending (default) or descending */
+        if (opts.descending) {
+            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), compare_by_pscore_desc);
+        } else {
+            qsort(sorted_treated, n_treated, sizeof(sorted_control_t), compare_by_pscore);
+        }
+
+        /* Copy sorted indices to treated_order */
+        for (size_t i = 0; i < n_treated; i++) {
+            treated_order[i] = sorted_treated[i].orig_idx;
+        }
+        free(sorted_treated);
+    } else {
+        /* For with-replacement, order doesn't matter - use original order */
+        for (size_t i = 0; i < n_treated; i++) {
+            treated_order[i] = i;
+        }
+    }
+
+    /* Count available controls for matching without replacement */
+    int n_controls_available = (int)n_controls;
+
+    /* Matching loop - sequential for noreplacement, parallel otherwise */
+    if (!opts.with_replace) {
+        /* ================================================================
+         * FAST sequential matching for noreplacement using sorted index
+         * ================================================================ */
+
+        /* Build sorted control index for O(log n) lookups */
+        sorted_control_t *sorted_controls = malloc(n_controls * sizeof(sorted_control_t));
+        int *sorted_available = malloc(n_controls * sizeof(int));  /* Track available in sorted order */
+
+        if (!sorted_controls || !sorted_available) {
+            free(sorted_controls);
+            free(sorted_available);
+            stata_data_free(&input_data);
+            free(treated_idx);
+            free(control_idx);
+            free(treated_pscore);
+            free(control_pscore);
+            free(control_available);
+            free(out_weight);
+            free(out_match);
+            free(out_support);
+            free(treated_order);
+            SF_error("cpsmatch: memory allocation failed\n");
+            return 920;
+        }
+
+        /* Populate and sort control array */
+        for (size_t i = 0; i < n_controls; i++) {
+            sorted_controls[i].orig_idx = i;
+            sorted_controls[i].obs_idx = control_idx[i];  /* Stata observation index for stable sort */
+            sorted_controls[i].pscore = control_pscore[i];
+            sorted_available[i] = 1;
+        }
+        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), compare_by_pscore);
+
+        /* End sort phase, start matching phase */
+        t_sort = ctools_timer_seconds() - t_sort;
+        t_match = ctools_timer_seconds();
+
+        /* Sequential matching using binary search */
+        for (size_t t_idx = 0; t_idx < n_treated; t_idx++) {
+            size_t t = treated_order[t_idx];
+            size_t obs_idx = treated_idx[t];
+            double ps = treated_pscore[t];
+
+            /* Check common support */
+            if (opts.common_support) {
+                if (ps < common_min || ps > common_max) {
+                    out_support[obs_idx] = 0.0;
+                    n_off_support++;
+                    continue;
+                }
+            }
+
+            /* Check if any controls are available */
+            if (n_controls_available <= 0) {
+                /* No more controls - treated is off support */
                 out_support[obs_idx] = 0.0;
                 n_off_support++;
                 continue;
             }
-        }
-        out_support[obs_idx] = 1.0;
 
-        match_result result;
-        memset(&result, 0, sizeof(result));
+            out_support[obs_idx] = 1.0;
 
-        int match_rc = 0;
+            /* Binary search to find insertion point */
+            size_t insert_pos = binary_search_left(sorted_controls, n_controls, ps);
 
-        switch (opts.method) {
-            case MATCH_NEAREST:
-                match_rc = find_nearest_neighbors(
-                    ps, control_pscore, control_idx,
-                    opts.with_replace ? NULL : control_available,
-                    n_controls, opts.n_neighbors, caliper,
-                    opts.with_replace, opts.ties, &result);
-                break;
+            /* Expand left and right to find nearest available control */
+            ssize_t left = (ssize_t)insert_pos - 1;
+            size_t right = insert_pos;
+            size_t best_idx = SIZE_MAX;
+            double best_dist = DBL_MAX;
 
-            case MATCH_RADIUS:
-                match_rc = find_radius_matches(
-                    ps, control_pscore, control_idx, n_controls,
-                    caliper > 0.0 ? caliper : CPSMATCH_DEFAULT_CALIPER,
-                    &result);
-                break;
+            /* Find the single nearest available control */
+            while (left >= 0 || right < n_controls) {
+                /* Check left candidate */
+                if (left >= 0 && sorted_available[left]) {
+                    double dist_left = fabs(ps - sorted_controls[left].pscore);
+                    if (caliper <= 0.0 || dist_left <= caliper) {
+                        if (dist_left < best_dist) {
+                            best_dist = dist_left;
+                            best_idx = (size_t)left;
+                        }
+                        break;  /* Found best on left, check right before deciding */
+                    }
+                    left--;
+                } else if (left >= 0) {
+                    left--;
+                    continue;
+                }
 
-            case MATCH_KERNEL:
-                match_rc = find_kernel_matches(
-                    ps, control_pscore, control_idx, n_controls,
-                    opts.bandwidth, opts.kernel, caliper, &result);
-                break;
+                /* Check right candidate */
+                if (right < n_controls && sorted_available[right]) {
+                    double dist_right = fabs(ps - sorted_controls[right].pscore);
+                    if (caliper <= 0.0 || dist_right <= caliper) {
+                        if (dist_right < best_dist) {
+                            best_dist = dist_right;
+                            best_idx = right;
+                        }
+                        break;  /* Found best on right */
+                    }
+                    right++;
+                } else if (right < n_controls) {
+                    right++;
+                    continue;
+                }
 
-            default:
-                match_rc = find_nearest_neighbors(
-                    ps, control_pscore, control_idx,
-                    opts.with_replace ? NULL : control_available,
-                    n_controls, opts.n_neighbors, caliper,
-                    opts.with_replace, opts.ties, &result);
-                break;
-        }
-
-        if (match_rc == 0 && result.n_matches > 0) {
-            n_matched_treated++;
-
-            /* Store first match ID for this treated observation */
-            out_match[obs_idx] = (double)(result.match_ids[0] + 1);  /* 1-based */
-
-            /* Accumulate weights for matched controls */
-            for (int m = 0; m < result.n_matches; m++) {
-                size_t match_idx = result.match_ids[m];
-                #pragma omp atomic
-                out_weight[match_idx] += result.match_weights[m];
+                /* Both sides exhausted without caliper match */
+                if (left < 0 && right >= n_controls) break;
             }
 
-            /* Weight for treated observation = 1 */
-            out_weight[obs_idx] = 1.0;
+            /* If we found a candidate on one side, check the other side for closer */
+            if (best_idx != SIZE_MAX && left >= 0 && right < n_controls) {
+                /* We broke out after finding one - check if other side is closer */
+                if (best_idx == (size_t)left + 1) {
+                    /* Found on left side, check right */
+                    while (right < n_controls) {
+                        if (sorted_available[right]) {
+                            double dist_right = fabs(ps - sorted_controls[right].pscore);
+                            if (dist_right < best_dist && (caliper <= 0.0 || dist_right <= caliper)) {
+                                best_dist = dist_right;
+                                best_idx = right;
+                            }
+                            break;
+                        }
+                        right++;
+                    }
+                } else {
+                    /* Found on right side, check left */
+                    while (left >= 0) {
+                        if (sorted_available[left]) {
+                            double dist_left = fabs(ps - sorted_controls[left].pscore);
+                            if (dist_left < best_dist && (caliper <= 0.0 || dist_left <= caliper)) {
+                                best_dist = dist_left;
+                                best_idx = (size_t)left;
+                            }
+                            break;
+                        }
+                        left--;
+                    }
+                }
+            }
+
+            if (best_idx != SIZE_MAX) {
+                n_matched_treated++;
+                n_controls_available--;
+
+                /* Mark control as used */
+                sorted_available[best_idx] = 0;
+
+                /* Get original control index */
+                size_t orig_ctrl_idx = sorted_controls[best_idx].orig_idx;
+                size_t match_obs_idx = control_idx[orig_ctrl_idx];
+
+                /* Store match ID */
+                out_match[obs_idx] = (double)(match_obs_idx + 1);  /* 1-based */
+
+                /* Set weights */
+                out_weight[match_obs_idx] = 1.0;
+                out_weight[obs_idx] = 1.0;
+            } else {
+                /* No match found (e.g., caliper constraint) - treated is off support */
+                out_support[obs_idx] = 0.0;
+                n_off_support++;
+            }
         }
 
-        /* Free match result */
-        free(result.match_ids);
-        free(result.match_dists);
-        free(result.match_weights);
+        free(sorted_controls);
+        free(sorted_available);
+    } else {
+        /* ================================================================
+         * FAST matching for with-replacement using sorted control index
+         * ================================================================ */
+
+        /* Build sorted control index for O(log n) lookups */
+        sorted_control_t *sorted_controls = malloc(n_controls * sizeof(sorted_control_t));
+        if (!sorted_controls) {
+            stata_data_free(&input_data);
+            free(treated_idx);
+            free(control_idx);
+            free(treated_pscore);
+            free(control_pscore);
+            free(control_available);
+            free(out_weight);
+            free(out_match);
+            free(out_support);
+            free(treated_order);
+            SF_error("cpsmatch: memory allocation failed\n");
+            return 920;
+        }
+
+        /* Populate sorted control array */
+        for (size_t i = 0; i < n_controls; i++) {
+            sorted_controls[i].orig_idx = i;
+            sorted_controls[i].obs_idx = control_idx[i];  /* Stata observation index for stable sort */
+            sorted_controls[i].pscore = control_pscore[i];
+        }
+
+        /* Sort controls by propensity score */
+        qsort(sorted_controls, n_controls, sizeof(sorted_control_t), compare_by_pscore);
+
+        /* End sort phase, start matching phase */
+        t_sort = ctools_timer_seconds() - t_sort;
+        t_match = ctools_timer_seconds();
+
+        /* Optimized parallel matching using fast O(log n) algorithms */
+
+        /* For radius matching, use thread-local weight buffers to reduce atomic contention */
+        if (opts.method == MATCH_RADIUS) {
+            double radius = (caliper > 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
+
+            /* Get number of threads */
+            int n_threads = 1;
+            #ifdef _OPENMP
+            n_threads = omp_get_max_threads();
+            #endif
+
+            /* Allocate thread-local weight buffers */
+            double **thread_weights = malloc(n_threads * sizeof(double *));
+            if (thread_weights) {
+                for (int i = 0; i < n_threads; i++) {
+                    thread_weights[i] = calloc(nobs_range, sizeof(double));
+                }
+            }
+
+            #pragma omp parallel reduction(+:n_matched_treated, n_off_support)
+            {
+                int tid = 0;
+                #ifdef _OPENMP
+                tid = omp_get_thread_num();
+                #endif
+
+                double *local_weights = (thread_weights && thread_weights[tid]) ? thread_weights[tid] : out_weight;
+                int use_local = (thread_weights && thread_weights[tid]) ? 1 : 0;
+
+                #pragma omp for schedule(dynamic, 64)
+                for (size_t t = 0; t < n_treated; t++) {
+                    size_t obs_idx = treated_idx[t];
+                    double ps = treated_pscore[t];
+
+                    /* Check common support */
+                    if (opts.common_support) {
+                        if (ps < common_min || ps > common_max) {
+                            out_support[obs_idx] = 0.0;
+                            n_off_support++;
+                            continue;
+                        }
+                    }
+                    out_support[obs_idx] = 1.0;
+
+                    /* Fast range query - no allocation */
+                    radius_match_info info;
+                    find_radius_range_fast(ps, sorted_controls, n_controls, radius, &info);
+
+                    if (info.n_matches > 0) {
+                        n_matched_treated++;
+
+                        /* Store first match ID */
+                        out_match[obs_idx] = (double)(control_idx[sorted_controls[info.start].orig_idx] + 1);
+
+                        /* Accumulate weights - use local buffer if available */
+                        double weight = 1.0 / info.n_matches;
+                        for (size_t i = info.start; i < info.end; i++) {
+                            size_t match_idx = control_idx[sorted_controls[i].orig_idx];
+                            if (use_local) {
+                                local_weights[match_idx] += weight;
+                            } else {
+                                #pragma omp atomic
+                                out_weight[match_idx] += weight;
+                            }
+                        }
+
+                        /* Weight for treated observation = 1 */
+                        if (use_local) {
+                            local_weights[obs_idx] = 1.0;
+                        } else {
+                            out_weight[obs_idx] = 1.0;
+                        }
+                    }
+                }
+            }
+
+            /* Merge thread-local buffers in parallel */
+            if (thread_weights) {
+                #pragma omp parallel for schedule(static)
+                for (size_t j = 0; j < nobs_range; j++) {
+                    double sum = 0.0;
+                    for (int i = 0; i < n_threads; i++) {
+                        if (thread_weights[i]) {
+                            sum += thread_weights[i][j];
+                        }
+                    }
+                    out_weight[j] += sum;
+                }
+                /* Free thread-local buffers */
+                for (int i = 0; i < n_threads; i++) {
+                    free(thread_weights[i]);
+                }
+                free(thread_weights);
+            }
+        } else {
+            /* General path for NN and kernel matching */
+            #pragma omp parallel for reduction(+:n_matched_treated, n_off_support) schedule(dynamic)
+            for (size_t t = 0; t < n_treated; t++) {
+                size_t obs_idx = treated_idx[t];
+                double ps = treated_pscore[t];
+
+                /* Check common support */
+                if (opts.common_support) {
+                    if (ps < common_min || ps > common_max) {
+                        out_support[obs_idx] = 0.0;
+                        n_off_support++;
+                        continue;
+                    }
+                }
+                out_support[obs_idx] = 1.0;
+
+                match_result result;
+                memset(&result, 0, sizeof(result));
+
+                int match_rc = 0;
+
+                switch (opts.method) {
+                    case MATCH_NEAREST:
+                        match_rc = find_nearest_neighbors_fast(
+                            ps, sorted_controls, control_idx, n_controls,
+                            opts.n_neighbors, caliper, opts.ties, &result);
+                        break;
+
+                    case MATCH_KERNEL:
+                        match_rc = find_kernel_matches_fast(
+                            ps, sorted_controls, control_idx, n_controls,
+                            opts.bandwidth, opts.kernel, caliper, &result);
+                        break;
+
+                    default:
+                        match_rc = find_nearest_neighbors_fast(
+                            ps, sorted_controls, control_idx, n_controls,
+                            opts.n_neighbors, caliper, opts.ties, &result);
+                        break;
+                }
+
+                if (match_rc == 0 && result.n_matches > 0) {
+                    n_matched_treated++;
+
+                    /* Store first match ID for this treated observation */
+                    out_match[obs_idx] = (double)(result.match_ids[0] + 1);  /* 1-based */
+
+                    /* Accumulate weights for matched controls */
+                    for (int m = 0; m < result.n_matches; m++) {
+                        size_t match_idx = result.match_ids[m];
+                        #pragma omp atomic
+                        out_weight[match_idx] += result.match_weights[m];
+                    }
+
+                    /* Weight for treated observation = 1 */
+                    out_weight[obs_idx] = 1.0;
+                }
+
+                /* Free match result */
+                free(result.match_ids);
+                free(result.match_dists);
+                free(result.match_weights);
+            }
+        }
+
+        free(sorted_controls);
     }
+
+    free(treated_order);
 
     /* Mark controls on support */
     for (size_t i = 0; i < n_controls; i++) {
@@ -910,8 +1652,10 @@ ST_retcode cpsmatch_main(const char *args)
      * ======================================================================== */
     t_store = ctools_timer_seconds();
 
-    /* Store results - NOTE: SF_vstore has off-by-one, so we add 1 to indices */
-    for (size_t i = 0; i < nobs; i++) {
+    /* Store results - variable indices need +1 offset for SF_vstore
+     * This is because the indices from Stata count from 1, but SF_vstore
+     * uses a different indexing scheme in the plugin API context */
+    for (size_t i = 0; i < nobs_range; i++) {
         ST_int obs = obs1 + (ST_int)i;
 
         if (opts.out_weight_idx > 0) {
@@ -936,6 +1680,8 @@ ST_retcode cpsmatch_main(const char *args)
     t_total = ctools_timer_seconds() - t_start;
 
     SF_scal_save("_cpsmatch_time_load", t_load);
+    SF_scal_save("_cpsmatch_time_setup", t_setup);
+    SF_scal_save("_cpsmatch_time_sort", t_sort);
     SF_scal_save("_cpsmatch_time_match", t_match);
     SF_scal_save("_cpsmatch_time_store", t_store);
     SF_scal_save("_cpsmatch_time_total", t_total);
@@ -950,11 +1696,8 @@ ST_retcode cpsmatch_main(const char *args)
     /* Thread diagnostics */
     CTOOLS_SAVE_THREAD_INFO("_cpsmatch");
 
-cleanup:
-    /* Cleanup */
-    free(treatment);
-    free(pscore);
-    free(outcome);
+    /* Cleanup - use stata_data_free for input data (frees treatment, pscore, outcome) */
+    stata_data_free(&input_data);
     free(treated_idx);
     free(control_idx);
     free(treated_pscore);

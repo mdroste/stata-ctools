@@ -3,7 +3,14 @@
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
 program define civreghdfe, eclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
@@ -1022,6 +1029,7 @@ program define civreghdfe, eclass
     }
 
     * Store macros
+    ereturn local predict "civreghdfe_p"
     ereturn local cmd "civreghdfe"
     ereturn local cmdline `"civreghdfe `0'"'
     ereturn local depvar "`depname_use'"
@@ -1142,6 +1150,13 @@ program define civreghdfe, eclass
             di as text "Estimates efficient for homoskedasticity only"
             di as text "Statistics robust to heteroskedasticity"
         }
+        else if `vce_type' == 2 & `kiefer_val' {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics robust to within-cluster autocorrelation (Kiefer)"
+            di as text "  kernel=Truncated; bandwidth=`bw_val'"
+            di as text "  time variable (t):  `kiefer_tvar'"
+            di as text "  group variable (i): `cluster_var'"
+        }
         else if `vce_type' == 2 {
             di as text "Estimates efficient for homoskedasticity only"
             di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
@@ -1153,7 +1168,8 @@ program define civreghdfe, eclass
         di as text ""
 
         * Summary statistics line 1
-        if `vce_type' == 2 {
+        * Kiefer does not display "Number of clusters" - it uses N-K-df_a for df_r
+        if `vce_type' == 2 & !`kiefer_val' {
             di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
                 as text _col(55) "Number of obs =" as result %9.0fc `N_used'
         }
@@ -1168,8 +1184,9 @@ program define civreghdfe, eclass
 
         * F statistic (Wald test)
         * For two-way clustering, use min(N_clust1, N_clust2) - 1 for degrees of freedom
+        * For Kiefer, use df_r = N - K - df_a (set earlier in the code)
         local prob_F = Ftail(`K_total', `df_r', `F_wald')
-        if `vce_type' == 2 {
+        if `vce_type' == 2 & !`kiefer_val' {
             di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else if `vce_type' == 3 {

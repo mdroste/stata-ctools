@@ -3,7 +3,7 @@
 *! Part of the ctools suite
 
 program define cqreg_p
-    version 14.0
+    version 14.1
 
     syntax newvarname [if] [in], [XB Residuals STDP]
 

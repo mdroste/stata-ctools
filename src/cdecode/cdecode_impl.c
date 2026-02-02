@@ -7,10 +7,10 @@
  * Algorithm:
  * 1. Parse value-label mappings passed from Stata
  * 2. Build hash table mapping integer values to string labels
- * 3. For each observation:
- *    a. Read numeric value
- *    b. Look up corresponding label in hash table
- *    c. Write label string to destination variable
+ * 3. Bulk load numeric source variable via ctools_data_load_selective()
+ * 4. For each observation:
+ *    a. Look up corresponding label in hash table (from loaded data)
+ *    b. Write label string to destination variable (must be sequential)
  */
 
 #include <stdlib.h>
@@ -27,6 +27,7 @@
 #include "ctools_timer.h"
 #include "ctools_config.h"
 #include "ctools_arena.h"
+#include "ctools_hash.h"
 #include "cdecode_impl.h"
 
 /* ============================================================================
@@ -40,154 +41,16 @@
 
 /* ============================================================================
  * Hash Table for Integer -> String Mapping
+ * Uses unified ctools_int_hash_table from ctools_hash.h
  * ============================================================================ */
 
-typedef struct {
-    int key;           /* Numeric value */
-    char *value;       /* Label string */
-    int occupied;      /* 1 if slot is used */
-} cdecode_hash_entry;
+/* Compatibility typedefs and macros for cdecode */
+typedef ctools_int_hash_table cdecode_hash_table;
 
-typedef struct {
-    cdecode_hash_entry *entries;
-    size_t capacity;
-    size_t count;
-    ctools_string_arena *arena;
-} cdecode_hash_table;
-
-static int cdecode_hash_init(cdecode_hash_table *ht, size_t initial_capacity)
-{
-    ht->capacity = initial_capacity;
-    ht->count = 0;
-    ht->entries = calloc(initial_capacity, sizeof(cdecode_hash_entry));
-    if (!ht->entries) return -1;
-
-    ht->arena = ctools_string_arena_create(initial_capacity * 64,
-                                            CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
-    if (!ht->arena) {
-        free(ht->entries);
-        ht->entries = NULL;
-        return -1;
-    }
-    return 0;
-}
-
-static void cdecode_hash_free(cdecode_hash_table *ht)
-{
-    if (ht->arena) {
-        ctools_string_arena_free(ht->arena);
-        ht->arena = NULL;
-    }
-    if (ht->entries) {
-        free(ht->entries);
-        ht->entries = NULL;
-    }
-    ht->count = 0;
-    ht->capacity = 0;
-}
-
-static int cdecode_hash_resize(cdecode_hash_table *ht, size_t new_capacity)
-{
-    cdecode_hash_entry *old_entries = ht->entries;
-    size_t old_capacity = ht->capacity;
-
-    ht->entries = calloc(new_capacity, sizeof(cdecode_hash_entry));
-    if (!ht->entries) {
-        ht->entries = old_entries;
-        return -1;
-    }
-    ht->capacity = new_capacity;
-
-    for (size_t i = 0; i < old_capacity; i++) {
-        if (old_entries[i].occupied) {
-            /* Simple hash function for integers */
-            unsigned int hash = (unsigned int)old_entries[i].key;
-            hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-            hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-            hash = (hash >> 16) ^ hash;
-
-            size_t idx = hash % new_capacity;
-            size_t probes = 0;
-            while (ht->entries[idx].occupied && probes < new_capacity) {
-                idx = (idx + 1) % new_capacity;
-                probes++;
-            }
-            if (probes >= new_capacity) {
-                /* Table full - should never happen with proper load factor */
-                free(ht->entries);
-                ht->entries = old_entries;
-                ht->capacity = old_capacity;
-                return -1;
-            }
-            ht->entries[idx] = old_entries[i];
-        }
-    }
-
-    free(old_entries);
-    return 0;
-}
-
-static int cdecode_hash_insert(cdecode_hash_table *ht, int key, const char *value)
-{
-    if ((double)ht->count / ht->capacity >= CDECODE_HASH_LOAD_FACTOR) {
-        if (cdecode_hash_resize(ht, ht->capacity * 2) != 0) {
-            return -1;
-        }
-    }
-
-    /* Simple hash function for integers */
-    unsigned int hash = (unsigned int)key;
-    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-    hash = (hash >> 16) ^ hash;
-
-    size_t idx = hash % ht->capacity;
-    size_t probes = 0;
-
-    while (ht->entries[idx].occupied && probes < ht->capacity) {
-        if (ht->entries[idx].key == key) {
-            /* Update existing entry */
-            return 0;
-        }
-        idx = (idx + 1) % ht->capacity;
-        probes++;
-    }
-
-    if (probes >= ht->capacity) {
-        return -1;  /* Table full - should never happen with proper load factor */
-    }
-
-    char *value_copy = ctools_string_arena_strdup(ht->arena, value);
-    if (!value_copy) return -1;
-
-    ht->entries[idx].key = key;
-    ht->entries[idx].value = value_copy;
-    ht->entries[idx].occupied = 1;
-    ht->count++;
-
-    return 0;
-}
-
-static const char *cdecode_hash_lookup(cdecode_hash_table *ht, int key)
-{
-    unsigned int hash = (unsigned int)key;
-    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-    hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
-    hash = (hash >> 16) ^ hash;
-
-    size_t idx = hash % ht->capacity;
-    size_t start = idx;
-
-    while (ht->entries[idx].occupied) {
-        if (ht->entries[idx].key == key) {
-            return ht->entries[idx].value;
-        }
-        idx = (idx + 1) % ht->capacity;
-        if (idx == start) break; /* Wrapped around */
-    }
-
-    return NULL;
-}
+#define cdecode_hash_init   ctools_int_hash_init
+#define cdecode_hash_free   ctools_int_hash_free
+#define cdecode_hash_insert ctools_int_hash_insert
+#define cdecode_hash_lookup ctools_int_hash_lookup
 
 /* ============================================================================
  * Label Parsing
@@ -396,24 +259,51 @@ ST_retcode cdecode_main(const char *args)
         maxlen = detected_maxlen > 0 ? detected_maxlen : 1;
     }
 
+    /* ========================================================================
+     * Bulk load source numeric variable using ctools_data_load_selective()
+     * ======================================================================== */
+    int var_indices[1] = { src_idx };
+    stata_data src_data;
+    stata_data_init(&src_data);
+    stata_retcode load_rc = ctools_data_load_selective(&src_data, var_indices, 1, obs1, obs2);
+
+    if (load_rc != STATA_OK) {
+        cdecode_hash_free(&ht);
+        SF_error("cdecode: failed to load source data\n");
+        return 920;
+    }
+
+    double *src_values = src_data.vars[0].data.dbl;
+
+    /* Build if-condition mask (sequential — SPI calls) */
+    unsigned char *if_mask = malloc(nobs);
+    if (!if_mask) {
+        stata_data_free(&src_data);
+        cdecode_hash_free(&ht);
+        SF_error("cdecode: memory allocation failed\n");
+        return 920;
+    }
+    for (size_t i = 0; i < nobs; i++) {
+        if_mask[i] = SF_ifobs((ST_int)(obs1 + (ST_int)i)) ? 1 : 0;
+    }
+
     /* Counters */
     int n_decoded = 0;
     int n_missing = 0;
     int n_unlabeled = 0;
 
-    /* Process observations */
+    /* Process observations - lookups from loaded data, string writes must be sequential */
     for (size_t i = 0; i < nobs; i++) {
         ST_int obs = obs1 + (ST_int)i;
 
         /* Check if observation is in the sample (respects if/in conditions) */
-        if (!SF_ifobs(obs)) {
+        if (!if_mask[i]) {
             /* Not in sample - store empty string */
             SF_sstore(dst_idx, obs, "");
             continue;
         }
 
-        double dval;
-        SF_vdata(src_idx, obs, &dval);
+        double dval = src_values[i];
 
         if (SF_is_missing(dval)) {
             /* Missing value -> empty string */
@@ -444,6 +334,10 @@ ST_retcode cdecode_main(const char *args)
             n_unlabeled++;
         }
     }
+
+    /* Free loaded data and if_mask */
+    free(if_mask);
+    stata_data_free(&src_data);
 
     t_decode = ctools_timer_seconds();
     t_total = t_decode - t_start;

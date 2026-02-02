@@ -10,11 +10,6 @@
 {phang}
 {bf:civreghdfe} {hline 2} C-accelerated instrumental variables regression with high-dimensional fixed effects
 
-{pstd}
-{cmd:civreghdfe} is a high-performance replacement for {cmd:ivreghdfe} by
-Sergio Correia ({browse "https://github.com/sergiocorreia/ivreghdfe":sergiocorreia/ivreghdfe}).
-The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} version 1.1.0+.
-
 
 {marker syntax}{...}
 {title:Syntax}

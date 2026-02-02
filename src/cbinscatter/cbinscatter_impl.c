@@ -153,7 +153,7 @@ static ST_retcode read_config(BinscatterConfig *config) {
 }
 
 /* ========================================================================
- * Load Data from Stata (Optimized with 8x unrolling)
+ * Load Data from Stata using ctools_data_load_selective()
  * ======================================================================== */
 
 static ST_retcode load_data(
@@ -170,7 +170,7 @@ static ST_retcode load_data(
     ST_int in1 = SF_in1();
     ST_int in2 = SF_in2();
     ST_int N = in2 - in1 + 1;
-    ST_int i, j, var_idx;
+    ST_int i, j;
     ST_double val;
 
     ST_double *y = NULL;
@@ -182,171 +182,151 @@ static ST_retcode load_data(
     ST_int *valid_idx = NULL;
     ST_int N_valid = 0;
 
-    /* Allocate arrays (using safe multiplication to prevent overflow) */
-    y = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
-    x = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
-    valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+    /* Count total variables to load via ctools infrastructure
+     * Variables are ordered: y, x, controls..., absorb..., by, weights */
+    int num_vars_to_load = 2;  /* y and x */
+    num_vars_to_load += config->has_controls ? config->num_controls : 0;
+    num_vars_to_load += config->has_absorb ? config->num_absorb : 0;
+    num_vars_to_load += config->has_by ? 1 : 0;
+    num_vars_to_load += config->has_weights ? 1 : 0;
 
-    if (!y || !x || !valid_idx) {
-        free(y); free(x); free(valid_idx);
+    /* Build array of variable indices for all variables */
+    int *var_indices = (int *)ctools_safe_malloc2(num_vars_to_load, sizeof(int));
+    if (!var_indices) {
         return CBINSCATTER_ERR_MEMORY;
     }
 
+    /* Track indices into loaded_data for each variable type */
+    int vidx = 0;
+    int y_data_idx = vidx;
+    var_indices[vidx++] = 1;  /* y */
+    int x_data_idx = vidx;
+    var_indices[vidx++] = 2;  /* x */
+
+    int controls_data_idx = vidx;  /* Track where controls start in loaded data */
+    for (j = 0; j < (config->has_controls ? config->num_controls : 0); j++) {
+        var_indices[vidx++] = 3 + j;  /* controls */
+    }
+
+    int absorb_data_idx = vidx;  /* Track where absorb starts in loaded data */
+    int absorb_var_start = 3 + (config->has_controls ? config->num_controls : 0);
+    for (j = 0; j < (config->has_absorb ? config->num_absorb : 0); j++) {
+        var_indices[vidx++] = absorb_var_start + j;  /* absorb vars */
+    }
+
+    int by_data_idx = vidx;  /* Track where by-var is in loaded data */
+    if (config->has_by) {
+        int by_var = absorb_var_start + (config->has_absorb ? config->num_absorb : 0);
+        var_indices[vidx++] = by_var;  /* by variable */
+    }
+
+    int weights_data_idx = -1;
+    if (config->has_weights) {
+        /* weights is the last variable */
+        weights_data_idx = vidx;
+        int w_var = 3;
+        if (config->has_controls) w_var += config->num_controls;
+        if (config->has_absorb) w_var += config->num_absorb;
+        if (config->has_by) w_var += 1;
+        var_indices[vidx++] = w_var;
+    }
+
+    /* Load all variables using ctools infrastructure */
+    stata_data loaded_data;
+    stata_data_init(&loaded_data);
+    stata_retcode load_rc = ctools_data_load_selective(&loaded_data, var_indices,
+                                                        num_vars_to_load, in1, in2);
+    free(var_indices);
+
+    if (load_rc != STATA_OK) {
+        stata_data_free(&loaded_data);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
+    /* Allocate and copy y and x */
+    y = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    x = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    if (!y || !x) {
+        free(y); free(x);
+        stata_data_free(&loaded_data);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+    memcpy(y, loaded_data.vars[y_data_idx].data.dbl, N * sizeof(ST_double));
+    memcpy(x, loaded_data.vars[x_data_idx].data.dbl, N * sizeof(ST_double));
+
+    /* Handle controls - need to reorganize to column-major layout expected by cbinscatter */
     if (config->has_controls && config->num_controls > 0) {
         controls = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)config->num_controls, sizeof(ST_double));
         if (!controls) {
-            free(y); free(x); free(valid_idx);
+            free(y); free(x);
+            stata_data_free(&loaded_data);
             return CBINSCATTER_ERR_MEMORY;
+        }
+        /* Copy from stata_data (contiguous per var) to column-major layout */
+        for (j = 0; j < config->num_controls; j++) {
+            ST_double *src = loaded_data.vars[controls_data_idx + j].data.dbl;
+            ST_double *dst = &controls[j * N];
+            memcpy(dst, src, N * sizeof(ST_double));
         }
     }
 
+    /* Handle absorb variables - convert doubles to 1-based integers with missing handling */
     if (config->has_absorb && config->num_absorb > 0) {
         fe_vars = (ST_int *)ctools_safe_malloc3((size_t)N, (size_t)config->num_absorb, sizeof(ST_int));
         if (!fe_vars) {
-            free(y); free(x); free(valid_idx); free(controls);
+            free(y); free(x); free(controls);
+            stata_data_free(&loaded_data);
             return CBINSCATTER_ERR_MEMORY;
         }
-    }
-
-    if (config->has_by) {
-        by_groups = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
-        if (!by_groups) {
-            free(y); free(x); free(valid_idx); free(controls); free(fe_vars);
-            return CBINSCATTER_ERR_MEMORY;
-        }
-    }
-
-    if (config->has_weights) {
-        weights = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!weights) {
-            free(y); free(x); free(valid_idx); free(controls);
-            free(fe_vars); free(by_groups);
-            return CBINSCATTER_ERR_MEMORY;
-        }
-    }
-
-    /* Read data from Stata with 8x unrolling for main variables */
-    var_idx = 1;
-
-    /* Read y (var 1) - 8x unrolled */
-    {
-        ST_int i_end = N - (N % 8);
-        ST_double v0, v1, v2, v3, v4, v5, v6, v7;
-        for (i = 0; i < i_end; i += 8) {
-            SF_vdata(var_idx, i + in1, &v0);
-            SF_vdata(var_idx, i + 1 + in1, &v1);
-            SF_vdata(var_idx, i + 2 + in1, &v2);
-            SF_vdata(var_idx, i + 3 + in1, &v3);
-            SF_vdata(var_idx, i + 4 + in1, &v4);
-            SF_vdata(var_idx, i + 5 + in1, &v5);
-            SF_vdata(var_idx, i + 6 + in1, &v6);
-            SF_vdata(var_idx, i + 7 + in1, &v7);
-            y[i] = v0; y[i+1] = v1; y[i+2] = v2; y[i+3] = v3;
-            y[i+4] = v4; y[i+5] = v5; y[i+6] = v6; y[i+7] = v7;
-        }
-        for (; i < N; i++) {
-            SF_vdata(var_idx, i + in1, &y[i]);
-        }
-    }
-    var_idx++;
-
-    /* Read x (var 2) - 8x unrolled */
-    {
-        ST_int i_end = N - (N % 8);
-        ST_double v0, v1, v2, v3, v4, v5, v6, v7;
-        for (i = 0; i < i_end; i += 8) {
-            SF_vdata(var_idx, i + in1, &v0);
-            SF_vdata(var_idx, i + 1 + in1, &v1);
-            SF_vdata(var_idx, i + 2 + in1, &v2);
-            SF_vdata(var_idx, i + 3 + in1, &v3);
-            SF_vdata(var_idx, i + 4 + in1, &v4);
-            SF_vdata(var_idx, i + 5 + in1, &v5);
-            SF_vdata(var_idx, i + 6 + in1, &v6);
-            SF_vdata(var_idx, i + 7 + in1, &v7);
-            x[i] = v0; x[i+1] = v1; x[i+2] = v2; x[i+3] = v3;
-            x[i+4] = v4; x[i+5] = v5; x[i+6] = v6; x[i+7] = v7;
-        }
-        for (; i < N; i++) {
-            SF_vdata(var_idx, i + in1, &x[i]);
-        }
-    }
-    var_idx++;
-
-    /* Read controls - 8x unrolled */
-    if (controls) {
-        for (j = 0; j < config->num_controls; j++) {
-            ST_double *col = &controls[j * N];
-            ST_int i_end = N - (N % 8);
-            ST_double v0, v1, v2, v3, v4, v5, v6, v7;
-            for (i = 0; i < i_end; i += 8) {
-                SF_vdata(var_idx, i + in1, &v0);
-                SF_vdata(var_idx, i + 1 + in1, &v1);
-                SF_vdata(var_idx, i + 2 + in1, &v2);
-                SF_vdata(var_idx, i + 3 + in1, &v3);
-                SF_vdata(var_idx, i + 4 + in1, &v4);
-                SF_vdata(var_idx, i + 5 + in1, &v5);
-                SF_vdata(var_idx, i + 6 + in1, &v6);
-                SF_vdata(var_idx, i + 7 + in1, &v7);
-                col[i] = v0; col[i+1] = v1; col[i+2] = v2; col[i+3] = v3;
-                col[i+4] = v4; col[i+5] = v5; col[i+6] = v6; col[i+7] = v7;
-            }
-            for (; i < N; i++) {
-                SF_vdata(var_idx, i + in1, &col[i]);
-            }
-            var_idx++;
-        }
-    }
-
-    /* Read absorb variables (as integers) */
-    /* NOTE: Check for Stata missings before casting - missings are large positive doubles
-       that would become huge ints and cause OOM in init_factor allocations.
-       Also, HDFE code expects 1-based FE levels, so add 1 to convert 0-based variables
-       like foreign (0=Domestic, 1=Foreign) to 1-based (1=Domestic, 2=Foreign). */
-    if (fe_vars) {
+        /* Convert loaded doubles to 1-based integers, setting missings to 0 */
         for (j = 0; j < config->num_absorb; j++) {
+            ST_double *src = loaded_data.vars[absorb_data_idx + j].data.dbl;
             for (i = 0; i < N; i++) {
-                SF_vdata(var_idx, i + in1, &val);
+                val = src[i];
                 /* Set missings to 0, add 1 to valid values to make them 1-based.
                  * The < 1 check later will filter out missings (value 0). */
                 fe_vars[j * N + i] = SF_is_missing(val) ? 0 : (ST_int)val + 1;
             }
-            var_idx++;
         }
     }
 
-    /* Read by variable */
-    /* NOTE: Check for Stata missings before casting - missings are large positive doubles
-       that would become huge ints and explode num_groups calculation */
-    if (by_groups) {
+    /* Handle by variable - convert double to integer with missing handling */
+    if (config->has_by) {
+        by_groups = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+        if (!by_groups) {
+            free(y); free(x); free(controls); free(fe_vars);
+            stata_data_free(&loaded_data);
+            return CBINSCATTER_ERR_MEMORY;
+        }
+        ST_double *src = loaded_data.vars[by_data_idx].data.dbl;
         for (i = 0; i < N; i++) {
-            SF_vdata(var_idx, i + in1, &val);
+            val = src[i];
             /* Set missings to -1 so they're filtered by the < 0 check later */
             by_groups[i] = SF_is_missing(val) ? -1 : (ST_int)val;
         }
-        var_idx++;
     }
 
-    /* Read weights - 8x unrolled */
-    if (weights) {
-        ST_int i_end = N - (N % 8);
-        ST_double v0, v1, v2, v3, v4, v5, v6, v7;
-        for (i = 0; i < i_end; i += 8) {
-            SF_vdata(var_idx, i + in1, &v0);
-            SF_vdata(var_idx, i + 1 + in1, &v1);
-            SF_vdata(var_idx, i + 2 + in1, &v2);
-            SF_vdata(var_idx, i + 3 + in1, &v3);
-            SF_vdata(var_idx, i + 4 + in1, &v4);
-            SF_vdata(var_idx, i + 5 + in1, &v5);
-            SF_vdata(var_idx, i + 6 + in1, &v6);
-            SF_vdata(var_idx, i + 7 + in1, &v7);
-            weights[i] = v0; weights[i+1] = v1; weights[i+2] = v2; weights[i+3] = v3;
-            weights[i+4] = v4; weights[i+5] = v5; weights[i+6] = v6; weights[i+7] = v7;
+    /* Get weights pointer */
+    if (config->has_weights && weights_data_idx >= 0) {
+        weights = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+        if (!weights) {
+            free(y); free(x); free(controls); free(fe_vars); free(by_groups);
+            stata_data_free(&loaded_data);
+            return CBINSCATTER_ERR_MEMORY;
         }
-        for (; i < N; i++) {
-            SF_vdata(var_idx, i + in1, &weights[i]);
-        }
-        var_idx++;
+        memcpy(weights, loaded_data.vars[weights_data_idx].data.dbl, N * sizeof(ST_double));
     }
+
+    /* Allocate valid_idx array */
+    valid_idx = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
+    if (!valid_idx) {
+        free(y); free(x); free(controls); free(fe_vars); free(by_groups); free(weights);
+        stata_data_free(&loaded_data);
+        return CBINSCATTER_ERR_MEMORY;
+    }
+
+    /* Free loaded_data - we've copied what we need */
+    stata_data_free(&loaded_data);
 
     /* Build valid index array (streaming - single pass) */
     N_valid = 0;

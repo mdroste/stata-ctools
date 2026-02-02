@@ -468,12 +468,18 @@ void ivvce_compute_twoway(
 }
 
 /*
-    Compute Kiefer VCE (homoskedastic within-panel autocorrelation).
+    Compute Kiefer VCE (within-panel autocorrelation robust).
 
-    Kiefer (1980) uses sigma^2 * sum_g (sum_i PzX_i)(sum_i PzX_i)'
-    instead of sum_g (sum_i PzX_i * e_i)(sum_i PzX_i * e_i)'
+    Kiefer (1980) VCE uses TIME-CLUSTERING: sum across all panels at each time point,
+    then add HAC cross-lag terms with truncated kernel (kw=1 for all lags).
 
-    This assumes homoskedastic errors with within-panel autocorrelation.
+    Following ivreg2's implementation (livreg2.mlib m_omega lines 446-535):
+    1. For each time t, compute eZ_t = sum over panels i of (e_it * Z_it)
+    2. Build shat_ZZ = sum_t (eZ_t * eZ_t') + sum_{tau} kw*(ghat + ghat')
+    3. Transform to X-space: meat = A' * shat_ZZ * A
+    4. V = XkX_inv * meat * XkX_inv * dof_adj
+
+    Note: Uses original (non-demeaned) Z to avoid orthogonality cancellation.
 */
 void ivvce_compute_kiefer(
     const ST_double *Z,
@@ -485,169 +491,156 @@ void ivvce_compute_kiefer(
     ST_int N,
     ST_int K_total,
     ST_int K_iv,
-    const ST_int *cluster_ids,
-    ST_int num_clusters,
+    const ST_int *panel_ids,
+    ST_int num_panels,
     ST_int df_a,
     ST_double *V
 )
 {
-    ST_int i, j, k, c;
-
-    /* Kiefer VCE uses the HAC formula with residuals, computed within panels.
-       The meat formula is the same as cluster-robust:
-       meat = sum_g (sum_i PzX_i * e_i)(sum_i PzX_i * e_i)'
-
-       But the DOF adjustment is different:
-       - Cluster: dof_adj = (N-1)/(N-K-df_a) * G/(G-1)
-       - Kiefer: dof_adj = N/(N-K-df_a) (no G/(G-1) factor)
-
-       Additionally, ivreg2 may use small-sample corrections. */
+    ST_int i, p;
 
     ST_int df_r = N - K_total - df_a;
     if (df_r <= 0) df_r = 1;
 
-    /* Compute P_Z X = Z * (Z'Z)^-1 Z'X = Z * temp_kiv_ktotal */
-    ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
-    if (!PzX) return;
+    /* Build panel membership lists */
+    ST_int *panel_counts = (ST_int *)calloc(num_panels, sizeof(ST_int));
+    ST_int *panel_starts = (ST_int *)calloc(num_panels + 1, sizeof(ST_int));
+    ST_int *obs_by_panel = (ST_int *)calloc(N, sizeof(ST_int));
+
+    if (!panel_counts || !panel_starts || !obs_by_panel) {
+        if (panel_counts) free(panel_counts);
+        if (panel_starts) free(panel_starts);
+        if (obs_by_panel) free(obs_by_panel);
+        return;
+    }
 
     for (i = 0; i < N; i++) {
-        for (j = 0; j < K_total; j++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
-            }
-            PzX[j * N + i] = sum;
+        p = panel_ids[i] - 1;
+        if (p >= 0 && p < num_panels) {
+            panel_counts[p]++;
         }
     }
 
-    /*
-       Kiefer VCE: Panel-aware HAC with truncated kernel.
-
-       The meat is computed using HAC formula but only for observations
-       in the SAME panel. With truncated kernel and bw >= T-1, this
-       includes all observation pairs within each panel.
-
-       For panel g with observations i1, i2, ..., iT:
-       meat_g = sum_{t,s in g} u_t * u_s' where u_t = PzX_t * e_t
-
-       Total meat = sum_g meat_g
-
-       This differs from standard cluster-robust which computes:
-       meat_cluster = sum_g (sum_t u_t)(sum_t u_t)'
-
-       The HAC formula with individual pairs gives different results
-       when residuals have different magnitudes within each cluster.
-    */
-
-    /* Compute RSS and sigma for homoskedastic scaling */
-    ST_double rss = 0.0;
-    for (i = 0; i < N; i++) {
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        rss += w * resid[i] * resid[i];
+    panel_starts[0] = 0;
+    for (p = 0; p < num_panels; p++) {
+        panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
     }
-    ST_double sigma = sqrt(rss / df_r);
 
-    /* Compute u_i = PzX_i * e_i for all observations */
-    ST_double *u = (ST_double *)calloc(N * K_total, sizeof(ST_double));
-    if (!u) {
-        free(PzX);
+    memset(panel_counts, 0, num_panels * sizeof(ST_int));
+    for (i = 0; i < N; i++) {
+        p = panel_ids[i] - 1;
+        if (p >= 0 && p < num_panels) {
+            obs_by_panel[panel_starts[p] + panel_counts[p]++] = i;
+        }
+    }
+
+    /* Find T = max panel length */
+    ST_int T_max = 0;
+    for (p = 0; p < num_panels; p++) {
+        ST_int T_p = panel_starts[p + 1] - panel_starts[p];
+        if (T_p > T_max) T_max = T_p;
+    }
+
+    if (T_max == 0) {
+        free(panel_counts); free(panel_starts); free(obs_by_panel);
+        return;
+    }
+
+    /* Compute Z-space score vectors: uZ[l,i] = Z[l,i] * e[i] * w[i] */
+    ST_double *uZ = (ST_double *)calloc(K_iv * N, sizeof(ST_double));
+    if (!uZ) {
+        free(panel_counts); free(panel_starts); free(obs_by_panel);
         return;
     }
 
     for (i = 0; i < N; i++) {
         ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
         ST_double we = w * resid[i];
-        for (j = 0; j < K_total; j++) {
-            u[j * N + i] = PzX[j * N + i] * we;
+        for (ST_int l = 0; l < K_iv; l++) {
+            uZ[l * N + i] = Z[l * N + i] * we;
         }
     }
 
-    (void)sigma;  /* May be used for alternative Kiefer formula */
-
-    free(PzX);
-
-    /* Compute panel-aware HAC meat.
-       For each pair of observations (i1, i2) in the same panel,
-       add u_i1 * u_i2' to the meat matrix.
-       This is O(sum_g T_g^2) which is efficient for balanced panels. */
-    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    if (!meat) {
-        free(u);
+    /* Allocate time_sums: for each time t, store sum of uZ across all panels */
+    ST_double *time_sums = (ST_double *)calloc(T_max * K_iv, sizeof(ST_double));
+    if (!time_sums) {
+        free(uZ); free(panel_counts); free(panel_starts); free(obs_by_panel);
         return;
     }
 
-    /* Build cluster membership lists for efficient iteration */
-    /* First, count observations per cluster */
-    ST_int *cluster_counts = (ST_int *)calloc(num_clusters, sizeof(ST_int));
-    ST_int *cluster_starts = (ST_int *)calloc(num_clusters + 1, sizeof(ST_int));
-    ST_int *obs_by_cluster = (ST_int *)calloc(N, sizeof(ST_int));
+    /* Compute time_sums: cluster by time (within-panel position), sum across panels */
+    for (p = 0; p < num_panels; p++) {
+        ST_int start = panel_starts[p];
+        ST_int T_p = panel_starts[p + 1] - start;
 
-    if (!cluster_counts || !cluster_starts || !obs_by_cluster) {
-        free(u); free(meat);
-        if (cluster_counts) free(cluster_counts);
-        if (cluster_starts) free(cluster_starts);
-        if (obs_by_cluster) free(obs_by_cluster);
+        for (ST_int t = 0; t < T_p; t++) {
+            ST_int obs_idx = obs_by_panel[start + t];
+            for (ST_int l = 0; l < K_iv; l++) {
+                time_sums[t * K_iv + l] += uZ[l * N + obs_idx];
+            }
+        }
+    }
+
+    free(uZ);
+
+    /* Compute shat_ZZ in Z-space with HAC (time-clustering) */
+    ST_double *shat_ZZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    if (!shat_ZZ) {
+        free(time_sums); free(panel_counts); free(panel_starts); free(obs_by_panel);
         return;
     }
 
-    for (i = 0; i < N; i++) {
-        c = cluster_ids[i] - 1;
-        if (c >= 0 && c < num_clusters) {
-            cluster_counts[c]++;
+    /* Lag 0: sum_t (time_sum[t])(time_sum[t])' */
+    for (ST_int t = 0; t < T_max; t++) {
+        for (ST_int l = 0; l < K_iv; l++) {
+            for (ST_int m = 0; m <= l; m++) {
+                ST_double contrib = time_sums[t * K_iv + l] * time_sums[t * K_iv + m];
+                shat_ZZ[l * K_iv + m] += contrib;
+                if (m != l) shat_ZZ[m * K_iv + l] += contrib;
+            }
         }
     }
 
-    /* Compute start indices */
-    cluster_starts[0] = 0;
-    for (c = 0; c < num_clusters; c++) {
-        cluster_starts[c + 1] = cluster_starts[c] + cluster_counts[c];
-    }
-
-    /* Reset counts to use as insertion indices */
-    memset(cluster_counts, 0, num_clusters * sizeof(ST_int));
-
-    /* Fill obs_by_cluster */
-    for (i = 0; i < N; i++) {
-        c = cluster_ids[i] - 1;
-        if (c >= 0 && c < num_clusters) {
-            ST_int idx = cluster_starts[c] + cluster_counts[c];
-            obs_by_cluster[idx] = i;
-            cluster_counts[c]++;
-        }
-    }
-
-    /* Compute meat: sum over all within-panel pairs */
-    for (c = 0; c < num_clusters; c++) {
-        ST_int start = cluster_starts[c];
-        ST_int end = cluster_starts[c + 1];
-        ST_int T_c = end - start;
-
-        /* For each pair (i1, i2) in this cluster */
-        for (ST_int t1 = 0; t1 < T_c; t1++) {
-            ST_int i1 = obs_by_cluster[start + t1];
-            for (ST_int t2 = 0; t2 < T_c; t2++) {
-                ST_int i2 = obs_by_cluster[start + t2];
-
-                /* Add u_i1 * u_i2' to meat */
-                for (j = 0; j < K_total; j++) {
-                    for (k = 0; k <= j; k++) {
-                        ST_double contrib = u[j * N + i1] * u[k * N + i2];
-                        meat[j * K_total + k] += contrib;
-                        if (k != j) meat[k * K_total + j] += contrib;
-                    }
+    /* HAC cross-lag terms: for tau=1 to T-1, add (ghat + ghat') with kw=1 (truncated) */
+    for (ST_int tau = 1; tau < T_max; tau++) {
+        for (ST_int t = tau; t < T_max; t++) {
+            for (ST_int l = 0; l < K_iv; l++) {
+                for (ST_int m = 0; m < K_iv; m++) {
+                    ST_double contrib = time_sums[t * K_iv + l] * time_sums[(t - tau) * K_iv + m]
+                                      + time_sums[(t - tau) * K_iv + l] * time_sums[t * K_iv + m];
+                    shat_ZZ[l * K_iv + m] += contrib;
                 }
             }
         }
     }
 
-    free(u);
-    free(cluster_counts);
-    free(cluster_starts);
-    free(obs_by_cluster);
+    free(time_sums);
+    free(panel_counts); free(panel_starts); free(obs_by_panel);
 
-    /* DOF adjustment for Kiefer: N / (N - K - df_a)
-       Note: NO G/(G-1) factor like cluster-robust.
-       This is the key difference between Kiefer and cluster VCE. */
+    /* Divide by N */
+    for (i = 0; i < K_iv * K_iv; i++) {
+        shat_ZZ[i] /= N;
+    }
+
+    /* Transform shat_ZZ to X-space:
+       meat = A' * shat_ZZ * A where A = temp_kiv_ktotal = (Z'Z)^{-1} * Z'X */
+    ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *temp_kk = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
+
+    if (!meat || !temp_kk) {
+        free(shat_ZZ);
+        if (meat) free(meat);
+        if (temp_kk) free(temp_kk);
+        return;
+    }
+
+    civreghdfe_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
+    civreghdfe_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
+
+    free(shat_ZZ);
+    free(temp_kk);
+
+    /* DOF adjustment for Kiefer: N / (N - K - df_a) */
     ST_double dof_adj = (ST_double)N / (ST_double)df_r;
 
     /* V = XkX_inv * meat * XkX_inv * dof_adj */
@@ -952,11 +945,14 @@ void ivvce_compute_full(
                         ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
                         if (kw < 1e-10) continue;
 
+                        /* Use full (l, m) loop without premature symmetrization.
+                           Each (i1, i2) contribution uZ[l,i1]*uZ[m,i2] is NOT symmetric in l,m.
+                           The overall shat_ZZ will be symmetric because we sum over all (t1,t2)
+                           pairs, and Gamma(tau) + Gamma(-tau) is symmetric. */
                         for (ST_int l = 0; l < K_iv; l++) {
-                            for (ST_int m = 0; m <= l; m++) {
+                            for (ST_int m = 0; m < K_iv; m++) {
                                 ST_double contrib = kw * uZ[l * N + i1] * uZ[m * N + i2];
                                 shat_ZZ[l * K_iv + m] += contrib;
-                                if (m != l) shat_ZZ[m * K_iv + l] += contrib;
                             }
                         }
                     }

@@ -12,11 +12,6 @@
 {phang}
 {bf:crangestat} {hline 2} C-accelerated range statistics for Stata
 
-{pstd}
-{cmd:crangestat} is a high-performance replacement for {cmd:rangestat} by Robert
-Picard, Nicholas J. Cox, and Roberto Ferrer
-({browse "https://ideas.repec.org/c/boc/bocode/s458161.html":SSC}).
-
 
 {marker syntax}{...}
 {title:Syntax}

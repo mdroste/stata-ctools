@@ -27,7 +27,14 @@
 *!   Verbose              - display timing breakdown
 
 program define cpsmatch, rclass sortpreserve
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     syntax varlist(min=1 numeric) [if] [in], ///
         [OUTcome(varname numeric) Pscore(varname numeric) ///
@@ -117,6 +124,7 @@ program define cpsmatch, rclass sortpreserve
         timer clear 90
         timer clear 91
         timer clear 92
+        timer clear 94
         timer on 90
         timer on 91
     }
@@ -307,6 +315,10 @@ program define cpsmatch, rclass sortpreserve
     * CALCULATE ATT (if outcome specified)
     * =========================================================================
 
+    if `__do_timing' {
+        timer on 94
+    }
+
     local att = .
     local att_se = .
     local att_t = .
@@ -370,6 +382,10 @@ program define cpsmatch, rclass sortpreserve
         di as text "Note: S.E. does not take into account that the propensity score is estimated."
     }
 
+    if `__do_timing' {
+        timer off 94
+    }
+
     * Treatment assignment table (psmatch2 format)
     di as text ""
     quietly count if _treated == 0 & _support == 1
@@ -421,22 +437,24 @@ program define cpsmatch, rclass sortpreserve
         local __time_preplugin = r(t91)
         quietly timer list 92
         local __time_plugin = r(t92)
-
-        local __plugin_overhead = `__time_plugin' - _cpsmatch_time_total
+        quietly timer list 94
+        local __time_att = r(t94)
 
         di as text "{hline 60}"
         di as text "cpsmatch timing breakdown:"
         di as text "{hline 60}"
+        di as text "  Stata pre-plugin:     " as result %8.4f `__time_preplugin' " sec"
+        di as text "  {hline 58}"
         di as text "  C plugin internals:"
         di as text "    Load data:          " as result %8.4f _cpsmatch_time_load " sec"
+        di as text "    Group separation:   " as result %8.4f _cpsmatch_time_setup " sec"
+        di as text "    Sort/index build:   " as result %8.4f _cpsmatch_time_sort " sec"
         di as text "    Matching:           " as result %8.4f _cpsmatch_time_match " sec"
         di as text "    Store results:      " as result %8.4f _cpsmatch_time_store " sec"
         di as text "  {hline 58}"
         di as text "    C plugin total:     " as result %8.4f _cpsmatch_time_total " sec"
         di as text "  {hline 58}"
-        di as text "  Stata overhead:"
-        di as text "    Pre-plugin setup:   " as result %8.4f `__time_preplugin' " sec"
-        di as text "    Plugin call:        " as result %8.4f `__plugin_overhead' " sec"
+        di as text "  Stata post-plugin:    " as result %8.4f `__time_att' " sec"
         di as text "{hline 60}"
         di as text "    Wall clock total:   " as result %8.4f `__time_total' " sec"
         di as text "{hline 60}"

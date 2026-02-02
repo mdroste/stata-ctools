@@ -150,27 +150,173 @@ void civreghdfe_compute_underid_test(
 
         /* Kleibergen-Paap for robust/cluster VCE */
         if (vce_type != 0) {
-            /* Extract first-stage coefficients on EXCLUDED instruments only
-               The pi vector is K_iv x 1, but we only need the last L coefficients
-               (those on excluded instruments, not exogenous variables) */
-            const ST_double *pi_full = temp1 + K_exog * K_iv;
-            const ST_double *pi_excl = pi_full + K_exog;  /* Skip exogenous coefficients */
+            /* For the KP test, we need to partial out included exogenous variables
+               from both X_endog and Z_excl before computing the test statistic.
+               This is required because the test is on the EXCLUDED instruments' coefficients
+               after controlling for exogenous variables. */
 
-            /* Compute first-stage residuals using FULL pi: v = X_endog - Z * pi */
+            const ST_double *Z_exog = Z;                /* First K_exog columns */
+            const ST_double *Z_excl_raw = Z + K_exog * N;  /* Last L columns */
+
+            /* Allocate partialled-out versions */
+            ST_double *X_endog_partial = (ST_double *)malloc(N * sizeof(ST_double));
+            ST_double *Z_excl_partial = (ST_double *)malloc(N * L * sizeof(ST_double));
             ST_double *v = (ST_double *)calloc(N, sizeof(ST_double));
-            if (!v) return;
-
-            for (i = 0; i < N; i++) {
-                ST_double pred = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    pred += Z[k * N + i] * pi_full[k];
-                }
-                v[i] = X_endog[i] - pred;
+            if (!X_endog_partial || !Z_excl_partial || !v) {
+                free(X_endog_partial); free(Z_excl_partial); free(v);
+                return;
             }
 
-            /* Compute shat0 for Wald statistic - ONLY for excluded instruments (L x L)
-               The Z matrix is organized as [exogenous, excluded], we need the last L columns */
-            const ST_double *Z_excl = Z + K_exog * N;  /* Pointer to excluded instruments */
+            /* Copy raw values */
+            memcpy(X_endog_partial, X_endog, N * sizeof(ST_double));
+            memcpy(Z_excl_partial, Z_excl_raw, N * L * sizeof(ST_double));
+
+            /* Partial out exogenous variables if K_exog > 0 */
+            if (K_exog > 0) {
+                /* Compute (Z_exog' * Z_exog)^-1 */
+                ST_double *ZeZe = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                ST_double *ZeZe_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                if (ZeZe && ZeZe_inv) {
+                    for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                        for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                            ST_double sum = 0.0;
+                            for (i = 0; i < N; i++) {
+                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                sum += w * Z_exog[l1 * N + i] * Z_exog[l2 * N + i];
+                            }
+                            ZeZe[l2 * K_exog + l1] = sum;
+                        }
+                    }
+
+                    memcpy(ZeZe_inv, ZeZe, K_exog * K_exog * sizeof(ST_double));
+                    if (cholesky(ZeZe_inv, K_exog) == 0) {
+                        invert_from_cholesky(ZeZe_inv, K_exog, ZeZe_inv);
+
+                        /* Partial out Z_exog from X_endog */
+                        ST_double *ZeX = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                        if (ZeX) {
+                            for (ST_int l = 0; l < K_exog; l++) {
+                                ST_double sum = 0.0;
+                                for (i = 0; i < N; i++) {
+                                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                    sum += w * Z_exog[l * N + i] * X_endog[i];
+                                }
+                                ZeX[l] = sum;
+                            }
+                            /* gamma = (Z_exog'Z_exog)^-1 * Z_exog'X_endog */
+                            ST_double *gamma = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                            if (gamma) {
+                                for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                                    ST_double sum = 0.0;
+                                    for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                        sum += ZeZe_inv[l2 * K_exog + l1] * ZeX[l2];
+                                    }
+                                    gamma[l1] = sum;
+                                }
+                                /* X_endog_partial = X_endog - Z_exog * gamma */
+                                for (i = 0; i < N; i++) {
+                                    ST_double pred = 0.0;
+                                    for (ST_int l = 0; l < K_exog; l++) {
+                                        pred += Z_exog[l * N + i] * gamma[l];
+                                    }
+                                    X_endog_partial[i] -= pred;
+                                }
+                                free(gamma);
+                            }
+                            free(ZeX);
+                        }
+
+                        /* Partial out Z_exog from each column of Z_excl */
+                        for (ST_int col = 0; col < L; col++) {
+                            ST_double *ZeZcol = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                            if (ZeZcol) {
+                                for (ST_int l = 0; l < K_exog; l++) {
+                                    ST_double sum = 0.0;
+                                    for (i = 0; i < N; i++) {
+                                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                        sum += w * Z_exog[l * N + i] * Z_excl_raw[col * N + i];
+                                    }
+                                    ZeZcol[l] = sum;
+                                }
+                                ST_double *gamma_z = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                                if (gamma_z) {
+                                    for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                                        ST_double sum = 0.0;
+                                        for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                            sum += ZeZe_inv[l2 * K_exog + l1] * ZeZcol[l2];
+                                        }
+                                        gamma_z[l1] = sum;
+                                    }
+                                    for (i = 0; i < N; i++) {
+                                        ST_double pred = 0.0;
+                                        for (ST_int l = 0; l < K_exog; l++) {
+                                            pred += Z_exog[l * N + i] * gamma_z[l];
+                                        }
+                                        Z_excl_partial[col * N + i] -= pred;
+                                    }
+                                    free(gamma_z);
+                                }
+                                free(ZeZcol);
+                            }
+                        }
+                    }
+                }
+                free(ZeZe);
+                free(ZeZe_inv);
+            }
+
+            /* Now compute first-stage on partialled data: X_endog_partial = Z_excl_partial * pi_excl + v */
+            /* First compute (Z_excl_partial' * Z_excl_partial)^-1 * Z_excl_partial' * X_endog_partial */
+            ST_double *ZtZ_excl = (ST_double *)calloc(L * L, sizeof(ST_double));
+            ST_double *ZtX = (ST_double *)calloc(L, sizeof(ST_double));
+            ST_double *pi_excl = (ST_double *)calloc(L, sizeof(ST_double));
+
+            if (ZtZ_excl && ZtX && pi_excl) {
+                for (ST_int l1 = 0; l1 < L; l1++) {
+                    for (ST_int l2 = 0; l2 < L; l2++) {
+                        ST_double sum = 0.0;
+                        for (i = 0; i < N; i++) {
+                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                            sum += w * Z_excl_partial[l1 * N + i] * Z_excl_partial[l2 * N + i];
+                        }
+                        ZtZ_excl[l2 * L + l1] = sum;
+                    }
+                    ST_double sum = 0.0;
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        sum += w * Z_excl_partial[l1 * N + i] * X_endog_partial[i];
+                    }
+                    ZtX[l1] = sum;
+                }
+
+                /* Solve for pi_excl = ZtZ_excl^-1 * ZtX */
+                ST_double *ZtZ_excl_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
+                if (ZtZ_excl_inv) {
+                    memcpy(ZtZ_excl_inv, ZtZ_excl, L * L * sizeof(ST_double));
+                    if (cholesky(ZtZ_excl_inv, L) == 0 && invert_from_cholesky(ZtZ_excl_inv, L, ZtZ_excl_inv) == 0) {
+                        for (ST_int l1 = 0; l1 < L; l1++) {
+                            ST_double sum = 0.0;
+                            for (ST_int l2 = 0; l2 < L; l2++) {
+                                sum += ZtZ_excl_inv[l2 * L + l1] * ZtX[l2];
+                            }
+                            pi_excl[l1] = sum;
+                        }
+                    }
+                    free(ZtZ_excl_inv);
+                }
+
+                /* Compute residuals: v = X_endog_partial - Z_excl_partial * pi_excl */
+                for (i = 0; i < N; i++) {
+                    ST_double pred = 0.0;
+                    for (k = 0; k < L; k++) {
+                        pred += Z_excl_partial[k * N + i] * pi_excl[k];
+                    }
+                    v[i] = X_endog_partial[i] - pred;
+                }
+            }
+
+            /* Use partialled Z_excl for shat0 computation */
+            const ST_double *Z_excl = Z_excl_partial;
 
             ST_double *shat0 = (ST_double *)calloc(L * L, sizeof(ST_double));
             ST_double *shat0_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
@@ -504,20 +650,20 @@ void civreghdfe_compute_underid_test(
                             ST_int dof;
                             ST_double denom;
                             ST_double cluster_adj;
-                            if ((vce_type == CIVREGHDFE_VCE_DKRAAY || kiefer) && kernel_type > 0 && bw > 0) {
-                                /* Driscoll-Kraay or Kiefer with HAC kernel: needs extra adjustment */
-                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
-                                denom = (ST_double)(N - 1);
-                                /* HAC requires ((G-1)/G)^2 to match ivreghdfe's ranktest-based widstat */
-                                cluster_adj = ((ST_double)(num_clusters - 1) / (ST_double)num_clusters) *
-                                              ((ST_double)(num_clusters - 1) / (ST_double)num_clusters);
-                            } else if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) {
-                                /* Regular cluster: single (G-1)/G adjustment */
-                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
+                            if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY ||
+                                ((kiefer) && kernel_type > 0 && bw > 0)) {
+                                /* Regular cluster: single (G-1)/G adjustment
+                                   For cluster VCE, ivreghdfe uses sdofminus = 1 (for the constant),
+                                   not the full df_a, because cluster handles the FE adjustment.
+                                   dof = N - K_iv - 1 */
+                                dof = N - K_iv - 1;
                                 denom = (ST_double)(N - 1);
                                 cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
                             } else {
-                                /* Robust: dof includes df_a */
+                                /* Robust: ivreghdfe formula is chi2/N * (N - K_iv - sdofminus) / L
+                                   where sdofminus = partial_ct + constant_flag
+                                   For absorb(), sdofminus = G (# FE variables) + 1 (constant) = df_a
+                                   (since df_a = absorbed FE levels + absorbed constant) */
                                 dof = N - K_iv - df_a;
                                 denom = (ST_double)N;
                                 cluster_adj = 1.0;
@@ -880,6 +1026,11 @@ void civreghdfe_compute_underid_test(
             free(v);
             free(shat0);
             free(shat0_inv);
+            free(X_endog_partial);
+            free(Z_excl_partial);
+            free(ZtZ_excl);
+            free(ZtX);
+            free(pi_excl);
         }
 
     } else if (K_endog > 1) {

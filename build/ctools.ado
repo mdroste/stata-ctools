@@ -3,7 +3,7 @@
 *! Main info program for the ctools suite
 
 program define ctools
-    version 14.0
+    version 14.1
 
     syntax [, Version ENVironment_check Verbose UPDATE]
 

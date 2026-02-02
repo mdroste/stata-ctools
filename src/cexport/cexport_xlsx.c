@@ -196,7 +196,9 @@ static void xlsx_col_to_letters(int col, char *letters) {
     letters[i] = '\0';
 }
 
-/* Convert Excel letters (A, B, ..., Z, AA, AB, ...) to column number (1-based) */
+/* Convert Excel letters (A, B, ..., Z, AA, AB, ...) to column number (1-based)
+ * Note: Currently unused but retained for future cell range parsing. */
+static int xlsx_letters_to_col(const char *letters) __attribute__((unused));
 static int xlsx_letters_to_col(const char *letters) {
     int col = 0;
     for (int i = 0; letters[i] && isalpha((unsigned char)letters[i]); i++) {
@@ -450,6 +452,8 @@ static void strbuf_init(StringBuffer *sb, size_t initial_cap) {
     if (sb->data) sb->data[0] = '\0';
 }
 
+/* Note: Currently unused but retained for completeness. */
+static void strbuf_free(StringBuffer *sb) __attribute__((unused));
 static void strbuf_free(StringBuffer *sb) {
     free(sb->data);
     sb->data = NULL;

@@ -10,10 +10,6 @@
 {phang}
 {bf:cdecode} {hline 2} C-accelerated numeric to string decoding for Stata
 
-{pstd}
-{cmd:cdecode} is a high-performance drop-in replacement for Stata's {help decode:decode}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}
