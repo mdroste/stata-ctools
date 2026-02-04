@@ -29,4 +29,12 @@
 */
 ST_retcode cexport_main(const char *args);
 
+/*
+ * Cleanup function for cexport persistent state.
+ * Currently a no-op since cexport uses stack-allocated context,
+ * but provided for interface consistency.
+ * Safe to call multiple times (idempotent).
+ */
+void cexport_cleanup_state(void);
+
 #endif /* CEXPORT_IMPL_H */

@@ -155,12 +155,20 @@ static void cimport_sanitize_varname(const char *input, int len, char *output) {
  * Type Inference
  * ============================================================================ */
 
-static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo *col) {
+static CImportNumericSubtype cimport_determine_numeric_subtype(CImportColumnInfo *col, bool use_double_for_decimals) {
     if (col->min_value < -2147483647.0 || col->max_value > 2147483620.0) {
         return CIMPORT_NUM_DOUBLE;
     }
 
     if (!col->is_integer) {
+        /* Use double for non-integers when custom decimal/group separators are used,
+         * to preserve precision for locale-specific data (e.g., financial data).
+         * Float can only represent ~7 significant digits and cannot exactly
+         * represent most decimal fractions (e.g., 1234.56 becomes 1234.56005...).
+         * For standard imports (decimal='.', no group sep), use float to match Stata. */
+        if (use_double_for_decimals) {
+            return CIMPORT_NUM_DOUBLE;
+        }
         return CIMPORT_NUM_FLOAT;
     }
 
@@ -362,7 +370,10 @@ static void cimport_infer_column_types(CImportContext *ctx) {
             } else if (ctx->columns[i].min_value == DBL_MAX) {
                 ctx->columns[i].num_subtype = CIMPORT_NUM_DOUBLE;
             } else {
-                ctx->columns[i].num_subtype = cimport_determine_numeric_subtype(&ctx->columns[i]);
+                /* Use double for non-integers when custom decimal/group separators
+                 * are specified, to preserve precision for locale-specific data. */
+                bool use_double = (ctx->decimal_separator != '.' || ctx->group_separator != '\0');
+                ctx->columns[i].num_subtype = cimport_determine_numeric_subtype(&ctx->columns[i], use_double);
             }
         }
     }
@@ -603,6 +614,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->skip_rows = skip_rows;
     ctx->bindquotes = bindquotes;
     ctx->filename = strdup(filename);
+    if (ctx->filename == NULL) {
+        return NULL;
+    }
     ctx->verbose = verbose;
     atomic_init(&ctx->error_code, 0);
 
@@ -1551,4 +1565,14 @@ ST_retcode cimport_main(const char *args) {
         cimport_display_error("cimport: invalid mode. Use 'scan' or 'load'\n");
         return 198;
     }
+}
+
+/* ============================================================================
+ * Cleanup function for ctools_cleanup system
+ * ============================================================================ */
+
+void cimport_cleanup_cache(void)
+{
+    /* Reuse existing cleanup function */
+    cimport_clear_cached_context();
 }

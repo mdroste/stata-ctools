@@ -13,9 +13,11 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
+capture mkdir "temp"
+
 quietly {
 
-capture mkdir "temp"
+noi di as text "Running validation tests for cimport..."
 
 /*******************************************************************************
  * Helper: benchmark_import - Import with both methods and compare using cf _all
@@ -290,9 +292,10 @@ benchmark_import using "temp/zipcodes.csv", testname("stringcols multiple column
  ******************************************************************************/
 print_section "decimalseparator/groupseparator Options"
 
+* NOTE: Tolerance threshold is $DEFAULT_TOL (1e-7). Do NOT change this unless explicitly asked by a person.
 * European format test
 capture cimport delimited using "temp/european.csv", delimiters(";") decimalseparator(,) groupseparator(.) clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "European format"
 }
 else {
@@ -307,7 +310,7 @@ file write fh "2;234,56" _n
 file close fh
 
 capture cimport delimited using "temp/comma_decimal.csv", delimiters(";") decimalseparator(,) clear
-if _rc == 0 & abs(value[1] - 123.45) < 0.01 {
+if _rc == 0 & abs(value[1] - 123.45) < $DEFAULT_TOL {
     test_pass "decimalseparator only"
 }
 else {
@@ -327,7 +330,7 @@ file write fh "2;2.345,67" _n
 file close fh
 
 capture cimport delimited using "temp/german_numbers.csv", delimiters(";") locale(de_DE) parselocale clear
-if _rc == 0 & abs(betrag[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(betrag[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "German locale (de_DE)"
 }
 else {
@@ -342,7 +345,7 @@ file write fh "2;2 345,67" _n
 file close fh
 
 capture cimport delimited using "temp/french_numbers.csv", delimiters(";") locale(fr_FR) parselocale clear
-if _rc == 0 & abs(montant[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(montant[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "French locale (fr_FR)"
 }
 else {
@@ -357,7 +360,7 @@ file write fh "2,2'345.67" _n
 file close fh
 
 capture cimport delimited using "temp/swiss_numbers.csv", locale(de_CH) parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "Swiss locale (de_CH)"
 }
 else {
@@ -372,7 +375,7 @@ file write fh "2,2345.67" _n
 file close fh
 
 capture cimport delimited using "temp/us_numbers.csv", locale(en_US) parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "US locale (en_US)"
 }
 else {
@@ -381,7 +384,7 @@ else {
 
 * Test parselocale without explicit locale (uses default)
 capture cimport delimited using "temp/us_numbers.csv", parselocale clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "parselocale without locale (default)"
 }
 else {
@@ -389,8 +392,9 @@ else {
 }
 
 * Test locale option alone (without parselocale) - should not affect parsing
-capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) clear
-if _rc == 0 & abs(amount[1] - 1234.56) < 0.01 {
+* Note: use asdouble for precise comparison against literal value
+capture cimport delimited using "temp/us_numbers.csv", locale(de_DE) asdouble clear
+if _rc == 0 & abs(amount[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "locale without parselocale (no effect)"
 }
 else {
@@ -405,7 +409,7 @@ file write fh "2;9.876,54" _n
 file close fh
 
 capture cimport delimited using "temp/italian_numbers.csv", delimiters(";") locale(it_IT) parselocale clear
-if _rc == 0 & abs(prezzo[1] - 1234.56) < 0.01 {
+if _rc == 0 & abs(prezzo[1] - 1234.56) < $DEFAULT_TOL {
     test_pass "Italian locale (it_IT)"
 }
 else {
@@ -977,12 +981,17 @@ file write fh "1,Alpha,100" _n
 file write fh `"2,"Beta"'
 file close fh
 
+* Compare behavior with Stata's import delimited
+capture import delimited using "temp/malformed_unterminated_quote.csv", clear
+local stata_rc = _rc
+local stata_n = _N
 capture cimport delimited using "temp/malformed_unterminated_quote.csv", clear
-if _rc == 0 {
-    test_pass "unterminated quote - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] unterminated quote - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "unterminated quote - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] unterminated quote" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Quote in middle of unquoted field
@@ -992,12 +1001,15 @@ file write fh "1,Al" _char(34) "pha,100" _n
 file write fh "2,Beta,200" _n
 file close fh
 
+capture import delimited using "temp/malformed_mid_quote.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_mid_quote.csv", clear
-if _rc == 0 {
-    test_pass "mid-field quote - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] mid-field quote - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "mid-field quote - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] mid-field quote" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Very inconsistent column counts
@@ -1009,12 +1021,15 @@ file write fh "1,2,3,4,5,6,7,8,9,10" _n
 file write fh "1,2,3" _n
 file close fh
 
+capture import delimited using "temp/malformed_very_inconsistent.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_very_inconsistent.csv", clear
-if _rc == 0 {
-    test_pass "very inconsistent cols - imported (N=`=_N', K=`=c(k)')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] very inconsistent cols - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "very inconsistent cols - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] very inconsistent cols" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Only commas (no actual data)
@@ -1024,12 +1039,15 @@ file write fh ",,,," _n
 file write fh ",,,," _n
 file close fh
 
+capture import delimited using "temp/malformed_only_commas.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_only_commas.csv", clear
-if _rc == 0 {
-    test_pass "only commas - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] only commas - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "only commas - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] only commas" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Random binary-like data
@@ -1038,12 +1056,15 @@ file write fh "id,data" _n
 file write fh _char(1) _char(2) _char(3) ",value" _n
 file close fh
 
+capture import delimited using "temp/malformed_binary.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_binary.csv", clear
-if _rc == 0 {
-    test_pass "binary chars - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] binary chars - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "binary chars - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] binary chars" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Null bytes
@@ -1053,12 +1074,15 @@ file write fh "1,te" _char(0) "st" _n
 file write fh "2,normal" _n
 file close fh
 
+capture import delimited using "temp/malformed_nulls.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_nulls.csv", clear
-if _rc == 0 {
-    test_pass "null bytes - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] null bytes - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "null bytes - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] null bytes" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Very long line (>10K chars)
@@ -1069,12 +1093,15 @@ file write fh "1,`verylong'" _n
 file write fh "2,short" _n
 file close fh
 
+capture import delimited using "temp/malformed_very_long_line.csv", clear
+local stata_rc = _rc
 capture cimport delimited using "temp/malformed_very_long_line.csv", clear
-if _rc == 0 {
-    test_pass "very long line (2K chars) - imported (N=`=_N')"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0) | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] very long line (2K chars) - matches Stata behavior (rc=`cimport_rc')"
 }
 else {
-    test_pass "very long line - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] very long line" "cimport rc=`cimport_rc' but Stata rc=`stata_rc'"
 }
 
 * Headers with invalid Stata varname chars
@@ -1084,14 +1111,16 @@ file write fh "1,2,3,4,5" _n
 file write fh "6,7,8,9,10" _n
 file close fh
 
+capture import delimited using "temp/malformed_bad_headers.csv", clear
+local stata_rc = _rc
+local stata_k = c(k)
 capture cimport delimited using "temp/malformed_bad_headers.csv", clear
-if _rc == 0 {
-    test_pass "invalid header chars - imported (N=`=_N', K=`=c(k)')"
-    ds
-    * (silent) "    Variables: `r(varlist)'"
+local cimport_rc = _rc
+if (`stata_rc' == 0 & `cimport_rc' == 0 & c(k) == `stata_k') | (`stata_rc' != 0 & `cimport_rc' != 0) {
+    test_pass "[malformed] invalid header chars - matches Stata behavior (rc=`cimport_rc', K=`=c(k)')"
 }
 else {
-    test_pass "invalid header chars - handled gracefully (rc=`=_rc')"
+    test_fail "[malformed] invalid header chars" "cimport rc=`cimport_rc' K=`=c(k)' but Stata rc=`stata_rc' K=`stata_k'"
 }
 
 /*******************************************************************************
@@ -2500,6 +2529,44 @@ capture erase "temp/excel_noheader.xlsx"
 capture erase "temp/excel_uppercase.xlsx"
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cimport returns the same error codes as import delimited
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* File doesn't exist
+test_error_match, stata_cmd(import delimited using "nonexistent_file.csv", clear) ctools_cmd(cimport delimited using "nonexistent_file.csv", clear) testname("file doesn't exist")
+
+* Invalid delimiter option (not a real test since delimiter is flexible, but test format)
+* Create a test file first
+clear
+set obs 5
+gen x = _n
+gen y = _n * 2
+export delimited using "temp/error_test.csv", replace
+clear
+
+* Try to import with invalid options - Note: Stata's import is forgiving about most options
+* Test empty file scenario instead
+clear
+file open test using "temp/empty_test.csv", write replace
+file close test
+capture import delimited using "temp/empty_test.csv", clear
+local stata_rc = _rc
+capture cimport delimited using "temp/empty_test.csv", clear
+local cimport_rc = _rc
+if `stata_rc' == `cimport_rc' {
+    test_pass "[error] empty file (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] empty file" "stata rc=`stata_rc', cimport rc=`cimport_rc'"
+}
+capture erase "temp/empty_test.csv"
+capture erase "temp/error_test.csv"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 
@@ -2513,4 +2580,5 @@ foreach f of local files {
 }
 
 * End of cimport validation
+noi print_summary "cimport"
 }

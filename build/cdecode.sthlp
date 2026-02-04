@@ -10,28 +10,25 @@
 {phang}
 {bf:cdecode} {hline 2} C-accelerated numeric to string decoding for Stata
 
-{pstd}
-{cmd:cdecode} is a high-performance drop-in replacement for Stata's {help decode:decode}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}
 
 {p 8 17 2}
 {cmdab:cdecode}
-{varname}
+{varlist}
 {ifin}
-{cmd:,} {opth gen:erate(newvar)} [{it:options}]
+{cmd:,} {opth gen:erate(newvarlist)} | {opt replace} [{it:options}]
 
 {synoptset 24 tabbed}{...}
 {synopthdr}
 {synoptline}
-{syntab:Required}
-{synopt:{opth gen:erate(newvar)}}create new string variable with decoded labels{p_end}
+{syntab:Required (one of)}
+{synopt:{opth gen:erate(newvarlist)}}create new string variables with decoded labels{p_end}
+{synopt:{opt replace}}replace {it:varlist} with the decoded variables (ctools only){p_end}
 
 {syntab:Options}
-{synopt:{opth maxl:ength(#)}}maximum string length for new variable{p_end}
+{synopt:{opth maxl:ength(#)}}maximum string length for new variables{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
 {synoptline}
@@ -42,11 +39,11 @@ command.
 
 {pstd}
 {cmd:cdecode} is a high-performance drop-in replacement for Stata's {help decode:decode}
-command. It converts a numeric variable with value labels to a string variable
+command. It converts numeric variables with value labels to string variables
 containing the label text.
 
 {pstd}
-The source variable must be numeric and have a value label attached. For each
+The source variables must be numeric and have value labels attached. For each
 observation, {cmd:cdecode} looks up the numeric value in the value label and
 writes the corresponding label text to the new string variable.
 
@@ -54,20 +51,40 @@ writes the corresponding label text to the new string variable.
 This is the counterpart to {help cencode:cencode}, which converts string
 variables to labeled numeric variables.
 
+{pstd}
+{bf:ctools extensions:} Unlike Stata's built-in {cmd:decode}, {cmd:cdecode} supports:
+
+{p 8 12 2}{bf:varlist support:} Decode multiple numeric variables in a single command.
+When using {opt generate()}, you must provide the same number of new variable names
+as there are variables in {it:varlist}.{p_end}
+
+{p 8 12 2}{bf:replace option:} Replace the original numeric variables with their
+decoded string versions instead of creating new variables.{p_end}
+
 
 {marker options}{...}
 {title:Options}
 
-{dlgtab:Required}
+{dlgtab:Required (one of)}
 
 {phang}
-{opth generate(newvar)} creates a new string variable containing the decoded
-label text. This option is required.
+{opth generate(newvarlist)} creates new string variables containing the decoded
+label text. The number of names must match the number of variables in {it:varlist}.
+
+{phang}
+{opt replace} specifies that the variables in {it:varlist} should be replaced with their
+decoded string versions instead of creating new variables. This is a ctools-specific
+extension not available in Stata's built-in {cmd:decode}. When {opt replace}
+is specified, each original numeric variable is dropped and replaced with the
+new string variable using the same name.
+
+{pstd}
+You must specify either {opt generate()} or {opt replace}, but not both.
 
 {dlgtab:Options}
 
 {phang}
-{opth maxlength(#)} specifies the maximum string length for the new variable.
+{opth maxlength(#)} specifies the maximum string length for the new variables.
 By default, {cmd:cdecode} automatically determines the length based on the
 longest label in the value label definition. Use this option to truncate
 labels to a specific length.
@@ -77,8 +94,7 @@ labels to a specific length.
 processing. By default, {cmd:cdecode} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent in each phase of
-the decoding process.
+{opt verbose} displays a timing breakdown showing time spent decoding the variables.
 
 
 {marker examples}{...}
@@ -103,6 +119,15 @@ the decoding process.
 {pstd}Decode only for certain observations:{p_end}
 {phang2}{cmd:. cdecode region if region <= 2, generate(region_ns)}{p_end}
 
+{pstd}Replace the original variable with the decoded version (ctools-specific):{p_end}
+{phang2}{cmd:. cdecode region, replace}{p_end}
+
+{pstd}Decode multiple variables at once (ctools-specific):{p_end}
+{phang2}{cmd:. cdecode var1 var2 var3, generate(var1_str var2_str var3_str)}{p_end}
+
+{pstd}Replace multiple variables at once (ctools-specific):{p_end}
+{phang2}{cmd:. cdecode var1 var2 var3, replace}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -110,18 +135,9 @@ the decoding process.
 {pstd}
 {cmd:cdecode} stores the following in {cmd:r()}:
 
-{synoptset 28 tabbed}{...}
-{p2col 5 28 32 2: Scalars}{p_end}
-{synopt:{cmd:_cdecode_n_decoded}}number of observations successfully decoded{p_end}
-{synopt:{cmd:_cdecode_n_missing}}number of missing values{p_end}
-{synopt:{cmd:_cdecode_n_unlabeled}}number of values without labels{p_end}
-
-{pstd}
-When the {opt verbose} option is specified, {cmd:cdecode} additionally stores:
-
-{synopt:{cmd:_cdecode_time_parse}}time to parse arguments (seconds){p_end}
-{synopt:{cmd:_cdecode_time_decode}}time to decode values (seconds){p_end}
-{synopt:{cmd:_cdecode_time_total}}total C plugin time (seconds){p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Scalars}{p_end}
+{synopt:{cmd:r(N_vars)}}number of variables decoded{p_end}
 
 
 {title:Author}

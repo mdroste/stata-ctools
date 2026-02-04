@@ -11,11 +11,6 @@
 {phang}
 {bf:cexport} {hline 2} C-accelerated data export (CSV and Excel)
 
-{pstd}
-{cmd:cexport delimited} is a high-performance replacement for Stata's
-{help export delimited:export delimited} command. {cmd:cexport excel} is a
-high-performance replacement for {help export excel:export excel}.
-
 
 {marker syntax}{...}
 {title:Syntax}

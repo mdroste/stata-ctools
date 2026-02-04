@@ -62,7 +62,7 @@ typedef struct {
     size_t adaptive_chunk_size;  /* Rows per chunk (adaptive) */
 
     /* Data from Stata */
-    stata_data data;
+    ctools_filtered_data filtered;
 
     /* Observation range for if/in filtering */
     size_t obs1;    /* First observation (1-based Stata index) */

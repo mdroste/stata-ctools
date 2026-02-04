@@ -16,6 +16,7 @@
 #include "../ctools_error.h"
 #include "../ctools_timer.h"
 #include "../ctools_config.h"
+#include "../ctools_types.h"  /* For ctools_data_load */
 
 #include <stdlib.h>
 #include <string.h>
@@ -111,20 +112,27 @@ static void store_scalar(const char *name, ST_double val)
  * - state->X is allocated as contiguous N*K array with X columns + constant
  * ============================================================================ */
 
-static ST_int load_data(cqreg_state *state,
-                        ST_int depvar_idx,
-                        const ST_int *indepvar_idx,
-                        ST_int K_x,
-                        ST_int N,
-                        ST_int in1, ST_int in2)
+/*
+ * Load data using ctools_data_load for efficient parallel loading.
+ *
+ * Uses ctools_data_load() which:
+ * - Handles if/in filtering at load time
+ * - Loads only filtered observations (memory efficient)
+ * - Returns obs_map for write-back operations
+ *
+ * The filtered data is already compact, so we just copy directly.
+ */
+static ST_int load_data_filtered(cqreg_state *state,
+                                  ctools_filtered_data *filtered,
+                                  ST_int K_x)
 {
     ST_int K = K_x + 1;  /* +1 for constant */
-    ST_int k, i, idx, obs;
-    ST_double val;
+    ST_int i, k;
+    ST_int N = (ST_int)filtered->data.nobs;
 
-    main_debug_log("load_data: N=%d, K_x=%d, in1=%d, in2=%d\n", N, K_x, in1, in2);
+    main_debug_log("load_data_filtered: N=%d, K_x=%d\n", N, K_x);
 
-    /* Allocate y array directly (owned by state) - with overflow check */
+    /* Allocate final y and X arrays */
     size_t y_size;
     if (ctools_safe_mul_size((size_t)N, sizeof(ST_double), &y_size) != 0) {
         ctools_error("cqreg", "Overflow computing y array size");
@@ -137,7 +145,6 @@ static ST_int load_data(cqreg_state *state,
     }
     state->y_owned = 1;
 
-    /* Allocate X matrix: column-major, N rows x K columns - with overflow check */
     size_t x_size;
     if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &x_size) != 0) {
         ctools_error("cqreg", "Overflow computing X matrix size");
@@ -149,67 +156,37 @@ static ST_int load_data(cqreg_state *state,
         return -1;
     }
 
-    /*
-     * Load data from Stata, filtering by if condition.
-     * Only include observations where SF_ifobs() returns true.
-     */
-    idx = 0;
-    for (obs = in1; obs <= in2; obs++) {
-        if (!SF_ifobs(obs)) continue;
+    /* Direct copy - data is already filtered, no indirection needed */
+    memcpy(state->y, filtered->data.vars[0].data.dbl, (size_t)N * sizeof(ST_double));
 
-        /* Load dependent variable */
-        if (SF_vdata(depvar_idx, obs, &val) != 0) {
-            ctools_error("cqreg", "Failed to read depvar at obs %d", obs);
-            return -1;
-        }
-        state->y[idx] = val;
-
-        /* Load independent variables */
-        for (k = 0; k < K_x; k++) {
-            if (SF_vdata(indepvar_idx[k], obs, &val) != 0) {
-                ctools_error("cqreg", "Failed to read indepvar %d at obs %d", k+1, obs);
-                return -1;
-            }
-            state->X[k * N + idx] = val;
-        }
-
-        idx++;
+    /* Copy X columns in parallel - direct memcpy */
+    #pragma omp parallel for if(K_x >= 2)
+    for (k = 0; k < K_x; k++) {
+        memcpy(&state->X[k * N], filtered->data.vars[1 + k].data.dbl,
+               (size_t)N * sizeof(ST_double));
     }
 
-    main_debug_log("load_data: loaded %d observations (expected %d)\n", idx, N);
-
-    /* Add constant as last column */
+    /* Fill constant column */
     ST_double *const_col = &state->X[K_x * N];
-    ST_int N8 = N - (N % 8);
-    for (i = 0; i < N8; i += 8) {
-        const_col[i]     = 1.0;
-        const_col[i + 1] = 1.0;
-        const_col[i + 2] = 1.0;
-        const_col[i + 3] = 1.0;
-        const_col[i + 4] = 1.0;
-        const_col[i + 5] = 1.0;
-        const_col[i + 6] = 1.0;
-        const_col[i + 7] = 1.0;
-    }
-    for (; i < N; i++) {
+    for (i = 0; i < N; i++) {
         const_col[i] = 1.0;
     }
 
-    main_debug_log("load_data: X matrix populated, constant added\n");
+    main_debug_log("load_data_filtered: X matrix populated, constant added\n");
 
     return 0;
 }
 
 /* ============================================================================
- * Helper: Load cluster variable
+ * Helper: Load cluster variable using obs_map for filtering
  * ============================================================================ */
 
 static ST_int load_clusters(cqreg_state *state,
                             ST_int cluster_var_idx,
                             ST_int N,
-                            ST_int in1, ST_int in2)
+                            perm_idx_t *obs_map)
 {
-    ST_int idx, obs;
+    ST_int idx;
 
     /* Use cqreg_aligned_alloc to match cqreg_aligned_free in cqreg_state_free */
     state->cluster_ids = (ST_int *)cqreg_aligned_alloc(N * sizeof(ST_int), CQREG_CACHE_LINE);
@@ -217,18 +194,14 @@ static ST_int load_clusters(cqreg_state *state,
         return -1;
     }
 
-    /* Load cluster IDs, filtering by if condition */
-    idx = 0;
-    for (obs = in1; obs <= in2; obs++) {
-        if (!SF_ifobs(obs)) continue;
-
+    /* Load cluster IDs using obs_map (already filtered) */
+    for (idx = 0; idx < N; idx++) {
         ST_double val;
-        if (SF_vdata(cluster_var_idx, obs, &val) != 0) {
-            ctools_error("cqreg", "Failed to read cluster var at obs %d", obs);
+        if (SF_vdata(cluster_var_idx, (ST_int)obs_map[idx], &val) != 0) {
+            ctools_error("cqreg", "Failed to read cluster var at obs %d", (int)obs_map[idx]);
             return -1;
         }
         state->cluster_ids[idx] = (ST_int)val;
-        idx++;
     }
 
     /* Count unique clusters */
@@ -284,9 +257,10 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
                                             ST_double quantile,
                                             cqreg_bw_method bw_method,
                                             const cqreg_ipm_config *ipm_config,
-                                            const ST_double *main_beta)
+                                            const ST_double *main_beta __attribute__((unused)),
+                                            ST_double precomputed_bw)
 {
-    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);
     ST_double q_lo = quantile - h;
     ST_double q_hi = quantile + h;
 
@@ -308,16 +282,16 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
 
     /*
      * Configure auxiliary solves for sparsity estimation.
-     * These need to match Stata's precision to get accurate VCE.
-     * Using same tolerance as main solve ensures sparsity estimate
-     * is accurate enough for standard error computation.
+     * OPTIMIZATION: Use relaxed tolerances for auxiliary solves.
+     * Sparsity estimation only needs ~3 decimal places of accuracy,
+     * so 1e-6 tolerance is sufficient (vs main solve's 1e-12 default).
      */
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = 200;       /* Same as main solve */
-    aux_config.tol_primal = 1e-8;   /* Tight tolerance for accurate sparsity */
-    aux_config.tol_dual = 1e-8;     /* Tight tolerance for accurate sparsity */
-    aux_config.tol_gap = 1e-8;      /* Tight tolerance for accurate sparsity */
+    aux_config.maxiter = 100;       /* Fewer iterations needed */
+    aux_config.tol_primal = 1e-6;   /* Relaxed for sparsity estimation */
+    aux_config.tol_dual = 1e-6;
+    aux_config.tol_gap = 1e-6;
     aux_config.verbose = 0;         /* Suppress output for aux solves */
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 
@@ -331,16 +305,6 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
         free(beta_lo);
         free(beta_hi);
         return 1.0;
-    }
-
-    /*
-     * OPTIMIZATION: Initialize auxiliary betas from main_beta.
-     * Even though τ±h differs from τ, the coefficients are typically close.
-     * This provides a better starting point than OLS, reducing iterations.
-     */
-    if (main_beta != NULL) {
-        memcpy(beta_lo, main_beta, K * sizeof(ST_double));
-        memcpy(beta_hi, main_beta, K * sizeof(ST_double));
     }
 
     /* Solve quantile regression at q_lo and q_hi.
@@ -378,7 +342,8 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
         return 1.0;
     }
 
-    /* Compute X̄ (mean of each column of X) */
+    /* Compute X̄ (mean of each column of X)
+     * OPTIMIZATION: Parallel column summation with 8x unrolling */
     ST_double *x_bar = (ST_double *)calloc(K, sizeof(ST_double));
     if (x_bar == NULL) {
         cqreg_ipm_free(ipm_lo);
@@ -388,13 +353,26 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
         return 1.0;
     }
 
+    ST_double inv_N = 1.0 / (ST_double)N;
+    ST_int N8 = N - (N & 7);
+
+    #pragma omp parallel for if(K >= 4 && N > 10000)
     for (ST_int k = 0; k < K; k++) {
         const ST_double *Xk = &X[k * N];
-        ST_double sum = 0.0;
-        for (ST_int i = 0; i < N; i++) {
+        ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+        ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+        ST_int i;
+        for (i = 0; i < N8; i += 8) {
+            s0 += Xk[i];     s1 += Xk[i + 1];
+            s2 += Xk[i + 2]; s3 += Xk[i + 3];
+            s4 += Xk[i + 4]; s5 += Xk[i + 5];
+            s6 += Xk[i + 6]; s7 += Xk[i + 7];
+        }
+        ST_double sum = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+        for (; i < N; i++) {
             sum += Xk[i];
         }
-        x_bar[k] = sum / (ST_double)N;
+        x_bar[k] = sum * inv_N;
     }
 
     /* Compute Q̂(τ-h|X̄) = X̄'β_lo and Q̂(τ+h|X̄) = X̄'β_hi */
@@ -465,9 +443,10 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
                                                   cqreg_bw_method bw_method,
                                                   const cqreg_ipm_config *ipm_config,
                                                   const ST_double *main_beta,
-                                                  ST_double *out_bandwidth)
+                                                  ST_double *out_bandwidth,
+                                                  ST_double precomputed_bw)
 {
-    ST_double h = cqreg_compute_bandwidth(N, quantile, bw_method);
+    ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);
     ST_double q_lo = quantile - h;
     ST_double q_hi = quantile + h;
 
@@ -495,13 +474,18 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
         return 1.0;
     }
 
-    /* Configure auxiliary solves */
+    /*
+     * Configure auxiliary solves for per-obs density estimation.
+     * OPTIMIZATION: Use relaxed tolerances for auxiliary solves.
+     * Density estimates only need ~3 decimal places of accuracy
+     * for VCE computation, so 1e-6 is sufficient.
+     */
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = 200;
-    aux_config.tol_primal = 1e-8;
-    aux_config.tol_dual = 1e-8;
-    aux_config.tol_gap = 1e-8;
+    aux_config.maxiter = 100;       /* Fewer iterations needed */
+    aux_config.tol_primal = 1e-6;   /* Relaxed for density estimation */
+    aux_config.tol_dual = 1e-6;
+    aux_config.tol_gap = 1e-6;
     aux_config.verbose = 0;
     aux_config.use_mehrotra = ipm_config->use_mehrotra;
 
@@ -561,18 +545,33 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
      * where xb_lo = x_i' * beta_lo, xb_hi = x_i' * beta_hi
      *
      * If (xb_hi - xb_lo) is too small, set f_i = 0 (Stata uses sqrt(c(epsdouble)))
+     *
+     * OPTIMIZATION: Parallelize over observations with reduction for total_density.
+     * Each observation's density is independent.
      */
     ST_double eps_sqrt = sqrt(2.2e-16);  /* sqrt of machine epsilon */
     ST_double total_density = 0.0;
     ST_double two_h = 2.0 * h;
 
+    #pragma omp parallel for reduction(+:total_density) if(N > 1000)
     for (ST_int i = 0; i < N; i++) {
-        /* Compute xb_lo = x_i' * beta_lo and xb_hi = x_i' * beta_hi */
+        /* Compute xb_lo = x_i' * beta_lo and xb_hi = x_i' * beta_hi
+         * OPTIMIZATION: Compute both dot products in a single pass with 4x unrolling */
         ST_double xb_lo = 0.0;
         ST_double xb_hi = 0.0;
 
-        for (ST_int k = 0; k < K; k++) {
-            ST_double x_ik = X[k * N + i];  /* Column-major: X[i,k] = X[k*N + i] */
+        ST_int K4 = K - (K & 3);
+        ST_int k;
+        for (k = 0; k < K4; k += 4) {
+            ST_double x0 = X[k * N + i];
+            ST_double x1 = X[(k + 1) * N + i];
+            ST_double x2 = X[(k + 2) * N + i];
+            ST_double x3 = X[(k + 3) * N + i];
+            xb_lo += x0 * beta_lo[k] + x1 * beta_lo[k + 1] + x2 * beta_lo[k + 2] + x3 * beta_lo[k + 3];
+            xb_hi += x0 * beta_hi[k] + x1 * beta_hi[k + 1] + x2 * beta_hi[k + 2] + x3 * beta_hi[k + 3];
+        }
+        for (; k < K; k++) {
+            ST_double x_ik = X[k * N + i];
             xb_lo += x_ik * beta_lo[k];
             xb_hi += x_ik * beta_hi[k];
         }
@@ -682,6 +681,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int vce_type = read_scalar_int("__cqreg_vce_type", 0);
     ST_int bw_method = read_scalar_int("__cqreg_bw_method", 0);
     ST_int density_method = read_scalar_int("__cqreg_density_method", 1);  /* Default: fitted */
+    ST_double precomputed_bw = read_scalar("__cqreg_bandwidth", -1.0);  /* Pre-computed in Stata for precision */
     ST_int verbose = read_scalar_int("__cqreg_verbose", 0);
     ST_double tolerance = read_scalar("__cqreg_tolerance", 1e-12);
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
@@ -693,55 +693,63 @@ ST_retcode cqreg_full_regression(const char *args)
         return 198;
     }
 
-    /* Get observation range and count valid observations (respecting if condition) */
-    ST_int in1 = SF_in1();
-    ST_int in2 = SF_in2();
+    /* Build variable index array for filtered loading */
+    ST_int depvar_idx = 1;  /* First variable */
+    ST_int K_x = K_total - 1;  /* Number of indepvars */
+    ST_int K = K_x + 1;  /* Including constant */
 
-    /* Count observations that pass the if condition */
-    ST_int N = 0;
-    for (ST_int obs = in1; obs <= in2; obs++) {
-        if (SF_ifobs(obs)) N++;
+    ST_int nvars_to_load = 1 + K_x;  /* depvar + indepvars */
+    int *var_indices = (int *)malloc((size_t)nvars_to_load * sizeof(int));
+    if (var_indices == NULL) {
+        ctools_error("cqreg", "Memory allocation failed for var_indices");
+        return 920;
+    }
+    var_indices[0] = depvar_idx;
+    for (ST_int k = 0; k < K_x; k++) {
+        var_indices[1 + k] = k + 2;  /* Variables 2 to K_total */
     }
 
+    /* Load data with if/in filtering using ctools_data_load.
+     * This handles SF_ifobs internally and returns only filtered observations. */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+                                                       (size_t)nvars_to_load, 0, 0, 0);
+    free(var_indices);
+    var_indices = NULL;
+
+    if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
+        ctools_error("cqreg", "Failed to load data");
+        return 920;
+    }
+
+    ST_int N = (ST_int)filtered.data.nobs;
+    perm_idx_t *obs_map = filtered.obs_map;  /* Keep for cluster loading */
+
     if (N <= 0) {
+        ctools_filtered_data_free(&filtered);
         ctools_error("cqreg", "No observations");
         return 2000;
     }
 
-    main_debug_log("cqreg_full_regression: N_range=%d, N_valid=%d\n", N_range, N);
+    main_debug_log("cqreg_full_regression: N_filtered=%d\n", N);
 
     /* Number of variables passed to plugin (for validation if needed) */
     (void)SF_nvars();
 
     /* Parse variable indices:
-     *   vars 1 to K_total: depvar, indepvars
+     *   vars 1 to K_total: depvar, indepvars (already loaded with filtering)
      *   vars K_total+1 to K_total+G: FE variables
      *   var K_total+G+1: cluster variable (if vce_type == cluster)
      */
-    ST_int depvar_idx = 1;  /* First variable */
-    ST_int K_x = K_total - 1;  /* Number of indepvars */
-    ST_int K = K_x + 1;  /* Including constant */
-
-    ST_int *indepvar_idx = NULL;
     ST_int *fe_var_idx = NULL;
     ST_int cluster_var_idx = 0;
-
-    /* Allocate index arrays */
-    if (K_x > 0) {
-        indepvar_idx = (ST_int *)malloc(K_x * sizeof(ST_int));
-        if (indepvar_idx == NULL) {
-            ctools_error("cqreg", "Memory allocation failed");
-            return 920;
-        }
-        for (ST_int k = 0; k < K_x; k++) {
-            indepvar_idx[k] = k + 2;  /* Variables 2 to K_total */
-        }
-    }
 
     if (G > 0) {
         fe_var_idx = (ST_int *)malloc(G * sizeof(ST_int));
         if (fe_var_idx == NULL) {
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             ctools_error("cqreg", "Memory allocation failed");
             return 920;
         }
@@ -754,8 +762,6 @@ ST_retcode cqreg_full_regression(const char *args)
         cluster_var_idx = K_total + G + 1;
     }
 
-
-
     main_debug_log("Step 1 done: N=%d, K=%d, G=%d, q=%.3f\n", N, K, G, quantile);
 
     /* ========================================================================
@@ -765,7 +771,7 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("Step 2: Creating state...\n");
     state = cqreg_state_create(N, K);
     if (state == NULL) {
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create state");
         return 920;
@@ -779,17 +785,20 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("State created. Loading data...\n");
 
-    /* Load data (filtering by if condition) */
-    if (load_data(state, depvar_idx, indepvar_idx, K_x, N, in1, in2) != 0) {
-        main_debug_log("ERROR: load_data failed\n");
+    /* Load data from filtered structure (already loaded with if/in filtering) */
+    if (load_data_filtered(state, &filtered, K_x) != 0) {
+        main_debug_log("ERROR: load_data_filtered failed\n");
         cqreg_state_free(state);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         main_debug_close();
         return 198;
     }
 
     main_debug_log("Data loaded successfully\n");
+
+    /* Record data load time (matches creghdfe - pure data transfer) */
+    state->time_load = ctools_timer_seconds() - time_start;
 
     /* Check for degenerate cases: constant y or constant x columns */
     /* Constant y: all values of y are the same */
@@ -803,7 +812,7 @@ ST_retcode cqreg_full_regression(const char *args)
         if (y_max - y_min < 1e-12) {
             ctools_error("cqreg", "Dependent variable has no variation (constant)");
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             main_debug_close();
             return 198;
@@ -819,13 +828,11 @@ ST_retcode cqreg_full_regression(const char *args)
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
-    state->time_load = ctools_timer_seconds() - time_start;
-
-    /* Load cluster variable if needed (filtering by if condition) */
+    /* Load cluster variable if needed (uses obs_map for filtering) */
     if (vce_type == CQREG_VCE_CLUSTER) {
-        if (load_clusters(state, cluster_var_idx, N, in1, in2) != 0) {
+        if (load_clusters(state, cluster_var_idx, N, obs_map) != 0) {
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             return 198;
         }
@@ -838,10 +845,13 @@ ST_retcode cqreg_full_regression(const char *args)
     if (G > 0) {
         double hdfe_start = ctools_timer_seconds();
 
-        /* Initialize HDFE with filtered observation count */
+        /* Initialize HDFE with filtered observation count
+         * Note: cqreg_hdfe_init still uses SF_ifobs internally for FE loading */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
         if (cqreg_hdfe_init(state, fe_var_idx, G, N, in1, in2, 10000, 1e-8) != 0) {
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             ctools_error("cqreg", "HDFE initialization failed");
             return 198;
@@ -851,7 +861,7 @@ ST_retcode cqreg_full_regression(const char *args)
         if (cqreg_hdfe_partial_out(state, state->y, state->X, N, K) != 0) {
             cqreg_hdfe_cleanup(state);
             cqreg_state_free(state);
-            free(indepvar_idx);
+            ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             ctools_error("cqreg", "HDFE partial out failed");
             return 198;
@@ -887,7 +897,7 @@ ST_retcode cqreg_full_regression(const char *args)
         main_debug_log("ERROR: cqreg_ipm_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create IPM solver");
         main_debug_close();
@@ -951,7 +961,7 @@ ST_retcode cqreg_full_regression(const char *args)
         main_debug_log("ERROR: cqreg_sparsity_create failed\n");
         cqreg_hdfe_cleanup(state);
         cqreg_state_free(state);
-        free(indepvar_idx);
+        ctools_filtered_data_free(&filtered);
         free(fe_var_idx);
         ctools_error("cqreg", "Failed to create sparsity estimator");
         main_debug_close();
@@ -983,7 +993,8 @@ ST_retcode cqreg_full_regression(const char *args)
                                                           state->bw_method,
                                                           &ipm_config,
                                                           state->beta,
-                                                          &state->bandwidth);
+                                                          &state->bandwidth,
+                                                          precomputed_bw);
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
         /* Fitted method for IID: use Siddiqui difference quotient method.
          * This fits QR at τ±h and computes sparsity at mean(X).
@@ -994,8 +1005,9 @@ ST_retcode cqreg_full_regression(const char *args)
                                                      N, K, quantile,
                                                      state->bw_method,
                                                      &ipm_config,
-                                                     state->beta);
-        state->bandwidth = cqreg_compute_bandwidth(N, quantile, state->bw_method);
+                                                     state->beta,
+                                                     precomputed_bw);
+        state->bandwidth = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, state->bw_method);
     } else {
         /* Residual method: use difference quotient sparsity */
         state->sparsity = cqreg_estimate_sparsity(state->sparsity_state, state->residuals);
@@ -1044,7 +1056,7 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("HDFE cleaned up\n");
     cqreg_state_free(state);
     main_debug_log("State freed\n");
-    free(indepvar_idx);
+    ctools_filtered_data_free(&filtered);
     main_debug_log("indepvar_idx freed\n");
     free(fe_var_idx);
     main_debug_log("fe_var_idx freed\n");

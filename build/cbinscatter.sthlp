@@ -10,10 +10,6 @@
 {phang}
 {bf:cbinscatter} {hline 2} C-accelerated binned scatter plots
 
-{pstd}
-{cmd:cbinscatter} is a high-performance replacement for {cmd:binscatter} by
-Michael Stepner ({browse "https://github.com/michaelstepner/binscatter":michaelstepner/binscatter}).
-
 
 {marker syntax}{...}
 {title:Syntax}

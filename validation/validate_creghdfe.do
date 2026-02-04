@@ -16,6 +16,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for creghdfe..."
+
 * Plugin check
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign)
@@ -145,23 +147,13 @@ benchmark_reghdfe y x1 x2 x3, absorb(id) vce(robust) testname("50K robust")
  ******************************************************************************/
 print_section "tolerance/maxiter Options"
 
+* Verify tolerance option produces correct results
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) tolerance(1e-10)
-if _rc == 0 {
-    test_pass "tolerance(1e-10) accepted"
-}
-else {
-    test_fail "tolerance option" "returned error `=_rc'"
-}
+benchmark_reghdfe price mpg weight, absorb(foreign) tolerance(1e-10) testname("[syntax] tolerance(1e-10)")
 
+* Verify iterate option produces correct results
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) maxiter(1000)
-if _rc == 0 {
-    test_pass "maxiter(1000) accepted"
-}
-else {
-    test_fail "maxiter option" "returned error `=_rc'"
-}
+benchmark_reghdfe price mpg weight, absorb(foreign) iterate(1000) testname("[syntax] iterate(1000)")
 
 /*******************************************************************************
  * SECTION 9: resid option
@@ -226,35 +218,13 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
+* if condition - use benchmark_reghdfe for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-reghdfe price mpg weight if price > 5000, absorb(foreign)
-matrix reghdfe_b = e(b)
-local reghdfe_N = e(N)
+benchmark_reghdfe price mpg weight if price > 5000, absorb(foreign) testname("if condition")
 
-creghdfe price mpg weight if price > 5000, absorb(foreign)
-matrix creghdfe_b = e(b)
-local creghdfe_N = e(N)
-
-if `reghdfe_N' == `creghdfe_N' {
-    test_pass "if condition: N matches"
-}
-else {
-    test_fail "if condition" "N differs"
-}
-
+* in condition - use benchmark_reghdfe for full comparison
 sysuse auto, clear
-reghdfe price mpg weight in 1/50, absorb(foreign)
-local reghdfe_N = e(N)
-
-creghdfe price mpg weight in 1/50, absorb(foreign)
-local creghdfe_N = e(N)
-
-if `reghdfe_N' == `creghdfe_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
+benchmark_reghdfe price mpg weight in 1/50, absorb(foreign) testname("in condition")
 
 /*******************************************************************************
  * SECTION 12: nostandardize option
@@ -1066,7 +1036,7 @@ if _rc == 0 {
     capture local creghdfe_coef_foreign = _b[1.foreign]
     if _rc != 0 local creghdfe_coef_foreign = _b[foreign]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < $DEFAULT_TOL {
         test_pass "i.foreign (2 levels)"
     }
     else {
@@ -1088,7 +1058,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.rep78 (5 levels)"
     }
     else {
@@ -1110,7 +1080,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.foreign + robust"
     }
     else {
@@ -1132,7 +1102,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.rep78 + cluster"
     }
     else {
@@ -1155,7 +1125,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.race panel"
     }
     else {
@@ -1178,7 +1148,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.race two-way FE"
     }
     else {
@@ -1200,7 +1170,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "c.mpg#i.foreign interaction"
     }
     else {
@@ -1222,7 +1192,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.race#i.married interaction"
     }
     else {
@@ -1244,7 +1214,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "ib3.rep78 (custom base level)"
     }
     else {
@@ -1266,7 +1236,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.foreign##c.mpg full factorial"
     }
     else {
@@ -1289,7 +1259,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "i.race i.union (multiple factors)"
     }
     else {
@@ -1329,7 +1299,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[L_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
         test_pass "manual lag (L.mvalue equivalent)"
     }
     else {
@@ -1355,7 +1325,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "manual multiple lags (L. L2. equivalent)"
     }
     else {
@@ -1382,7 +1352,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[D_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
         test_pass "manual difference (D.mvalue equivalent)"
     }
     else {
@@ -1409,7 +1379,7 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[F_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 & abs(`reghdfe_coef' - `creghdfe_coef') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
         test_pass "manual lead (F.mvalue equivalent)"
     }
     else {
@@ -1434,7 +1404,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "manual lag + two-way FE"
     }
     else {
@@ -1459,7 +1429,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "manual lag + robust"
     }
     else {
@@ -1484,7 +1454,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "manual lag + cluster"
     }
     else {
@@ -1510,7 +1480,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "nlswork manual lag"
     }
     else {
@@ -1536,7 +1506,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "nlswork manual difference"
     }
     else {
@@ -1596,7 +1566,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "lead and lag together"
     }
     else {
@@ -1621,7 +1591,7 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < 1e-7 {
+    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
         test_pass "manual lag + i.company factor"
     }
     else {
@@ -1758,8 +1728,103 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that creghdfe returns the same error codes as reghdfe
+ * when given invalid inputs or error conditions.
+ * Note: reghdfe is a user-written command (ssc install reghdfe).
+ * If reghdfe is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if reghdfe is installed
+capture which reghdfe
+local reghdfe_installed = (_rc == 0)
+
+* Variable doesn't exist
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price nonexistent_var, absorb(foreign)) ctools_cmd(creghdfe price nonexistent_var, absorb(foreign)) testname("nonexistent variable")
+}
+else {
+    capture creghdfe price nonexistent_var, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* Missing absorb option
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg) ctools_cmd(creghdfe price mpg) testname("missing absorb option")
+}
+else {
+    capture creghdfe price mpg
+    if _rc != 0 {
+        test_pass "[error] missing absorb option (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] missing absorb option" "should have errored"
+    }
+}
+
+* No observations after if condition
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg if price > 100000, absorb(foreign)) ctools_cmd(creghdfe price mpg if price > 100000, absorb(foreign)) testname("no observations after if")
+}
+else {
+    capture creghdfe price mpg if price > 100000, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] no observations after if (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] no observations after if" "should have errored"
+    }
+}
+
+* Constant dependent variable (singleton groups)
+clear
+set obs 10
+gen y = 1
+gen x = runiform()
+gen group = 1
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe y x, absorb(group)) ctools_cmd(creghdfe y x, absorb(group)) testname("constant dependent variable")
+}
+else {
+    capture creghdfe y x, absorb(group)
+    if _rc != 0 {
+        test_pass "[error] constant dependent variable (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] constant dependent variable" "should have errored"
+    }
+}
+
+* Collinear variables
+sysuse auto, clear
+gen mpg2 = mpg * 2
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg mpg2, absorb(foreign)) ctools_cmd(creghdfe price mpg mpg2, absorb(foreign)) testname("collinear variables")
+}
+else {
+    capture creghdfe price mpg mpg2, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] collinear variables (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] collinear variables" "should have errored"
+    }
+}
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 
 * End of creghdfe validation
+noi print_summary "creghdfe"
 }

@@ -274,7 +274,8 @@ ST_retcode ivest_compute_2sls(
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
     ST_int sdofminus,
-    ST_int center
+    ST_int center,
+    const ST_double *Z_original  /* Original (non-demeaned) Z for Kiefer VCE */
 );
 
 #endif /* CIVREGHDFE_ESTIMATE_H */

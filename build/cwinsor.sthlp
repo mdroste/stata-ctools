@@ -11,10 +11,6 @@
 {phang}
 {bf:cwinsor} {hline 2} C-accelerated parallel winsorization for Stata variables
 
-{pstd}
-{cmd:cwinsor} is a high-performance replacement for {cmd:winsor2} by Yujun Lian
-({browse "https://ideas.repec.org/c/boc/bocode/s457765.html":SSC}).
-
 
 {marker syntax}{...}
 {title:Syntax}

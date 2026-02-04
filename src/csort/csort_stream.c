@@ -253,7 +253,7 @@ static int stream_permute_string_var(
     ST_int stata_var,
     const perm_idx_t *inv_perm,
     size_t nobs,
-    size_t obs1)
+    const perm_idx_t *obs_map)
 {
     size_t i;
 
@@ -274,9 +274,9 @@ static int stream_permute_string_var(
 
     char strbuf[2048];
 
-    /* Sequential read from Stata, scatter to buffer via inverse perm */
+    /* Sequential read from Stata using obs_map, scatter to buffer via inverse perm */
     for (i = 0; i < nobs; i++) {
-        SF_sdata(stata_var, (ST_int)(i + obs1), strbuf);
+        SF_sdata(stata_var, (ST_int)obs_map[i], strbuf);
         str_ptrs[inv_perm[i]] = ctools_string_arena_strdup(arena, strbuf);
 
         if (!str_ptrs[inv_perm[i]]) {
@@ -292,9 +292,9 @@ static int stream_permute_string_var(
         }
     }
 
-    /* Sequential write back to Stata */
+    /* Sequential write back to Stata using obs_map */
     for (i = 0; i < nobs; i++) {
-        SF_sstore(stata_var, (ST_int)(i + obs1), str_ptrs[i] ? str_ptrs[i] : "");
+        SF_sstore(stata_var, (ST_int)obs_map[i], str_ptrs[i] ? str_ptrs[i] : "");
     }
 
     /* Free fallback allocations (those not owned by arena) */
@@ -316,8 +316,9 @@ stata_retcode csort_stream_apply_permutation(
     size_t nobs,
     int *nonkey_var_indices,
     size_t nvars_nonkey,
-    size_t obs1,
+    const perm_idx_t *obs_map,
     size_t block_size,
+    int vars_per_batch,
     csort_stream_timings *timings)
 {
     size_t v;
@@ -325,6 +326,10 @@ stata_retcode csort_stream_apply_permutation(
     int is_identity;
     double t_phase;
     (void)block_size;
+
+    /* Validate and constrain vars_per_batch */
+    if (vars_per_batch < 1) vars_per_batch = 1;
+    if (vars_per_batch > 16) vars_per_batch = 16;
 
     /* Initialize timing accumulators */
     double t_build_inv = 0.0;
@@ -387,31 +392,37 @@ stata_retcode csort_stream_apply_permutation(
         timings->n_string_vars = n_string;
     }
 
-    /* Process numeric variables in parallel with shared buffer pool
-       Each thread gets its own buffer to avoid allocation overhead */
+    /* Process numeric variables in batches with shared buffer pool
+       vars_per_batch controls how many variables are loaded at a time */
     #ifdef _OPENMP
     int success = 1;
-    double **thread_bufs = NULL;
+    double **batch_bufs = NULL;
     int nthreads = 0;
+    int actual_batch_size = vars_per_batch;
 
     if (n_numeric > 0) {
+        /* Limit batch size to number of numeric variables */
+        if (actual_batch_size > (int)n_numeric) {
+            actual_batch_size = (int)n_numeric;
+        }
+
         nthreads = omp_get_max_threads();
-        if (nthreads > (int)n_numeric) nthreads = (int)n_numeric;
+        if (nthreads > actual_batch_size) nthreads = actual_batch_size;
         if (nthreads < 1) nthreads = 1;
 
-        /* Pre-allocate buffers for each thread */
-        thread_bufs = (double **)malloc(nthreads * sizeof(double *));
-        if (!thread_bufs) {
+        /* Pre-allocate buffers for the batch (one per variable in batch) */
+        batch_bufs = (double **)malloc(actual_batch_size * sizeof(double *));
+        if (!batch_bufs) {
             free(numeric_vars);
             free(string_vars);
             ctools_aligned_free(inv_perm);
             return STATA_ERR_MEMORY;
         }
-        for (int t = 0; t < nthreads; t++) {
-            thread_bufs[t] = (double *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
-            if (!thread_bufs[t]) {
-                for (int k = 0; k < t; k++) ctools_aligned_free(thread_bufs[k]);
-                free(thread_bufs);
+        for (int b = 0; b < actual_batch_size; b++) {
+            batch_bufs[b] = (double *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
+            if (!batch_bufs[b]) {
+                for (int k = 0; k < b; k++) ctools_aligned_free(batch_bufs[k]);
+                free(batch_bufs);
                 free(numeric_vars);
                 free(string_vars);
                 ctools_aligned_free(inv_perm);
@@ -420,135 +431,144 @@ stata_retcode csort_stream_apply_permutation(
         }
     }
 
-    /* Track scatter and writeback times using per-thread accumulators */
-    double *thread_scatter_times = NULL;
-    double *thread_writeback_times = NULL;
+    /* Track scatter and writeback times */
     if (n_numeric > 0) {
-        thread_scatter_times = (double *)calloc(nthreads, sizeof(double));
-        thread_writeback_times = (double *)calloc(nthreads, sizeof(double));
-    }
+        /* Process variables in batches of actual_batch_size */
+        size_t batch_start = 0;
+        while (batch_start < n_numeric) {
+            /* Determine how many variables in this batch */
+            int this_batch = actual_batch_size;
+            if (batch_start + this_batch > n_numeric) {
+                this_batch = (int)(n_numeric - batch_start);
+            }
 
-    if (n_numeric > 0) {
-        #pragma omp parallel for schedule(static) num_threads(nthreads)
-        for (v = 0; v < n_numeric; v++) {
-            int tid = omp_get_thread_num();
-            double *num_buf = thread_bufs[tid];
-            ST_int stata_var = (ST_int)numeric_vars[v];
-            size_t i;
-            double t_var_scatter, t_var_writeback;
+            /* Determine threads for this batch */
+            int batch_threads = nthreads;
+            if (batch_threads > this_batch) batch_threads = this_batch;
 
-            /* Phase 1: Sequential read, scatter via inverse perm */
-            t_var_scatter = ctools_timer_seconds();
+            double batch_scatter_time = 0.0;
+            double batch_writeback_time = 0.0;
 
-            size_t nobs_batch16 = (nobs / 16) * 16;
-            double batch[16] __attribute__((aligned(64)));
+            /* Phase 1: Read and scatter for all variables in batch (parallel) */
+            double t_batch_scatter = ctools_timer_seconds();
 
-            for (i = 0; i < nobs_batch16; i += 16) {
-                /* Prefetch future permutation indices for next iteration */
-                if (i + STREAM_PREFETCH_DIST < nobs) {
-                    CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
-                }
+            #pragma omp parallel for schedule(static) num_threads(batch_threads)
+            for (int b = 0; b < this_batch; b++) {
+                size_t var_idx = batch_start + b;
+                double *num_buf = batch_bufs[b];
+                ST_int stata_var = (ST_int)numeric_vars[var_idx];
+                size_t i;
 
-                /* Read data from Stata */
-                SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+                size_t nobs_batch16 = (nobs / 16) * 16;
+                double batch_vals[16] __attribute__((aligned(64)));
+
+                for (i = 0; i < nobs_batch16; i += 16) {
+                    /* Prefetch future permutation indices for next iteration */
+                    if (i + STREAM_PREFETCH_DIST < nobs) {
+                        CTOOLS_PREFETCH(&inv_perm[i + STREAM_PREFETCH_DIST]);
+                    }
+
+                    /* Read data from Stata */
+                    SF_VDATA_BATCH16(stata_var, (ST_int)obs_map[i], batch_vals);
 
 #ifdef HAVE_AVX512_SCATTER
-                /* AVX-512: Scatter 8 doubles at a time using SIMD scatter instruction.
-                   Two scatter calls for 16 values. */
-                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch[0]);
-                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch[8]);
+                    /* AVX-512: Scatter 8 doubles at a time using SIMD scatter instruction.
+                       Two scatter calls for 16 values. */
+                    scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch_vals[0]);
+                    scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch_vals[8]);
 #else
-                /* Scalar fallback: Prefetch destinations then scatter */
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 3]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 4]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 5]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 6]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 7]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 8]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 9]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 10]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 11]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 12]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 13]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
-                CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
+                    /* Scalar fallback: Prefetch destinations then scatter */
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 1]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 2]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 3]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 4]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 5]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 6]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 7]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 8]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 9]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 10]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 11]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 12]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 13]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
+                    CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
 
-                num_buf[inv_perm[i + 0]]  = batch[0];
-                num_buf[inv_perm[i + 1]]  = batch[1];
-                num_buf[inv_perm[i + 2]]  = batch[2];
-                num_buf[inv_perm[i + 3]]  = batch[3];
-                num_buf[inv_perm[i + 4]]  = batch[4];
-                num_buf[inv_perm[i + 5]]  = batch[5];
-                num_buf[inv_perm[i + 6]]  = batch[6];
-                num_buf[inv_perm[i + 7]]  = batch[7];
-                num_buf[inv_perm[i + 8]]  = batch[8];
-                num_buf[inv_perm[i + 9]]  = batch[9];
-                num_buf[inv_perm[i + 10]] = batch[10];
-                num_buf[inv_perm[i + 11]] = batch[11];
-                num_buf[inv_perm[i + 12]] = batch[12];
-                num_buf[inv_perm[i + 13]] = batch[13];
-                num_buf[inv_perm[i + 14]] = batch[14];
-                num_buf[inv_perm[i + 15]] = batch[15];
+                    num_buf[inv_perm[i + 0]]  = batch_vals[0];
+                    num_buf[inv_perm[i + 1]]  = batch_vals[1];
+                    num_buf[inv_perm[i + 2]]  = batch_vals[2];
+                    num_buf[inv_perm[i + 3]]  = batch_vals[3];
+                    num_buf[inv_perm[i + 4]]  = batch_vals[4];
+                    num_buf[inv_perm[i + 5]]  = batch_vals[5];
+                    num_buf[inv_perm[i + 6]]  = batch_vals[6];
+                    num_buf[inv_perm[i + 7]]  = batch_vals[7];
+                    num_buf[inv_perm[i + 8]]  = batch_vals[8];
+                    num_buf[inv_perm[i + 9]]  = batch_vals[9];
+                    num_buf[inv_perm[i + 10]] = batch_vals[10];
+                    num_buf[inv_perm[i + 11]] = batch_vals[11];
+                    num_buf[inv_perm[i + 12]] = batch_vals[12];
+                    num_buf[inv_perm[i + 13]] = batch_vals[13];
+                    num_buf[inv_perm[i + 14]] = batch_vals[14];
+                    num_buf[inv_perm[i + 15]] = batch_vals[15];
 #endif
-            }
-            for (i = nobs_batch16; i < nobs; i++) {
-                double val;
-                SF_vdata(stata_var, (ST_int)(i + obs1), &val);
-                num_buf[inv_perm[i]] = val;
-            }
-
-            t_var_scatter = ctools_timer_seconds() - t_var_scatter;
-            if (thread_scatter_times) thread_scatter_times[tid] += t_var_scatter;
-
-            /* Phase 2: Sequential write back to Stata
-               Use non-temporal prefetch hints since buffer won't be reused. */
-            t_var_writeback = ctools_timer_seconds();
-
-            size_t nobs_batch8 = (nobs / 8) * 8;
-            for (i = 0; i < nobs_batch8; i += 8) {
-                /* Prefetch next chunk with non-temporal hint (won't be reused) */
-                CTOOLS_PREFETCH_NTA(&num_buf[i + 64]);
-
-                /* Store 8 values to Stata */
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 0), num_buf[i + 0]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 1), num_buf[i + 1]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 2), num_buf[i + 2]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 3), num_buf[i + 3]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 4), num_buf[i + 4]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 5), num_buf[i + 5]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 6), num_buf[i + 6]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 7), num_buf[i + 7]);
-            }
-            for (i = nobs_batch8; i < nobs; i++) {
-                SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
+                }
+                for (i = nobs_batch16; i < nobs; i++) {
+                    double val;
+                    SF_vdata(stata_var, (ST_int)obs_map[i], &val);
+                    num_buf[inv_perm[i]] = val;
+                }
             }
 
-            t_var_writeback = ctools_timer_seconds() - t_var_writeback;
-            if (thread_writeback_times) thread_writeback_times[tid] += t_var_writeback;
+            batch_scatter_time = ctools_timer_seconds() - t_batch_scatter;
+            t_scatter += batch_scatter_time;
+
+            /* Phase 2: Write back all variables in batch (parallel) */
+            double t_batch_writeback = ctools_timer_seconds();
+
+            #pragma omp parallel for schedule(static) num_threads(batch_threads)
+            for (int b = 0; b < this_batch; b++) {
+                size_t var_idx = batch_start + b;
+                double *num_buf = batch_bufs[b];
+                ST_int stata_var = (ST_int)numeric_vars[var_idx];
+                size_t i;
+
+                size_t nobs_batch8 = (nobs / 8) * 8;
+                for (i = 0; i < nobs_batch8; i += 8) {
+                    /* Prefetch next chunk with non-temporal hint (won't be reused) */
+                    CTOOLS_PREFETCH_NTA(&num_buf[i + 64]);
+
+                    /* Store 8 values to Stata */
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 0], num_buf[i + 0]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 1], num_buf[i + 1]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 2], num_buf[i + 2]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 3], num_buf[i + 3]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 4], num_buf[i + 4]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 5], num_buf[i + 5]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 6], num_buf[i + 6]);
+                    SF_vstore(stata_var, (ST_int)obs_map[i + 7], num_buf[i + 7]);
+                }
+                for (i = nobs_batch8; i < nobs; i++) {
+                    SF_vstore(stata_var, (ST_int)obs_map[i], num_buf[i]);
+                }
+            }
+
+            batch_writeback_time = ctools_timer_seconds() - t_batch_writeback;
+            t_writeback += batch_writeback_time;
+
+            batch_start += this_batch;
         }
 
-        /* Aggregate per-thread times (take max since threads run in parallel) */
-        if (thread_scatter_times && thread_writeback_times) {
-            for (int t = 0; t < nthreads; t++) {
-                if (thread_scatter_times[t] > t_scatter) t_scatter = thread_scatter_times[t];
-                if (thread_writeback_times[t] > t_writeback) t_writeback = thread_writeback_times[t];
-            }
+        /* Free batch buffers */
+        for (int b = 0; b < actual_batch_size; b++) {
+            ctools_aligned_free(batch_bufs[b]);
         }
-        free(thread_scatter_times);
-        free(thread_writeback_times);
-
-        /* Free thread buffers */
-        for (int t = 0; t < nthreads; t++) {
-            ctools_aligned_free(thread_bufs[t]);
-        }
-        free(thread_bufs);
+        free(batch_bufs);
     }
 
     #else
     /* Non-OpenMP fallback: process sequentially with single reused buffer */
+    (void)vars_per_batch;  /* Unused in non-OpenMP build */
     double *num_buf = NULL;
     if (n_numeric > 0) {
         num_buf = (double *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
@@ -558,7 +578,7 @@ stata_retcode csort_stream_apply_permutation(
             ST_int stata_var = (ST_int)numeric_vars[v];
             size_t i;
             size_t nobs_batch16 = (nobs / 16) * 16;
-            double batch[16] __attribute__((aligned(64)));
+            double batch_vals[16] __attribute__((aligned(64)));
             double t_var_scatter, t_var_writeback;
 
             /* Phase 1: Sequential read, scatter via inverse perm */
@@ -566,12 +586,12 @@ stata_retcode csort_stream_apply_permutation(
 
             for (i = 0; i < nobs_batch16; i += 16) {
                 /* Read data from Stata */
-                SF_VDATA_BATCH16(stata_var, (ST_int)(i + obs1), batch);
+                SF_VDATA_BATCH16(stata_var, (ST_int)obs_map[i], batch_vals);
 
 #ifdef HAVE_AVX512_SCATTER
                 /* AVX-512: Scatter 8 doubles at a time */
-                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch[0]);
-                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch[8]);
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch_vals[0]);
+                scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch_vals[8]);
 #else
                 /* Scalar fallback: Prefetch destinations then scatter */
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
@@ -591,27 +611,27 @@ stata_retcode csort_stream_apply_permutation(
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 14]]);
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 15]]);
 
-                num_buf[inv_perm[i + 0]]  = batch[0];
-                num_buf[inv_perm[i + 1]]  = batch[1];
-                num_buf[inv_perm[i + 2]]  = batch[2];
-                num_buf[inv_perm[i + 3]]  = batch[3];
-                num_buf[inv_perm[i + 4]]  = batch[4];
-                num_buf[inv_perm[i + 5]]  = batch[5];
-                num_buf[inv_perm[i + 6]]  = batch[6];
-                num_buf[inv_perm[i + 7]]  = batch[7];
-                num_buf[inv_perm[i + 8]]  = batch[8];
-                num_buf[inv_perm[i + 9]]  = batch[9];
-                num_buf[inv_perm[i + 10]] = batch[10];
-                num_buf[inv_perm[i + 11]] = batch[11];
-                num_buf[inv_perm[i + 12]] = batch[12];
-                num_buf[inv_perm[i + 13]] = batch[13];
-                num_buf[inv_perm[i + 14]] = batch[14];
-                num_buf[inv_perm[i + 15]] = batch[15];
+                num_buf[inv_perm[i + 0]]  = batch_vals[0];
+                num_buf[inv_perm[i + 1]]  = batch_vals[1];
+                num_buf[inv_perm[i + 2]]  = batch_vals[2];
+                num_buf[inv_perm[i + 3]]  = batch_vals[3];
+                num_buf[inv_perm[i + 4]]  = batch_vals[4];
+                num_buf[inv_perm[i + 5]]  = batch_vals[5];
+                num_buf[inv_perm[i + 6]]  = batch_vals[6];
+                num_buf[inv_perm[i + 7]]  = batch_vals[7];
+                num_buf[inv_perm[i + 8]]  = batch_vals[8];
+                num_buf[inv_perm[i + 9]]  = batch_vals[9];
+                num_buf[inv_perm[i + 10]] = batch_vals[10];
+                num_buf[inv_perm[i + 11]] = batch_vals[11];
+                num_buf[inv_perm[i + 12]] = batch_vals[12];
+                num_buf[inv_perm[i + 13]] = batch_vals[13];
+                num_buf[inv_perm[i + 14]] = batch_vals[14];
+                num_buf[inv_perm[i + 15]] = batch_vals[15];
 #endif
             }
             for (i = nobs_batch16; i < nobs; i++) {
                 double val;
-                SF_vdata(stata_var, (ST_int)(i + obs1), &val);
+                SF_vdata(stata_var, (ST_int)obs_map[i], &val);
                 num_buf[inv_perm[i]] = val;
             }
 
@@ -628,17 +648,17 @@ stata_retcode csort_stream_apply_permutation(
                 CTOOLS_PREFETCH_NTA(&num_buf[i + 64]);
 
                 /* Store 8 values to Stata */
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 0), num_buf[i + 0]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 1), num_buf[i + 1]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 2), num_buf[i + 2]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 3), num_buf[i + 3]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 4), num_buf[i + 4]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 5), num_buf[i + 5]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 6), num_buf[i + 6]);
-                SF_vstore(stata_var, (ST_int)(i + obs1 + 7), num_buf[i + 7]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 0], num_buf[i + 0]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 1], num_buf[i + 1]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 2], num_buf[i + 2]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 3], num_buf[i + 3]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 4], num_buf[i + 4]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 5], num_buf[i + 5]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 6], num_buf[i + 6]);
+                SF_vstore(stata_var, (ST_int)obs_map[i + 7], num_buf[i + 7]);
             }
             for (i = nobs_batch8; i < nobs; i++) {
-                SF_vstore(stata_var, (ST_int)(i + obs1), num_buf[i]);
+                SF_vstore(stata_var, (ST_int)obs_map[i], num_buf[i]);
             }
 
             t_var_writeback = ctools_timer_seconds() - t_var_writeback;
@@ -652,7 +672,7 @@ stata_retcode csort_stream_apply_permutation(
     t_phase = ctools_timer_seconds();
 
     for (v = 0; v < n_string; v++) {
-        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs1) != 0) {
+        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs_map) != 0) {
             #ifdef _OPENMP
             success = 0;
             #endif
@@ -747,12 +767,14 @@ stata_retcode csort_stream_sort(
     size_t nvars,
     sort_algorithm_t algorithm,
     size_t block_size,
+    int vars_per_batch,
     csort_stream_timings *timings)
 {
-    stata_data key_data;
+    ctools_filtered_data key_filtered;
+    perm_idx_t *obs_map = NULL;
     stata_retcode rc;
     double t_start, t_phase;
-    size_t obs1, nobs;
+    size_t nobs = 0;
     size_t i, j;
     perm_idx_t *saved_perm = NULL;
     int *nonkey_var_indices = NULL;
@@ -761,31 +783,29 @@ stata_retcode csort_stream_sort(
     csort_stream_timings local_timings = {0};
     t_start = ctools_timer_seconds();
 
-    /* Validate observation bounds */
-    {
-        ST_int in1 = SF_in1();
-        ST_int in2 = SF_in2();
-        if (in1 < 1 || in2 < in1) {
-            /* Invalid range - treat as zero rows (nothing to sort) */
-            if (timings) *timings = local_timings;
-            return STATA_OK;
-        }
-        obs1 = (size_t)in1;
-        nobs = (size_t)(in2 - in1 + 1);
-    }
-
     /* ================================================================
-       Phase 1: Load only key variables
+       Phase 1: Load only key variables using filtered loading
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
-    stata_data_init(&key_data);
-    rc = ctools_data_load_selective(&key_data, key_var_indices, nkeys, 0, 0);
+    ctools_filtered_data_init(&key_filtered);
+    rc = ctools_data_load(&key_filtered, key_var_indices, nkeys, 0, 0, 0);
 
     local_timings.load_keys_time = ctools_timer_seconds() - t_phase;
 
     if (rc != STATA_OK) {
         goto cleanup;
+    }
+
+    /* Get filtered observation count and obs_map */
+    nobs = key_filtered.data.nobs;
+    obs_map = key_filtered.obs_map;
+
+    if (nobs == 0) {
+        /* No observations to sort */
+        ctools_filtered_data_free(&key_filtered);
+        if (timings) *timings = local_timings;
+        return STATA_OK;
     }
 
     /* ================================================================
@@ -803,7 +823,7 @@ stata_retcode csort_stream_sort(
     }
 
     /* Call unified sort dispatcher (computes sort_order only) */
-    rc = ctools_sort_dispatch(&key_data, local_sort_vars, nkeys, algorithm);
+    rc = ctools_sort_dispatch(&key_filtered.data, local_sort_vars, nkeys, algorithm);
 
     local_timings.sort_time = ctools_timer_seconds() - t_phase;
 
@@ -820,14 +840,14 @@ stata_retcode csort_stream_sort(
         rc = STATA_ERR_MEMORY;
         goto cleanup;
     }
-    memcpy(saved_perm, key_data.sort_order, nobs * sizeof(perm_idx_t));
+    memcpy(saved_perm, key_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
 
     /* ================================================================
        Phase 3: Apply permutation to key variables (in C memory)
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
-    rc = ctools_apply_permutation(&key_data);
+    rc = ctools_apply_permutation(&key_filtered.data);
 
     local_timings.permute_keys_time = ctools_timer_seconds() - t_phase;
 
@@ -836,11 +856,15 @@ stata_retcode csort_stream_sort(
     }
 
     /* ================================================================
-       Phase 4: Write sorted key variables back to Stata
+       Phase 4: Write sorted key variables back to Stata using obs_map
        ================================================================ */
     t_phase = ctools_timer_seconds();
 
-    rc = ctools_data_store_selective(&key_data, key_var_indices, nkeys, obs1);
+    /* Store each key variable using obs_map */
+    for (size_t k = 0; k < nkeys && rc == STATA_OK; k++) {
+        rc = ctools_store_filtered(key_filtered.data.vars[k].data.dbl,
+                                   nobs, key_var_indices[k], obs_map);
+    }
 
     local_timings.store_keys_time = ctools_timer_seconds() - t_phase;
 
@@ -853,9 +877,9 @@ stata_retcode csort_stream_sort(
     {
         double prev_val, curr_val;
         int sorted_ok = 1;
-        SF_vdata(key_var_indices[0], (ST_int)obs1, &prev_val);
+        SF_vdata(key_var_indices[0], (ST_int)obs_map[0], &prev_val);
         for (size_t check_i = 1; check_i < nobs && sorted_ok; check_i++) {
-            SF_vdata(key_var_indices[0], (ST_int)(check_i + obs1), &curr_val);
+            SF_vdata(key_var_indices[0], (ST_int)obs_map[check_i], &curr_val);
             if (curr_val < prev_val) {
                 char msg[256];
                 snprintf(msg, sizeof(msg),
@@ -872,8 +896,8 @@ stata_retcode csort_stream_sort(
     }
     #endif
 
-    stata_data_free(&key_data);
-    stata_data_init(&key_data);
+    ctools_filtered_data_free(&key_filtered);
+    stata_data_init(&key_filtered.data);
 
     /* ================================================================
        Phase 5: Stream-permute non-key variables
@@ -910,8 +934,8 @@ stata_retcode csort_stream_sort(
         }
 
         rc = csort_stream_apply_permutation(saved_perm, nobs, nonkey_var_indices,
-                                             nvars_nonkey, obs1, block_size,
-                                             &local_timings);
+                                             nvars_nonkey, obs_map, block_size,
+                                             vars_per_batch, &local_timings);
     }
 
     local_timings.stream_nonkeys_time = ctools_timer_seconds() - t_phase;
@@ -920,7 +944,7 @@ cleanup:
     free(local_sort_vars);
     free(nonkey_var_indices);
     ctools_aligned_free(saved_perm);
-    stata_data_free(&key_data);
+    ctools_filtered_data_free(&key_filtered);
 
     local_timings.total_time = ctools_timer_seconds() - t_start;
     local_timings.block_size = block_size ? block_size : CSORT_STREAM_DEFAULT_BLOCK_SIZE;

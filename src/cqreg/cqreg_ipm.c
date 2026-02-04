@@ -51,26 +51,31 @@ void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
     /* Compute initial beta via OLS: beta = (X'X)^{-1} X'y */
     /* This gives a good starting point close to the solution */
 
-    /* Compute X'X with 8x loop unrolling */
+    /* Compute X'X with 8x loop unrolling - parallelized across columns */
     ST_int N8 = N - (N & 7);
     memset(ipm->XDX, 0, K * K * sizeof(ST_double));
+
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
+    #endif
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
+        ST_int ii;
         /* Diagonal with 8x unrolling */
         ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
         ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
-        for (i = 0; i < N8; i += 8) {
-            d0 += Xj[i]     * Xj[i];
-            d1 += Xj[i + 1] * Xj[i + 1];
-            d2 += Xj[i + 2] * Xj[i + 2];
-            d3 += Xj[i + 3] * Xj[i + 3];
-            d4 += Xj[i + 4] * Xj[i + 4];
-            d5 += Xj[i + 5] * Xj[i + 5];
-            d6 += Xj[i + 6] * Xj[i + 6];
-            d7 += Xj[i + 7] * Xj[i + 7];
+        for (ii = 0; ii < N8; ii += 8) {
+            d0 += Xj[ii]     * Xj[ii];
+            d1 += Xj[ii + 1] * Xj[ii + 1];
+            d2 += Xj[ii + 2] * Xj[ii + 2];
+            d3 += Xj[ii + 3] * Xj[ii + 3];
+            d4 += Xj[ii + 4] * Xj[ii + 4];
+            d5 += Xj[ii + 5] * Xj[ii + 5];
+            d6 += Xj[ii + 6] * Xj[ii + 6];
+            d7 += Xj[ii + 7] * Xj[ii + 7];
         }
-        for (; i < N; i++) {
-            d0 += Xj[i] * Xj[i];
+        for (; ii < N; ii++) {
+            d0 += Xj[ii] * Xj[ii];
         }
         ipm->XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
 
@@ -79,18 +84,18 @@ void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
             const ST_double *Xk = &X[k * N];
             ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
             ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                s0 += Xj[i]     * Xk[i];
-                s1 += Xj[i + 1] * Xk[i + 1];
-                s2 += Xj[i + 2] * Xk[i + 2];
-                s3 += Xj[i + 3] * Xk[i + 3];
-                s4 += Xj[i + 4] * Xk[i + 4];
-                s5 += Xj[i + 5] * Xk[i + 5];
-                s6 += Xj[i + 6] * Xk[i + 6];
-                s7 += Xj[i + 7] * Xk[i + 7];
+            for (ii = 0; ii < N8; ii += 8) {
+                s0 += Xj[ii]     * Xk[ii];
+                s1 += Xj[ii + 1] * Xk[ii + 1];
+                s2 += Xj[ii + 2] * Xk[ii + 2];
+                s3 += Xj[ii + 3] * Xk[ii + 3];
+                s4 += Xj[ii + 4] * Xk[ii + 4];
+                s5 += Xj[ii + 5] * Xk[ii + 5];
+                s6 += Xj[ii + 6] * Xk[ii + 6];
+                s7 += Xj[ii + 7] * Xk[ii + 7];
             }
-            for (; i < N; i++) {
-                s0 += Xj[i] * Xk[i];
+            for (; ii < N; ii++) {
+                s0 += Xj[ii] * Xk[ii];
             }
             ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
             ipm->XDX[j * K + k] = total;
@@ -180,6 +185,7 @@ void cqreg_ipm_compute_residuals(cqreg_ipm_state *ipm,
     ST_int N = ipm->N;
     ST_int K = ipm->K;
     ST_int i;
+    ST_int N8 = N - (N & 7);
 
     /* Primal residual: r_p = y - X*beta - u + v
      * At feasibility: r_p = 0
@@ -190,20 +196,34 @@ void cqreg_ipm_compute_residuals(cqreg_ipm_state *ipm,
     }
 
     /* Dual residual: r_d = q*X'1 - X'*lambda_u
-     *
-     * The KKT conditions give: lambda_u = q - λ, lambda_v = (1-q) + λ
-     * where λ is the dual variable for the equality constraint.
-     * The dual constraint is X'λ = 0, i.e., X'(q - lambda_u) = 0.
-     * So: r_d = X'λ = q*X'1 - X'*lambda_u
-     */
+     * OPTIMIZED: 8x unrolling with parallelization */
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
+    #endif
     for (ST_int j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
-        ST_double col_sum = 0.0;
-        ST_double weighted_sum = 0.0;
-        for (i = 0; i < N; i++) {
-            col_sum += Xj[i];
-            weighted_sum += Xj[i] * ipm->lambda_u[i];
+        ST_int ii;
+        ST_double c0 = 0.0, c1 = 0.0, c2 = 0.0, c3 = 0.0;
+        ST_double c4 = 0.0, c5 = 0.0, c6 = 0.0, c7 = 0.0;
+        ST_double w0 = 0.0, w1 = 0.0, w2 = 0.0, w3 = 0.0;
+        ST_double w4 = 0.0, w5 = 0.0, w6 = 0.0, w7 = 0.0;
+
+        for (ii = 0; ii < N8; ii += 8) {
+            c0 += Xj[ii];     w0 += Xj[ii]     * ipm->lambda_u[ii];
+            c1 += Xj[ii + 1]; w1 += Xj[ii + 1] * ipm->lambda_u[ii + 1];
+            c2 += Xj[ii + 2]; w2 += Xj[ii + 2] * ipm->lambda_u[ii + 2];
+            c3 += Xj[ii + 3]; w3 += Xj[ii + 3] * ipm->lambda_u[ii + 3];
+            c4 += Xj[ii + 4]; w4 += Xj[ii + 4] * ipm->lambda_u[ii + 4];
+            c5 += Xj[ii + 5]; w5 += Xj[ii + 5] * ipm->lambda_u[ii + 5];
+            c6 += Xj[ii + 6]; w6 += Xj[ii + 6] * ipm->lambda_u[ii + 6];
+            c7 += Xj[ii + 7]; w7 += Xj[ii + 7] * ipm->lambda_u[ii + 7];
         }
+        for (; ii < N; ii++) {
+            c0 += Xj[ii];
+            w0 += Xj[ii] * ipm->lambda_u[ii];
+        }
+        ST_double col_sum = ((c0 + c4) + (c1 + c5)) + ((c2 + c6) + (c3 + c7));
+        ST_double weighted_sum = ((w0 + w4) + (w1 + w5)) + ((w2 + w6) + (w3 + w7));
         ipm->r_dual[j] = q * col_sum - weighted_sum;
     }
 
@@ -211,20 +231,34 @@ void cqreg_ipm_compute_residuals(cqreg_ipm_state *ipm,
     ipm->primal_infeas = cqreg_vmax_abs(ipm->r_primal, N);
     ipm->dual_infeas = cqreg_vmax_abs(ipm->r_dual, K);
 
-    /* Compute primal objective: q * sum(u) + (1-q) * sum(v) */
-    ST_double sum_u = 0.0, sum_v = 0.0;
-    for (i = 0; i < N; i++) {
-        sum_u += ipm->u[i];
-        sum_v += ipm->v[i];
-    }
-    ipm->primal_obj = q * sum_u + (1.0 - q) * sum_v;
+    /* Compute primal and dual objectives in single pass with 8x unrolling */
+    ST_double su0 = 0.0, su1 = 0.0, su2 = 0.0, su3 = 0.0;
+    ST_double su4 = 0.0, su5 = 0.0, su6 = 0.0, su7 = 0.0;
+    ST_double sv0 = 0.0, sv1 = 0.0, sv2 = 0.0, sv3 = 0.0;
+    ST_double sv4 = 0.0, sv5 = 0.0, sv6 = 0.0, sv7 = 0.0;
+    ST_double do0 = 0.0, do1 = 0.0, do2 = 0.0, do3 = 0.0;
+    ST_double do4 = 0.0, do5 = 0.0, do6 = 0.0, do7 = 0.0;
 
-    /* Dual objective: y' * (lambda_u - lambda_v) */
-    ST_double dual_obj = 0.0;
-    for (i = 0; i < N; i++) {
-        dual_obj += y[i] * (ipm->lambda_u[i] - ipm->lambda_v[i]);
+    for (i = 0; i < N8; i += 8) {
+        su0 += ipm->u[i];     sv0 += ipm->v[i];     do0 += y[i]     * (ipm->lambda_u[i]     - ipm->lambda_v[i]);
+        su1 += ipm->u[i + 1]; sv1 += ipm->v[i + 1]; do1 += y[i + 1] * (ipm->lambda_u[i + 1] - ipm->lambda_v[i + 1]);
+        su2 += ipm->u[i + 2]; sv2 += ipm->v[i + 2]; do2 += y[i + 2] * (ipm->lambda_u[i + 2] - ipm->lambda_v[i + 2]);
+        su3 += ipm->u[i + 3]; sv3 += ipm->v[i + 3]; do3 += y[i + 3] * (ipm->lambda_u[i + 3] - ipm->lambda_v[i + 3]);
+        su4 += ipm->u[i + 4]; sv4 += ipm->v[i + 4]; do4 += y[i + 4] * (ipm->lambda_u[i + 4] - ipm->lambda_v[i + 4]);
+        su5 += ipm->u[i + 5]; sv5 += ipm->v[i + 5]; do5 += y[i + 5] * (ipm->lambda_u[i + 5] - ipm->lambda_v[i + 5]);
+        su6 += ipm->u[i + 6]; sv6 += ipm->v[i + 6]; do6 += y[i + 6] * (ipm->lambda_u[i + 6] - ipm->lambda_v[i + 6]);
+        su7 += ipm->u[i + 7]; sv7 += ipm->v[i + 7]; do7 += y[i + 7] * (ipm->lambda_u[i + 7] - ipm->lambda_v[i + 7]);
     }
-    ipm->dual_obj = dual_obj;
+    for (; i < N; i++) {
+        su0 += ipm->u[i];
+        sv0 += ipm->v[i];
+        do0 += y[i] * (ipm->lambda_u[i] - ipm->lambda_v[i]);
+    }
+
+    ST_double sum_u = ((su0 + su4) + (su1 + su5)) + ((su2 + su6) + (su3 + su7));
+    ST_double sum_v = ((sv0 + sv4) + (sv1 + sv5)) + ((sv2 + sv6) + (sv3 + sv7));
+    ipm->primal_obj = q * sum_u + (1.0 - q) * sum_v;
+    ipm->dual_obj = ((do0 + do4) + (do1 + do5)) + ((do2 + do6) + (do3 + do7));
 
     /* Duality gap */
     ipm->gap = fabs(ipm->primal_obj - ipm->dual_obj);
@@ -456,39 +490,45 @@ void cqreg_ipm_combined_direction(cqreg_ipm_state *ipm,
 ST_double cqreg_ipm_step_length(cqreg_ipm_state *ipm, ST_int affine)
 {
     ST_int N = ipm->N;
-    ST_double alpha = 1.0;
+    ST_int i;
+    ST_int N4 = N - (N & 3);
 
     ST_double *du = affine ? ipm->delta_u_aff : ipm->delta_u;
     ST_double *dv = affine ? ipm->delta_v_aff : ipm->delta_v;
     ST_double *dlu = affine ? ipm->delta_lambda_u_aff : ipm->delta_lambda_u;
     ST_double *dlv = affine ? ipm->delta_lambda_v_aff : ipm->delta_lambda_v;
 
-    /* Find maximum step maintaining positivity */
-    for (ST_int i = 0; i < N; i++) {
-        /* u + alpha * delta_u > 0 */
-        if (du[i] < -IPM_EPS) {
-            ST_double a = -ipm->u[i] / du[i];
-            if (a < alpha) alpha = a;
-        }
+    /* Find maximum step maintaining positivity - 4-way parallel reduction */
+    ST_double alpha0 = 1.0, alpha1 = 1.0, alpha2 = 1.0, alpha3 = 1.0;
 
-        /* v + alpha * delta_v > 0 */
-        if (dv[i] < -IPM_EPS) {
-            ST_double a = -ipm->v[i] / dv[i];
-            if (a < alpha) alpha = a;
-        }
+    for (i = 0; i < N4; i += 4) {
+        /* Process 4 elements at a time for better ILP */
+        #define CHECK_STEP(idx, alpha_var) \
+            if (du[idx] < -IPM_EPS) { ST_double a = -ipm->u[idx] / du[idx]; if (a < alpha_var) alpha_var = a; } \
+            if (dv[idx] < -IPM_EPS) { ST_double a = -ipm->v[idx] / dv[idx]; if (a < alpha_var) alpha_var = a; } \
+            if (dlu[idx] < -IPM_EPS) { ST_double a = -ipm->lambda_u[idx] / dlu[idx]; if (a < alpha_var) alpha_var = a; } \
+            if (dlv[idx] < -IPM_EPS) { ST_double a = -ipm->lambda_v[idx] / dlv[idx]; if (a < alpha_var) alpha_var = a; }
 
-        /* lambda_u + alpha * delta_lambda_u > 0 */
-        if (dlu[i] < -IPM_EPS) {
-            ST_double a = -ipm->lambda_u[i] / dlu[i];
-            if (a < alpha) alpha = a;
-        }
-
-        /* lambda_v + alpha * delta_lambda_v > 0 */
-        if (dlv[i] < -IPM_EPS) {
-            ST_double a = -ipm->lambda_v[i] / dlv[i];
-            if (a < alpha) alpha = a;
-        }
+        CHECK_STEP(i, alpha0)
+        CHECK_STEP(i + 1, alpha1)
+        CHECK_STEP(i + 2, alpha2)
+        CHECK_STEP(i + 3, alpha3)
+        #undef CHECK_STEP
     }
+
+    /* Remainder */
+    for (; i < N; i++) {
+        if (du[i] < -IPM_EPS) { ST_double a = -ipm->u[i] / du[i]; if (a < alpha0) alpha0 = a; }
+        if (dv[i] < -IPM_EPS) { ST_double a = -ipm->v[i] / dv[i]; if (a < alpha0) alpha0 = a; }
+        if (dlu[i] < -IPM_EPS) { ST_double a = -ipm->lambda_u[i] / dlu[i]; if (a < alpha0) alpha0 = a; }
+        if (dlv[i] < -IPM_EPS) { ST_double a = -ipm->lambda_v[i] / dlv[i]; if (a < alpha0) alpha0 = a; }
+    }
+
+    /* Reduce to single alpha */
+    ST_double alpha = alpha0;
+    if (alpha1 < alpha) alpha = alpha1;
+    if (alpha2 < alpha) alpha = alpha2;
+    if (alpha3 < alpha) alpha = alpha3;
 
     /* Step back from boundary */
     alpha *= IPM_STEP_BACK;
@@ -509,20 +549,46 @@ void cqreg_ipm_update_variables(cqreg_ipm_state *ipm, ST_double alpha)
 {
     ST_int N = ipm->N;
     ST_int K = ipm->K;
+    ST_int i;
+    ST_int N4 = N - (N & 3);
 
     /* Update beta */
     for (ST_int k = 0; k < K; k++) {
         ipm->beta[k] += alpha * ipm->delta_beta[k];
     }
 
-    /* Update primal and dual variables */
-    for (ST_int i = 0; i < N; i++) {
+    /* Update primal and dual variables with 4x unrolling */
+    for (i = 0; i < N4; i += 4) {
+        ipm->u[i]     += alpha * ipm->delta_u[i];
+        ipm->u[i + 1] += alpha * ipm->delta_u[i + 1];
+        ipm->u[i + 2] += alpha * ipm->delta_u[i + 2];
+        ipm->u[i + 3] += alpha * ipm->delta_u[i + 3];
+
+        ipm->v[i]     += alpha * ipm->delta_v[i];
+        ipm->v[i + 1] += alpha * ipm->delta_v[i + 1];
+        ipm->v[i + 2] += alpha * ipm->delta_v[i + 2];
+        ipm->v[i + 3] += alpha * ipm->delta_v[i + 3];
+
+        ipm->lambda_u[i]     += alpha * ipm->delta_lambda_u[i];
+        ipm->lambda_u[i + 1] += alpha * ipm->delta_lambda_u[i + 1];
+        ipm->lambda_u[i + 2] += alpha * ipm->delta_lambda_u[i + 2];
+        ipm->lambda_u[i + 3] += alpha * ipm->delta_lambda_u[i + 3];
+
+        ipm->lambda_v[i]     += alpha * ipm->delta_lambda_v[i];
+        ipm->lambda_v[i + 1] += alpha * ipm->delta_lambda_v[i + 1];
+        ipm->lambda_v[i + 2] += alpha * ipm->delta_lambda_v[i + 2];
+        ipm->lambda_v[i + 3] += alpha * ipm->delta_lambda_v[i + 3];
+    }
+    /* Remainder */
+    for (; i < N; i++) {
         ipm->u[i] += alpha * ipm->delta_u[i];
         ipm->v[i] += alpha * ipm->delta_v[i];
         ipm->lambda_u[i] += alpha * ipm->delta_lambda_u[i];
         ipm->lambda_v[i] += alpha * ipm->delta_lambda_v[i];
+    }
 
-        /* Ensure positivity (numerical safety) */
+    /* Ensure positivity (numerical safety) - separate loop for cache efficiency */
+    for (i = 0; i < N; i++) {
         if (ipm->u[i] < IPM_MIN_VAL) ipm->u[i] = IPM_MIN_VAL;
         if (ipm->v[i] < IPM_MIN_VAL) ipm->v[i] = IPM_MIN_VAL;
         if (ipm->lambda_u[i] < IPM_MIN_VAL) ipm->lambda_u[i] = IPM_MIN_VAL;
@@ -537,13 +603,30 @@ void cqreg_ipm_update_variables(cqreg_ipm_state *ipm, ST_double alpha)
 ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm)
 {
     ST_int N = ipm->N;
-    ST_double sum = 0.0;
+    ST_int i;
+    ST_int N8 = N - (N & 7);
 
-    for (ST_int i = 0; i < N; i++) {
-        sum += ipm->u[i] * ipm->lambda_u[i] + ipm->v[i] * ipm->lambda_v[i];
+    /* 8-way unrolled accumulation for better ILP */
+    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
+    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
+
+    for (i = 0; i < N8; i += 8) {
+        sum0 += ipm->u[i]     * ipm->lambda_u[i]     + ipm->v[i]     * ipm->lambda_v[i];
+        sum1 += ipm->u[i + 1] * ipm->lambda_u[i + 1] + ipm->v[i + 1] * ipm->lambda_v[i + 1];
+        sum2 += ipm->u[i + 2] * ipm->lambda_u[i + 2] + ipm->v[i + 2] * ipm->lambda_v[i + 2];
+        sum3 += ipm->u[i + 3] * ipm->lambda_u[i + 3] + ipm->v[i + 3] * ipm->lambda_v[i + 3];
+        sum4 += ipm->u[i + 4] * ipm->lambda_u[i + 4] + ipm->v[i + 4] * ipm->lambda_v[i + 4];
+        sum5 += ipm->u[i + 5] * ipm->lambda_u[i + 5] + ipm->v[i + 5] * ipm->lambda_v[i + 5];
+        sum6 += ipm->u[i + 6] * ipm->lambda_u[i + 6] + ipm->v[i + 6] * ipm->lambda_v[i + 6];
+        sum7 += ipm->u[i + 7] * ipm->lambda_u[i + 7] + ipm->v[i + 7] * ipm->lambda_v[i + 7];
     }
 
-    return sum;
+    /* Remainder */
+    for (; i < N; i++) {
+        sum0 += ipm->u[i] * ipm->lambda_u[i] + ipm->v[i] * ipm->lambda_v[i];
+    }
+
+    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
 }
 
 /* ============================================================================
@@ -689,7 +772,7 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
         ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
 
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic) if(K > 2 && N > 1000)
+        #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
         #endif
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
@@ -739,7 +822,7 @@ ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
 
         /* Compute X'g with 8x unrolling - parallelized */
         #ifdef _OPENMP
-        #pragma omp parallel for schedule(static) if(K > 2 && N > 1000)
+        #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
         #endif
         for (j = 0; j < K; j++) {
             const ST_double *Xj = &X[j * N];
@@ -996,12 +1079,19 @@ static ST_int solve_subsample_qr(
         return -1;
     }
 
-    /* Extract subsample */
+    /* Extract subsample - parallelize across columns for large K */
     for (i = 0; i < m; i++) {
-        ST_int obs = active_set[i];
-        y_sub[i] = y_full[obs];
-        for (j = 0; j < K; j++) {
-            X_sub[j * m + i] = X_full[j * N_full + obs];
+        y_sub[i] = y_full[active_set[i]];
+    }
+
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K >= 2 && m > 500)
+    #endif
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj_full = &X_full[j * N_full];
+        ST_double *Xj_sub = &X_sub[j * m];
+        for (ST_int ii = 0; ii < m; ii++) {
+            Xj_sub[ii] = Xj_full[active_set[ii]];
         }
     }
 
@@ -1065,14 +1155,21 @@ static ST_int check_optimality(
         return -1;
     }
 
-    /* Compute residuals for all observations and gather stats */
+    /* Compute residuals for all observations and gather stats
+     * OPTIMIZED: First compute yhat = X*beta using column-major access pattern */
+    memset(r, 0, N * sizeof(ST_double));
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+        ST_double bj = beta[j];
+        for (i = 0; i < N; i++) {
+            r[i] += Xj[i] * bj;
+        }
+    }
+
+    /* Now compute r = y - yhat and sum of squares */
     ST_double sum_r2 = 0.0;
     for (i = 0; i < N; i++) {
-        ST_double yhat = 0.0;
-        for (j = 0; j < K; j++) {
-            yhat += X[j * N + i] * beta[j];
-        }
-        r[i] = y[i] - yhat;
+        r[i] = y[i] - r[i];
         sum_r2 += r[i] * r[i];
     }
 
@@ -1092,12 +1189,12 @@ static ST_int check_optimality(
         }
     }
 
-    /* Compute X'g */
+    /* Compute X'g using optimized dot product with 8x unrolling */
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
+    #endif
     for (j = 0; j < K; j++) {
-        const ST_double *Xj = &X[j * N];
-        for (i = 0; i < N; i++) {
-            Xg[j] += Xj[i] * g[i];
-        }
+        Xg[j] = cqreg_dot(&X[j * N], g, N);
     }
 
     /* Check dual feasibility: X'g should be zero
@@ -1153,38 +1250,40 @@ static ST_int check_optimality(
         }
 
         /* If still no violations found, add a batch of observations
-         * with smallest |residual| to make progress */
+         * with smallest |residual| to make progress.
+         * OPTIMIZED: Use single-pass collection + partial sort instead of O(N²) search */
         if (*n_violations == 0) {
             /* Add up to 10% more observations or at least 10 */
             ST_int batch_size = N / 10;
             if (batch_size < 10) batch_size = 10;
             if (batch_size > N / 2) batch_size = N / 2;
 
-            /* Find observations with smallest |r| not in active set */
-            for (ST_int added = 0; added < batch_size; added++) {
-                ST_double min_abs_r = 1e30;
-                ST_int min_idx = -1;
+            /* Collect all candidate observations not in active set - O(N) */
+            resid_pair *candidates = (resid_pair *)malloc(N * sizeof(resid_pair));
+            if (candidates != NULL) {
+                ST_int n_candidates = 0;
                 for (i = 0; i < N; i++) {
                     if (!in_active_set[i]) {
-                        /* Check if already added as violation */
-                        ST_int already_added = 0;
-                        for (ST_int v = 0; v < *n_violations; v++) {
-                            if (violations[v] == i) {
-                                already_added = 1;
-                                break;
-                            }
-                        }
-                        if (!already_added && fabs(r[i]) < min_abs_r) {
-                            min_abs_r = fabs(r[i]);
-                            min_idx = i;
-                        }
+                        candidates[n_candidates].idx = i;
+                        candidates[n_candidates].abs_resid = fabs(r[i]);
+                        n_candidates++;
                     }
                 }
-                if (min_idx >= 0) {
-                    violations[(*n_violations)++] = min_idx;
-                } else {
-                    break;  /* No more observations to add */
+
+                /* Partial sort to find smallest batch_size elements - O(N log batch_size) */
+                if (n_candidates > 0) {
+                    /* Full sort for simplicity - still O(N log N) vs old O(N²) */
+                    if (n_candidates > batch_size) {
+                        qsort(candidates, n_candidates, sizeof(resid_pair), compare_resid_pair);
+                    }
+
+                    /* Add the smallest |r| observations */
+                    ST_int to_add = (n_candidates < batch_size) ? n_candidates : batch_size;
+                    for (i = 0; i < to_add; i++) {
+                        violations[(*n_violations)++] = candidates[i].idx;
+                    }
                 }
+                free(candidates);
             }
         }
     }
@@ -1242,16 +1341,34 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
 
 
     /* Step 2: Compute OLS solution for initial residuals */
-    /* Compute X'X */
+    /* Compute X'X with parallelization and unrolling */
     memset(ipm->XDX, 0, K * K * sizeof(ST_double));
+    ST_int N8_pre = N - (N & 7);
+
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(static) if(K >= 2 && N > 500)
+    #endif
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
+        ST_int ii;
         for (ST_int k = j; k < K; k++) {
             const ST_double *Xk = &X[k * N];
-            ST_double sum = 0.0;
-            for (i = 0; i < N; i++) {
-                sum += Xj[i] * Xk[i];
+            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
+            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
+            for (ii = 0; ii < N8_pre; ii += 8) {
+                s0 += Xj[ii]     * Xk[ii];
+                s1 += Xj[ii + 1] * Xk[ii + 1];
+                s2 += Xj[ii + 2] * Xk[ii + 2];
+                s3 += Xj[ii + 3] * Xk[ii + 3];
+                s4 += Xj[ii + 4] * Xk[ii + 4];
+                s5 += Xj[ii + 5] * Xk[ii + 5];
+                s6 += Xj[ii + 6] * Xk[ii + 6];
+                s7 += Xj[ii + 7] * Xk[ii + 7];
             }
+            for (; ii < N; ii++) {
+                s0 += Xj[ii] * Xk[ii];
+            }
+            ST_double sum = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
             ipm->XDX[j * K + k] = sum;
             ipm->XDX[k * K + j] = sum;
         }
@@ -1301,15 +1418,43 @@ ST_int cqreg_preprocess_solve(cqreg_ipm_state *ipm,
      * The top (1-q)*N by OLS residual rank should have positive QR residuals.
      */
 
-    /* First pass: compute residuals and gather stats */
+    /* First pass: compute residuals using column-major access pattern for cache efficiency */
     ST_double *ols_resid = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!ols_resid) {
+        free(resid_order);
+        free(active_set);
+        free(in_active_set);
+        free(predicted_sign);
+        free(violations);
+        return -1;
+    }
+
+    /* Compute yhat = X * beta using column-major traversal */
+    memset(ols_resid, 0, N * sizeof(ST_double));
+    for (j = 0; j < K; j++) {
+        const ST_double *Xj = &X[j * N];
+        ST_double bj = beta[j];
+        ST_int N8_ols = N - (N & 7);
+        ST_int ii;
+        for (ii = 0; ii < N8_ols; ii += 8) {
+            ols_resid[ii]     += Xj[ii]     * bj;
+            ols_resid[ii + 1] += Xj[ii + 1] * bj;
+            ols_resid[ii + 2] += Xj[ii + 2] * bj;
+            ols_resid[ii + 3] += Xj[ii + 3] * bj;
+            ols_resid[ii + 4] += Xj[ii + 4] * bj;
+            ols_resid[ii + 5] += Xj[ii + 5] * bj;
+            ols_resid[ii + 6] += Xj[ii + 6] * bj;
+            ols_resid[ii + 7] += Xj[ii + 7] * bj;
+        }
+        for (; ii < N; ii++) {
+            ols_resid[ii] += Xj[ii] * bj;
+        }
+    }
+
+    /* Compute r = y - yhat and gather stats */
     ST_double sum_r2 = 0.0;
     for (i = 0; i < N; i++) {
-        ST_double yhat = 0.0;
-        for (j = 0; j < K; j++) {
-            yhat += X[j * N + i] * beta[j];
-        }
-        ST_double r = y[i] - yhat;
+        ST_double r = y[i] - ols_resid[i];
         ols_resid[i] = r;
         resid_order[i].idx = i;
         resid_order[i].abs_resid = fabs(r);

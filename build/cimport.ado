@@ -28,7 +28,7 @@
 *!   emptylines(skip|fill) - How to handle empty lines (default: skip)
 
 program define cimport, rclass
-    version 14.0
+    version 14.1
 
     * Parse the subcommand
     gettoken subcmd 0 : 0, parse(" ,")
@@ -741,7 +741,7 @@ end
  *   verbose                - Display timing information
  ******************************************************************************/
 program define cimport_excel, rclass
-    version 14.0
+    version 14.1
 
     syntax [anything] [using/] [, SHEET(string) CELLRange(string) FIRSTrow ///
         ALLString CASE(string) CLEAR Verbose]

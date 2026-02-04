@@ -10,11 +10,6 @@
 {phang}
 {bf:civreghdfe} {hline 2} C-accelerated instrumental variables regression with high-dimensional fixed effects
 
-{pstd}
-{cmd:civreghdfe} is a high-performance replacement for {cmd:ivreghdfe} by
-Sergio Correia ({browse "https://github.com/sergiocorreia/ivreghdfe":sergiocorreia/ivreghdfe}).
-The syntax and functionality are designed to be compatible with {cmd:ivreghdfe} version 1.1.0+.
-
 
 {marker syntax}{...}
 {title:Syntax}
@@ -422,6 +417,7 @@ results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}number of observations{p_end}
+{synopt:{cmd:e(df_m)}}model degrees of freedom{p_end}
 {synopt:{cmd:e(df_r)}}residual degrees of freedom{p_end}
 {synopt:{cmd:e(df_a)}}absorbed degrees of freedom{p_end}
 {synopt:{cmd:e(K)}}number of regressors{p_end}
@@ -429,12 +425,15 @@ results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
 {synopt:{cmd:e(K_exog)}}number of exogenous regressors{p_end}
 {synopt:{cmd:e(K_iv)}}number of instruments (including exogenous){p_end}
 {synopt:{cmd:e(G)}}number of absorbed FE groups{p_end}
+{synopt:{cmd:e(N_hdfe)}}number of absorbed FE dimensions (same as G){p_end}
 {synopt:{cmd:e(N_clust)}}number of clusters (if clustered); for two-way equals e(N_clust1){p_end}
 {synopt:{cmd:e(N_clust1)}}number of first-dimension clusters (if two-way clustered){p_end}
 {synopt:{cmd:e(N_clust2)}}number of second-dimension clusters (if two-way clustered){p_end}
 {synopt:{cmd:e(F)}}Wald F-statistic{p_end}
 {synopt:{cmd:e(r2)}}R-squared{p_end}
+{synopt:{cmd:e(r2_a)}}adjusted R-squared{p_end}
 {synopt:{cmd:e(rss)}}residual sum of squares{p_end}
+{synopt:{cmd:e(mss)}}model sum of squares{p_end}
 {synopt:{cmd:e(tss)}}total sum of squares{p_end}
 {synopt:{cmd:e(rmse)}}root mean squared error{p_end}
 {synopt:{cmd:e(level)}}confidence level{p_end}
@@ -493,10 +492,18 @@ results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
 {synopt:{cmd:e(clustvar1)}}first cluster variable (if two-way clustered){p_end}
 {synopt:{cmd:e(clustvar2)}}second cluster variable (if two-way clustered){p_end}
 
+{p2col 5 20 24 2: DOF adjustment scalars (if specified)}{p_end}
+{synopt:{cmd:e(dofminus)}}user-specified DOF adjustment (if {cmd:dofminus()} specified){p_end}
+{synopt:{cmd:e(sdofminus_opt)}}user-specified small-sample DOF adjustment (if {cmd:sdofminus()} specified){p_end}
+
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}
 {synopt:{cmd:e(b)}}coefficient vector{p_end}
-{synopt:{cmd:e(V)}}variance-covariance matrix{p_end}
+{synopt:{cmd:e(V)}}variance-covariance matrix of the estimators{p_end}
+
+{synoptset 20 tabbed}{...}
+{p2col 5 20 24 2: Functions}{p_end}
+{synopt:{cmd:e(sample)}}marks estimation sample{p_end}
 
 
 {title:Diagnostic Tests}

@@ -67,9 +67,14 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_error.c \
               $(SRC_DIR)/ctools_threads.c \
               $(SRC_DIR)/ctools_arena.c \
+              $(SRC_DIR)/ctools_cleanup.c \
               $(SRC_DIR)/ctools_data_io.c \
+              $(SRC_DIR)/ctools_spi_checked.c \
               $(SRC_DIR)/ctools_hdfe_utils.c \
               $(SRC_DIR)/ctools_ols.c \
+              $(SRC_DIR)/ctools_parse.c \
+              $(SRC_DIR)/ctools_hash.c \
+              $(SRC_DIR)/ctools_sort_pairs.c \
               $(SRC_DIR)/ctools_sort_radix_lsd.c \
               $(SRC_DIR)/ctools_sort_radix_msd.c \
               $(SRC_DIR)/ctools_sort_timsort.c \
@@ -102,10 +107,9 @@ CEXPORT_SRCS = $(SRC_DIR)/cexport/cexport_impl.c \
                $(SRC_DIR)/cexport/cexport_parse.c \
                $(SRC_DIR)/cexport/cexport_xlsx.c
 
-# cmerge module
+# cmerge module (cmerge_radix_sort.c consolidated into ctools_sort_pairs.c)
 CMERGE_SRCS = $(SRC_DIR)/cmerge/cmerge_impl.c \
               $(SRC_DIR)/cmerge/cmerge_memory.c \
-              $(SRC_DIR)/cmerge/cmerge_radix_sort.c \
               $(SRC_DIR)/cmerge/cmerge_keys.c \
               $(SRC_DIR)/cmerge/cmerge_group_search.c \
               $(SRC_DIR)/cmerge/cmerge_join.c \
@@ -167,8 +171,14 @@ CSAMPLE_SRCS = $(SRC_DIR)/csample/csample_impl.c
 # cbsample module
 CBSAMPLE_SRCS = $(SRC_DIR)/cbsample/cbsample_impl.c
 
+# crangestat module
+CRANGESTAT_SRCS = $(SRC_DIR)/crangestat/crangestat_impl.c
+
+# cpsmatch module
+CPSMATCH_SRCS = $(SRC_DIR)/cpsmatch/cpsmatch_impl.c
+
 # All sources
-SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS) $(CSAMPLE_SRCS) $(CBSAMPLE_SRCS)
+SOURCES = $(CORE_SRCS) $(COMMON_SRCS) $(CSORT_SRCS) $(CIMPORT_SRCS) $(CEXPORT_SRCS) $(CMERGE_SRCS) $(CREGHDFE_SRCS) $(CQREG_SRCS) $(CBINSCATTER_SRCS) $(CIVREGHDFE_SRCS) $(CENCODE_SRCS) $(CWINSOR_SRCS) $(CDESTRING_SRCS) $(CDECODE_SRCS) $(CSAMPLE_SRCS) $(CBSAMPLE_SRCS) $(CRANGESTAT_SRCS) $(CPSMATCH_SRCS)
 
 # Headers (for dependency tracking)
 CORE_HEADERS = $(SRC_DIR)/stplugin.h \
@@ -177,10 +187,15 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_error.h \
                $(SRC_DIR)/ctools_threads.h \
                $(SRC_DIR)/ctools_arena.h \
+               $(SRC_DIR)/ctools_cleanup.h \
                $(SRC_DIR)/ctools_hdfe_utils.h \
                $(SRC_DIR)/ctools_ols.h \
                $(SRC_DIR)/ctools_config.h \
-               $(SRC_DIR)/ctools_spi.h
+               $(SRC_DIR)/ctools_spi.h \
+               $(SRC_DIR)/ctools_spi_checked.h \
+               $(SRC_DIR)/ctools_parse.h \
+               $(SRC_DIR)/ctools_hash.h \
+               $(SRC_DIR)/ctools_sort_pairs.h
 
 CSORT_HEADERS = $(SRC_DIR)/csort/csort_impl.h \
                 $(SRC_DIR)/csort/csort_stream.h
@@ -259,8 +274,12 @@ CSAMPLE_HEADERS = $(SRC_DIR)/csample/csample_impl.h
 
 CBSAMPLE_HEADERS = $(SRC_DIR)/cbsample/cbsample_impl.h
 
+CRANGESTAT_HEADERS = $(SRC_DIR)/crangestat/crangestat_impl.h
+
+CPSMATCH_HEADERS = $(SRC_DIR)/cpsmatch/cpsmatch_impl.h
+
 # Include paths for subdirectories
-INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cimport/miniz -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample
+INCLUDE_DIRS = -I$(SRC_DIR) -I$(SRC_DIR)/csort -I$(SRC_DIR)/cimport -I$(SRC_DIR)/cimport/miniz -I$(SRC_DIR)/cexport -I$(SRC_DIR)/cmerge -I$(SRC_DIR)/creshape -I$(SRC_DIR)/creghdfe -I$(SRC_DIR)/cqreg -I$(SRC_DIR)/cbinscatter -I$(SRC_DIR)/civreghdfe -I$(SRC_DIR)/cencode -I$(SRC_DIR)/cwinsor -I$(SRC_DIR)/cdestring -I$(SRC_DIR)/cdecode -I$(SRC_DIR)/csample -I$(SRC_DIR)/cbsample -I$(SRC_DIR)/crangestat -I$(SRC_DIR)/cpsmatch
 
 # ------------------------------------------------------------------------------
 # Output Configuration

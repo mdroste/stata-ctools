@@ -11,10 +11,6 @@
 {phang}
 {bf:cimport delimited} {hline 2} C-accelerated CSV/delimited text import
 
-{pstd}
-{cmd:cimport delimited} is a high-performance replacement for Stata's
-{help import delimited:import delimited} command.
-
 
 {marker syntax}{...}
 {title:Syntax}

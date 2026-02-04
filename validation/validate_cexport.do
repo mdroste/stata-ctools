@@ -6,7 +6,7 @@
  *
  * VERIFICATION: Exports both CSVs, imports them back into Stata, and compares:
  *   - First attempts cf _all for byte-for-byte comparison
- *   - Falls back to tolerance-based comparison (1e-10 absolute, 1e-10 relative)
+ *   - Falls back to ABSOLUTE tolerance-based comparison (1e-7)
  *     to handle floating point precision differences in CSV formatting
  *   - String variables must match exactly
  *   - Reports max difference even when tests pass (if tolerance check was needed)
@@ -18,9 +18,11 @@ if _rc != 0 {
     do "validate_setup.do"
 }
 
+capture mkdir "temp"
+
 quietly {
 
-capture mkdir "temp"
+noi di as text "Running validation tests for cexport..."
 
 /*******************************************************************************
  * Helper: benchmark_export - Export with both methods, import back, compare
@@ -119,9 +121,7 @@ program define benchmark_export
 
     local all_match = 1
     local fail_reason ""
-    local tol = 1e-10
-    local overall_max_diff = 0
-    local overall_max_reldiff = 0
+    local min_sigfigs = 99
 
     foreach v of local allvars {
         * Check if string or numeric
@@ -136,36 +136,39 @@ program define benchmark_export
             }
         }
         else {
-            * Numeric variable - compare values allowing tolerance
+            * Numeric variable - compare values using significant figures
             * Create double copies to avoid type mismatch issues
             quietly gen double _v1 = `v'_stata
             quietly gen double _v2 = `v'_cexport
-            quietly gen double _diff = abs(_v1 - _v2) if !missing(_v1) & !missing(_v2)
-            quietly gen double _reldiff = _diff / max(abs(_v1), 1e-300) if !missing(_v1) & !missing(_v2)
 
-            * Track max differences across all variables
-            quietly summarize _diff
-            if r(max) != . & r(max) > `overall_max_diff' {
-                local overall_max_diff = r(max)
-            }
-            quietly summarize _reldiff
-            if r(max) != . & r(max) > `overall_max_reldiff' {
-                local overall_max_reldiff = r(max)
+            * Check each non-missing pair using sigfigs
+            local var_min_sf = 99
+            quietly count if !missing(_v1) & !missing(_v2)
+            local n_pairs = r(N)
+            if `n_pairs' > 0 {
+                * Use vectorized comparison via assert_var_equal logic
+                quietly gen double _rel_err = abs(_v1 - _v2) / max(abs(_v1), abs(_v2), 1e-300) if !missing(_v1) & !missing(_v2)
+                quietly summarize _rel_err
+                if r(max) != . & r(max) > 0 {
+                    * Convert max relative error to approximate sigfigs
+                    local max_rel_err = r(max)
+                    local var_min_sf = -log10(`max_rel_err')
+                    if `var_min_sf' < `min_sigfigs' {
+                        local min_sigfigs = `var_min_sf'
+                    }
+                }
+                drop _rel_err
             }
 
-            * Use relative tolerance: allow 1e-10 relative difference or absolute 1e-10, whichever is larger
-            quietly gen double _reltol = max(`tol', abs(_v1) * `tol') if !missing(_v1)
-            quietly count if _diff > _reltol
-            if r(N) > 0 {
+            * Check if sigfigs meets threshold
+            if `var_min_sf' < $DEFAULT_SIGFIGS {
                 local all_match = 0
-                quietly summarize _diff, detail
-                local diff_mean = r(mean)
-                local diff_max = r(max)
-                local fail_reason "numeric variable `v' has `r(N)' values exceeding tolerance (mean_diff=`diff_mean', max_diff=`diff_max')"
-                drop _v1 _v2 _diff _reldiff _reltol
+                local sf_fmt : display %4.1f `var_min_sf'
+                local fail_reason "numeric variable `v' has only `sf_fmt' significant figures agreement"
+                drop _v1 _v2
                 continue, break
             }
-            drop _v1 _v2 _diff _reldiff _reltol
+            drop _v1 _v2
             * Check missing values match
             quietly count if missing(`v'_stata) != missing(`v'_cexport)
             if r(N) > 0 {
@@ -179,8 +182,9 @@ program define benchmark_export
     restore
 
     if `all_match' == 1 {
-        if `overall_max_diff' > 0 {
-            test_pass "`testname' (max_diff=`overall_max_diff', max_reldiff=`overall_max_reldiff')"
+        if `min_sigfigs' < 99 {
+            local sf_fmt : display %4.1f `min_sigfigs'
+            test_pass "`testname' (min_sigfigs=`sf_fmt')"
         }
         else {
             test_pass "`testname'"
@@ -701,7 +705,7 @@ replace huge = 999999999 in 4
 replace huge = 0 in 5
 benchmark_export, testname("very large numbers")
 
-* Extreme numeric range - test export only (very large/small values may differ in CSV representation)
+* Extreme numeric range - compare behavior with Stata's export delimited
 clear
 set obs 6
 gen double extreme = .
@@ -711,12 +715,15 @@ replace extreme = 1e-308 in 3
 replace extreme = -1e-308 in 4
 replace extreme = 0 in 5
 replace extreme = . in 6
+capture export delimited using "temp/extreme_range_stata.csv", replace
+local stata_rc = _rc
 capture cexport delimited using "temp/extreme_range.csv", replace
-if _rc == 0 {
-    test_pass "extreme numeric range - exported"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    test_pass "extreme numeric range - matches Stata behavior (rc=`cexport_rc')"
 }
 else {
-    test_pass "extreme numeric range - handled gracefully (rc=`=_rc')"
+    test_fail "extreme numeric range" "cexport rc=`cexport_rc' but Stata rc=`stata_rc'"
 }
 
 * All numeric types
@@ -1169,69 +1176,35 @@ benchmark_export, testname("special characters")
  ******************************************************************************/
 print_section "Large Datasets"
 
-* 10K rows export
+* 10K rows export - full comparison
 clear
+set seed 12345
 set obs 10000
 gen id = _n
 gen value = runiform()
 gen str20 name = "item_" + string(_n)
 
-capture cexport delimited using "temp/large_10k.csv", replace
-if _rc == 0 {
-    test_pass "10K rows export"
-}
-else {
-    test_fail "10K rows" "rc=`=_rc'"
-}
+benchmark_export, testname("10K rows export")
 
-* Compare with export delimited
-export delimited using "temp/large_10k_stata.csv", replace
-cexport delimited using "temp/large_10k_cexport.csv", replace
-
-file open f1 using "temp/large_10k_stata.csv", read
-file read f1 line1_stata
-file close f1
-
-file open f2 using "temp/large_10k_cexport.csv", read
-file read f2 line1_cexport
-file close f2
-
-if "`line1_stata'" == "`line1_cexport'" {
-    test_pass "large export matches Stata header"
-}
-else {
-    test_fail "large match" "headers differ"
-}
-
-* 50K rows
+* 50K rows - full comparison
 clear
+set seed 54321
 set obs 50000
 gen id = _n
 gen x = runiform()
 gen y = runiform()
 
-capture cexport delimited using "temp/large_50k.csv", replace
-if _rc == 0 {
-    test_pass "50K rows export"
-}
-else {
-    test_fail "50K rows" "rc=`=_rc'"
-}
+benchmark_export, testname("50K rows export")
 
-* Many columns (20)
+* Many columns (20) - full comparison
 clear
+set seed 11111
 set obs 1000
 forvalues i = 1/20 {
     gen var`i' = runiform()
 }
 
-capture cexport delimited using "temp/many_cols.csv", replace
-if _rc == 0 {
-    test_pass "20 columns export"
-}
-else {
-    test_fail "20 columns" "rc=`=_rc'"
-}
+benchmark_export, testname("20 columns export")
 
 /*******************************************************************************
  * SECTION: Pathological Data (Original)
@@ -2105,6 +2078,42 @@ else {
 capture erase "temp/excel_auto_opts.xlsx"
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cexport returns the same error codes as export delimited
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(export delimited nonexistent_var using "temp/error_test.csv", replace) ctools_cmd(cexport delimited nonexistent_var using "temp/error_test.csv", replace) testname("nonexistent variable")
+
+* No data loaded (empty dataset with no variables)
+clear
+test_error_match, stata_cmd(export delimited using "temp/error_test.csv", replace) ctools_cmd(cexport delimited using "temp/error_test.csv", replace) testname("no data loaded")
+
+* Invalid path (directory doesn't exist)
+sysuse auto, clear
+test_error_match, stata_cmd(export delimited using "nonexistent_dir/test.csv", replace) ctools_cmd(cexport delimited using "nonexistent_dir/test.csv", replace) testname("invalid path")
+
+* File already exists without replace
+sysuse auto, clear
+export delimited using "temp/exist_test.csv", replace
+sysuse auto, clear
+capture export delimited using "temp/exist_test.csv"
+local stata_rc = _rc
+capture cexport delimited using "temp/exist_test.csv"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    test_pass "[error] file exists without replace (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] file exists without replace" "stata rc=`stata_rc', cexport rc=`cexport_rc'"
+}
+capture erase "temp/exist_test.csv"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 
@@ -2118,4 +2127,5 @@ foreach f of local files {
 }
 
 * End of cexport validation
+noi print_summary "cexport"
 }

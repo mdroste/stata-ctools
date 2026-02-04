@@ -11,10 +11,6 @@
 {phang}
 {bf:cbsample} {hline 2} C-accelerated bootstrap sampling with replacement
 
-{pstd}
-{cmd:cbsample} is a high-performance drop-in replacement for Stata's {help bsample:bsample}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}

@@ -20,6 +20,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cqreg..."
+
 * Plugin check
 sysuse auto, clear
 capture cqreg price mpg weight
@@ -69,9 +71,8 @@ benchmark_qreg price mpg weight length turn displacement, testname("many covaria
 print_section "VCE Options - Full Coverage"
 
 * vce(robust) - Huber sandwich estimator
-* Use slightly relaxed tolerance (2e-6) for numerical precision differences
 sysuse auto, clear
-benchmark_qreg price mpg weight, vce(robust) tol(2e-6) testname("vce(robust)")
+benchmark_qreg price mpg weight, vce(robust) testname("vce(robust)")
 
 * vce(iid) - assumes i.i.d. errors
 sysuse auto, clear
@@ -255,12 +256,14 @@ if _rc == 0 {
     local qreg_adev = e(sum_adev)
     quietly cqreg studytime age drug
     local cqreg_adev = e(sum_adev)
-    local adev_diff = abs(`qreg_adev' - `cqreg_adev')
-    if `adev_diff' < 1e-7 {
+    sigfigs `qreg_adev' `cqreg_adev'
+    local sf = r(sigfigs)
+    if `sf' >= $DEFAULT_SIGFIGS {
         test_pass "cancer: median (same objective, alternate solution OK)"
     }
     else {
-        test_fail "cancer: median" "sum_adev differs: `qreg_adev' vs `cqreg_adev'"
+        local sf_fmt : display %4.1f `sf'
+        test_fail "cancer: median" "sum_adev sigfigs=`sf_fmt'"
     }
 
     webuse cancer, clear
@@ -400,12 +403,14 @@ quietly qreg y d1 d2
 local qreg_adev = e(sum_adev)
 quietly cqreg y d1 d2
 local cqreg_adev = e(sum_adev)
-local adev_diff = abs(`qreg_adev' - `cqreg_adev')
-if `adev_diff' < 1e-7 {
+sigfigs `qreg_adev' `cqreg_adev'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
     test_pass "near-dummy trap (same objective, alternate solution OK)"
 }
 else {
-    test_fail "near-dummy trap" "sum_adev differs: `qreg_adev' vs `cqreg_adev'"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "near-dummy trap" "sum_adev sigfigs=`sf_fmt'"
 }
 
 * High but not perfect correlation
@@ -597,17 +602,14 @@ quietly qreg y x
 matrix qreg_b = e(b)
 quietly cqreg y x
 matrix cqreg_b = e(b)
-matrix diff = qreg_b - cqreg_b
-local maxdiff = 0
-forvalues j = 1/2 {
-    local d = abs(diff[1, `j'])
-    if `d' > `maxdiff' local maxdiff = `d'
-}
-if `maxdiff' < 1e-7 {
+matrix_min_sigfigs qreg_b cqreg_b
+local min_sf = r(min_sigfigs)
+if `min_sf' >= $DEFAULT_SIGFIGS {
     test_pass "very small y (1e-8 scale) - coefficients match"
 }
 else {
-    test_fail "very small y (1e-8 scale)" "coefficient maxdiff=`maxdiff'"
+    local sf_fmt : display %4.1f `min_sf'
+    test_fail "very small y (1e-8 scale)" "coefficient sigfigs=`sf_fmt'"
 }
 
 * Mixed scale
@@ -771,65 +773,64 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
-* if condition
+* if condition - use benchmark_qreg for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-qreg price mpg weight if price > 5000
+benchmark_qreg price mpg weight if price > 5000, testname("if condition")
+
+* in condition - LP may have multiple optimal solutions (alternative optima)
+* so we compare sum_adev (objective value) rather than requiring identical coefficients
+sysuse auto, clear
+quietly qreg price mpg weight in 1/50
 local qreg_N = e(N)
+local qreg_adev = e(sum_adev)
+local qreg_cols = colsof(e(b))
+matrix qreg_V = e(V)
 
-cqreg price mpg weight if price > 5000
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if condition: N matches"
+capture quietly cqreg price mpg weight in 1/50
+if _rc != 0 {
+    test_fail "in condition" "cqreg returned error `=_rc'"
 }
 else {
-    test_fail "if condition" "N differs"
+    local cqreg_N = e(N)
+    local cqreg_adev = e(sum_adev)
+    local cqreg_cols = colsof(e(b))
+    matrix cqreg_V = e(V)
+
+    if `qreg_N' != `cqreg_N' {
+        test_fail "in condition" "N differs"
+    }
+    else if `qreg_cols' != `cqreg_cols' {
+        test_fail "in condition" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
+    }
+    else {
+        * Check objective value using sigfigs
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        * Check VCE using sigfigs
+        matrix_min_sigfigs qreg_V cqreg_V
+        local V_sf = r(min_sigfigs)
+
+        if `adev_sf' >= $DEFAULT_SIGFIGS & `V_sf' >= $DEFAULT_SIGFIGS {
+            test_pass "in condition (alternate solution OK)"
+        }
+        else if `adev_sf' < $DEFAULT_SIGFIGS {
+            local sf_fmt : display %4.1f `adev_sf'
+            test_fail "in condition" "sum_adev sigfigs=`sf_fmt'"
+        }
+        else {
+            local sf_fmt : display %4.1f `V_sf'
+            test_fail "in condition" "e(V) sigfigs=`sf_fmt'"
+        }
+    }
 }
 
-* in condition
+* Combined if and in - use benchmark_qreg for full comparison
 sysuse auto, clear
-qreg price mpg weight in 1/50
-local qreg_N = e(N)
+benchmark_qreg price mpg weight if foreign == 0 in 1/60, testname("if and in combined")
 
-cqreg price mpg weight in 1/50
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
-
-* Combined if and in
+* if with numeric comparison - use benchmark_qreg for full comparison
 sysuse auto, clear
-qreg price mpg weight if foreign == 0 in 1/60
-local qreg_N = e(N)
-
-cqreg price mpg weight if foreign == 0 in 1/60
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if and in combined: N matches"
-}
-else {
-    test_fail "if and in combined" "N differs"
-}
-
-* if with numeric comparison
-sysuse auto, clear
-qreg price mpg weight if mpg > 20
-local qreg_N = e(N)
-
-cqreg price mpg weight if mpg > 20
-local cqreg_N = e(N)
-
-if `qreg_N' == `cqreg_N' {
-    test_pass "if mpg > 20: N matches"
-}
-else {
-    test_fail "if mpg > 20" "N differs"
-}
+benchmark_qreg price mpg weight if mpg > 20, testname("if mpg > 20")
 
 /*******************************************************************************
  * SECTION 26: absorb Option (experimental)
@@ -1098,13 +1099,14 @@ else {
     }
     else {
         * Check objective function (sum_adev) matches within tolerance
-        local adev_diff = abs(`qreg_adev' - `cqreg_adev')
-        local adev_reldiff = `adev_diff' / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.foreign: median"
         }
         else {
-            test_fail "i.foreign: median" "sum_adev reldiff=`adev_reldiff'"
+            local sf_fmt : display %4.1f `adev_sf'
+            test_fail "i.foreign: median" "sum_adev sigfigs=`sf_fmt'"
         }
     }
 }
@@ -1127,12 +1129,14 @@ else {
         test_fail "i.rep78: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.rep78: median"
         }
         else {
-            test_fail "i.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            local sf_fmt : display %4.1f `adev_sf'
+            test_fail "i.rep78: median" "sum_adev sigfigs=`sf_fmt'"
         }
     }
 }
@@ -1155,12 +1159,13 @@ else {
         test_fail "i.rep78: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.rep78: q=0.25"
         }
         else {
-            test_fail "i.rep78: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.rep78: q=0.25" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1183,12 +1188,13 @@ else {
         test_fail "i.rep78: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.rep78: q=0.75"
         }
         else {
-            test_fail "i.rep78: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.rep78: q=0.75" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1211,12 +1217,13 @@ else {
         test_fail "i.foreign i.rep78: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.foreign i.rep78: median"
         }
         else {
-            test_fail "i.foreign i.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.foreign i.rep78: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1239,12 +1246,13 @@ else {
         test_fail "nlsw88 i.race: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "nlsw88 i.race: median"
         }
         else {
-            test_fail "nlsw88 i.race: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1267,12 +1275,13 @@ else {
         test_fail "nlsw88 i.race: q=0.10" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "nlsw88 i.race: q=0.10"
         }
         else {
-            test_fail "nlsw88 i.race: q=0.10" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: q=0.10" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1295,12 +1304,13 @@ else {
         test_fail "nlsw88 i.race: q=0.90" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "nlsw88 i.race: q=0.90"
         }
         else {
-            test_fail "nlsw88 i.race: q=0.90" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.race: q=0.90" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1323,12 +1333,13 @@ else {
         test_fail "nlsw88 i.occupation: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "nlsw88 i.occupation: median"
         }
         else {
-            test_fail "nlsw88 i.occupation: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.occupation: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1351,12 +1362,13 @@ else {
         test_fail "nlsw88 i.industry: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "nlsw88 i.industry: median"
         }
         else {
-            test_fail "nlsw88 i.industry: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "nlsw88 i.industry: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1393,12 +1405,13 @@ else {
         test_fail "i.race#i.married: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "i.race#i.married: median (alternate solution OK)"
         }
         else {
-            test_fail "i.race#i.married: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "i.race#i.married: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1427,12 +1440,13 @@ else {
         test_fail "ib3.rep78: median" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "ib3.rep78: median (alternate solution OK)"
         }
         else {
-            test_fail "ib3.rep78: median" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "ib3.rep78: median" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1459,12 +1473,13 @@ else {
         test_fail "ib3.rep78: q=0.75" "dimension mismatch: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
     else {
-        local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-        if `adev_reldiff' < 1e-7 {
+        sigfigs `qreg_adev' `cqreg_adev'
+        local adev_sf = r(sigfigs)
+        if `adev_sf' >= $DEFAULT_SIGFIGS {
             test_pass "ib3.rep78: q=0.75 (alternate solution OK)"
         }
         else {
-            test_fail "ib3.rep78: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+            test_fail "ib3.rep78: q=0.75" "sum_adev sigfigs=`adev_sf'"
         }
     }
 }
@@ -1555,12 +1570,14 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld L.mvalue: median"
             }
             else {
-                test_fail "grunfeld L.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld L.mvalue: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1582,12 +1599,14 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld L.mvalue: q=0.25"
             }
             else {
-                test_fail "grunfeld L.mvalue: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld L.mvalue: q=0.25" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1609,12 +1628,14 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld L.mvalue: q=0.75"
             }
             else {
-                test_fail "grunfeld L.mvalue: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld L.mvalue: q=0.75" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1636,12 +1657,14 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld D.mvalue: median"
             }
             else {
-                test_fail "grunfeld D.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld D.mvalue: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1663,12 +1686,14 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld D.mvalue: q=0.25"
             }
             else {
-                test_fail "grunfeld D.mvalue: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld D.mvalue: q=0.25" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1690,12 +1715,14 @@ if _rc == 0 {
             test_fail "grunfeld D.mvalue: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld D.mvalue: q=0.75"
             }
             else {
-                test_fail "grunfeld D.mvalue: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld D.mvalue: q=0.75" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1717,12 +1744,14 @@ if _rc == 0 {
             test_fail "grunfeld L2.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld L2.mvalue: median"
             }
             else {
-                test_fail "grunfeld L2.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld L2.mvalue: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1744,12 +1773,14 @@ if _rc == 0 {
             test_fail "grunfeld L.mvalue D.kstock: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld L.mvalue D.kstock: median"
             }
             else {
-                test_fail "grunfeld L.mvalue D.kstock: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld L.mvalue D.kstock: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1771,12 +1802,14 @@ if _rc == 0 {
             test_fail "grunfeld F.mvalue: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "grunfeld F.mvalue: median"
             }
             else {
-                test_fail "grunfeld F.mvalue: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "grunfeld F.mvalue: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1809,12 +1842,14 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "nlswork L.tenure: median"
             }
             else {
-                test_fail "nlswork L.tenure: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "nlswork L.tenure: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1836,12 +1871,14 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: q=0.25" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "nlswork L.tenure: q=0.25"
             }
             else {
-                test_fail "nlswork L.tenure: q=0.25" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "nlswork L.tenure: q=0.25" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1863,12 +1900,14 @@ if _rc == 0 {
             test_fail "nlswork L.tenure: q=0.75" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "nlswork L.tenure: q=0.75"
             }
             else {
-                test_fail "nlswork L.tenure: q=0.75" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "nlswork L.tenure: q=0.75" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1890,12 +1929,14 @@ if _rc == 0 {
             test_fail "nlswork D.tenure: median" "N differs: qreg=`qreg_N' cqreg=`cqreg_N'"
         }
         else {
-            local adev_reldiff = abs(`qreg_adev' - `cqreg_adev') / `qreg_adev'
-            if `adev_reldiff' < 1e-7 {
+            sigfigs `qreg_adev' `cqreg_adev'
+            local adev_sf = r(sigfigs)
+            if `adev_sf' >= $DEFAULT_SIGFIGS {
                 test_pass "nlswork D.tenure: median"
             }
             else {
-                test_fail "nlswork D.tenure: median" "sum_adev reldiff=`adev_reldiff'"
+                local sf_fmt : display %4.1f `adev_sf'
+                test_fail "nlswork D.tenure: median" "sum_adev sigfigs=`sf_fmt'"
             }
         }
     }
@@ -1998,8 +2039,37 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cqreg returns the same error codes as qreg
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price nonexistent_var) ctools_cmd(cqreg price nonexistent_var) testname("nonexistent variable")
+
+* Invalid quantile (> 1)
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg, quantile(1.5)) ctools_cmd(cqreg price mpg, quantile(1.5)) testname("invalid quantile > 1")
+
+* Invalid quantile (< 0)
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg, quantile(-0.5)) ctools_cmd(cqreg price mpg, quantile(-0.5)) testname("invalid quantile < 0")
+
+* No observations after if condition
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg if price > 100000) ctools_cmd(cqreg price mpg if price > 100000) testname("no observations after if")
+
+* String variable as dependent
+sysuse auto, clear
+test_error_match, stata_cmd(qreg make mpg) ctools_cmd(cqreg make mpg) testname("string dependent variable")
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 
 * End of cqreg validation
+noi print_summary "cqreg"
 }

@@ -38,4 +38,11 @@
 */
 ST_retcode cmerge_main(const char *args);
 
+/*
+ * Cleanup function for cmerge persistent state.
+ * Frees the global using dataset cache if loaded.
+ * Safe to call multiple times (idempotent).
+ */
+void cmerge_cleanup_cache(void);
+
 #endif /* CMERGE_IMPL_H */

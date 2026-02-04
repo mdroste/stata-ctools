@@ -127,10 +127,34 @@ All three algorithms are optimized for performance:
 - **Parallelization**: Parallel permutation application
 - **Best case**: Near-instant for already-sorted data
 
-### Common Optimizations
-1. **Cache-Efficient Memory Access**: 8-way loop unrolling for data loading/storing
-2. **Stable Sort**: All three algorithms maintain relative order of equal elements
-3. **Parallel Permutation**: Variable data reordering done in parallel
+### Speedup Tricks
+
+**LSD Radix Sort:**
+- **8-bit radix (256 buckets)**: Balances the number of passes against bucket overhead; 8 passes for 64-bit doubles
+- **Parallel histogram and scatter phases**: OpenMP parallelizes both the counting and the data redistribution passes
+- **Pointer swapping between passes**: Avoids copying the entire array; input/output buffers alternate roles
+- **Early exit for uniform passes**: Skips any radix pass where all values fall into a single bucket
+- **32-bit permutation indices**: Uses 4-byte indices instead of 8-byte pointers, halving auxiliary memory
+- **Pre-cached string lengths**: Avoids repeated `strlen()` calls during multi-key string sorts
+- **Cache-line aligned histograms**: 64-byte alignment prevents false sharing between threads
+
+**MSD Radix Sort:**
+- **Early termination**: Stops recursing when elements are distinguished by their prefix
+- **Insertion sort for small buckets**: Avoids recursion overhead on small partitions
+- **OpenMP task parallelism**: Independent buckets are sorted concurrently as separate tasks
+
+**Timsort:**
+- **Natural run detection**: Finds pre-existing ascending/descending runs in O(N)
+- **Binary insertion sort for short runs**: Extends runs below a minimum length threshold
+- **Galloping merge**: Exponential search during merge to skip large blocks of already-ordered elements
+
+**Common (all algorithms):**
+- **SIMD data loading**: AVX2/SSE2 on x86 and NEON on ARM64 for bulk memory operations in `ctools_data_io`
+- **16x loop unrolling**: Reduces loop overhead and improves instruction pipelining during data load/store
+- **Software prefetching**: `_mm_prefetch` hints hide memory latency during data transfer
+- **Non-temporal stores**: Bypasses cache for very large writes to avoid cache pollution
+- **Parallel permutation application**: Each variable's data is reordered by a separate thread
+- **Persistent thread pool**: Threads are reused across calls, avoiding creation/destruction overhead
 
 ### Timing Breakdown
 

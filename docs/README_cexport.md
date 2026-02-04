@@ -66,15 +66,18 @@ cexport delimited using output.csv, quote replace
 
 `cexport` achieves its speed advantage through:
 
-### Parallel Processing
-- Data is loaded from Stata in parallel
-- Multiple threads format data concurrently
-- Chunked writing for efficient I/O
+### Speedup Tricks
 
-### Optimized Formatting
-- Efficient numeric-to-string conversion
-- Smart quoting (only quotes when necessary, unless `quote` specified)
-- Minimal memory allocation overhead
+- **Vectored I/O**: Uses `pwritev()` on POSIX and batched async `WriteFile` on Windows to write multiple buffers in a single syscall, reducing kernel transitions
+- **Async mmap flush**: Uses `MS_ASYNC` instead of `MS_SYNC` so the OS writes dirty pages in the background while formatting continues
+- **File pre-allocation**: `posix_fallocate` (POSIX) or `SetFilePointerEx`+`SetEndOfFile` (Windows) reserves disk space upfront, avoiding expensive file-growth operations during writing
+- **Zero-copy mmap access**: Data is formatted directly into memory-mapped output buffers, bypassing userspace buffering
+- **Deferred fsync**: Optional `CEXPORT_IO_FLAG_NOFSYNC` skips the final `fsync`, trading durability for speed on non-critical exports
+- **Windows async batching**: `WaitForMultipleObjects` allows concurrent overlapped writes, saturating disk bandwidth
+- **Optional direct I/O**: `FILE_FLAG_NO_BUFFERING` on Windows bypasses the OS page cache for large exports, avoiding cache pollution
+- **SIMD-accelerated data loading**: AVX2/SSE2/NEON bulk load from Stata with 16x loop unrolling in `ctools_data_io`
+- **Parallel formatting**: Multiple OpenMP threads convert numeric values to text concurrently
+- **Smart quoting**: Only quotes fields containing delimiters, quotes, or newlines—avoids unnecessary work
 
 ### Timing Breakdown
 

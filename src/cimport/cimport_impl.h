@@ -26,4 +26,11 @@
  */
 ST_retcode cimport_main(const char *args);
 
+/*
+ * Cleanup function for cimport persistent state.
+ * Frees the global parsed CSV context cache if loaded.
+ * Safe to call multiple times (idempotent).
+ */
+void cimport_cleanup_cache(void);
+
 #endif /* CIMPORT_IMPL_H */

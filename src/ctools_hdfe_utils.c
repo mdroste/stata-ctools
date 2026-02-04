@@ -183,9 +183,13 @@ ST_int ctools_remap_cluster_ids(
 {
     ST_int i;
 
-    /* Find max cluster ID */
+    /* Find max cluster ID and check for invalid (negative) values */
     ST_int max_id = 0;
     for (i = 0; i < N; i++) {
+        /* Defensive check: negative IDs indicate missing values or corruption */
+        if (cluster_ids[i] < 0) {
+            return -1;  /* Error: invalid cluster ID */
+        }
         if (cluster_ids[i] > max_id) max_id = cluster_ids[i];
     }
 

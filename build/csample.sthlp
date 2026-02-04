@@ -11,10 +11,6 @@
 {phang}
 {bf:csample} {hline 2} C-accelerated random sampling without replacement
 
-{pstd}
-{cmd:csample} is a high-performance drop-in replacement for Stata's {help sample:sample}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}

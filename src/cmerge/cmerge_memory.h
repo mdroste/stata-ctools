@@ -39,14 +39,14 @@ typedef ctools_string_arena cmerge_string_arena;
 cmerge_string_arena *cmerge_arena_create(size_t capacity);
 
 /* Allocate a string copy from the arena.
- * Falls back to strdup if full, then to static empty string.
+ * Falls back to static empty string when arena is full.
  * ALWAYS returns a valid pointer (never NULL). */
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s);
 
 /* Check if a pointer was allocated from the arena (or is the static fallback) */
 int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr);
 
-/* Free the arena. Note: strings from fallback strdup must be freed separately */
+/* Free the arena */
 void cmerge_arena_free(cmerge_string_arena *arena);
 
 #endif /* CMERGE_MEMORY_H */

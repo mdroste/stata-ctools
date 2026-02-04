@@ -3,13 +3,21 @@
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
 program define civreghdfe, eclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
+    * absorb() is optional - without it, runs as regular IV (no FE absorption)
     syntax anything(name=0 equalok) [if] [in] [aw fw pw/], ///
-        Absorb(varlist) ///
-        [vce(string) ///
+        [Absorb(varlist) ///
+        vce(string) ///
         Robust ///
         CLuster(varlist) ///
         TOLerance(real 1e-8) ///
@@ -62,7 +70,8 @@ program define civreghdfe, eclass
         SAVEFPrefix(string) ///
         SAVERF ///
         SAVERFPrefix(string) ///
-        THReads(integer 0)]
+        THReads(integer 0) ///
+        NORETURN]
 
     * Clean up any leftover scalars from previous runs to prevent state contamination
     capture scalar drop __civreghdfe_n_orthog
@@ -127,42 +136,55 @@ program define civreghdfe, eclass
     local exog_before = strtrim("`exog_before'")
 
     * Check for parentheses containing endogenous = instruments
+    * If no parentheses, treat remaining vars as exogenous and run as OLS (no IV)
+    local is_iv_model = 0
     if strpos("`rest'", "(") == 0 {
-        di as error "civreghdfe requires (endogvars = instruments) specification"
-        exit 198
+        * No IV specification - treat rest as exogenous vars, run as OLS
+        local exog_after = strtrim("`rest'")
+        local paren_content ""
+        local endogvars ""
+        local instruments ""
     }
+    else {
+        local is_iv_model = 1
 
-    * Extract content within parentheses
-    local rest = strtrim("`rest'")
-    if substr("`rest'", 1, 1) == "(" {
-        local rest = substr("`rest'", 2, .)
+        * Extract content within parentheses
+        local rest = strtrim("`rest'")
+        if substr("`rest'", 1, 1) == "(" {
+            local rest = substr("`rest'", 2, .)
+        }
+
+        local paren_end = strpos("`rest'", ")")
+        if `paren_end' == 0 {
+            di as error "Unmatched parenthesis in variable specification"
+            exit 198
+        }
+
+        local paren_content = substr("`rest'", 1, `paren_end' - 1)
+        local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
+
+        * Parse endogenous = instruments
+        local eq_pos = strpos("`paren_content'", "=")
+        if `eq_pos' == 0 {
+            di as error "Must specify instruments after '=' in parentheses"
+            exit 198
+        }
+
+        local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
+        local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
     }
-
-    local paren_end = strpos("`rest'", ")")
-    if `paren_end' == 0 {
-        di as error "Unmatched parenthesis in variable specification"
-        exit 198
-    }
-
-    local paren_content = substr("`rest'", 1, `paren_end' - 1)
-    local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
 
     * Combine exogenous variables from before and after parentheses
     local exogvars `exog_before' `exog_after'
     local exogvars = strtrim("`exogvars'")
 
-    * Parse endogenous = instruments
-    local eq_pos = strpos("`paren_content'", "=")
-    if `eq_pos' == 0 {
-        di as error "Must specify instruments after '=' in parentheses"
-        exit 198
-    }
-
-    local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
-    local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
-
-    * Validate dependent variable exists
+    * Validate dependent variable exists and is numeric (error 109 for string vars)
     foreach v of local depvar {
+        capture confirm string variable `v'
+        if _rc == 0 {
+            di as error "type mismatch"
+            exit 109
+        }
         confirm numeric variable `v'
     }
     foreach v of local absorb {
@@ -172,6 +194,13 @@ program define civreghdfe, eclass
     * Mark sample early for fvrevar
     marksample touse
     markout `touse' `depvar' `absorb'
+
+    * Early check for no observations (before _rmcoll which throws error 2000)
+    qui count if `touse'
+    if r(N) == 0 {
+        di as error "no observations"
+        exit 2001
+    }
 
     * Expand factor variables for endogenous variables
     local endogvars_coef ""
@@ -388,25 +417,27 @@ program define civreghdfe, eclass
     local N = r(N)
 
     if `N' == 0 {
-        di as error "No observations"
-        exit 2000
+        di as error "no observations"
+        exit 2001
     }
 
     * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)
     * This needs to happen before verbose output to show correct VCE type
-    * Also detect panel-aware HAC for kernel/bw with tsset panel data
     local panel_aware_hac = 0
     if "`kernel'" != "" & `bw' > 0 & `vce_type' == 0 & `dkraay' == 0 & "`kiefer'" == "" {
         local vce_type = 1
-        * Check if data is tsset panel - enable panel-aware HAC
-        if "`absorb'" != "" {
-            qui tsset
-            if _rc == 0 {
-                local tsset_ivar `r(panelvar)'
-                local tsset_tvar `r(timevar)'
-                if "`tsset_ivar'" != "" & "`tsset_tvar'" != "" {
-                    local panel_aware_hac = 1
-                }
+    }
+
+    * Detect panel-aware HAC for kernel/bw with tsset panel data
+    * This is separate from vce_type check because user may specify robust explicitly
+    * Note: bw > 0 implies HAC even without explicit kernel (defaults to Bartlett later)
+    if ("`kernel'" != "" | `bw' > 0) & `dkraay' == 0 & "`kiefer'" == "" & "`absorb'" != "" {
+        capture qui tsset
+        if _rc == 0 {
+            local tsset_ivar `r(panelvar)'
+            local tsset_tvar `r(timevar)'
+            if "`tsset_ivar'" != "" & "`tsset_tvar'" != "" {
+                local panel_aware_hac = 1
             }
         }
     }
@@ -676,6 +707,7 @@ program define civreghdfe, eclass
     scalar __civreghdfe_sdofminus = `sdofminus'
     scalar __civreghdfe_nopartialsmall = ("`nopartialsmall'" != "")
     scalar __civreghdfe_center = ("`center'" != "")
+    scalar __civreghdfe_noreturn = ("`noreturn'" != "")
 
     * Update cluster scalars after Kiefer/dkraay handling
     * vce_type 4 = dkraay, which also uses cluster variable (time)
@@ -879,6 +911,15 @@ program define civreghdfe, eclass
     timer clear 98
     timer on 98
 
+    * If noreturn specified, skip all result retrieval and e() posting
+    if "`noreturn'" != "" {
+        timer off 98
+        di as text "(noreturn specified - skipping result storage)"
+        * Clean up the noreturn scalar
+        capture scalar drop __civreghdfe_noreturn
+        exit 0
+    }
+
     * Retrieve results
     local N_used = __civreghdfe_N
     local df_r = __civreghdfe_df_r
@@ -916,6 +957,12 @@ program define civreghdfe, eclass
             capture local fe_nested_`g' = __civreghdfe_fe_nested_`g'
             if _rc != 0 local fe_nested_`g' = 0
         }
+    }
+
+    * Read mobility groups (connected components) for multi-way FE redundancy
+    capture local mobility_groups = scalar(__civreghdfe_mobility_groups)
+    if _rc != 0 | "`mobility_groups'" == "" | "`mobility_groups'" == "." {
+        local mobility_groups = 0
     }
 
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
@@ -1014,6 +1061,7 @@ program define civreghdfe, eclass
     }
 
     * Store macros
+    ereturn local predict "civreghdfe_p"
     ereturn local cmd "civreghdfe"
     ereturn local cmdline `"civreghdfe `0'"'
     ereturn local depvar "`depname_use'"
@@ -1134,6 +1182,13 @@ program define civreghdfe, eclass
             di as text "Estimates efficient for homoskedasticity only"
             di as text "Statistics robust to heteroskedasticity"
         }
+        else if `vce_type' == 2 & `kiefer_val' {
+            di as text "Estimates efficient for homoskedasticity only"
+            di as text "Statistics robust to within-cluster autocorrelation (Kiefer)"
+            di as text "  kernel=Truncated; bandwidth=`bw_val'"
+            di as text "  time variable (t):  `kiefer_tvar'"
+            di as text "  group variable (i): `cluster_var'"
+        }
         else if `vce_type' == 2 {
             di as text "Estimates efficient for homoskedasticity only"
             di as text "Statistics robust to heteroskedasticity and clustering on `cluster_var'"
@@ -1145,7 +1200,8 @@ program define civreghdfe, eclass
         di as text ""
 
         * Summary statistics line 1
-        if `vce_type' == 2 {
+        * Kiefer does not display "Number of clusters" - it uses N-K-df_a for df_r
+        if `vce_type' == 2 & !`kiefer_val' {
             di as text "Number of clusters (`cluster_var') = " as result %9.0fc `N_clust' ///
                 as text _col(55) "Number of obs =" as result %9.0fc `N_used'
         }
@@ -1160,8 +1216,9 @@ program define civreghdfe, eclass
 
         * F statistic (Wald test)
         * For two-way clustering, use min(N_clust1, N_clust2) - 1 for degrees of freedom
+        * For Kiefer, use df_r = N - K - df_a (set earlier in the code)
         local prob_F = Ftail(`K_total', `df_r', `F_wald')
-        if `vce_type' == 2 {
+        if `vce_type' == 2 & !`kiefer_val' {
             di as text _col(55) "F(" %3.0f `K_total' "," %6.0f (`N_clust' - 1) ") =" as result %9.2f `F_wald'
         }
         else if `vce_type' == 3 {
@@ -1560,36 +1617,38 @@ program define civreghdfe, eclass
     di as text "{hline 13}{c +}{hline 39}{c RT}"
 
     * Display each FE with its components
+    * Redundancy calculation uses connected components (mobility groups) from C:
+    * - G == 1: no redundancy (0)
+    * - G >= 2: second FE gets mobility_groups redundant (from connected components)
+    * - G > 2: each additional FE gets 1 redundant
+    * - Nested FEs: all levels are redundant
     local total_coefs = 0
     local has_nested = 0
     forval g = 1/`G' {
         local fevar : word `g' of `absorb'
         local cats = `fe_levels_`g''
         * For nested FEs: all levels are redundant
-        * For first non-nested FE: no redundant
-        * For subsequent non-nested FEs: 1 redundant (identification)
         if `fe_nested_`g'' == 1 {
             local redundant = `cats'
             local has_nested = 1
             local nested_marker "*"
         }
         else {
-            if `g' == 1 | (`has_nested' == 0 & `g' == 1) {
-                * First non-nested FE: check if any prior FE was nested
-                local first_nonnested = 1
-                forval prev = 1/`=`g'-1' {
-                    if `fe_nested_`prev'' == 0 {
-                        local first_nonnested = 0
-                    }
-                }
-                if `first_nonnested' {
-                    local redundant = 0
-                }
-                else {
-                    local redundant = 1
+            if `g' == 1 {
+                * First FE: no redundancy
+                local redundant = 0
+            }
+            else if `g' == 2 {
+                * Second FE: redundancy = mobility_groups (connected components)
+                local redundant = `mobility_groups'
+                * For G > 2, mobility_groups includes (G-2) extra, but we want
+                * the second FE to show only the base mobility groups
+                if `G' > 2 {
+                    local redundant = `mobility_groups' - (`G' - 2)
                 }
             }
             else {
+                * Third+ FE: 1 redundant each
                 local redundant = 1
             }
             local nested_marker " "
@@ -1710,6 +1769,7 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_sdofminus
     capture scalar drop __civreghdfe_nopartialsmall
     capture scalar drop __civreghdfe_center
+    capture scalar drop __civreghdfe_noreturn
     capture scalar drop __civreghdfe_has_b0
     capture matrix drop __civreghdfe_b0
     capture scalar drop __civreghdfe_sargan

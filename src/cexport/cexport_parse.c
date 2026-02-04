@@ -21,7 +21,7 @@
 void cexport_context_init(cexport_context *ctx)
 {
     memset(ctx, 0, sizeof(*ctx));
-    stata_data_init(&ctx->data);
+    ctools_filtered_data_init(&ctx->filtered);
 
     /* Set defaults */
     ctx->delimiter = ',';
@@ -74,7 +74,7 @@ void cexport_context_cleanup(cexport_context *ctx)
         ctx->vartypes = NULL;
     }
 
-    stata_data_free(&ctx->data);
+    ctools_filtered_data_free(&ctx->filtered);
 }
 
 /* ========================================================================
@@ -95,6 +95,10 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
         if (arg_idx == 0) {
             /* First arg: filename */
             ctx->filename = strdup(token);
+            if (ctx->filename == NULL) {
+                free(args_copy);
+                return -1;
+            }
         } else if (arg_idx == 1) {
             /* Second arg: delimiter */
             if (strlen(token) == 1) {

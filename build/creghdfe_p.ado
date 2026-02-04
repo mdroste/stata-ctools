@@ -3,7 +3,7 @@
 *! Part of the ctools suite
 
 program define creghdfe_p, rclass
-    version 14.0
+    version 14.1
 
     * Handle score option (used by margins)
     capture syntax anything [if] [in], SCore

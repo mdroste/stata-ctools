@@ -315,8 +315,13 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
         return -1;
     }
 
-    /* Fill pairs */
+    /* Fill pairs - check for missing values to avoid undefined cast behavior */
     for (ST_int i = 0; i < N; i++) {
+        /* Missing values must be filtered out before calling this function */
+        if (SF_is_missing(values[i])) {
+            free(pairs);
+            return -1;  /* Error: unexpected missing value */
+        }
         pairs[i].value = (ST_int)values[i];
         pairs[i].index = i;
     }

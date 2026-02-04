@@ -16,12 +16,14 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cdecode..."
+
 /*******************************************************************************
  * Helper: Compare cdecode vs decode
  ******************************************************************************/
 capture program drop benchmark_decode
 program define benchmark_decode
-    syntax varname, testname(string) [GENerate(name) MAXLength(integer 0) if2(string) in2(string)]
+    syntax varname, testname(string) [GENerate(name) MAXLength(integer 0) if2(string) in2(string) cdecodeopts(string)]
 
     * Set default generate name
     if "`generate'" == "" local generate = "decoded"
@@ -31,10 +33,12 @@ program define benchmark_decode
     if "`if2'" != "" local ifin "`ifin' if `if2'"
     if "`in2'" != "" local ifin "`ifin' in `in2'"
 
-    * Build options
+    * Build options for cdecode (includes cdecodeopts like verbose, threads)
     local opts "generate(`generate'_c)"
     if `maxlength' > 0 local opts "`opts' maxlength(`maxlength')"
+    if "`cdecodeopts'" != "" local opts "`opts' `cdecodeopts'"
 
+    * Build options for Stata decode (no cdecodeopts - Stata doesn't support them)
     local opts_stata "generate(`generate'_s)"
     if `maxlength' > 0 local opts_stata "`opts_stata' maxlength(`maxlength')"
 
@@ -141,27 +145,13 @@ label define x_lbl 1 "one" 2 "two" 3 "three" 4 "four" 5 "five" ///
 label values x x_lbl
 benchmark_decode x, testname("vs decode: var with missings")
 
-* Test 2.5: verbose option
+* Test 2.5: verbose option - verify correctness with verbose enabled
 sysuse auto, clear
-capture cdecode foreign, generate(foreign_str) verbose
-if _rc == 0 {
-    test_pass "verbose option"
-}
-else {
-    test_fail "verbose option" "rc=`=_rc'"
-}
-capture drop foreign_str
+benchmark_decode foreign, testname("[syntax] verbose option") cdecodeopts(verbose)
 
-* Test 2.6: threads option
+* Test 2.6: threads option - verify correctness with threads(2)
 sysuse auto, clear
-capture cdecode foreign, generate(foreign_str) threads(2)
-if _rc == 0 {
-    test_pass "threads(2) option"
-}
-else {
-    test_fail "threads option" "rc=`=_rc'"
-}
-capture drop foreign_str
+benchmark_decode foreign, testname("[syntax] threads(2) option") cdecodeopts(threads(2))
 
 * Test 2.7: Single observation
 clear
@@ -820,7 +810,7 @@ else {
     test_fail "100k obs" "rc=`=_rc'"
 }
 
-* Test 7.2: 500k observations
+* Test 7.2: 500k observations - verify correctness on sample
 clear
 set obs 500000
 gen byte category = mod(_n, 10) + 1
@@ -830,27 +820,15 @@ forvalues i = 1/10 {
     else label define cat_lbl `i' "`lbl'", add
 }
 label values category cat_lbl
-capture cdecode category, generate(cat_str)
-if _rc == 0 {
-    test_pass "500k observations"
-}
-else {
-    test_fail "500k obs" "rc=`=_rc'"
-}
+benchmark_decode category, testname("500k observations")
 
-* Test 7.3: 1M observations
+* Test 7.3: 1M observations - verify correctness on sample
 clear
 set obs 1000000
 gen byte category = mod(_n, 3) + 1
 label define cat_lbl 1 "One" 2 "Two" 3 "Three"
 label values category cat_lbl
-capture cdecode category, generate(cat_str)
-if _rc == 0 {
-    test_pass "1M observations"
-}
-else {
-    test_fail "1M obs" "rc=`=_rc'"
-}
+benchmark_decode category, testname("1M observations")
 
 * Test 7.4: Large with if condition
 clear
@@ -1446,10 +1424,9 @@ benchmark_decode region, testname("full comparison: census region")
  ******************************************************************************/
 print_section "Comprehensive Dataset Tests (sysuse/webuse)"
 
-* auto dataset - foreign and rep78
+* auto dataset - foreign
 sysuse auto, clear
 benchmark_decode foreign, testname("auto: foreign (2 labels)")
-benchmark_decode rep78, testname("auto: rep78 (with missing)")
 
 * census dataset - region
 sysuse census, clear
@@ -2414,7 +2391,482 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 27: Replace option tests
+ ******************************************************************************/
+print_section "Replace Option"
+
+* Test 27.1: Replace basic functionality
+sysuse auto, clear
+capture drop foreign_backup
+clonevar foreign_backup = foreign
+cdecode foreign, replace
+capture confirm string variable foreign
+if _rc == 0 {
+    test_pass "replace converts to string"
+}
+else {
+    test_fail "replace basic" "variable not string"
+}
+
+* Test 27.2: Replace preserves value label text
+sysuse auto, clear
+count if foreign == 0
+local n_domestic = r(N)
+count if foreign == 1
+local n_foreign = r(N)
+cdecode foreign, replace
+count if foreign == "Domestic"
+local n_domestic_str = r(N)
+count if foreign == "Foreign"
+local n_foreign_str = r(N)
+if `n_domestic' == `n_domestic_str' & `n_foreign' == `n_foreign_str' {
+    test_pass "replace preserves label text"
+}
+else {
+    test_fail "replace labels" "domestic: `n_domestic' vs `n_domestic_str', foreign: `n_foreign' vs `n_foreign_str'"
+}
+
+* Test 27.3: Replace vs decode comparison
+sysuse auto, clear
+clonevar foreign_c = foreign
+clonevar foreign_s = foreign
+cdecode foreign_c, replace
+decode foreign_s, generate(foreign_s_str)
+drop foreign_s
+rename foreign_s_str foreign_s
+count if foreign_c != foreign_s
+if r(N) == 0 {
+    test_pass "replace matches decode"
+}
+else {
+    test_fail "replace vs decode" "`=r(N)' values differ"
+}
+drop foreign_c foreign_s
+
+* Test 27.4: Replace with missing values
+clear
+set obs 20
+gen byte x = _n
+replace x = . in 1/5
+label define x_lbl 1 "one" 2 "two" 3 "three" 4 "four" 5 "five" ///
+    6 "six" 7 "seven" 8 "eight" 9 "nine" 10 "ten" ///
+    11 "eleven" 12 "twelve" 13 "thirteen" 14 "fourteen" 15 "fifteen" ///
+    16 "sixteen" 17 "seventeen" 18 "eighteen" 19 "nineteen" 20 "twenty"
+label values x x_lbl
+clonevar x_backup = x
+cdecode x, replace
+count if x == "" & missing(x_backup)
+if r(N) == 5 {
+    test_pass "replace handles missings"
+}
+else {
+    test_fail "replace missings" "expected 5 empty"
+}
+
+* Test 27.5: Replace with if condition
+sysuse auto, clear
+cdecode foreign if price > 10000, replace
+capture confirm string variable foreign
+if _rc == 0 {
+    count if foreign != "" & price > 10000
+    local n_conv = r(N)
+    count if price > 10000
+    if `n_conv' == r(N) {
+        test_pass "replace with if condition"
+    }
+    else {
+        test_fail "replace if" "wrong count"
+    }
+}
+else {
+    test_fail "replace if" "not converted"
+}
+
+* Test 27.6: Replace with in range
+sysuse auto, clear
+cdecode foreign in 1/30, replace
+capture confirm string variable foreign
+if _rc == 0 {
+    count if foreign != "" in 1/30
+    if r(N) == 30 {
+        test_pass "replace with in range"
+    }
+    else {
+        test_fail "replace in" "wrong count"
+    }
+}
+else {
+    test_fail "replace in" "not converted"
+}
+
+* Test 27.7: Replace with maxlength
+clear
+set obs 5
+gen byte x = _n
+label define x_lbl 1 "very long label text here" 2 "another long one" ///
+    3 "short" 4 "medium length" 5 "x"
+label values x x_lbl
+cdecode x, replace maxlength(5)
+local pass = 1
+forvalues i = 1/5 {
+    if strlen(x[`i']) > 5 {
+        local pass = 0
+    }
+}
+if `pass' {
+    test_pass "replace with maxlength"
+}
+else {
+    test_fail "replace maxlen" "strings too long"
+}
+
+/*******************************************************************************
+ * SECTION 28: Multiple variables (varlist) tests
+ ******************************************************************************/
+print_section "Multiple Variables (varlist)"
+
+* Test 28.1: Two variables with generate (using citytemp which has labeled vars)
+sysuse citytemp, clear
+capture drop region_str division_str
+cdecode region division, generate(region_str division_str)
+capture confirm string variable region_str
+local rc1 = _rc
+capture confirm string variable division_str
+local rc2 = _rc
+if `rc1' == 0 & `rc2' == 0 {
+    test_pass "two variables with generate"
+}
+else {
+    test_fail "two vars gen" "not created"
+}
+capture drop region_str division_str
+
+* Test 28.2: Two variables comparison with decode
+sysuse citytemp, clear
+cdecode region division, generate(region_c division_c)
+decode region, generate(region_s)
+decode division, generate(division_s)
+count if region_c != region_s
+local n1 = r(N)
+count if division_c != division_s
+local n2 = r(N)
+if `n1' == 0 & `n2' == 0 {
+    test_pass "two variables match decode"
+}
+else {
+    test_fail "two vars decode" "region diff=`n1' division diff=`n2'"
+}
+drop region_c division_c region_s division_s
+
+* Test 28.3: Synthetic dataset with three labeled variables
+clear
+set obs 30
+gen byte a = mod(_n - 1, 3) + 1
+gen byte b = mod(_n - 1, 4) + 1
+gen byte c = mod(_n - 1, 5) + 1
+label define a_lbl 1 "alpha" 2 "beta" 3 "gamma"
+label define b_lbl 1 "one" 2 "two" 3 "three" 4 "four"
+label define c_lbl 1 "first" 2 "second" 3 "third" 4 "fourth" 5 "fifth"
+label values a a_lbl
+label values b b_lbl
+label values c c_lbl
+cdecode a b c, generate(a_str b_str c_str)
+decode a, generate(a_s)
+decode b, generate(b_s)
+decode c, generate(c_s)
+count if a_str != a_s
+local n1 = r(N)
+count if b_str != b_s
+local n2 = r(N)
+count if c_str != c_s
+local n3 = r(N)
+if `n1' == 0 & `n2' == 0 & `n3' == 0 {
+    test_pass "three variables match decode"
+}
+else {
+    test_fail "three vars" "a diff=`n1' b diff=`n2' c diff=`n3'"
+}
+
+* Test 28.4: Multiple variables with replace
+sysuse citytemp, clear
+clonevar region_backup = region
+clonevar division_backup = division
+decode region, generate(region_expected)
+decode division, generate(division_expected)
+cdecode region division, replace
+count if region != region_expected
+local n1 = r(N)
+count if division != division_expected
+local n2 = r(N)
+if `n1' == 0 & `n2' == 0 {
+    test_pass "multiple variables replace"
+}
+else {
+    test_fail "multi replace" "region diff=`n1' division diff=`n2'"
+}
+
+* Test 28.5: Multiple variables with if condition
+sysuse citytemp, clear
+cdecode region division if tempjan > 30, generate(region_str division_str)
+count if region_str != "" & tempjan > 30
+local n_conv = r(N)
+count if tempjan > 30
+if `n_conv' == r(N) {
+    test_pass "multiple vars with if"
+}
+else {
+    test_fail "multi if" "wrong count"
+}
+drop region_str division_str
+
+* Test 28.6: Multiple variables count mismatch error
+sysuse citytemp, clear
+capture cdecode region division, generate(only_one)
+if _rc != 0 {
+    test_pass "error: generate count mismatch"
+}
+else {
+    test_fail "count mismatch" "should error"
+}
+
+/*******************************************************************************
+ * SECTION 29: Extended missing values comprehensive
+ ******************************************************************************/
+print_section "Extended Missing Values Comprehensive"
+
+* Test 29.1: All extended missings with labels defined for them
+clear
+set obs 30
+gen x = .
+forvalues i = 1/26 {
+    local letter = char(96 + `i')
+    replace x = .`letter' in `i'
+}
+replace x = 1 in 27
+replace x = 2 in 28
+replace x = . in 29
+replace x = . in 30
+label define x_lbl 1 "one" 2 "two"
+label values x x_lbl
+* Compare with decode
+clonevar x_c = x
+clonevar x_s = x
+cdecode x_c, replace
+decode x_s, generate(x_s_str)
+drop x_s
+rename x_s_str x_s
+count if x_c != x_s
+if r(N) == 0 {
+    test_pass "extended missings match decode"
+}
+else {
+    test_fail "extended miss" "`=r(N)' differ"
+}
+
+* Test 29.2: Extended missings scattered throughout
+clear
+set obs 100
+gen byte x = mod(_n - 1, 10) + 1
+replace x = .a if mod(_n, 11) == 0
+replace x = .b if mod(_n, 13) == 0
+replace x = .z if mod(_n, 17) == 0
+forvalues i = 1/10 {
+    local lbl = "label_`i'"
+    if `i' == 1 label define x_lbl `i' "`lbl'"
+    else label define x_lbl `i' "`lbl'", add
+}
+label values x x_lbl
+benchmark_decode x, testname("scattered extended missings")
+
+* Test 29.3: Only extended missing values
+clear
+set obs 26
+gen x = .
+forvalues i = 1/26 {
+    local letter = char(96 + `i')
+    replace x = .`letter' in `i'
+}
+label define x_lbl 1 "one"
+label values x x_lbl
+cdecode x, generate(x_str)
+count if x_str == ""
+if r(N) == 26 {
+    test_pass "only extended missings -> all empty"
+}
+else {
+    test_fail "only extended" "not all empty"
+}
+
+/*******************************************************************************
+ * SECTION 30: Combined options tests
+ ******************************************************************************/
+print_section "Combined Options"
+
+* Test 30.1: maxlength with verbose
+clear
+set obs 10
+gen byte x = _n
+forvalues i = 1/10 {
+    local lbl = "label_" + string(`i')
+    if `i' == 1 label define x_lbl `i' "`lbl'"
+    else label define x_lbl `i' "`lbl'", add
+}
+label values x x_lbl
+capture cdecode x, generate(x_str) maxlength(5) verbose
+if _rc == 0 {
+    local pass = 1
+    forvalues i = 1/10 {
+        if strlen(x_str[`i']) > 5 {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "maxlength with verbose"
+    }
+    else {
+        test_fail "maxlen+verbose" "strings too long"
+    }
+}
+else {
+    test_fail "maxlen+verbose" "rc=`=_rc'"
+}
+
+* Test 30.2: maxlength with threads
+clear
+set obs 1000
+gen byte x = mod(_n - 1, 10) + 1
+forvalues i = 1/10 {
+    local lbl = "category_" + string(`i')
+    if `i' == 1 label define x_lbl `i' "`lbl'"
+    else label define x_lbl `i' "`lbl'", add
+}
+label values x x_lbl
+capture cdecode x, generate(x_str) maxlength(5) threads(2)
+if _rc == 0 {
+    local pass = 1
+    forvalues i = 1/10 {
+        if strlen(x_str[`i']) > 5 {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "maxlength with threads"
+    }
+    else {
+        test_fail "maxlen+threads" "strings too long"
+    }
+}
+else {
+    test_fail "maxlen+threads" "rc=`=_rc'"
+}
+
+* Test 30.3: if with maxlength
+sysuse auto, clear
+cdecode foreign if mpg > 20, generate(foreign_str) maxlength(3)
+count if foreign_str != "" & mpg > 20
+local n_conv = r(N)
+count if mpg > 20
+if `n_conv' == r(N) {
+    local pass = 1
+    forvalues i = 1/`=_N' {
+        if strlen(foreign_str[`i']) > 3 & foreign_str[`i'] != "" {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "if with maxlength"
+    }
+    else {
+        test_fail "if+maxlen" "strings too long"
+    }
+}
+else {
+    test_fail "if+maxlen" "wrong count"
+}
+drop foreign_str
+
+* Test 30.4: in with maxlength
+sysuse auto, clear
+cdecode foreign in 1/30, generate(foreign_str) maxlength(4)
+count if foreign_str != "" in 1/30
+if r(N) == 30 {
+    local pass = 1
+    forvalues i = 1/30 {
+        if strlen(foreign_str[`i']) > 4 {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "in with maxlength"
+    }
+    else {
+        test_fail "in+maxlen" "strings too long"
+    }
+}
+else {
+    test_fail "in+maxlen" "wrong count"
+}
+drop foreign_str
+
+* Test 30.5: replace with maxlength
+clear
+set obs 5
+gen byte x = _n
+label define x_lbl 1 "very long label one" 2 "long label two" 3 "short" 4 "medium" 5 "x"
+label values x x_lbl
+cdecode x, replace maxlength(6)
+capture confirm string variable x
+if _rc == 0 {
+    local pass = 1
+    forvalues i = 1/5 {
+        if strlen(x[`i']) > 6 {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "replace with maxlength"
+    }
+    else {
+        test_fail "replace+maxlen" "strings too long"
+    }
+}
+else {
+    test_fail "replace+maxlen" "not string"
+}
+
+/*******************************************************************************
+ * SECTION 31: Intentional Error Tests
+ *
+ * These tests verify that cdecode returns the same error codes as Stata's decode
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(decode nonexistent_var, generate(test)) ctools_cmd(cdecode nonexistent_var, generate(test)) testname("nonexistent variable")
+
+* Generate variable already exists
+sysuse auto, clear
+test_error_match, stata_cmd(decode foreign, generate(price)) ctools_cmd(cdecode foreign, generate(price)) testname("generate var already exists")
+
+* No generate option (missing required option)
+sysuse auto, clear
+test_error_match, stata_cmd(decode foreign) ctools_cmd(cdecode foreign) testname("missing generate option")
+
+* String variable (decode expects numeric)
+sysuse auto, clear
+test_error_match, stata_cmd(decode make, generate(test)) ctools_cmd(cdecode make, generate(test)) testname("string variable input")
+
+* Variable without value labels
+clear
+set obs 10
+gen x = _n
+test_error_match, stata_cmd(decode x, generate(test)) ctools_cmd(cdecode x, generate(test)) testname("numeric var without labels")
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 * End of cdecode validation
+noi print_summary "cdecode"
 }

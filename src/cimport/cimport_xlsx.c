@@ -116,6 +116,13 @@ void xlsx_context_free(XLSXContext *ctx)
     if (ctx->rows) {
         for (int i = 0; i < ctx->num_rows; i++) {
             if (ctx->rows[i].cells) {
+                /* Free any inline strings within cells */
+                for (int j = 0; j < ctx->rows[i].num_cells; j++) {
+                    if (ctx->rows[i].cells[j].type == XLSX_CELL_STRING &&
+                        ctx->rows[i].cells[j].value.inline_string != NULL) {
+                        free((void *)ctx->rows[i].cells[j].value.inline_string);
+                    }
+                }
                 free(ctx->rows[i].cells);
             }
         }
@@ -335,6 +342,8 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
                 size_t new_size = ctx->shared_strings_pool_size == 0 ?
                                   (1024 * 1024) : ctx->shared_strings_pool_size * 2;
                 while (ctx->shared_strings_pool_used + need > new_size) {
+                    /* Check for overflow before doubling */
+                    if (new_size > SIZE_MAX / 2) return false;
                     new_size *= 2;
                 }
                 char *new_pool = (char *)realloc(ctx->shared_strings_pool, new_size);
@@ -475,12 +484,13 @@ static bool styles_callback(const xlsx_xml_event *event, void *user_data)
                 int new_size = ctx->num_styles == 0 ? 64 : ctx->num_styles * 2;
                 bool *new_styles = (bool *)realloc(ctx->date_styles,
                                                     new_size * sizeof(bool));
-                if (new_styles) {
-                    memset(new_styles + ctx->num_styles, 0,
-                           (new_size - ctx->num_styles) * sizeof(bool));
-                    ctx->date_styles = new_styles;
-                    ctx->num_styles = new_size;
+                if (!new_styles) {
+                    return false;  /* Memory allocation failed */
                 }
+                memset(new_styles + ctx->num_styles, 0,
+                       (new_size - ctx->num_styles) * sizeof(bool));
+                ctx->date_styles = new_styles;
+                ctx->num_styles = new_size;
             }
 
             if (state->current_xf_index < ctx->num_styles) {
@@ -733,6 +743,9 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                         /* Store as shared string for uniformity */
                         cell->type = XLSX_CELL_STRING;
                         cell->value.inline_string = strdup(state->value_buf);
+                        if (cell->value.inline_string == NULL) {
+                            return false;  /* Memory allocation failed */
+                        }
                         break;
                     default:
                         break;
@@ -1371,33 +1384,45 @@ ST_retcode xlsx_import_main(const char *args)
         snprintf(buf, sizeof(buf), "%d", ctx.num_columns);
         SF_macro_save("_cimport_nvar", buf);
 
-        /* Build varnames string */
+        /* Build varnames string with bounds checking */
         char varnames[8192] = "";
         char vartypes[1024] = "";
         char numtypes[1024] = "";
         char strlens[1024] = "";
+        size_t varnames_pos = 0, vartypes_pos = 0, numtypes_pos = 0, strlens_pos = 0;
+        int written;
 
         for (int c = 0; c < ctx.num_columns; c++) {
             CImportColumnInfo *col = &ctx.columns[c];
+            const char *sep = (c > 0) ? " " : "";
 
-            if (c > 0) {
-                strcat(varnames, " ");
-                strcat(vartypes, " ");
-                strcat(numtypes, " ");
-                strcat(strlens, " ");
+            /* Append to varnames with bounds check */
+            if (varnames_pos < sizeof(varnames) - 1) {
+                written = snprintf(varnames + varnames_pos, sizeof(varnames) - varnames_pos,
+                                   "%s%s", sep, col->name);
+                if (written > 0) varnames_pos += (size_t)written;
             }
 
-            strcat(varnames, col->name);
+            /* Append to vartypes */
+            if (vartypes_pos < sizeof(vartypes) - 1) {
+                written = snprintf(vartypes + vartypes_pos, sizeof(vartypes) - vartypes_pos,
+                                   "%s%d", sep, col->type == CIMPORT_COL_STRING ? 1 : 0);
+                if (written > 0) vartypes_pos += (size_t)written;
+            }
 
-            snprintf(buf, sizeof(buf), "%d",
-                     col->type == CIMPORT_COL_STRING ? 1 : 0);
-            strcat(vartypes, buf);
+            /* Append to numtypes */
+            if (numtypes_pos < sizeof(numtypes) - 1) {
+                written = snprintf(numtypes + numtypes_pos, sizeof(numtypes) - numtypes_pos,
+                                   "%s%d", sep, col->num_subtype);
+                if (written > 0) numtypes_pos += (size_t)written;
+            }
 
-            snprintf(buf, sizeof(buf), "%d", col->num_subtype);
-            strcat(numtypes, buf);
-
-            snprintf(buf, sizeof(buf), "%d", col->max_strlen);
-            strcat(strlens, buf);
+            /* Append to strlens */
+            if (strlens_pos < sizeof(strlens) - 1) {
+                written = snprintf(strlens + strlens_pos, sizeof(strlens) - strlens_pos,
+                                   "%s%d", sep, col->max_strlen);
+                if (written > 0) strlens_pos += (size_t)written;
+            }
         }
 
         SF_macro_save("_cimport_varnames", varnames);

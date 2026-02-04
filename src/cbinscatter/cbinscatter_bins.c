@@ -393,22 +393,38 @@ ST_retcode compute_bins_single_group(
 
     } else if (weights == NULL) {
         /*
-         * Unweighted, small N: Full sort is fine
-         * Assign bins directly from sorted order.
+         * Unweighted, small N: Use cutpoint-based binning to match xtile/binscatter
+         *
+         * 1. Sort x values
+         * 2. Compute quantile cutpoints (percentiles)
+         * 3. Assign bins based on which cutpoint interval each value falls into
          */
         g_sort_values = x;
         qsort(sort_idx, N, sizeof(ST_int), compare_indices);
 
-        for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (SF_is_missing(x[orig_idx])) {
-                bin_ids[orig_idx] = 0;
-            } else {
-                ST_int bin = (ST_int)(((int64_t)i * nq) / N) + 1;
-                if (bin > nq) bin = nq;
-                bin_ids[orig_idx] = bin;
-            }
+        /* Build sorted x array for cutpoint computation */
+        ST_double *x_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+        ST_double *cutpoints = (ST_double *)malloc((nq + 1) * sizeof(ST_double));
+
+        if (!x_sorted || !cutpoints) {
+            free(x_sorted);
+            free(cutpoints);
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
         }
+
+        for (i = 0; i < N; i++) {
+            x_sorted[i] = x[sort_idx[i]];
+        }
+
+        /* Compute quantile cutpoints */
+        compute_quantile_cutpoints(x_sorted, N, nq, NULL, cutpoints);
+
+        /* Assign bins based on cutpoints */
+        assign_bins(x, N, cutpoints, nq, bin_ids);
+
+        free(x_sorted);
+        free(cutpoints);
 
     } else if (N >= HISTOGRAM_THRESHOLD) {
         /*
@@ -684,16 +700,23 @@ ST_retcode compute_quantile_cutpoints(
     ST_double *cutpoints
 ) {
     ST_int q, idx;
-    ST_double p;
 
     if (w_sorted == NULL) {
-        /* Unweighted: simple percentile computation */
-        for (q = 0; q <= nquantiles; q++) {
-            p = (ST_double)q / nquantiles;
-            idx = (ST_int)(p * (N - 1));
+        /*
+         * Unweighted: match Stata's _pctile/xtile algorithm
+         *
+         * Stata's xtile uses: cutpoint[q] = x[ceil(q * N / nquantiles)]
+         * This ensures exactly (q * N / nquantiles) observations are <= cutpoint[q]
+         */
+        cutpoints[0] = x_sorted[0];  /* Minimum */
+        cutpoints[nquantiles] = x_sorted[N - 1];  /* Maximum */
+
+        for (q = 1; q < nquantiles; q++) {
+            /* Stata's formula: ceil(q * N / nquantiles) gives 1-based index */
+            idx = (q * N + nquantiles - 1) / nquantiles;  /* Ceiling division */
             if (idx >= N) idx = N - 1;
-            if (idx < 0) idx = 0;
-            cutpoints[q] = x_sorted[idx];
+            if (idx < 1) idx = 1;
+            cutpoints[q] = x_sorted[idx - 1];  /* Convert to 0-based */
         }
     } else {
         /* Weighted: compute total, then find cutpoints via cumulative weight */

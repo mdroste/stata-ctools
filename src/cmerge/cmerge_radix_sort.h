@@ -2,32 +2,18 @@
  * cmerge_radix_sort.h
  * Parallel LSD Radix Sort for order pairs
  *
- * O(n) stable sort optimized for bounded integer keys with parallel execution.
- * Uses 4 passes of 8-bit radix sort (sufficient for Stata's 2^31 obs limit).
+ * This header now wraps ctools_sort_pairs.h for backwards compatibility.
+ * All functionality has been consolidated into the unified sort pairs module.
  */
 
 #ifndef CMERGE_RADIX_SORT_H
 #define CMERGE_RADIX_SORT_H
 
-#include <stdlib.h>
-#include <stdint.h>
-
-/* Order pair for preserve_order sorting */
-typedef struct {
-    size_t order_key;
-    size_t orig_idx;
-} cmerge_order_pair_t;
-
-/*
- * Sort an array of order pairs by order_key using parallel LSD radix sort.
- * Falls back to qsort for small arrays where parallel overhead dominates.
- *
- * @param pairs  Array of order pairs to sort (modified in place)
- * @param n      Number of pairs
+/* Include the unified sort pairs header which provides:
+ * - cmerge_order_pair_t (typedef for ctools_order_pair_t)
+ * - cmerge_radix_sort_order_pairs (macro for ctools_sort_order_pairs)
+ * - cmerge_compare_order_pairs (macro for ctools_compare_order_pairs)
  */
-void cmerge_radix_sort_order_pairs(cmerge_order_pair_t *pairs, size_t n);
-
-/* Comparison function for qsort fallback */
-int cmerge_compare_order_pairs(const void *a, const void *b);
+#include "../ctools_sort_pairs.h"
 
 #endif /* CMERGE_RADIX_SORT_H */

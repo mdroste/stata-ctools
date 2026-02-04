@@ -29,7 +29,14 @@
 *!   noparallel          - Disable parallel I/O (for debugging)
 
 program define cexport, rclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     * Parse the subcommand
     gettoken subcmd 0 : 0, parse(" ,")
@@ -457,7 +464,14 @@ end
  *   verbose        - Display timing information
  ******************************************************************************/
 program define cexport_excel, rclass
-    version 14.0
+    version 14.1
+
+    * Check observation limit (Stata plugin API limitation)
+    if _N > 2147483647 {
+        di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
+        di as error "This is a limitation of Stata's plugin API"
+        exit 920
+    }
 
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [SHEET(string) FIRSTrow(string) ///

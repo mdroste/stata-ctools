@@ -196,7 +196,9 @@ static void xlsx_col_to_letters(int col, char *letters) {
     letters[i] = '\0';
 }
 
-/* Convert Excel letters (A, B, ..., Z, AA, AB, ...) to column number (1-based) */
+/* Convert Excel letters (A, B, ..., Z, AA, AB, ...) to column number (1-based)
+ * Note: Currently unused but retained for future cell range parsing. */
+static int xlsx_letters_to_col(const char *letters) __attribute__((unused));
 static int xlsx_letters_to_col(const char *letters) {
     int col = 0;
     for (int i = 0; letters[i] && isalpha((unsigned char)letters[i]); i++) {
@@ -234,7 +236,7 @@ static void xlsx_parse_cell_ref(const char *cell_ref, int *col, int *row) {
 
 static void xlsx_context_init(XLSXExportContext *ctx) {
     memset(ctx, 0, sizeof(*ctx));
-    strcpy(ctx->sheet_name, "Sheet1");
+    snprintf(ctx->sheet_name, sizeof(ctx->sheet_name), "Sheet1");
     ctx->firstrow = true;  /* Default to writing variable names */
     ctx->start_col = 1;    /* Default to column A */
     ctx->start_row = 1;    /* Default to row 1 */
@@ -362,6 +364,9 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
             xlsx_parse_cell_ref(opt + 5, &ctx->start_col, &ctx->start_row);
         } else if (strncmp(opt, "missing=", 8) == 0) {
             ctx->missing_value = strdup(opt + 8);
+            if (ctx->missing_value == NULL) {
+                return 920;  /* Memory allocation failed */
+            }
         } else if (strcmp(opt, "keepcellfmt") == 0) {
             ctx->keepcellfmt = true;
         }
@@ -410,6 +415,11 @@ static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx) {
     char *name = strtok(varnames_buf, " ");
     for (ST_int i = 0; i < ctx->nvars && name; i++) {
         ctx->varnames[i] = strdup(name);
+        if (ctx->varnames[i] == NULL) {
+            snprintf(ctx->error_message, sizeof(ctx->error_message),
+                     "cexport xlsx: memory allocation failed for variable name\n");
+            return 920;
+        }
         name = strtok(NULL, " ");
     }
 
@@ -443,13 +453,16 @@ typedef struct {
     size_t capacity;
 } StringBuffer;
 
-static void strbuf_init(StringBuffer *sb, size_t initial_cap) {
+static bool strbuf_init(StringBuffer *sb, size_t initial_cap) {
     sb->data = malloc(initial_cap);
     sb->len = 0;
-    sb->capacity = initial_cap;
+    sb->capacity = sb->data ? initial_cap : 0;
     if (sb->data) sb->data[0] = '\0';
+    return sb->data != NULL;
 }
 
+/* Note: Currently unused but retained for completeness. */
+static void strbuf_free(StringBuffer *sb) __attribute__((unused));
 static void strbuf_free(StringBuffer *sb) {
     free(sb->data);
     sb->data = NULL;
@@ -458,6 +471,7 @@ static void strbuf_free(StringBuffer *sb) {
 }
 
 static void strbuf_append(StringBuffer *sb, const char *str) {
+    if (!sb->data) return;
     size_t slen = strlen(str);
     if (sb->len + slen + 1 > sb->capacity) {
         size_t new_cap = sb->capacity * 2;
@@ -483,7 +497,10 @@ static void strbuf_appendf(StringBuffer *sb, const char *fmt, ...) {
 /* Generate worksheet XML with data */
 static char *xlsx_gen_worksheet_xml(XLSXExportContext *ctx, size_t *out_len) {
     StringBuffer sb;
-    strbuf_init(&sb, INITIAL_XML_SIZE);
+    if (!strbuf_init(&sb, INITIAL_XML_SIZE)) {
+        *out_len = 0;
+        return NULL;
+    }
 
     /* XML header */
     strbuf_append(&sb, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");

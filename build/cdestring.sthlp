@@ -11,10 +11,6 @@
 {phang}
 {bf:cdestring} {hline 2} C-accelerated parallel string to numeric conversion for Stata
 
-{pstd}
-{cmd:cdestring} is a high-performance drop-in replacement for Stata's {help destring:destring}
-command.
-
 
 {marker syntax}{...}
 {title:Syntax}

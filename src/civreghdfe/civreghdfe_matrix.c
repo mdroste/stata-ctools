@@ -204,30 +204,42 @@ ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double
 
 /*
     HAC Kernel weight functions
+
+    Kernel weights for HAC (Newey-West style) estimators.
+    bw = bandwidth parameter
+    j = lag index
+
+    Kernels are classified as:
+    - "lag" windows (Bartlett, Parzen, Truncated, Tukey-Hanning): truncated at bw
+    - "spectral" windows (Quadratic Spectral): weights computed for all lags
+
+    Following ivreg2/livreg2's m_calckw() function exactly.
 */
 ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
 {
     if (j == 0) return 1.0;
     if (bw <= 0) return 0.0;
-    if (j > bw) return 0.0;  /* No weight beyond bandwidth */
 
-    ST_double x = (ST_double)j / (ST_double)bw;  /* ivreg2 uses j/bw, not j/(bw+1) */
+    /* karg = tau / bw, following ivreg2's m_calckw() */
+    ST_double x = (ST_double)j / (ST_double)bw;
 
     switch (kernel_type) {
-        case 1:  /* Bartlett / Newey-West */
-            if (x <= 1.0) return 1.0 - x;
-            return 0.0;
+        case 1:  /* Bartlett / Newey-West - lag window, truncate at bw */
+            /* kw = 1 - karg */
+            if (j > bw) return 0.0;
+            return 1.0 - x;
 
-        case 2:  /* Parzen */
+        case 2:  /* Parzen - lag window, truncate at bw */
+            if (j > bw) return 0.0;
             if (x <= 0.5) {
                 return 1.0 - 6.0 * x * x + 6.0 * x * x * x;
-            } else if (x <= 1.0) {
+            } else {
                 ST_double t = 1.0 - x;
                 return 2.0 * t * t * t;
             }
-            return 0.0;
 
-        case 3:  /* Quadratic Spectral */
+        case 3:  /* Quadratic Spectral - spectral window, no truncation */
+            /* kw = 25/(12*pi^2*karg^2) * (sin(6*pi*karg/5)/(6*pi*karg/5) - cos(6*pi*karg/5)) */
             {
                 ST_double pi = 3.14159265358979323846;
                 ST_double z = 6.0 * pi * x / 5.0;
@@ -236,16 +248,16 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw)
                        (sin(z) / z - cos(z));
             }
 
-        case 4:  /* Truncated */
-            if (x <= 1.0) return 1.0;
-            return 0.0;
+        case 4:  /* Truncated - lag window, truncate at bw */
+            if (j > bw) return 0.0;
+            return 1.0;
 
-        case 5:  /* Tukey-Hanning */
-            if (x <= 1.0) {
+        case 5:  /* Tukey-Hanning - lag window, truncate at bw */
+            if (j > bw) return 0.0;
+            {
                 ST_double pi = 3.14159265358979323846;
-                return 0.5 * (1.0 + cos(pi * x));
+                return 0.5 + 0.5 * cos(pi * x);
             }
-            return 0.0;
 
         default:
             return 0.0;
@@ -262,8 +274,15 @@ ST_double civreghdfe_jacobi_eigenvalues(const ST_double *A, ST_int K, ST_double 
     ST_int iter, p, q, i;
 
     /* Work with a copy */
-    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
-    memcpy(D, A, K * K * sizeof(ST_double));
+    ST_double *D = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
+    if (!D) {
+        /* Return identity eigenvalue on allocation failure */
+        if (eigenvalues) {
+            for (i = 0; i < K; i++) eigenvalues[i] = 1.0;
+        }
+        return 1.0;
+    }
+    memcpy(D, A, (size_t)K * K * sizeof(ST_double));
 
     for (iter = 0; iter < max_iter; iter++) {
         /* Find largest off-diagonal element */
@@ -357,13 +376,18 @@ ST_int civreghdfe_matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *
     ST_int iter, p, q, i, j;
 
     /* Work matrices */
-    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
-    ST_double *V = (ST_double *)malloc(K * K * sizeof(ST_double));
+    ST_double *D = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
+    ST_double *V = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
 
-    memcpy(D, M, K * K * sizeof(ST_double));
+    if (!D || !V) {
+        free(D); free(V);
+        return -1;  /* Allocation failure */
+    }
+
+    memcpy(D, M, (size_t)K * K * sizeof(ST_double));
 
     /* Initialize V as identity */
-    memset(V, 0, K * K * sizeof(ST_double));
+    memset(V, 0, (size_t)K * K * sizeof(ST_double));
     for (i = 0; i < K; i++) V[i * K + i] = 1.0;
 
     /* Jacobi iteration to diagonalize D, accumulate eigenvectors in V */
@@ -418,6 +442,10 @@ ST_int civreghdfe_matpowersym_neg_half(const ST_double *M, ST_int K, ST_double *
 
     /* Compute V * diag(1/sqrt(eigenvalues)) * V' */
     ST_double *VD = (ST_double *)malloc(K * K * sizeof(ST_double));
+    if (!VD) {
+        free(D); free(V);
+        return -1;  /* Allocation failure */
+    }
     for (j = 0; j < K; j++) {
         ST_double eval = D[j * K + j];
         if (eval <= 0) {

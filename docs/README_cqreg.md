@@ -73,18 +73,22 @@ cqreg price mpg weight, verbose timeit
 
 `cqreg` achieves its speed through:
 
-### Interior Point Method Solver
-- Primal-dual IPM with Mehrotra predictor-corrector steps
-- O(sqrt(N)) convergence rate
-- Much faster than simplex method used by native `qreg` for large datasets
+### Speedup Tricks
 
-### Parallel Computation
-- OpenMP parallelization for linear algebra operations
-- Efficient matrix operations using optimized BLAS-like routines
+**IPM Solver:**
+- **Mehrotra predictor-corrector**: Each Newton step computes both a predictor (affine) and corrector direction, achieving superlinear convergence and typically finishing in 15-30 iterations regardless of N
+- **O(sqrt(N)) convergence**: IPM complexity is polynomial, compared to the simplex method's exponential worst case—dominant advantage on large datasets
 
-### HDFE Support
-- Fixed effects absorbed using conjugate gradient solver
-- Same algorithm as `creghdfe` for consistency
+**Linear Algebra:**
+- **BLAS/LAPACK dispatch**: Automatically uses Apple Accelerate (macOS) or OpenBLAS when available for matrix-matrix and matrix-vector operations, falling back to hand-tuned C kernels
+- **K-way unrolled dot product**: `ctools_dot_unrolled` (8/16-way) used in the fallback path when BLAS is unavailable
+- **4-way unrolled scaling**: Custom `dscal`-equivalent loop processes 4 elements per iteration when BLAS is not linked
+- **OpenMP parallelization**: Parallel matrix operations in both the IPM core and the HDFE pre-processing step
+
+**HDFE Support:**
+- **CG solver with symmetric Kaczmarz**: Same algorithm as `creghdfe`—fixed effects are partialled out before the IPM solve, so the IPM operates on a smaller effective problem
+- **Pre-computed inverse group counts**: Avoids division in the inner demeaning loop
+- **Thread-local accumulators**: Eliminates contention during parallel FE projection
 
 ## Algorithm
 

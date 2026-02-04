@@ -18,6 +18,7 @@
     - cwinsor: C-accelerated winsorization (replaces winsor2)
     - cdestring: C-accelerated string to numeric conversion (replaces destring)
     - cdecode: C-accelerated numeric to string decoding (replaces decode)
+    - crangestat: C-accelerated range statistics (replaces rangestat)
 
     Usage from Stata:
         plugin call ctools_plugin ..., "csort <args>"
@@ -43,6 +44,7 @@
 #include "stplugin.h"
 #include "ctools_config.h"
 #include "ctools_threads.h"
+#include "ctools_cleanup.h"
 
 /*
     Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes
@@ -149,6 +151,34 @@ static int parse_threads_arg(char *cmd_args)
 #include "cdecode_impl.h"
 #include "csample_impl.h"
 #include "cbsample_impl.h"
+#include "crangestat_impl.h"
+#include "cpsmatch_impl.h"
+
+/*
+    Map command name to command ID for cleanup system.
+    Returns the command type for tracking multi-phase operations.
+*/
+static ctools_command_t get_command_type(const char *cmd_name)
+{
+    if (strcmp(cmd_name, "csort") == 0) return CTOOLS_CMD_CSORT;
+    if (strcmp(cmd_name, "cmerge") == 0) return CTOOLS_CMD_CMERGE;
+    if (strcmp(cmd_name, "cimport") == 0) return CTOOLS_CMD_CIMPORT;
+    if (strcmp(cmd_name, "cexport") == 0) return CTOOLS_CMD_CEXPORT;
+    if (strcmp(cmd_name, "cexport_xlsx") == 0) return CTOOLS_CMD_CEXPORT;
+    if (strcmp(cmd_name, "creghdfe") == 0) return CTOOLS_CMD_CREGHDFE;
+    if (strcmp(cmd_name, "civreghdfe") == 0) return CTOOLS_CMD_CIVREGHDFE;
+    if (strcmp(cmd_name, "cqreg") == 0) return CTOOLS_CMD_CQREG;
+    if (strcmp(cmd_name, "cbinscatter") == 0) return CTOOLS_CMD_CBINSCATTER;
+    if (strcmp(cmd_name, "cencode") == 0) return CTOOLS_CMD_CENCODE;
+    if (strcmp(cmd_name, "cdecode") == 0) return CTOOLS_CMD_CDECODE;
+    if (strcmp(cmd_name, "cwinsor") == 0) return CTOOLS_CMD_CWINSOR;
+    if (strcmp(cmd_name, "cdestring") == 0) return CTOOLS_CMD_CDESTRING;
+    if (strcmp(cmd_name, "csample") == 0) return CTOOLS_CMD_CSAMPLE;
+    if (strcmp(cmd_name, "cbsample") == 0) return CTOOLS_CMD_CBSAMPLE;
+    if (strcmp(cmd_name, "crangestat") == 0) return CTOOLS_CMD_CRANGESTAT;
+    if (strcmp(cmd_name, "cpsmatch") == 0) return CTOOLS_CMD_CPSMATCH;
+    return CTOOLS_CMD_OTHER;
+}
 
 /*
     Main plugin entry point.
@@ -212,6 +242,13 @@ STDLL stata_call(int argc, char *argv[])
         ctools_set_max_threads(thread_count);
     }
 
+    /* Cleanup stale state from other commands before dispatch.
+     * This preserves state for multi-phase operations (like cmerge load_using
+     * followed by cmerge execute) while freeing state from interrupted
+     * operations when switching to a different command. */
+    ctools_command_t current_cmd = get_command_type(cmd_name);
+    ctools_cleanup_stale_state(current_cmd);
+    ctools_set_current_command(current_cmd);
 
     /* Dispatch to appropriate command handler */
     if (strcmp(cmd_name, "csort") == 0) {
@@ -258,6 +295,12 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cbsample") == 0) {
         rc = cbsample_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "crangestat") == 0) {
+        rc = crangestat_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cpsmatch") == 0) {
+        rc = cpsmatch_main(cmd_args);
     }
     else {
         char msg[256];

@@ -16,14 +16,21 @@
 
 {p 8 17 2}
 {cmdab:ctools}
-[{cmd:,} {it:options}]
+[{cmd:,} {opt env:ironment_check} {opt update}]
 
-{synoptset 20 tabbed}{...}
-{synopthdr}
-{synoptline}
-{synopt:{opt help}}display help information{p_end}
-{synopt:{opt update}}check for updates (placeholder){p_end}
-{synoptline}
+
+{marker options}{...}
+{title:Options}
+
+{phang}
+{opt environment_check} loads the ctools C plugin and reports whether it was
+successfully loaded. This is useful for diagnosing installation issues. The
+plugin is automatically detected for your platform (macOS ARM/Intel, Windows,
+Linux).
+
+{phang}
+{opt update} downloads and installs the latest version of ctools from GitHub.
+You may need to restart Stata after updating for all changes to take effect.
 
 
 {marker description}{...}
@@ -40,16 +47,6 @@ All commands are designed as drop-in replacements with syntax that closely
 matches the original commands they replace.
 
 
-{marker options}{...}
-{title:Options}
-
-{phang}
-{opt help} displays this help file.
-
-{phang}
-{opt update} checks for available updates. (Not yet implemented.)
-
-
 {marker commands}{...}
 {title:Available Commands}
 
@@ -57,31 +54,25 @@ matches the original commands they replace.
 {ul:Data Management}
 
 {p2colset 5 20 22 2}{...}
-{p2col:{help csort}}High-performance parallel sorting (replaces {help sort}){p_end}
-{p2col:{help cmerge}}C-accelerated merge (replaces {help merge}){p_end}
-{p2col:{help cimport}}Multi-threaded CSV import (replaces {help import delimited}){p_end}
-{p2col:{help cexport}}Parallel data export to CSV/Excel (replaces {help export delimited}/{help export excel}){p_end}
-{p2col:{help cencode}}Parallel string encoding (replaces {help encode}){p_end}
-{p2col:{help cdecode}}Parallel numeric decoding (replaces {help decode}){p_end}
-{p2col:{help cdestring}}Parallel string-to-numeric conversion (replaces {help destring}){p_end}
+{p2col:{help cimport}}Import text-delimited and Excel data (replaces {help import delimited}){p_end}
+{p2col:{help cexport}}Export text-delimited and Excel data (replaces {help export delimited}/{help export excel}){p_end}
+{p2col:{help csort}}Sort dataset (replaces {help sort}){p_end}
+{p2col:{help cmerge}}Merge (join) datasets (replaces {help merge}){p_end}
+{p2col:{help csample}}Resampling without replacement (replaces {help sample}){p_end}
+{p2col:{help cbsample}}Resampling with replacement (replaces {help bsample}){p_end}
+{p2col:{help cencode}}Recast string as labeled numeric (replaces {help encode}){p_end}
+{p2col:{help cdecode}}Recast labeled numeric as string (replaces {help decode}){p_end}
+{p2col:{help cdestring}}Recast string as numeric type (replaces {help destring}){p_end}
+{p2col:{help cwinsor}}Winsorize variables (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}/{help gstats winsor:gstats winsor}){p_end}
+{p2col:{help crangestat}}Range statistics of variables (replaces {browse "https://ideas.repec.org/c/boc/bocode/s458118.html":rangestat}){p_end}
 
 {pstd}
-{ul:Sampling}
+{ul:Estimation}
 
-{p2col:{help csample}}Random sampling without replacement (replaces {help sample}){p_end}
-{p2col:{help cbsample}}Bootstrap sampling with replacement (replaces {help bsample}){p_end}
-
-{pstd}
-{ul:Data Transformation}
-
-{p2col:{help cwinsor}}Parallel winsorization (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}){p_end}
-
-{pstd}
-{ul:Statistical Estimation}
-
-{p2col:{help creghdfe}}HDFE linear regression (replaces {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}){p_end}
-{p2col:{help civreghdfe}}IV/2SLS with HDFE (replaces {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}){p_end}
-{p2col:{help cqreg}}Quantile regression with HDFE (replaces {help qreg}){p_end}
+{p2col:{help creghdfe}}OLS with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}){p_end}
+{p2col:{help civreghdfe}}2SLS/GMM with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}){p_end}
+{p2col:{help cqreg}}Quantile regression (replaces {help qreg}){p_end}
+{p2col:{help cpsmatch}}Propensity score matching (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457730.html":psmatch2}){p_end}
 
 {pstd}
 {ul:Visualization}
@@ -93,8 +84,6 @@ matches the original commands they replace.
 {marker examples}{...}
 {title:Examples}
 
-{phang}{cmd:. ctools}{p_end}
-{phang}{cmd:. ctools, help}{p_end}
 {phang}{cmd:. csort myvar}{p_end}
 {phang}{cmd:. csort var1 var2 var3, verbose}{p_end}
 {phang}{cmd:. cmerge m:1 id using lookup.dta}{p_end}
@@ -114,18 +103,26 @@ Michael Droste{break}
 
 {pstd}
 Several commands in this package are inspired by excellent user-written packages.
-We gratefully acknowledge:
+Thanks to:
 
-{p 8 12 2}- Sergio Correia for {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} and
-{browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}{p_end}
+{p 8 12 2}- Sergio Correia for {browse "https://github.com/sergiocorreia/ftools":ftools},
+{browse "https://github.com/sergiocorreia/reghdfe":reghdfe}, and
+{browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe} (with Lars Vilhuber){p_end}
+{p 8 12 2}- Mauricio Caceres Bravo for {browse "https://github.com/mcaceresb/gtools":gtools}{p_end}
+{p 8 12 2}- Christopher (Kit) Baum, Mark E Schaffer, and Steven Stillman for
+{browse "https://ideas.repec.org/c/boc/bocode/s425401.html":ivreg2}{p_end}
+{p 8 12 2}- Robert Picard, Nicholas J. Cox, and Roberto Ferrer for
+{browse "https://ideas.repec.org/c/boc/bocode/s458161.html":rangestat}{p_end}
 {p 8 12 2}- Michael Stepner for {browse "https://github.com/michaelstepner/binscatter":binscatter}{p_end}
 {p 8 12 2}- Yujun Lian for {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2}{p_end}
+{p 8 12 2}- Sascha Witt for the {browse "https://github.com/SaschaWitt/ips4o":IPS4o} sorting algorithm{p_end}
 
 
 {title:Also see}
 
 {psee}
-Online: {help csort}, {help cmerge}, {help cimport}, {help cexport}, {help creghdfe},
-{help civreghdfe}, {help cqreg}, {help cbinscatter}, {help cencode}, {help cdecode},
-{help cdestring}, {help cwinsor}, {help csample}, {help cbsample}
+Online: {help cimport}, {help cexport}, {help csort}, {help cmerge}, {help cencode},
+{help cdecode}, {help cdestring}, {help csample}, {help cbsample}, {help cwinsor},
+{help crangestat}, {help creghdfe}, {help civreghdfe}, {help cqreg}, {help cpsmatch},
+{help cbinscatter}
 {p_end}

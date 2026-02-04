@@ -10,24 +10,102 @@
 #include "../ctools_unroll.h"
 
 /* ========================================================================
- * Kahan-compensated dot product for numerical stability
+ * Compensated dot product using FMA-based error-free transformations.
+ * Achieves near-quad-precision accumulation for OLS numerical stability.
  * ======================================================================== */
+
+#include <math.h>
 
 ST_double kahan_dot(const ST_double * RESTRICT x,
                     const ST_double * RESTRICT y,
                     ST_int N)
 {
-    ST_double sum = 0.0;
-    ST_double c = 0.0;  /* Compensation for lost low-order bits */
+    ST_double s = 0.0;
+    ST_double c = 0.0;
     ST_int i;
 
     for (i = 0; i < N; i++) {
-        ST_double prod = x[i] * y[i] - c;
-        ST_double t = sum + prod;
-        c = (t - sum) - prod;
-        sum = t;
+        ST_double p = x[i] * y[i];
+        ST_double pe = fma(x[i], y[i], -p);
+        ST_double t = s + p;
+        ST_double v = t - s;
+        ST_double te = (s - (t - v)) + (p - v);
+        c += te + pe;
+        s = t;
     }
-    return sum;
+    return s + c;
+}
+
+/* ========================================================================
+ * Double-double (quad-precision) accumulation functions
+ * These match Stata's quadcross() precision for RSS/TSS calculations
+ * ======================================================================== */
+
+ST_double dd_sum_sq(const ST_double *x, ST_int N)
+{
+    dd_real sum = {0.0, 0.0};
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        dd_real prod = two_prod(x[i], x[i]);
+        /* Add both hi and lo parts to accumulator */
+        sum = dd_add_d(sum, prod.hi);
+        sum = dd_add_d(sum, prod.lo);
+    }
+    return sum.hi + sum.lo;
+}
+
+ST_double dd_sum_sq_weighted(const ST_double *x, const ST_double *w, ST_int N)
+{
+    dd_real sum = {0.0, 0.0};
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        /* Compute x[i]^2 with error tracking */
+        dd_real sq = two_prod(x[i], x[i]);
+        /* Multiply by weight: w * sq.hi and w * sq.lo */
+        dd_real wsq_hi = two_prod(w[i], sq.hi);
+        dd_real wsq_lo = two_prod(w[i], sq.lo);
+        /* Accumulate all parts */
+        sum = dd_add_d(sum, wsq_hi.hi);
+        sum = dd_add_d(sum, wsq_hi.lo);
+        sum = dd_add_d(sum, wsq_lo.hi);
+        sum = dd_add_d(sum, wsq_lo.lo);
+    }
+    return sum.hi + sum.lo;
+}
+
+ST_double dd_sum_sq_dev(const ST_double *x, ST_double mean, ST_int N)
+{
+    dd_real sum = {0.0, 0.0};
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        ST_double d = x[i] - mean;
+        dd_real prod = two_prod(d, d);
+        sum = dd_add_d(sum, prod.hi);
+        sum = dd_add_d(sum, prod.lo);
+    }
+    return sum.hi + sum.lo;
+}
+
+ST_double dd_sum_sq_dev_weighted(const ST_double *x, ST_double mean,
+                                  const ST_double *w, ST_int N)
+{
+    dd_real sum = {0.0, 0.0};
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        ST_double d = x[i] - mean;
+        dd_real sq = two_prod(d, d);
+        dd_real wsq_hi = two_prod(w[i], sq.hi);
+        dd_real wsq_lo = two_prod(w[i], sq.lo);
+        sum = dd_add_d(sum, wsq_hi.hi);
+        sum = dd_add_d(sum, wsq_hi.lo);
+        sum = dd_add_d(sum, wsq_lo.hi);
+        sum = dd_add_d(sum, wsq_lo.lo);
+    }
+    return sum.hi + sum.lo;
 }
 
 /* ========================================================================
@@ -61,8 +139,10 @@ void compute_xtx_xty(
     memset(xtx, 0, K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
-    /* For small N use Kahan summation, for large N use fast dot */
-    int use_kahan = (N > 10000000);
+    /* Always use Kahan-compensated summation for OLS dot products.
+     * reghdfe uses Mata's quadcross() (quad-precision), so we need
+     * compensated summation to match its numerical precision. */
+    int use_kahan = 1;
 
 #ifdef _OPENMP
     /* Parallel computation of X'y and diagonal of X'X */

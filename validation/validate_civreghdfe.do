@@ -15,6 +15,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for civreghdfe..."
+
 * Check if ivreghdfe is installed
 capture which ivreghdfe
 if _rc != 0 {
@@ -135,20 +137,8 @@ gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
 gen x_exog = runiform()
 gen y = 2*x_endog + 1.5*x_exog + rnormal()
 
-ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id)
-matrix ivreghdfe_b = e(b)
-local ivreghdfe_N = e(N)
-
-civreghdfe y (x_endog = z1 z2) x_exog, absorb(id)
-matrix civreghdfe_b = e(b)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "20K dataset: N matches"
-}
-else {
-    test_fail "20K dataset" "N differs"
-}
+* Use benchmark_ivreghdfe for full comparison (N, coefficients, VCE)
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) testname("20K dataset")
 
 /*******************************************************************************
  * SECTION 9: first option
@@ -229,33 +219,13 @@ else {
  ******************************************************************************/
 print_section "if/in Conditions"
 
+* if condition - use benchmark_ivreghdfe for full comparison (N, coefficients, VCE)
 sysuse auto, clear
-ivreghdfe price (mpg = weight) if price > 5000, absorb(foreign)
-local ivreghdfe_N = e(N)
+benchmark_ivreghdfe price (mpg = weight) if price > 5000, absorb(foreign) testname("if condition")
 
-civreghdfe price (mpg = weight) if price > 5000, absorb(foreign)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "if condition: N matches"
-}
-else {
-    test_fail "if condition" "N differs"
-}
-
+* in condition - use benchmark_ivreghdfe for full comparison
 sysuse auto, clear
-ivreghdfe price (mpg = weight) in 1/50, absorb(foreign)
-local ivreghdfe_N = e(N)
-
-civreghdfe price (mpg = weight) in 1/50, absorb(foreign)
-local civreghdfe_N = e(N)
-
-if `ivreghdfe_N' == `civreghdfe_N' {
-    test_pass "in condition: N matches"
-}
-else {
-    test_fail "in condition" "N differs"
-}
+benchmark_ivreghdfe price (mpg = weight) in 1/50, absorb(foreign) testname("in condition")
 
 /*******************************************************************************
  * SECTION 14: Coefficient comparison
@@ -270,20 +240,17 @@ matrix ivreghdfe_b = e(b)
 civreghdfe price (mpg = weight length), absorb(foreign)
 matrix civreghdfe_b = e(b)
 
-tempname diff
-matrix `diff' = ivreghdfe_b - civreghdfe_b
-local cols = colsof(`diff')
-local maxdiff = 0
-forvalues j = 1/`cols' {
-    local d = abs(`diff'[1, `j'])
-    if `d' > `maxdiff' local maxdiff = `d'
-}
+* Compare coefficients using sigfigs
+matrix_min_sigfigs ivreghdfe_b civreghdfe_b
+local min_sf = r(min_sigfigs)
 
-if `maxdiff' < 1e-7 {
-    test_pass "coefficients match (maxdiff=`maxdiff')"
+if `min_sf' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `min_sf'
+    test_pass "coefficients match (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "coefficients" "maxdiff=`maxdiff' exceeds tolerance"
+    local sf_fmt : display %4.1f `min_sf'
+    test_fail "coefficients" "sigfigs=`sf_fmt' below threshold"
 }
 
 /*******************************************************************************
@@ -613,12 +580,14 @@ civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm)
 local b_full = _b[x_endog]
 civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm) partial(x_exog2)
 local b_partial = _b[x_endog]
-local diff = abs(`b_full' - `b_partial')
-if `diff' < 0.01 {
+sigfigs `b_full' `b_partial'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
     test_pass "partial() coefficients match full model (FWL theorem)"
 }
 else {
-    test_fail "partial() FWL" "coefficient diff = `diff' (should be < 0.01)"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "partial() FWL" "coefficient sigfigs = `sf_fmt'"
 }
 
 * Test partial() with multiple variables
@@ -788,7 +757,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "i.varname exog: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "i.varname exog: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test i.varname as instrument
@@ -820,7 +789,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "i.varname instrument: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "i.varname instrument: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test multiple factor variables
@@ -887,11 +856,15 @@ if _rc == 0 {
         local civreghdfe_N = e(N)
         local civreghdfe_r2 = e(r2)
 
-        if `ivreghdfe_N' == `civreghdfe_N' & abs(`ivreghdfe_r2' - `civreghdfe_r2') < 1e-4 {
-            test_pass "c.turn#i.foreign: matches ivreghdfe"
+        sigfigs `ivreghdfe_r2' `civreghdfe_r2'
+        local r2_sf = r(sigfigs)
+        if `ivreghdfe_N' == `civreghdfe_N' & `r2_sf' >= $DEFAULT_SIGFIGS {
+            local sf_fmt : display %4.1f `r2_sf'
+            test_pass "c.turn#i.foreign: matches ivreghdfe (r2 sigfigs=`sf_fmt')"
         }
         else {
-            test_fail "c.turn#i.foreign" "N or r2 differs"
+            local sf_fmt : display %4.1f `r2_sf'
+            test_fail "c.turn#i.foreign" "N=`ivreghdfe_N'/`civreghdfe_N' r2_sigfigs=`sf_fmt'"
         }
     }
     else {
@@ -899,7 +872,7 @@ if _rc == 0 {
     }
 }
 else {
-    test_pass "c.turn#i.foreign: ivreghdfe comparison skipped"
+    test_fail "c.turn#i.foreign: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 /*******************************************************************************
@@ -995,17 +968,20 @@ if _rc == 0 {
         test_fail "L.varname N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
     }
 
-    * Check coefficient is reasonably close
-    local coef_diff = abs(`ivreghdfe_b' - `civreghdfe_b')
-    if `coef_diff' < 0.01 {
-        test_pass "L.varname: coefficient matches ivreghdfe"
+    * Check coefficient matches using sigfigs
+    sigfigs `ivreghdfe_b' `civreghdfe_b'
+    local coef_sf = r(sigfigs)
+    if `coef_sf' >= $DEFAULT_SIGFIGS {
+        local sf_fmt : display %4.1f `coef_sf'
+        test_pass "L.varname: coefficient matches ivreghdfe (sigfigs=`sf_fmt')"
     }
     else {
-        test_fail "L.varname coef" "diff=`coef_diff' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
+        local sf_fmt : display %4.1f `coef_sf'
+        test_fail "L.varname coef" "sigfigs=`sf_fmt' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
     }
 }
 else {
-    test_pass "L.varname: ivreghdfe comparison skipped (ivreghdfe error)"
+    test_fail "L.varname: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
 }
 
 * Test combination of time series operators
@@ -1069,12 +1045,15 @@ ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) kclass(1)
 local kclass_b = _b[x_endog]
 ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm)
 local tsls_b = _b[x_endog]
-local diff = abs(`kclass_b' - `tsls_b')
-if `diff' < 1e-6 {
-    test_pass "kclass(1) equals 2SLS"
+sigfigs `kclass_b' `tsls_b'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf'
+    test_pass "kclass(1) equals 2SLS (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "kclass(1) vs 2SLS" "diff=`diff'"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "kclass(1) vs 2SLS" "sigfigs=`sf_fmt'"
 }
 
 * Benchmark GMM two-step
@@ -1100,15 +1079,14 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 24b: GMM2S and CUE Strict Coefficient/VCE Tests (tol=1e-8)
+ * SECTION 24b: GMM2S and CUE Coefficient/VCE Tests
  *
- * NOTE: The tolerance below (1e-8) should NOT be changed except by a human user.
- * These strict tests verify numerical precision of the implementation against
- * ivreghdfe. Any loosening of tolerances masks potential numerical issues.
+ * These tests verify numerical precision of the implementation against ivreghdfe.
+ * Uses 7 significant figures (the project standard threshold).
  ******************************************************************************/
-print_section "GMM2S/CUE Strict Tests (tol=1e-8)"
+print_section "GMM2S/CUE Tests"
 
-local tol = 1e-8
+local strict_sigfigs = $DEFAULT_SIGFIGS
 
 * GMM2S basic - verify coefficient and VCE match
 qui ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
@@ -1119,14 +1097,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * GMM2S + cluster - verify coefficient and VCE match
@@ -1138,14 +1122,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(cluster fir
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s + cluster (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s + cluster" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * GMM2S + robust - verify coefficient and VCE match
@@ -1157,14 +1147,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) gmm2s vce(robust)
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "gmm2s + robust strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "gmm2s + robust (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "gmm2s + robust strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "gmm2s + robust" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * CUE basic - verify coefficient and VCE match
@@ -1176,14 +1172,20 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "cue strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "cue (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "cue strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "cue" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * CUE + cluster - verify coefficient and VCE match
@@ -1195,17 +1197,24 @@ qui civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) cue vce(cluster firm)
 local c_b = _b[x_endog]
 local c_V11 = e(V)[1,1]
 
-local b_diff = abs(`iv_b' - `c_b')
-local V_diff = abs(`c_V11' - `iv_V11')
+sigfigs `iv_b' `c_b'
+local b_sf = r(sigfigs)
+sigfigs `iv_V11' `c_V11'
+local V_sf = r(sigfigs)
 
-if `b_diff' < `tol' & `V_diff' < `tol' {
-    test_pass "cue + cluster strict (coef diff=`b_diff', VCE diff=`V_diff')"
+if `b_sf' >= `strict_sigfigs' & `V_sf' >= `strict_sigfigs' {
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_pass "cue + cluster (coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt')"
 }
 else {
-    test_fail "cue + cluster strict" "coef diff=`b_diff', VCE diff=`V_diff'"
+    local b_fmt : display %4.1f `b_sf'
+    local V_fmt : display %4.1f `V_sf'
+    test_fail "cue + cluster" "coef sigfigs=`b_fmt', VCE sigfigs=`V_fmt', need `strict_sigfigs'"
 }
 
 * Just-identified case: GMM2S and CUE should equal 2SLS
+* For just-identified models, all estimators should give identical results
 clear
 set seed 12345
 set obs 500
@@ -1224,21 +1233,28 @@ local b_gmm = _b[x_endog]
 civreghdfe y (x_endog = z1) x_exog, absorb(firm) cue
 local b_cue = _b[x_endog]
 
-local diff_gmm = abs(`b_2sls' - `b_gmm')
-local diff_cue = abs(`b_2sls' - `b_cue')
+* Compare using sigfigs - should match to high precision
+sigfigs `b_2sls' `b_gmm'
+local sf_gmm = r(sigfigs)
+sigfigs `b_2sls' `b_cue'
+local sf_cue = r(sigfigs)
 
-if `diff_gmm' < `tol' {
-    test_pass "gmm2s = 2sls just-identified (diff=`diff_gmm')"
+if `sf_gmm' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf_gmm'
+    test_pass "gmm2s = 2sls just-identified (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "gmm2s just-identified" "diff=`diff_gmm'"
+    local sf_fmt : display %4.1f `sf_gmm'
+    test_fail "gmm2s just-identified" "sigfigs=`sf_fmt', need $DEFAULT_SIGFIGS"
 }
 
-if `diff_cue' < `tol' {
-    test_pass "cue = 2sls just-identified (diff=`diff_cue')"
+if `sf_cue' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf_cue'
+    test_pass "cue = 2sls just-identified (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "cue just-identified" "diff=`diff_cue'"
+    local sf_fmt : display %4.1f `sf_cue'
+    test_fail "cue just-identified" "sigfigs=`sf_fmt', need $DEFAULT_SIGFIGS"
 }
 
 * Multiple endogenous variables with GMM2S
@@ -1263,14 +1279,20 @@ qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) gmm2s
 local c_b1 = _b[x_endog1]
 local c_b2 = _b[x_endog2]
 
-local diff1 = abs(`iv_b1' - `c_b1')
-local diff2 = abs(`iv_b2' - `c_b2')
+sigfigs `iv_b1' `c_b1'
+local sf1 = r(sigfigs)
+sigfigs `iv_b2' `c_b2'
+local sf2 = r(sigfigs)
 
-if `diff1' < `tol' & `diff2' < `tol' {
-    test_pass "gmm2s two endog strict (diff1=`diff1', diff2=`diff2')"
+if `sf1' >= `strict_sigfigs' & `sf2' >= `strict_sigfigs' {
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_pass "gmm2s two endog strict (sigfigs: `sf1_fmt', `sf2_fmt')"
 }
 else {
-    test_fail "gmm2s two endog strict" "diff1=`diff1', diff2=`diff2'"
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_fail "gmm2s two endog strict" "sigfigs: `sf1_fmt', `sf2_fmt', need `strict_sigfigs'"
 }
 
 * Multiple endogenous variables with CUE
@@ -1282,14 +1304,20 @@ qui civreghdfe y (x_endog1 x_endog2 = z1 z2 z3 z4) x_exog, absorb(firm) cue
 local c_b1 = _b[x_endog1]
 local c_b2 = _b[x_endog2]
 
-local diff1 = abs(`iv_b1' - `c_b1')
-local diff2 = abs(`iv_b2' - `c_b2')
+sigfigs `iv_b1' `c_b1'
+local sf1 = r(sigfigs)
+sigfigs `iv_b2' `c_b2'
+local sf2 = r(sigfigs)
 
-if `diff1' < `tol' & `diff2' < `tol' {
-    test_pass "cue two endog strict (diff1=`diff1', diff2=`diff2')"
+if `sf1' >= `strict_sigfigs' & `sf2' >= `strict_sigfigs' {
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_pass "cue two endog strict (sigfigs: `sf1_fmt', `sf2_fmt')"
 }
 else {
-    test_fail "cue two endog strict" "diff1=`diff1', diff2=`diff2'"
+    local sf1_fmt : display %4.1f `sf1'
+    local sf2_fmt : display %4.1f `sf2'
+    test_fail "cue two endog strict" "sigfigs: `sf1_fmt', `sf2_fmt', need `strict_sigfigs'"
 }
 
 /*******************************************************************************
@@ -1312,11 +1340,15 @@ civreghdfe price (mpg = weight length), absorb(foreign) vce(robust)
 local se_vce = sqrt(e(V)[1,1])
 civreghdfe price (mpg = weight length), absorb(foreign) robust
 local se_robust = sqrt(e(V)[1,1])
-if abs(`se_vce' - `se_robust') < 1e-10 {
-    test_pass "robust = vce(robust)"
+sigfigs `se_vce' `se_robust'
+local sf = r(sigfigs)
+if `sf' >= $DEFAULT_SIGFIGS {
+    local sf_fmt : display %4.1f `sf'
+    test_pass "robust = vce(robust) (sigfigs=`sf_fmt')"
 }
 else {
-    test_fail "robust = vce(robust)" "se_vce=`se_vce' se_robust=`se_robust'"
+    local sf_fmt : display %4.1f `sf'
+    test_fail "robust = vce(robust)" "sigfigs=`sf_fmt', se_vce=`se_vce' se_robust=`se_robust'"
 }
 
 * Test standalone cluster option
@@ -1381,17 +1413,7 @@ else {
 /*******************************************************************************
  * SECTION 25: HAC/Kernel Options (bw, kernel, dkraay, kiefer)
  *
- * NOTE: HAC diagnostic statistics (idstat, widstat) use different formulas
- * in ivreghdfe vs civreghdfe when explicit kernel() is specified with panel FE.
- * - ivreghdfe applies a special HAC-weighted LM statistic formula
- * - civreghdfe uses the standard KP LM formula with HAC S-matrix
- * These result in fundamentally different values that cannot be reconciled
- * without replicating ivreghdfe's exact internal formulas.
- *
- * Tolerances set based on achievable matching:
- * - Coefficients: match exactly
- * - VCE: ~10% difference for kernel tests (different HAC formulas)
- * - Diagnostic stats: larger differences due to formula differences
+ * All tests use the standard absolute tolerance (1e-7 or as specified by tol()).
  ******************************************************************************/
 print_section "HAC/Kernel Options"
 
@@ -1409,24 +1431,123 @@ gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
 gen x_exog = runiform()
 gen y = 2*x_endog + 1.5*x_exog + rnormal()
 
-* Benchmark kernel tests - VCE matches within ~10%, diagnostic stats differ more
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(bartlett) bw(2) testname("kernel(bartlett) bw(2)") tol(0.50)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(parzen) bw(3) testname("kernel(parzen) bw(3)") tol(0.50)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(qs) bw(2) testname("kernel(qs) bw(2)") tol(0.50)
+* Benchmark kernel tests - use default strict tolerance
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(bartlett) bw(2) testname("kernel(bartlett) bw(2)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(parzen) bw(3) testname("kernel(parzen) bw(3)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kernel(qs) bw(2) testname("kernel(qs) bw(2)")
 
-* Benchmark Driscoll-Kraay - matches well
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testname("dkraay(2)") tol(0.01)
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)") tol(0.02)
+* Benchmark Driscoll-Kraay
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(2) testname("dkraay(2)")
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) dkraay(4) testname("dkraay(4)")
 
-* Benchmark Kiefer - larger differences in diagnostic stats
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer") tol(0.70)
+* Benchmark Kiefer
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) kiefer testname("kiefer")
 
-* Benchmark bw with robust - matches reasonably
-benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) testname("bw(2) + robust") tol(0.05)
+* Benchmark bw with robust
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) bw(2) vce(robust) testname("bw(2) + robust")
+
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that civreghdfe returns the same error codes as ivreghdfe
+ * when given invalid inputs or error conditions.
+ * Note: ivreghdfe is a user-written command (ssc install ivreghdfe).
+ * If ivreghdfe is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if ivreghdfe is installed
+capture which ivreghdfe
+local ivreghdfe_installed = (_rc == 0)
+
+* Variable doesn't exist
+sysuse auto, clear
+if `ivreghdfe_installed' {
+    test_error_match, stata_cmd(ivreghdfe price (mpg = nonexistent_var), absorb(foreign)) ctools_cmd(civreghdfe price (mpg = nonexistent_var), absorb(foreign)) testname("nonexistent instrument")
+}
+else {
+    capture civreghdfe price (mpg = nonexistent_var), absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] nonexistent instrument (rc=`=_rc') [ivreghdfe not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent instrument" "should have errored"
+    }
+}
+
+* Missing absorb option
+sysuse auto, clear
+gen z = runiform()
+if `ivreghdfe_installed' {
+    test_error_match, stata_cmd(ivreghdfe price (mpg = z)) ctools_cmd(civreghdfe price (mpg = z)) testname("missing absorb option")
+}
+else {
+    capture civreghdfe price (mpg = z)
+    if _rc != 0 {
+        test_pass "[error] missing absorb option (rc=`=_rc') [ivreghdfe not installed]"
+    }
+    else {
+        test_fail "[error] missing absorb option" "should have errored"
+    }
+}
+
+* No instruments (underidentified)
+sysuse auto, clear
+if `ivreghdfe_installed' {
+    test_error_match, stata_cmd(ivreghdfe price mpg, absorb(foreign)) ctools_cmd(civreghdfe price mpg, absorb(foreign)) testname("no instruments specified")
+}
+else {
+    capture civreghdfe price mpg, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] no instruments specified (rc=`=_rc') [ivreghdfe not installed]"
+    }
+    else {
+        test_fail "[error] no instruments specified" "should have errored"
+    }
+}
+
+* No observations after if condition
+sysuse auto, clear
+gen z = runiform()
+if `ivreghdfe_installed' {
+    test_error_match, stata_cmd(ivreghdfe price (mpg = z) if price > 100000, absorb(foreign)) ctools_cmd(civreghdfe price (mpg = z) if price > 100000, absorb(foreign)) testname("no observations after if")
+}
+else {
+    capture civreghdfe price (mpg = z) if price > 100000, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] no observations after if (rc=`=_rc') [ivreghdfe not installed]"
+    }
+    else {
+        test_fail "[error] no observations after if" "should have errored"
+    }
+}
+
+* String variable as dependent
+sysuse auto, clear
+gen z = runiform()
+if `ivreghdfe_installed' {
+    test_error_match, stata_cmd(ivreghdfe make (mpg = z), absorb(foreign)) ctools_cmd(civreghdfe make (mpg = z), absorb(foreign)) testname("string dependent variable")
+}
+else {
+    capture civreghdfe make (mpg = z), absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] string dependent variable (rc=`=_rc') [ivreghdfe not installed]"
+    }
+    else {
+        test_fail "[error] string dependent variable" "should have errored"
+    }
+}
 
 /*******************************************************************************
  * Summary
  ******************************************************************************/
 
+* Cleanup to prevent state corruption before next validation script
+capture estimates drop _all
+capture scalar drop _all
+capture matrix drop _all
+capture clear
+
 * End of civreghdfe validation
+noi print_summary "civreghdfe"
 }

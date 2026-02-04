@@ -16,12 +16,14 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cencode..."
+
 /*******************************************************************************
  * Helper: Compare cencode vs encode
  ******************************************************************************/
 capture program drop benchmark_encode
 program define benchmark_encode
-    syntax varname, testname(string) [GENerate(name) LABel(name) noextend if2(string) in2(string)]
+    syntax varname, testname(string) [GENerate(name) LABel(name) noextend if2(string) in2(string) cencodeopts(string)]
 
     * Set default generate name
     if "`generate'" == "" local generate = "encoded"
@@ -31,11 +33,13 @@ program define benchmark_encode
     if "`if2'" != "" local ifin "`ifin' if `if2'"
     if "`in2'" != "" local ifin "`ifin' in `in2'"
 
-    * Build options
+    * Build options for cencode (includes cencodeopts like verbose, threads)
     local opts "generate(`generate'_c)"
     if "`label'" != "" local opts "`opts' label(`label'_c)"
     if "`noextend'" != "" local opts "`opts' noextend"
+    if "`cencodeopts'" != "" local opts "`opts' `cencodeopts'"
 
+    * Build options for Stata encode (no cencodeopts - Stata doesn't support them)
     local opts_stata "generate(`generate'_s)"
     if "`label'" != "" local opts_stata "`opts_stata' label(`label'_s)"
     if "`noextend'" != "" local opts_stata "`opts_stata' noextend"
@@ -223,27 +227,13 @@ else {
     test_fail "two observations" "order wrong"
 }
 
-* Test 2.9: verbose option
+* Test 2.9: verbose option - verify correctness with verbose enabled
 sysuse auto, clear
-capture cencode make, generate(make_code) verbose
-if _rc == 0 {
-    test_pass "verbose option"
-}
-else {
-    test_fail "verbose option" "rc=`=_rc'"
-}
-capture drop make_code
+benchmark_encode make, testname("[syntax] verbose option") cencodeopts(verbose)
 
-* Test 2.10: threads option
+* Test 2.10: threads option - verify correctness with threads(2)
 sysuse auto, clear
-capture cencode make, generate(make_code) threads(2)
-if _rc == 0 {
-    test_pass "threads(2) option"
-}
-else {
-    test_fail "threads option" "rc=`=_rc'"
-}
-capture drop make_code
+benchmark_encode make, testname("[syntax] threads(2) option") cencodeopts(threads(2))
 
 /*******************************************************************************
  * SECTION 3: Missing values (10 tests)
@@ -816,17 +806,11 @@ else {
     test_fail "100k obs" "wrong unique count"
 }
 
-* Test 7.2: 500k observations
+* Test 7.2: 500k observations - verify correctness
 clear
 set obs 500000
 gen str20 category = "cat" + string(mod(_n, 500))
-capture cencode category, generate(cat_code)
-if _rc == 0 {
-    test_pass "500k observations"
-}
-else {
-    test_fail "500k obs" "rc=`=_rc'"
-}
+benchmark_encode category, testname("500k observations")
 
 * Test 7.3: 10k unique values
 clear
@@ -2877,7 +2861,556 @@ sysuse auto, clear
 benchmark_encode make, testname("vs encode: in 10/60") in2("10/60")
 
 /*******************************************************************************
+ * SECTION 25: Replace option tests
+ ******************************************************************************/
+print_section "Replace Option"
+
+* Test 25.1: Replace basic functionality
+clear
+set obs 10
+gen str20 x = "category_" + string(mod(_n - 1, 5) + 1)
+cencode x, replace
+capture confirm numeric variable x
+if _rc == 0 {
+    test_pass "replace converts to numeric"
+}
+else {
+    test_fail "replace basic" "variable not numeric"
+}
+
+* Test 25.2: Replace preserves values
+clear
+set obs 10
+gen str10 x = "cat" + string(mod(_n - 1, 3) + 1)
+clonevar x_backup = x
+cencode x, replace
+* Check that each unique string maps to same code
+quietly tab x
+if r(r) == 3 {
+    test_pass "replace preserves unique values"
+}
+else {
+    test_fail "replace values" "expected 3 unique"
+}
+
+* Test 25.3: Replace comparison with encode
+clear
+set obs 50
+gen str20 x = "item_" + string(mod(_n - 1, 10) + 1)
+clonevar x_c = x
+clonevar x_s = x
+cencode x_c, replace
+encode x_s, generate(x_s_enc)
+drop x_s
+rename x_s_enc x_s
+* Compare values
+count if x_c != x_s
+if r(N) == 0 {
+    test_pass "replace matches encode"
+}
+else {
+    test_fail "replace vs encode" "`=r(N)' values differ"
+}
+
+* Test 25.4: Replace with empty strings
+clear
+set obs 20
+gen str20 x = cond(mod(_n, 3) == 0, "", "val" + string(_n))
+clonevar x_backup = x
+cencode x, replace
+count if missing(x) & x_backup == ""
+local n_miss = r(N)
+count if !missing(x) & x_backup != ""
+local n_enc = r(N)
+* Empty strings should become missing (just like encode)
+if `n_miss' > 0 {
+    test_pass "replace handles empty strings"
+}
+else {
+    test_fail "replace empty" "expected some missing"
+}
+
+* Test 25.5: Replace with if condition
+clear
+set obs 100
+gen str10 x = "cat" + string(mod(_n - 1, 5) + 1)
+gen flag = mod(_n, 2)
+cencode x if flag == 1, replace
+capture confirm numeric variable x
+if _rc == 0 {
+    count if !missing(x) & flag == 1
+    local n_conv = r(N)
+    count if flag == 1
+    if `n_conv' == r(N) {
+        test_pass "replace with if condition"
+    }
+    else {
+        test_fail "replace if" "wrong count"
+    }
+}
+else {
+    test_fail "replace if" "not converted"
+}
+
+* Test 25.6: Replace with in range
+clear
+set obs 100
+gen str10 x = "cat" + string(mod(_n - 1, 5) + 1)
+cencode x in 1/50, replace
+capture confirm numeric variable x
+if _rc == 0 {
+    count if !missing(x) in 1/50
+    if r(N) == 50 {
+        test_pass "replace with in range"
+    }
+    else {
+        test_fail "replace in" "wrong count"
+    }
+}
+else {
+    test_fail "replace in" "not converted"
+}
+
+* Test 25.7: Replace with label option
+clear
+set obs 20
+gen str10 x = "val" + string(mod(_n - 1, 4) + 1)
+capture label drop my_custom_label
+cencode x, replace label(my_custom_label)
+local attached : value label x
+if "`attached'" == "my_custom_label" {
+    test_pass "replace with custom label"
+}
+else {
+    test_fail "replace label" "label not my_custom_label"
+}
+capture label drop my_custom_label
+
+/*******************************************************************************
+ * SECTION 26: Multiple variables (varlist) tests
+ ******************************************************************************/
+print_section "Multiple Variables (varlist)"
+
+* Test 26.1: Two variables with generate
+clear
+set obs 50
+gen str10 a = "cat" + string(mod(_n - 1, 5) + 1)
+gen str10 b = "grp" + string(mod(_n - 1, 3) + 1)
+cencode a b, generate(a_num b_num)
+capture confirm numeric variable a_num
+local rc1 = _rc
+capture confirm numeric variable b_num
+local rc2 = _rc
+if `rc1' == 0 & `rc2' == 0 {
+    test_pass "two variables with generate"
+}
+else {
+    test_fail "two vars gen" "not created"
+}
+drop a_num b_num
+
+* Test 26.2: Two variables comparison with encode
+clear
+set obs 50
+gen str10 a = "cat" + string(mod(_n - 1, 5) + 1)
+gen str10 b = "grp" + string(mod(_n - 1, 3) + 1)
+capture label drop a_c b_c a_s b_s
+cencode a b, generate(a_c b_c)
+encode a, generate(a_s)
+encode b, generate(b_s)
+count if a_c != a_s
+local n1 = r(N)
+count if b_c != b_s
+local n2 = r(N)
+if `n1' == 0 & `n2' == 0 {
+    test_pass "two variables match encode"
+}
+else {
+    test_fail "two vars encode" "a diff=`n1' b diff=`n2'"
+}
+drop a_c b_c a_s b_s
+
+* Test 26.3: Three variables
+clear
+set obs 30
+gen str10 x = "x_" + string(mod(_n - 1, 3) + 1)
+gen str10 y = "y_" + string(mod(_n - 1, 4) + 1)
+gen str10 z = "z_" + string(mod(_n - 1, 5) + 1)
+capture label drop x_num y_num z_num x_e y_e z_e
+cencode x y z, generate(x_num y_num z_num)
+encode x, generate(x_e)
+encode y, generate(y_e)
+encode z, generate(z_e)
+count if x_num != x_e
+local n1 = r(N)
+count if y_num != y_e
+local n2 = r(N)
+count if z_num != z_e
+local n3 = r(N)
+if `n1' == 0 & `n2' == 0 & `n3' == 0 {
+    test_pass "three variables match encode"
+}
+else {
+    test_fail "three vars" "x diff=`n1' y diff=`n2' z diff=`n3'"
+}
+drop x_num y_num z_num x_e y_e z_e
+
+* Test 26.4: Multiple variables with replace
+clear
+set obs 40
+gen str10 a = "cat" + string(mod(_n - 1, 4) + 1)
+gen str10 b = "grp" + string(mod(_n - 1, 2) + 1)
+clonevar a_backup = a
+clonevar b_backup = b
+encode a_backup, generate(a_expected)
+encode b_backup, generate(b_expected)
+cencode a b, replace
+count if a != a_expected
+local n1 = r(N)
+count if b != b_expected
+local n2 = r(N)
+if `n1' == 0 & `n2' == 0 {
+    test_pass "multiple variables replace"
+}
+else {
+    test_fail "multi replace" "a diff=`n1' b diff=`n2'"
+}
+
+* Test 26.5: Multiple variables with if condition
+clear
+set obs 50
+gen str10 a = "cat" + string(mod(_n - 1, 5) + 1)
+gen str10 b = "grp" + string(mod(_n - 1, 3) + 1)
+gen flag = mod(_n, 2)
+capture label drop a_num b_num
+cencode a b if flag == 1, generate(a_num b_num)
+count if !missing(a_num) & flag == 1
+local n_conv = r(N)
+count if flag == 1
+if `n_conv' == r(N) {
+    test_pass "multiple vars with if"
+}
+else {
+    test_fail "multi if" "wrong count"
+}
+drop a_num b_num
+
+* Test 26.6: Multiple variables count mismatch error
+clear
+set obs 10
+gen str10 a = "cat" + string(_n)
+gen str10 b = "grp" + string(_n)
+capture cencode a b, generate(only_one)
+if _rc != 0 {
+    test_pass "error: generate count mismatch"
+}
+else {
+    test_fail "count mismatch" "should error"
+}
+
+/*******************************************************************************
+ * SECTION 27: Empty string edge cases comprehensive
+ ******************************************************************************/
+print_section "Empty String Edge Cases Comprehensive"
+
+* Test 27.1: Single empty string observation
+clear
+set obs 5
+gen str10 x = "val" + string(_n)
+replace x = "" in 3
+cencode x, generate(x_num)
+encode x, generate(x_enc)
+count if missing(x_num) != missing(x_enc)
+if r(N) == 0 {
+    test_pass "single empty matches encode"
+}
+else {
+    test_fail "single empty" "missing pattern differs"
+}
+drop x_num x_enc
+
+* Test 27.2: First observation empty
+clear
+set obs 10
+gen str10 x = "val" + string(_n)
+replace x = "" in 1
+cencode x, generate(x_num)
+encode x, generate(x_enc)
+count if missing(x_num) != missing(x_enc)
+if r(N) == 0 {
+    test_pass "first empty matches encode"
+}
+else {
+    test_fail "first empty" "missing pattern differs"
+}
+drop x_num x_enc
+
+* Test 27.3: Last observation empty
+clear
+set obs 10
+gen str10 x = "val" + string(_n)
+replace x = "" in 10
+cencode x, generate(x_num)
+encode x, generate(x_enc)
+count if missing(x_num) != missing(x_enc)
+if r(N) == 0 {
+    test_pass "last empty matches encode"
+}
+else {
+    test_fail "last empty" "missing pattern differs"
+}
+drop x_num x_enc
+
+* Test 27.4: Consecutive empties
+clear
+set obs 20
+gen str10 x = "val" + string(_n)
+replace x = "" in 5/10
+cencode x, generate(x_num)
+encode x, generate(x_enc)
+count if missing(x_num) != missing(x_enc)
+if r(N) == 0 {
+    test_pass "consecutive empties match encode"
+}
+else {
+    test_fail "consecutive empty" "missing pattern differs"
+}
+drop x_num x_enc
+
+* Test 27.5: Bookend pattern (first and last empty)
+clear
+set obs 20
+gen str10 x = "val" + string(_n)
+replace x = "" in 1
+replace x = "" in 20
+cencode x, generate(x_num)
+encode x, generate(x_enc)
+count if missing(x_num) != missing(x_enc)
+if r(N) == 0 {
+    test_pass "bookend empties match encode"
+}
+else {
+    test_fail "bookend empty" "missing pattern differs"
+}
+drop x_num x_enc
+
+/*******************************************************************************
+ * SECTION 28: Combined options tests
+ ******************************************************************************/
+print_section "Combined Options"
+
+* Test 28.1: verbose with threads
+clear
+set obs 1000
+gen str20 x = "category_" + string(mod(_n - 1, 10) + 1)
+capture cencode x, generate(x_num) verbose threads(2)
+if _rc == 0 {
+    quietly tab x_num
+    if r(r) == 10 {
+        test_pass "verbose with threads"
+    }
+    else {
+        test_fail "verbose+threads" "wrong unique count"
+    }
+}
+else {
+    test_fail "verbose+threads" "rc=`=_rc'"
+}
+drop x_num
+
+* Test 28.2: label with noextend (existing label)
+clear
+set obs 20
+gen str10 x = "cat" + string(mod(_n - 1, 3) + 1)
+capture label drop test_label
+label define test_label 1 "cat1" 2 "cat2" 3 "cat3"
+capture cencode x, generate(x_num) label(test_label) noextend
+if _rc == 0 {
+    local lbl_1 : label test_label 1
+    local lbl_2 : label test_label 2
+    if "`lbl_1'" == "cat1" & "`lbl_2'" == "cat2" {
+        test_pass "label with noextend"
+    }
+    else {
+        test_fail "label+noextend" "labels changed"
+    }
+}
+else {
+    test_fail "label+noextend" "rc=`=_rc'"
+}
+capture label drop test_label
+
+* Test 28.3: if with threads
+clear
+set obs 1000
+gen str10 x = "cat" + string(mod(_n - 1, 5) + 1)
+gen flag = mod(_n, 2)
+capture cencode x if flag == 1, generate(x_num) threads(2)
+if _rc == 0 {
+    count if !missing(x_num) & flag == 1
+    local n_conv = r(N)
+    count if flag == 1
+    if `n_conv' == r(N) {
+        test_pass "if with threads"
+    }
+    else {
+        test_fail "if+threads" "wrong count"
+    }
+}
+else {
+    test_fail "if+threads" "rc=`=_rc'"
+}
+drop x_num
+
+* Test 28.4: in with verbose
+clear
+set obs 100
+gen str10 x = "cat" + string(mod(_n - 1, 5) + 1)
+capture cencode x in 1/50, generate(x_num) verbose
+if _rc == 0 {
+    count if !missing(x_num) in 1/50
+    if r(N) == 50 {
+        test_pass "in with verbose"
+    }
+    else {
+        test_fail "in+verbose" "wrong count"
+    }
+}
+else {
+    test_fail "in+verbose" "rc=`=_rc'"
+}
+drop x_num
+
+* Test 28.5: replace with threads
+clear
+set obs 5000
+gen str10 x = "cat" + string(mod(_n - 1, 20) + 1)
+capture cencode x, replace threads(4)
+if _rc == 0 {
+    capture confirm numeric variable x
+    if _rc == 0 {
+        quietly tab x
+        if r(r) == 20 {
+            test_pass "replace with threads"
+        }
+        else {
+            test_fail "replace+threads" "wrong unique count"
+        }
+    }
+    else {
+        test_fail "replace+threads" "not numeric"
+    }
+}
+else {
+    test_fail "replace+threads" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 29: strL variable type tests
+ ******************************************************************************/
+print_section "strL Variable Tests"
+
+* Test 29.1: Basic strL encoding
+clear
+set obs 10
+gen strL x = "value_" + string(_n)
+capture cencode x, generate(x_num)
+if _rc == 0 {
+    quietly tab x_num
+    if r(r) == 10 {
+        test_pass "basic strL encoding"
+    }
+    else {
+        test_fail "strL basic" "wrong unique count"
+    }
+}
+else {
+    test_fail "strL basic" "rc=`=_rc'"
+}
+
+* Test 29.2: strL with long content
+clear
+set obs 5
+gen strL x = ""
+replace x = "short" in 1
+replace x = "a" * 500 + "_1" in 2
+replace x = "b" * 500 + "_2" in 3
+replace x = "c" * 500 + "_3" in 4
+replace x = "medium length text" in 5
+capture cencode x, generate(x_num)
+if _rc == 0 {
+    quietly tab x_num
+    if r(r) == 5 {
+        test_pass "strL with long content"
+    }
+    else {
+        test_fail "strL long" "wrong unique count"
+    }
+}
+else {
+    test_fail "strL long" "rc=`=_rc'"
+}
+
+* Test 29.3: strL comparison with encode
+clear
+set obs 20
+gen strL x = "category_" + string(mod(_n - 1, 5) + 1)
+capture label drop x_c x_s
+capture cencode x, generate(x_c)
+local cencode_rc = _rc
+capture encode x, generate(x_s)
+local encode_rc = _rc
+if `cencode_rc' == `encode_rc' {
+    if `cencode_rc' == 0 {
+        count if x_c != x_s
+        if r(N) == 0 {
+            test_pass "strL matches encode"
+        }
+        else {
+            test_fail "strL encode" "`=r(N)' differ"
+        }
+    }
+    else {
+        test_pass "strL - both error as expected"
+    }
+}
+else {
+    test_fail "strL encode" "cencode rc=`cencode_rc' encode rc=`encode_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cencode returns the same error codes as Stata's encode
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(encode nonexistent_var, generate(test)) ctools_cmd(cencode nonexistent_var, generate(test)) testname("nonexistent variable")
+
+* Generate variable already exists
+sysuse auto, clear
+test_error_match, stata_cmd(encode make, generate(price)) ctools_cmd(cencode make, generate(price)) testname("generate var already exists")
+
+* No generate option (missing required option)
+sysuse auto, clear
+test_error_match, stata_cmd(encode make) ctools_cmd(cencode make) testname("missing generate option")
+
+* Numeric variable (encode expects string)
+sysuse auto, clear
+test_error_match, stata_cmd(encode price, generate(test)) ctools_cmd(cencode price, generate(test)) testname("numeric variable input")
+
+* Empty dataset
+clear
+set obs 0
+gen str10 x = ""
+test_error_match, stata_cmd(encode x, generate(test)) ctools_cmd(cencode x, generate(test)) testname("empty dataset")
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 * End of cencode validation
+noi print_summary "cencode"
 }

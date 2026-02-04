@@ -10,6 +10,7 @@
     - Endogeneity tests (Durbin-Wu-Hausman)
 */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -107,6 +108,7 @@ void civreghdfe_compute_underid_test(
     ST_int num_clusters,
     ST_int kernel_type,
     ST_int bw,
+    ST_int kiefer,
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
     ST_double *underid_stat,
@@ -149,40 +151,261 @@ void civreghdfe_compute_underid_test(
 
         /* Kleibergen-Paap for robust/cluster VCE */
         if (vce_type != 0) {
-            /* Extract first-stage coefficients on EXCLUDED instruments only
-               The pi vector is K_iv x 1, but we only need the last L coefficients
-               (those on excluded instruments, not exogenous variables) */
-            const ST_double *pi_full = temp1 + K_exog * K_iv;
-            const ST_double *pi_excl = pi_full + K_exog;  /* Skip exogenous coefficients */
+            /* For the KP test, we need to partial out included exogenous variables
+               from both X_endog and Z_excl before computing the test statistic.
+               This is required because the test is on the EXCLUDED instruments' coefficients
+               after controlling for exogenous variables. */
 
-            /* Compute first-stage residuals using FULL pi: v = X_endog - Z * pi */
+            const ST_double *Z_exog = Z;                /* First K_exog columns */
+            const ST_double *Z_excl_raw = Z + K_exog * N;  /* Last L columns */
+
+            /* Allocate partialled-out versions */
+            ST_double *X_endog_partial = (ST_double *)malloc(N * sizeof(ST_double));
+            ST_double *Z_excl_partial = (ST_double *)malloc(N * L * sizeof(ST_double));
             ST_double *v = (ST_double *)calloc(N, sizeof(ST_double));
-            if (!v) return;
-
-            for (i = 0; i < N; i++) {
-                ST_double pred = 0.0;
-                for (k = 0; k < K_iv; k++) {
-                    pred += Z[k * N + i] * pi_full[k];
-                }
-                v[i] = X_endog[i] - pred;
+            if (!X_endog_partial || !Z_excl_partial || !v) {
+                free(X_endog_partial); free(Z_excl_partial); free(v);
+                return;
             }
 
-            /* Compute shat0 for Wald statistic - ONLY for excluded instruments (L x L)
-               The Z matrix is organized as [exogenous, excluded], we need the last L columns */
-            const ST_double *Z_excl = Z + K_exog * N;  /* Pointer to excluded instruments */
+            /* Copy raw values */
+            memcpy(X_endog_partial, X_endog, N * sizeof(ST_double));
+            memcpy(Z_excl_partial, Z_excl_raw, N * L * sizeof(ST_double));
+
+            /* Partial out exogenous variables if K_exog > 0 */
+            if (K_exog > 0) {
+                /* Compute (Z_exog' * Z_exog)^-1 */
+                ST_double *ZeZe = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                ST_double *ZeZe_inv = (ST_double *)calloc(K_exog * K_exog, sizeof(ST_double));
+                if (ZeZe && ZeZe_inv) {
+                    for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                        for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                            ST_double sum = 0.0;
+                            for (i = 0; i < N; i++) {
+                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                sum += w * Z_exog[l1 * N + i] * Z_exog[l2 * N + i];
+                            }
+                            ZeZe[l2 * K_exog + l1] = sum;
+                        }
+                    }
+
+                    memcpy(ZeZe_inv, ZeZe, K_exog * K_exog * sizeof(ST_double));
+                    if (cholesky(ZeZe_inv, K_exog) == 0) {
+                        invert_from_cholesky(ZeZe_inv, K_exog, ZeZe_inv);
+
+                        /* Partial out Z_exog from X_endog */
+                        ST_double *ZeX = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                        if (ZeX) {
+                            for (ST_int l = 0; l < K_exog; l++) {
+                                ST_double sum = 0.0;
+                                for (i = 0; i < N; i++) {
+                                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                    sum += w * Z_exog[l * N + i] * X_endog[i];
+                                }
+                                ZeX[l] = sum;
+                            }
+                            /* gamma = (Z_exog'Z_exog)^-1 * Z_exog'X_endog */
+                            ST_double *gamma = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                            if (gamma) {
+                                for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                                    ST_double sum = 0.0;
+                                    for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                        sum += ZeZe_inv[l2 * K_exog + l1] * ZeX[l2];
+                                    }
+                                    gamma[l1] = sum;
+                                }
+                                /* X_endog_partial = X_endog - Z_exog * gamma */
+                                for (i = 0; i < N; i++) {
+                                    ST_double pred = 0.0;
+                                    for (ST_int l = 0; l < K_exog; l++) {
+                                        pred += Z_exog[l * N + i] * gamma[l];
+                                    }
+                                    X_endog_partial[i] -= pred;
+                                }
+                                free(gamma);
+                            }
+                            free(ZeX);
+                        }
+
+                        /* Partial out Z_exog from each column of Z_excl */
+                        for (ST_int col = 0; col < L; col++) {
+                            ST_double *ZeZcol = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                            if (ZeZcol) {
+                                for (ST_int l = 0; l < K_exog; l++) {
+                                    ST_double sum = 0.0;
+                                    for (i = 0; i < N; i++) {
+                                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                        sum += w * Z_exog[l * N + i] * Z_excl_raw[col * N + i];
+                                    }
+                                    ZeZcol[l] = sum;
+                                }
+                                ST_double *gamma_z = (ST_double *)calloc(K_exog, sizeof(ST_double));
+                                if (gamma_z) {
+                                    for (ST_int l1 = 0; l1 < K_exog; l1++) {
+                                        ST_double sum = 0.0;
+                                        for (ST_int l2 = 0; l2 < K_exog; l2++) {
+                                            sum += ZeZe_inv[l2 * K_exog + l1] * ZeZcol[l2];
+                                        }
+                                        gamma_z[l1] = sum;
+                                    }
+                                    for (i = 0; i < N; i++) {
+                                        ST_double pred = 0.0;
+                                        for (ST_int l = 0; l < K_exog; l++) {
+                                            pred += Z_exog[l * N + i] * gamma_z[l];
+                                        }
+                                        Z_excl_partial[col * N + i] -= pred;
+                                    }
+                                    free(gamma_z);
+                                }
+                                free(ZeZcol);
+                            }
+                        }
+                    }
+                }
+                free(ZeZe);
+                free(ZeZe_inv);
+            }
+
+            /* Now compute first-stage on partialled data: X_endog_partial = Z_excl_partial * pi_excl + v */
+            /* First compute (Z_excl_partial' * Z_excl_partial)^-1 * Z_excl_partial' * X_endog_partial */
+            ST_double *ZtZ_excl = (ST_double *)calloc(L * L, sizeof(ST_double));
+            ST_double *ZtX = (ST_double *)calloc(L, sizeof(ST_double));
+            ST_double *pi_excl = (ST_double *)calloc(L, sizeof(ST_double));
+
+            if (ZtZ_excl && ZtX && pi_excl) {
+                for (ST_int l1 = 0; l1 < L; l1++) {
+                    for (ST_int l2 = 0; l2 < L; l2++) {
+                        ST_double sum = 0.0;
+                        for (i = 0; i < N; i++) {
+                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                            sum += w * Z_excl_partial[l1 * N + i] * Z_excl_partial[l2 * N + i];
+                        }
+                        ZtZ_excl[l2 * L + l1] = sum;
+                    }
+                    ST_double sum = 0.0;
+                    for (i = 0; i < N; i++) {
+                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                        sum += w * Z_excl_partial[l1 * N + i] * X_endog_partial[i];
+                    }
+                    ZtX[l1] = sum;
+                }
+
+                /* Solve for pi_excl = ZtZ_excl^-1 * ZtX */
+                ST_double *ZtZ_excl_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
+                if (ZtZ_excl_inv) {
+                    memcpy(ZtZ_excl_inv, ZtZ_excl, L * L * sizeof(ST_double));
+                    if (cholesky(ZtZ_excl_inv, L) == 0 && invert_from_cholesky(ZtZ_excl_inv, L, ZtZ_excl_inv) == 0) {
+                        for (ST_int l1 = 0; l1 < L; l1++) {
+                            ST_double sum = 0.0;
+                            for (ST_int l2 = 0; l2 < L; l2++) {
+                                sum += ZtZ_excl_inv[l2 * L + l1] * ZtX[l2];
+                            }
+                            pi_excl[l1] = sum;
+                        }
+                    }
+                    free(ZtZ_excl_inv);
+                }
+
+                /* Compute residuals: v = X_endog_partial - Z_excl_partial * pi_excl */
+                for (i = 0; i < N; i++) {
+                    ST_double pred = 0.0;
+                    for (k = 0; k < L; k++) {
+                        pred += Z_excl_partial[k * N + i] * pi_excl[k];
+                    }
+                    v[i] = X_endog_partial[i] - pred;
+                }
+            }
+
+            /* Use partialled Z_excl for shat0 computation */
+            const ST_double *Z_excl = Z_excl_partial;
 
             ST_double *shat0 = (ST_double *)calloc(L * L, sizeof(ST_double));
             ST_double *shat0_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
             if (!shat0 || !shat0_inv) {
+                free(X_endog_partial); free(Z_excl_partial);
                 free(v); free(shat0); free(shat0_inv);
+                if (ZtZ_excl) free(ZtZ_excl);
+                if (ZtX) free(ZtX);
+                if (pi_excl) free(pi_excl);
                 return;
             }
 
-            if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
+            if (kiefer && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
+                /* Kiefer VCE: HAC within each panel (cluster), not across panels */
+                /* cluster_ids contains panel IDs, observations are sorted by time within panel */
+                ST_int *panel_counts = (ST_int *)calloc(num_clusters, sizeof(ST_int));
+                ST_int *panel_starts = (ST_int *)calloc(num_clusters + 1, sizeof(ST_int));
+                ST_int *obs_by_panel = (ST_int *)malloc(N * sizeof(ST_int));
+
+                if (panel_counts && panel_starts && obs_by_panel) {
+                    /* Count observations per panel */
+                    for (i = 0; i < N; i++) {
+                        ST_int p = cluster_ids[i] - 1;
+                        if (p >= 0 && p < num_clusters) {
+                            panel_counts[p]++;
+                        }
+                    }
+
+                    /* Compute start indices */
+                    panel_starts[0] = 0;
+                    for (ST_int p = 0; p < num_clusters; p++) {
+                        panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                    }
+
+                    /* Reset counts for filling */
+                    memset(panel_counts, 0, num_clusters * sizeof(ST_int));
+
+                    /* Fill obs_by_panel (preserves time order within each panel) */
+                    for (i = 0; i < N; i++) {
+                        ST_int p = cluster_ids[i] - 1;
+                        if (p >= 0 && p < num_clusters) {
+                            ST_int idx = panel_starts[p] + panel_counts[p];
+                            obs_by_panel[idx] = i;
+                            panel_counts[p]++;
+                        }
+                    }
+
+                    /* Compute HAC within each panel */
+                    for (ST_int p = 0; p < num_clusters; p++) {
+                        ST_int start = panel_starts[p];
+                        ST_int end = panel_starts[p + 1];
+                        ST_int T_p = end - start;
+
+                        for (ST_int t1 = 0; t1 < T_p; t1++) {
+                            ST_int i1 = obs_by_panel[start + t1];
+                            for (ST_int t2 = 0; t2 < T_p; t2++) {
+                                ST_int i2 = obs_by_panel[start + t2];
+                                ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                                ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                                if (fabs(kw) < 1e-10) continue;
+
+                                ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                                ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                                ST_double v_prod = w1 * v[i1] * w2 * v[i2];
+
+                                for (ST_int ki = 0; ki < L; ki++) {
+                                    for (ST_int kj = 0; kj < L; kj++) {
+                                        shat0[kj * L + ki] += kw * v_prod *
+                                            Z_excl[ki * N + i1] * Z_excl[kj * N + i2];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (panel_counts) free(panel_counts);
+                if (panel_starts) free(panel_starts);
+                if (obs_by_panel) free(obs_by_panel);
+            } else if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
                 /* Cluster-robust or HAC (Driscoll-Kraay) */
                 ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                 if (!cluster_Zv) {
+                    free(X_endog_partial); free(Z_excl_partial);
                     free(v); free(shat0); free(shat0_inv);
+                    if (ZtZ_excl) free(ZtZ_excl);
+                    if (ZtX) free(ZtX);
+                    if (pi_excl) free(pi_excl);
                     return;
                 }
 
@@ -204,7 +427,7 @@ void civreghdfe_compute_underid_test(
                         for (ST_int s = 0; s < num_clusters; s++) {
                             ST_int lag = (t > s) ? (t - s) : (s - t);
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                            if (kw == 0.0) continue;  /* Skip if no weight */
+                            if (fabs(kw) < 1e-10) continue;  /* Skip if no weight */
 
                             for (ST_int ki = 0; ki < L; ki++) {
                                 for (ST_int kj = 0; kj < L; kj++) {
@@ -226,9 +449,6 @@ void civreghdfe_compute_underid_test(
                     }
                 }
                 free(cluster_Zv);
-
-                /* No small-sample adjustment to shat0 - the adjustment is
-                   handled through the denominator and dof in the formula */
             } else {
                 /* HC robust */
                 for (i = 0; i < N; i++) {
@@ -254,21 +474,89 @@ void civreghdfe_compute_underid_test(
                 /* Recompute shat0 with HAC kernel weights */
                 memset(shat0, 0, L * L * sizeof(ST_double));
 
-                /* HAC: shat0 = sum_{t,s} kernel_weight(|t-s|) * Z_excl_t * v_t * v_s * Z_excl_s' */
-                for (ST_int t = 0; t < N; t++) {
-                    for (ST_int s = 0; s < N; s++) {
-                        ST_int lag = (t > s) ? (t - s) : (s - t);
-                        ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                        if (kw == 0.0) continue;
+                if (hac_panel_ids && num_hac_panels > 0) {
+                    /* Panel-aware HAC: apply kernel weights within each panel */
+                    ST_int *panel_counts = (ST_int *)calloc(num_hac_panels, sizeof(ST_int));
+                    ST_int *panel_starts = (ST_int *)calloc(num_hac_panels + 1, sizeof(ST_int));
+                    ST_int *obs_by_panel = (ST_int *)malloc(N * sizeof(ST_int));
 
-                        ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
-                        ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
-                        ST_double v_prod = wt * v[t] * ws * v[s];
+                    if (panel_counts && panel_starts && obs_by_panel) {
+                        /* Count observations per panel */
+                        for (i = 0; i < N; i++) {
+                            ST_int p = hac_panel_ids[i] - 1;
+                            if (p >= 0 && p < num_hac_panels) {
+                                panel_counts[p]++;
+                            }
+                        }
 
-                        for (ST_int ki = 0; ki < L; ki++) {
-                            for (ST_int kj = 0; kj < L; kj++) {
-                                shat0[kj * L + ki] += kw * v_prod *
-                                    Z_excl[ki * N + t] * Z_excl[kj * N + s];
+                        /* Compute start indices */
+                        panel_starts[0] = 0;
+                        for (ST_int p = 0; p < num_hac_panels; p++) {
+                            panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                        }
+
+                        /* Reset counts for filling */
+                        memset(panel_counts, 0, num_hac_panels * sizeof(ST_int));
+
+                        /* Fill obs_by_panel */
+                        for (i = 0; i < N; i++) {
+                            ST_int p = hac_panel_ids[i] - 1;
+                            if (p >= 0 && p < num_hac_panels) {
+                                ST_int idx = panel_starts[p] + panel_counts[p];
+                                obs_by_panel[idx] = i;
+                                panel_counts[p]++;
+                            }
+                        }
+
+                        /* Compute HAC within each panel */
+                        for (ST_int p = 0; p < num_hac_panels; p++) {
+                            ST_int start = panel_starts[p];
+                            ST_int end = panel_starts[p + 1];
+                            ST_int T_p = end - start;
+
+                            for (ST_int t1 = 0; t1 < T_p; t1++) {
+                                ST_int i1 = obs_by_panel[start + t1];
+                                for (ST_int t2 = 0; t2 < T_p; t2++) {
+                                    ST_int i2 = obs_by_panel[start + t2];
+                                    ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                                    ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                                    if (fabs(kw) < 1e-10) continue;
+
+                                    ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                                    ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                                    ST_double v_prod = w1 * v[i1] * w2 * v[i2];
+
+                                    for (ST_int ki = 0; ki < L; ki++) {
+                                        for (ST_int kj = 0; kj < L; kj++) {
+                                            shat0[kj * L + ki] += kw * v_prod *
+                                                Z_excl[ki * N + i1] * Z_excl[kj * N + i2];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (panel_counts) free(panel_counts);
+                    if (panel_starts) free(panel_starts);
+                    if (obs_by_panel) free(obs_by_panel);
+                } else {
+                    /* Non-panel HAC: use raw observation indices */
+                    for (ST_int t = 0; t < N; t++) {
+                        for (ST_int s = 0; s < N; s++) {
+                            ST_int lag = (t > s) ? (t - s) : (s - t);
+                            ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                            if (fabs(kw) < 1e-10) continue;
+
+                            ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
+                            ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
+                            ST_double v_prod = wt * v[t] * ws * v[s];
+
+                            for (ST_int ki = 0; ki < L; ki++) {
+                                for (ST_int kj = 0; kj < L; kj++) {
+                                    shat0[kj * L + ki] += kw * v_prod *
+                                        Z_excl[ki * N + t] * Z_excl[kj * N + s];
+                                }
                             }
                         }
                     }
@@ -368,26 +656,31 @@ void civreghdfe_compute_underid_test(
                             ST_int dof;
                             ST_double denom;
                             ST_double cluster_adj;
-                            if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
-                                /* Driscoll-Kraay with HAC kernel: needs extra adjustment */
-                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
-                                denom = (ST_double)(N - 1);
-                                /* HAC requires ((G-1)/G)^2 to match ivreghdfe's ranktest-based widstat */
-                                cluster_adj = ((ST_double)(num_clusters - 1) / (ST_double)num_clusters) *
-                                              ((ST_double)(num_clusters - 1) / (ST_double)num_clusters);
-                            } else if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) {
-                                /* Regular cluster: single (G-1)/G adjustment */
-                                dof = N - K_iv - 1;  /* -1 for sdofminus (constant) */
+                            if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY ||
+                                ((kiefer) && kernel_type > 0 && bw > 0)) {
+                                /* Cluster/dkraay: (G-1)/G adjustment
+                                   ivreghdfe formula (lines 1832-1835):
+                                   rkf = chi2/(N-1) * (N - K - sdofminus - dofminus) * (G-1)/G / L
+                                   where sdofminus = partial_ct (absorbed FE count + constant)
+                                   So dof = N - K_iv - df_a (which includes absorbed FE) */
+                                dof = N - K_iv - df_a;
                                 denom = (ST_double)(N - 1);
                                 cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
                             } else {
-                                /* Robust: dof includes df_a */
+                                /* Robust: ivreghdfe formula is chi2/N * (N - K_iv - sdofminus) / L
+                                   where sdofminus = partial_ct + constant_flag
+                                   For absorb(), sdofminus = G (# FE variables) + 1 (constant) = df_a
+                                   (since df_a = absorbed FE levels + absorbed constant) */
                                 dof = N - K_iv - df_a;
                                 denom = (ST_double)N;
                                 cluster_adj = 1.0;
                             }
                             if (dof <= 0) dof = 1;
 
+                            /* ivreghdfe formula:
+                               rkf = r(chi2)/(N-1) * (N - iv1_ct - sdofminus) * (G-1)/G / L
+                               r(chi2) from ranktest already has scaling adjustments.
+                               Our kp_wald_raw needs similar scaling. */
                             *kp_f = kp_wald_raw / denom * (ST_double)dof * cluster_adj / (ST_double)L;
 
                                 free(ZtZ_shat0_inv_ZtX);
@@ -483,7 +776,73 @@ void civreghdfe_compute_underid_test(
                     /* Now compute KP LM using Z_excl and y_resid */
                     ST_double *shat0_lm = (ST_double *)calloc(L * L, sizeof(ST_double));
                     if (shat0_lm) {
-                        if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
+                        if (kiefer && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
+                            /* Kiefer VCE: HAC within each panel (cluster), not across panels */
+                            ST_int *panel_counts = (ST_int *)calloc(num_clusters, sizeof(ST_int));
+                            ST_int *panel_starts = (ST_int *)calloc(num_clusters + 1, sizeof(ST_int));
+                            ST_int *obs_by_panel = (ST_int *)malloc(N * sizeof(ST_int));
+
+                            if (panel_counts && panel_starts && obs_by_panel) {
+                                /* Count observations per panel */
+                                for (i = 0; i < N; i++) {
+                                    ST_int p = cluster_ids[i] - 1;
+                                    if (p >= 0 && p < num_clusters) {
+                                        panel_counts[p]++;
+                                    }
+                                }
+
+                                /* Compute start indices */
+                                panel_starts[0] = 0;
+                                for (ST_int p = 0; p < num_clusters; p++) {
+                                    panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                                }
+
+                                /* Reset counts for filling */
+                                memset(panel_counts, 0, num_clusters * sizeof(ST_int));
+
+                                /* Fill obs_by_panel (preserves time order within each panel) */
+                                for (i = 0; i < N; i++) {
+                                    ST_int p = cluster_ids[i] - 1;
+                                    if (p >= 0 && p < num_clusters) {
+                                        ST_int idx = panel_starts[p] + panel_counts[p];
+                                        obs_by_panel[idx] = i;
+                                        panel_counts[p]++;
+                                    }
+                                }
+
+                                /* Compute HAC within each panel */
+                                for (ST_int p = 0; p < num_clusters; p++) {
+                                    ST_int start = panel_starts[p];
+                                    ST_int end = panel_starts[p + 1];
+                                    ST_int T_p = end - start;
+
+                                    for (ST_int t1 = 0; t1 < T_p; t1++) {
+                                        ST_int i1 = obs_by_panel[start + t1];
+                                        for (ST_int t2 = 0; t2 < T_p; t2++) {
+                                            ST_int i2 = obs_by_panel[start + t2];
+                                            ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                                            ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                                            if (fabs(kw) < 1e-10) continue;
+
+                                            ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                                            ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                                            ST_double y_prod = w1 * y_resid[i1] * w2 * y_resid[i2];
+
+                                            for (ST_int ki = 0; ki < L; ki++) {
+                                                for (ST_int kj = 0; kj < L; kj++) {
+                                                    shat0_lm[kj * L + ki] += kw * y_prod *
+                                                        Z_excl[ki * N + i1] * Z_excl[kj * N + i2];
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if (panel_counts) free(panel_counts);
+                            if (panel_starts) free(panel_starts);
+                            if (obs_by_panel) free(obs_by_panel);
+                        } else if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
                             ST_double *cluster_Zy = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                             if (cluster_Zy) {
                                 /* Sum Z_excl * y_resid within each cluster */
@@ -496,14 +855,14 @@ void civreghdfe_compute_underid_test(
                                     }
                                 }
 
-                                /* Check if HAC kernel should be applied */
+                                /* Check if HAC kernel should be applied (dkraay only, kiefer handled above) */
                                 if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
                                     /* HAC with kernel weights */
                                     for (ST_int t = 0; t < num_clusters; t++) {
                                         for (ST_int s = 0; s < num_clusters; s++) {
                                             ST_int lag = (t > s) ? (t - s) : (s - t);
                                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                                            if (kw == 0.0) continue;
+                                            if (fabs(kw) < 1e-10) continue;
 
                                             for (ST_int ki = 0; ki < L; ki++) {
                                                 for (ST_int kj = 0; kj < L; kj++) {
@@ -574,7 +933,7 @@ void civreghdfe_compute_underid_test(
                                             ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                             ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                            if (kw == 0.0) continue;
+                                            if (fabs(kw) < 1e-10) continue;
 
                                             ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                             ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -601,7 +960,7 @@ void civreghdfe_compute_underid_test(
                                 for (ST_int s = 0; s < N; s++) {
                                     ST_int lag = (t > s) ? (t - s) : (s - t);
                                     ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                                    if (kw == 0.0) continue;
+                                    if (fabs(kw) < 1e-10) continue;
 
                                     ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
                                     ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
@@ -678,6 +1037,11 @@ void civreghdfe_compute_underid_test(
             free(v);
             free(shat0);
             free(shat0_inv);
+            free(X_endog_partial);
+            free(Z_excl_partial);
+            free(ZtZ_excl);
+            free(ZtX);
+            free(pi_excl);
         }
 
     } else if (K_endog > 1) {
@@ -844,6 +1208,9 @@ void civreghdfe_compute_sargan_j(
     ST_int num_clusters,
     ST_int kernel_type,
     ST_int bw,
+    ST_int kiefer,
+    const ST_int *hac_panel_ids,
+    ST_int num_hac_panels,
     ST_double *sargan_stat,
     ST_int *overid_df
 )
@@ -903,7 +1270,72 @@ void civreghdfe_compute_sargan_j(
             return;
         }
 
-        if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
+        if (kiefer && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
+            /* Kiefer VCE: HAC within each panel (cluster), not across panels */
+            ST_int *panel_counts = (ST_int *)calloc(num_clusters, sizeof(ST_int));
+            ST_int *panel_starts = (ST_int *)calloc(num_clusters + 1, sizeof(ST_int));
+            ST_int *obs_by_panel = (ST_int *)malloc(N * sizeof(ST_int));
+
+            if (panel_counts && panel_starts && obs_by_panel) {
+                /* Count observations per panel */
+                for (i = 0; i < N; i++) {
+                    ST_int p = cluster_ids[i] - 1;
+                    if (p >= 0 && p < num_clusters) {
+                        panel_counts[p]++;
+                    }
+                }
+
+                /* Compute start indices */
+                panel_starts[0] = 0;
+                for (ST_int p = 0; p < num_clusters; p++) {
+                    panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                }
+
+                /* Reset counts for filling */
+                memset(panel_counts, 0, num_clusters * sizeof(ST_int));
+
+                /* Fill obs_by_panel (preserves time order within each panel) */
+                for (i = 0; i < N; i++) {
+                    ST_int p = cluster_ids[i] - 1;
+                    if (p >= 0 && p < num_clusters) {
+                        ST_int idx = panel_starts[p] + panel_counts[p];
+                        obs_by_panel[idx] = i;
+                        panel_counts[p]++;
+                    }
+                }
+
+                /* Compute HAC within each panel */
+                for (ST_int p = 0; p < num_clusters; p++) {
+                    ST_int start = panel_starts[p];
+                    ST_int end = panel_starts[p + 1];
+                    ST_int T_p = end - start;
+
+                    for (ST_int t1 = 0; t1 < T_p; t1++) {
+                        ST_int i1 = obs_by_panel[start + t1];
+                        for (ST_int t2 = 0; t2 < T_p; t2++) {
+                            ST_int i2 = obs_by_panel[start + t2];
+                            ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                            ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                            if (fabs(kw) < 1e-10) continue;
+
+                            ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                            ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                            ST_double r_prod = w1 * resid[i1] * w2 * resid[i2];
+
+                            for (j = 0; j < K_iv; j++) {
+                                for (k = 0; k < K_iv; k++) {
+                                    ZOmegaZ[k * K_iv + j] += kw * r_prod * Z[j * N + i1] * Z[k * N + i2];
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (panel_counts) free(panel_counts);
+            if (panel_starts) free(panel_starts);
+            if (obs_by_panel) free(obs_by_panel);
+        } else if ((vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY) && cluster_ids && num_clusters > 0) {
             /* Cluster-robust or Driscoll-Kraay Z'ΩZ */
             if (vce_type == CIVREGHDFE_VCE_DKRAAY && kernel_type > 0 && bw > 0) {
                 /* HAC with kernel weights for dkraay */
@@ -924,7 +1356,7 @@ void civreghdfe_compute_sargan_j(
                         for (ST_int s = 0; s < num_clusters; s++) {
                             ST_int lag = (t > s) ? (t - s) : (s - t);
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                            if (kw == 0.0) continue;
+                            if (fabs(kw) < 1e-10) continue;
 
                             for (ST_int ki = 0; ki < K_iv; ki++) {
                                 for (ST_int kj = 0; kj < K_iv; kj++) {
@@ -942,20 +1374,88 @@ void civreghdfe_compute_sargan_j(
                                               cluster_ids, N, K_iv, num_clusters, ZOmegaZ);
             }
         } else if (vce_type == CIVREGHDFE_VCE_ROBUST && kernel_type > 0 && bw > 0) {
-            /* HAC (bw + robust without cluster) - apply kernel weights observation by observation */
-            for (ST_int t = 0; t < N; t++) {
-                for (ST_int s = 0; s < N; s++) {
-                    ST_int lag = (t > s) ? (t - s) : (s - t);
-                    ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                    if (kw == 0.0) continue;
+            /* HAC (bw + robust without cluster) - apply kernel weights */
+            if (hac_panel_ids && num_hac_panels > 0) {
+                /* Panel-aware HAC: apply kernel weights within each panel */
+                ST_int *panel_counts = (ST_int *)calloc(num_hac_panels, sizeof(ST_int));
+                ST_int *panel_starts = (ST_int *)calloc(num_hac_panels + 1, sizeof(ST_int));
+                ST_int *obs_by_panel = (ST_int *)malloc(N * sizeof(ST_int));
 
-                    ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
-                    ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
-                    ST_double r_prod = wt * resid[t] * ws * resid[s];
+                if (panel_counts && panel_starts && obs_by_panel) {
+                    /* Count observations per panel */
+                    for (i = 0; i < N; i++) {
+                        ST_int p = hac_panel_ids[i] - 1;
+                        if (p >= 0 && p < num_hac_panels) {
+                            panel_counts[p]++;
+                        }
+                    }
 
-                    for (j = 0; j < K_iv; j++) {
-                        for (k = 0; k < K_iv; k++) {
-                            ZOmegaZ[k * K_iv + j] += kw * r_prod * Z[j * N + t] * Z[k * N + s];
+                    /* Compute start indices */
+                    panel_starts[0] = 0;
+                    for (ST_int p = 0; p < num_hac_panels; p++) {
+                        panel_starts[p + 1] = panel_starts[p] + panel_counts[p];
+                    }
+
+                    /* Reset counts for filling */
+                    memset(panel_counts, 0, num_hac_panels * sizeof(ST_int));
+
+                    /* Fill obs_by_panel */
+                    for (i = 0; i < N; i++) {
+                        ST_int p = hac_panel_ids[i] - 1;
+                        if (p >= 0 && p < num_hac_panels) {
+                            ST_int idx = panel_starts[p] + panel_counts[p];
+                            obs_by_panel[idx] = i;
+                            panel_counts[p]++;
+                        }
+                    }
+
+                    /* Compute HAC within each panel */
+                    for (ST_int p = 0; p < num_hac_panels; p++) {
+                        ST_int start = panel_starts[p];
+                        ST_int end = panel_starts[p + 1];
+                        ST_int T_p = end - start;
+
+                        for (ST_int t1 = 0; t1 < T_p; t1++) {
+                            ST_int i1 = obs_by_panel[start + t1];
+                            for (ST_int t2 = 0; t2 < T_p; t2++) {
+                                ST_int i2 = obs_by_panel[start + t2];
+                                ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
+
+                                ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
+                                if (fabs(kw) < 1e-10) continue;
+
+                                ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
+                                ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
+                                ST_double r_prod = w1 * resid[i1] * w2 * resid[i2];
+
+                                for (j = 0; j < K_iv; j++) {
+                                    for (k = 0; k < K_iv; k++) {
+                                        ZOmegaZ[k * K_iv + j] += kw * r_prod * Z[j * N + i1] * Z[k * N + i2];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (panel_counts) free(panel_counts);
+                if (panel_starts) free(panel_starts);
+                if (obs_by_panel) free(obs_by_panel);
+            } else {
+                /* Non-panel HAC: use raw observation indices */
+                for (ST_int t = 0; t < N; t++) {
+                    for (ST_int s = 0; s < N; s++) {
+                        ST_int lag = (t > s) ? (t - s) : (s - t);
+                        ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
+                        if (fabs(kw) < 1e-10) continue;
+
+                        ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
+                        ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
+                        ST_double r_prod = wt * resid[t] * ws * resid[s];
+
+                        for (j = 0; j < K_iv; j++) {
+                            for (k = 0; k < K_iv; k++) {
+                                ZOmegaZ[k * K_iv + j] += kw * r_prod * Z[j * N + t] * Z[k * N + s];
+                            }
                         }
                     }
                 }

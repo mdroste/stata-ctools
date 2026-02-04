@@ -74,19 +74,26 @@ creghdfe y x1 x2, absorb(firm year industry)
 
 `creghdfe` achieves its speed through:
 
-### Conjugate Gradient Solver
-- Uses CG iteration with Kaczmarz-style symmetric sweeping
-- Converges in O(sqrt(condition number)) iterations
-- Much faster than direct projection for large fixed effects
+### Speedup Tricks
 
-### Parallel Computation
-- OpenMP parallelization for matrix operations
-- Parallel data loading with 8-way loop unrolling
-- Efficient memory access patterns
+**CG Solver and HDFE Absorption:**
+- **Symmetric Kaczmarz transform**: Forward + backward sweep per CG iteration doubles convergence rate compared to a one-directional sweep
+- **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, since division is 5-20x slower than multiplication on modern CPUs
+- **Counting sort for CSR index construction**: Builds compressed sparse row indices in O(N+L) instead of O(N log N), where L is the number of FE levels
+- **Two-pass singleton detection**: First pass counts group sizes, second pass marks singletons—avoids expensive repeated scans
+- **Iterative singleton removal**: Handles connected components where dropping one singleton creates new singletons
 
-### Iterative Demeaning
-- Fixed effects are absorbed via iterative mean removal
-- Convergence is fast for typical panel data structures
+**Linear Algebra:**
+- **K-way unrolled dot product**: `ctools_dot_unrolled` processes 8 or 16 elements per loop iteration, improving instruction-level parallelism and reducing loop overhead
+- **Fused project-subtract**: Combines FE projection and subtraction in a single pass over the data, halving memory traffic
+- **Cholesky decomposition for (X'X)^-1**: Exploits symmetric positive-definiteness for efficient normal equation solving
+- **OpenMP SIMD pragmas**: Compiler hints trigger auto-vectorization of inner loops
+
+**Data I/O:**
+- **SIMD bulk load/store**: AVX2/SSE2 (x86) and NEON (ARM64) for parallel variable loading with 16x unrolling
+- **Thread-local buffers**: Each OpenMP thread has its own accumulator, eliminating contention during parallel demeaning
+- **Cache-line aligned allocations**: 64-byte boundaries prevent false sharing between threads
+- **Persistent thread pool**: Threads are reused across CG iterations
 
 ## Algorithm
 

@@ -127,6 +127,7 @@ ST_retcode ols_residualize(
     const ST_double *weights,
     ST_int weight_type
 ) {
+    ST_double *X_full = NULL;  /* Controls + constant */
     ST_double *XtX = NULL;
     ST_double *Xty = NULL;
     ST_double *Xtx = NULL;
@@ -135,23 +136,38 @@ ST_retcode ols_residualize(
     ST_retcode rc = CBINSCATTER_OK;
     ST_int i, j;
     ST_double w, xj;
+    ST_int K_full = K + 1;  /* K controls + 1 constant */
 
     (void)weight_type;  /* Currently unused, reserved for future */
 
-    /* Allocate working arrays (with overflow-safe multiplication) */
-    XtX = (ST_double *)ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(ST_double));
-    Xty = (ST_double *)ctools_safe_calloc2((size_t)K, sizeof(ST_double));
-    Xtx = (ST_double *)ctools_safe_calloc2((size_t)K, sizeof(ST_double));
-    beta_y = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
-    beta_x = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
+    /* Allocate working arrays (with overflow-safe multiplication)
+     * Include an extra column for the constant term */
+    X_full = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_full, sizeof(ST_double));
+    XtX = (ST_double *)ctools_safe_malloc3((size_t)K_full, (size_t)K_full, sizeof(ST_double));
+    Xty = (ST_double *)ctools_safe_calloc2((size_t)K_full, sizeof(ST_double));
+    Xtx = (ST_double *)ctools_safe_calloc2((size_t)K_full, sizeof(ST_double));
+    beta_y = (ST_double *)ctools_safe_malloc2((size_t)K_full, sizeof(ST_double));
+    beta_x = (ST_double *)ctools_safe_malloc2((size_t)K_full, sizeof(ST_double));
 
-    if (!XtX || !Xty || !Xtx || !beta_y || !beta_x) {
+    if (!X_full || !XtX || !Xty || !Xtx || !beta_y || !beta_x) {
         rc = CBINSCATTER_ERR_MEMORY;
         goto cleanup;
     }
 
+    /* Build design matrix: [constant | controls] */
+    /* Column 0: constant (all 1s) */
+    for (i = 0; i < N; i++) {
+        X_full[0 * N + i] = 1.0;
+    }
+    /* Columns 1 to K: controls */
+    for (j = 0; j < K; j++) {
+        for (i = 0; i < N; i++) {
+            X_full[(j + 1) * N + i] = controls[j * N + i];
+        }
+    }
+
     /* Compute X'X */
-    rc = compute_xtx_weighted(controls, N, K, weights, XtX);
+    rc = compute_xtx_weighted(X_full, N, K_full, weights, XtX);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     /* Compute X'y and X'x */
@@ -159,32 +175,32 @@ ST_retcode ols_residualize(
         w = (weights != NULL) ? weights[i] : 1.0;
         ST_double wy = w * y[i];
         ST_double wx = w * x[i];
-        for (j = 0; j < K; j++) {
-            xj = controls[j * N + i];
+        for (j = 0; j < K_full; j++) {
+            xj = X_full[j * N + i];
             Xty[j] += xj * wy;
             Xtx[j] += xj * wx;
         }
     }
 
     /* Cholesky decomposition of X'X */
-    rc = cholesky_decompose(XtX, K);
+    rc = cholesky_decompose(XtX, K_full);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     /* Solve for beta_y: (X'X) * beta_y = X'y */
-    memcpy(beta_y, Xty, K * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K, beta_y);
+    memcpy(beta_y, Xty, K_full * sizeof(ST_double));
+    rc = cholesky_solve(XtX, K_full, beta_y);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     /* Solve for beta_x: (X'X) * beta_x = X'x */
-    memcpy(beta_x, Xtx, K * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K, beta_x);
+    memcpy(beta_x, Xtx, K_full * sizeof(ST_double));
+    rc = cholesky_solve(XtX, K_full, beta_x);
     if (rc != CBINSCATTER_OK) goto cleanup;
 
     /* Compute residuals: y - X*beta_y, x - X*beta_x */
     for (i = 0; i < N; i++) {
         ST_double fitted_y = 0.0, fitted_x = 0.0;
-        for (j = 0; j < K; j++) {
-            xj = controls[j * N + i];
+        for (j = 0; j < K_full; j++) {
+            xj = X_full[j * N + i];
             fitted_y += xj * beta_y[j];
             fitted_x += xj * beta_x[j];
         }
@@ -193,6 +209,7 @@ ST_retcode ols_residualize(
     }
 
 cleanup:
+    free(X_full);
     free(XtX);
     free(Xty);
     free(Xtx);

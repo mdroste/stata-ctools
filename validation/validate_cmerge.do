@@ -17,6 +17,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cmerge..."
+
 * Basic 1:1 merge tests
 
 * Numeric key
@@ -2940,5 +2942,63 @@ else {
     test_fail "single obs" "rc=`=_rc'"
 }
 
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cmerge returns the same error codes as Stata's merge
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Using file doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(merge 1:1 make using "nonexistent_file.dta") ctools_cmd(cmerge 1:1 make using "nonexistent_file.dta", noreport) testname("using file doesn't exist")
+
+* Key variable doesn't exist
+sysuse auto, clear
+tempfile using_file
+save `using_file'
+test_error_match, stata_cmd(merge 1:1 nonexistent_var using `using_file') ctools_cmd(cmerge 1:1 nonexistent_var using `using_file', noreport) testname("key variable doesn't exist")
+
+* Invalid merge type
+sysuse auto, clear
+tempfile using_file
+save `using_file'
+test_error_match, stata_cmd(merge invalid_type make using `using_file') ctools_cmd(cmerge invalid_type make using `using_file', noreport) testname("invalid merge type")
+
+* _merge variable already exists
+sysuse auto, clear
+gen _merge = 1
+tempfile using_file
+save `using_file'
+test_error_match, stata_cmd(merge 1:1 make using `using_file') ctools_cmd(cmerge 1:1 make using `using_file', noreport) testname("_merge variable already exists")
+
+* Empty master dataset
+clear
+set obs 0
+gen id = .
+tempfile using_file
+clear
+set obs 5
+gen id = _n
+save `using_file'
+clear
+set obs 0
+gen id = .
+capture merge 1:1 id using `using_file'
+local stata_rc = _rc
+clear
+set obs 0
+gen id = .
+capture cmerge 1:1 id using `using_file', noreport
+local cmerge_rc = _rc
+if `stata_rc' == `cmerge_rc' {
+    test_pass "[error] empty master dataset (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] empty master dataset" "stata rc=`stata_rc', cmerge rc=`cmerge_rc'"
+}
+
 * End of cmerge validation
+noi print_summary "cmerge"
 }

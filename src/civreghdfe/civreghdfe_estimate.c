@@ -11,10 +11,12 @@
 #include <stdio.h>
 
 #include "civreghdfe_estimate.h"
+#include "civreghdfe_impl.h"  /* For g_civreghdfe_noreturn */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_config.h"
+#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
 
 /* OpenMP for parallel residual computation */
 #ifdef _OPENMP
@@ -575,6 +577,8 @@ static ST_double cue_objective(
 
     /* Compute g = Z'e */
     ST_double *g = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    if (!g) return 1e30;  /* Return large value on allocation failure */
+
     for (i = 0; i < N; i++) {
         for (j = 0; j < K_iv; j++) {
             g[j] += Z[j * N + i] * work_resid[i];
@@ -587,6 +591,10 @@ static ST_double cue_objective(
         /* Homoskedastic: Q = e'Pz e / σ² = g'(Z'Z)^{-1}g / (e'e/N) */
         /* Compute g'(Z'Z)^{-1}g using pre-computed ZtZ_inv */
         ST_double *temp = (ST_double *)calloc(K_iv, sizeof(ST_double));
+        if (!temp) {
+            free(g);
+            return 1e30;  /* Return large value on allocation failure */
+        }
         for (i = 0; i < K_iv; i++) {
             for (j = 0; j < K_iv; j++) {
                 temp[i] += ctx->ZtZ_inv[j * K_iv + i] * g[j];
@@ -611,9 +619,18 @@ static ST_double cue_objective(
         ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
         ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
 
+        if (!ZOmegaZ || !ZOmegaZ_inv) {
+            free(g); free(ZOmegaZ); free(ZOmegaZ_inv);
+            return 1e30;  /* Return large value on allocation failure */
+        }
+
         if (cluster_ids && num_clusters > 0) {
             /* Cluster-robust */
             ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+            if (!cluster_ze) {
+                free(g); free(ZOmegaZ); free(ZOmegaZ_inv);
+                return 1e30;  /* Return large value on allocation failure */
+            }
             for (i = 0; i < N; i++) {
                 ST_int c = cluster_ids[i] - 1;
                 if (c < 0 || c >= num_clusters) continue;
@@ -1063,17 +1080,28 @@ ST_retcode ivest_compute_2sls(
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
     ST_int sdofminus,
-    ST_int center
+    ST_int center,
+    const ST_double *Z_original  /* Original (non-demeaned) Z for Kiefer VCE */
 )
 {
     ST_int K_total = K_exog + K_endog;  /* Total regressors */
     ST_int i, j, k;
 
     /* Suppress unused variable warnings for not-yet-implemented features */
-    /* TODO: sdofminus is for additional small-sample DOF adjustment in VCE */
     /* TODO: center is for centering HAC score vectors before outer product */
-    (void)sdofminus;
     (void)center;
+
+    /* sdofminus is the FULL df_a (including all absorbed FE), used for test statistics DOF.
+       This differs from the df_a parameter which is df_a_for_vce (excluding nested FE).
+       For VCE computation, use df_a. For test statistics, use sdofminus. */
+    ST_int df_a_full = (sdofminus > 0) ? sdofminus : df_a;
+
+    if (verbose) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "civreghdfe: df_a=%d, sdofminus=%d, df_a_full=%d\n",
+                 (int)df_a, (int)sdofminus, (int)df_a_full);
+        SF_display(buf);
+    }
 
     /* Determine k value based on estimation method */
     ST_double kclass = 1.0;  /* Default: 2SLS */
@@ -1253,6 +1281,12 @@ ST_retcode ivest_compute_2sls(
     /* Step 6: Compute X'P_Z y = (Z'X)' * (Z'Z)^-1 * Z'y */
     /* First compute (Z'Z)^-1 * Z'y */
     ST_double *ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    if (!ZtZ_inv_Zty) {
+        SF_error("civreghdfe: Memory allocation failed for ZtZ_inv_Zty\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        return 920;
+    }
     for (i = 0; i < K_iv; i++) {
         ST_double sum = 0.0;
         for (k = 0; k < K_iv; k++) {
@@ -1275,6 +1309,14 @@ ST_retcode ivest_compute_2sls(
     ST_double *Xty = NULL;
     ST_double *XkX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     ST_double *Xky = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+    if (!XkX || !Xky) {
+        SF_error("civreghdfe: Memory allocation failed for XkX/Xky\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        free(ZtZ_inv_Zty); free(XkX); free(Xky);
+        return 920;
+    }
 
     if (kclass != 1.0) {
         XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
@@ -1326,6 +1368,16 @@ ST_retcode ivest_compute_2sls(
 
     /* Step 7: Solve XkX * beta = Xky */
     ST_double *XkX_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+    if (!XkX_copy) {
+        SF_error("civreghdfe: Memory allocation failed for XkX_copy\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        free(ZtZ_inv_Zty);
+        if (XtX) free(XtX);
+        if (Xty) free(Xty);
+        free(XkX); free(Xky);
+        return 920;
+    }
     memcpy(XkX_copy, XkX, K_total * K_total * sizeof(ST_double));
 
     /* Use Cholesky solve */
@@ -1342,6 +1394,16 @@ ST_retcode ivest_compute_2sls(
 
     /* Forward substitution */
     ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
+    if (!beta_temp) {
+        SF_error("civreghdfe: Memory allocation failed for beta_temp\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        free(ZtZ_inv_Zty); free(XkX_copy);
+        if (XtX) free(XtX);
+        if (Xty) free(Xty);
+        free(XkX); free(Xky);
+        return 920;
+    }
     for (i = 0; i < K_total; i++) {
         ST_double sum = Xky[i];
         for (j = 0; j < i; j++) {
@@ -1591,18 +1653,27 @@ ST_retcode ivest_compute_2sls(
         );
     } else if (kiefer && kernel_type > 0 && bw > 0 && cluster_ids != NULL && num_clusters > 0) {
         /*
-           Kiefer (1980) VCE: panel-aware HAC with truncated kernel.
-           Computes HAC meat only within panels (not across panels).
-           Uses the same formula as cluster-robust but with different DOF adjustment.
+           Kiefer (1980) VCE: homoskedastic within-panel autocorrelation.
+           Unlike cluster-robust, Kiefer assumes homoskedasticity.
+           Uses ivvce_compute_kiefer which implements the correct formula.
         */
         if (verbose) {
             char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: Using Kiefer VCE (kernel=%d, bw=%d, clusters=%d)\n",
+            snprintf(buf, sizeof(buf), "civreghdfe: Using Kiefer VCE (kernel=%d, bw=%d, panels=%d)\n",
                      (int)kernel_type, (int)bw, (int)num_clusters);
             SF_display(buf);
         }
+        /* Use original (non-demeaned) Z for Kiefer VCE
+           This ensures sum_t(Z'e) != 0, which is required for the Kiefer formula
+           to produce non-zero results */
+        const ST_double *Z_for_kiefer = Z_original ? Z_original : Z;
+        /* Note: Kiefer VCE with time-clustering is currently not fully compatible
+           with FE demeaning. The FE structure causes residuals to have zero mean
+           within each panel, which makes sum_t(Z_it * e_it) small when summed
+           across panels. This is a known limitation.
+           TODO: Investigate ivreg2's approach for proper Kiefer + FE handling. */
         ivvce_compute_kiefer(
-            Z, resid, temp1, XkX_inv,
+            Z_for_kiefer, resid, temp1, XkX_inv,
             weights, weight_type,
             N, K_total, K_iv,
             cluster_ids, num_clusters,
@@ -1732,9 +1803,11 @@ ST_retcode ivest_compute_2sls(
             if (first_stage_F[e] < 0) first_stage_F[e] = 0;
 
             /* Save partial R² for ffirst display */
-            char r2_name[64];
-            snprintf(r2_name, sizeof(r2_name), "__civreghdfe_partial_r2_%d", (int)(e + 1));
-            SF_scal_save(r2_name, partial_r2);
+            if (!g_civreghdfe_noreturn) {
+                char r2_name[64];
+                snprintf(r2_name, sizeof(r2_name), "__civreghdfe_partial_r2_%d", (int)(e + 1));
+                ctools_scal_save(r2_name, partial_r2);
+            }
 
             if (verbose) {
                 char buf[256];
@@ -1755,16 +1828,18 @@ ST_retcode ivest_compute_2sls(
 
     civreghdfe_compute_underid_test(
         X_endog, Z, ZtZ, ZtZ_inv, temp1, first_stage_F,
-        weights, weight_type, N, K_exog, K_endog, K_iv, df_a,
+        weights, weight_type, N, K_exog, K_endog, K_iv, df_a_full,
         vce_type, cluster_ids, num_clusters,
-        kernel_type, bw,
+        kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
         &underid_stat, &underid_df, &cd_f, &kp_f
     );
 
     /* Store underidentification test result */
-    SF_scal_save("__civreghdfe_underid", underid_stat);
-    SF_scal_save("__civreghdfe_underid_df", (ST_double)underid_df);
+    if (!g_civreghdfe_noreturn) {
+        ctools_scal_save("__civreghdfe_underid", underid_stat);
+        ctools_scal_save("__civreghdfe_underid_df", (ST_double)underid_df);
+    }
 
     /* Step 11: Compute Sargan/Hansen J overidentification test */
     /* Calls modular function from civreghdfe_tests.c */
@@ -1775,15 +1850,18 @@ ST_retcode ivest_compute_2sls(
         resid, Z, ZtZ_inv, rss,
         weights, weight_type, N, K_exog, K_endog, K_iv,
         vce_type, cluster_ids, num_clusters,
-        kernel_type, bw,
+        kernel_type, bw, kiefer,
+        hac_panel_ids, num_hac_panels,
         &sargan_stat, &overid_df
     );
 
     /* Store diagnostic statistics as Stata scalars */
-    SF_scal_save("__civreghdfe_sargan", sargan_stat);
-    SF_scal_save("__civreghdfe_sargan_df", (ST_double)overid_df);
-    SF_scal_save("__civreghdfe_cd_f", cd_f);
-    SF_scal_save("__civreghdfe_kp_f", kp_f);
+    if (!g_civreghdfe_noreturn) {
+        ctools_scal_save("__civreghdfe_sargan", sargan_stat);
+        ctools_scal_save("__civreghdfe_sargan_df", (ST_double)overid_df);
+        ctools_scal_save("__civreghdfe_cd_f", cd_f);
+        ctools_scal_save("__civreghdfe_kp_f", kp_f);
+    }
 
     /* Step 12: Compute Durbin-Wu-Hausman endogeneity test */
     /* Calls modular function from civreghdfe_tests.c */
@@ -1793,13 +1871,15 @@ ST_retcode ivest_compute_2sls(
 
     civreghdfe_compute_dwh_test(
         y, X_exog, X_endog, Z, temp1,
-        N, K_exog, K_endog, K_iv, df_a,
+        N, K_exog, K_endog, K_iv, df_a_full,
         &endog_chi2, &endog_f, &endog_df
     );
 
-    SF_scal_save("__civreghdfe_endog_chi2", endog_chi2);
-    SF_scal_save("__civreghdfe_endog_f", endog_f);
-    SF_scal_save("__civreghdfe_endog_df", (ST_double)endog_df);
+    if (!g_civreghdfe_noreturn) {
+        ctools_scal_save("__civreghdfe_endog_chi2", endog_chi2);
+        ctools_scal_save("__civreghdfe_endog_f", endog_f);
+        ctools_scal_save("__civreghdfe_endog_df", (ST_double)endog_df);
+    }
 
     /* Step 13: Compute optional diagnostic tests (orthog, endogtest, redundant) */
     ST_double dval_test;
@@ -1830,8 +1910,10 @@ ST_retcode ivest_compute_2sls(
                 sargan_stat, &cstat, &cstat_df
             );
 
-            SF_scal_save("__civreghdfe_cstat", cstat);
-            SF_scal_save("__civreghdfe_cstat_df", (ST_double)cstat_df);
+            if (!g_civreghdfe_noreturn) {
+                ctools_scal_save("__civreghdfe_cstat", cstat);
+                ctools_scal_save("__civreghdfe_cstat_df", (ST_double)cstat_df);
+            }
 
             free(orthog_indices);
         }
@@ -1859,13 +1941,15 @@ ST_retcode ivest_compute_2sls(
 
             civreghdfe_compute_endogtest_subset(
                 y, X_exog, X_endog, Z, temp1,
-                N, K_exog, K_endog, K_iv, df_a,
+                N, K_exog, K_endog, K_iv, df_a_full,
                 endogtest_indices, n_endogtest,
                 &endogtest_stat, &endogtest_df_out
             );
 
-            SF_scal_save("__civreghdfe_endogtest_stat", endogtest_stat);
-            SF_scal_save("__civreghdfe_endogtest_df", (ST_double)endogtest_df_out);
+            if (!g_civreghdfe_noreturn) {
+                ctools_scal_save("__civreghdfe_endogtest_stat", endogtest_stat);
+                ctools_scal_save("__civreghdfe_endogtest_df", (ST_double)endogtest_df_out);
+            }
 
             free(endogtest_indices);
         }
@@ -1897,8 +1981,10 @@ ST_retcode ivest_compute_2sls(
                 &redund_stat, &redund_df
             );
 
-            SF_scal_save("__civreghdfe_redund_stat", redund_stat);
-            SF_scal_save("__civreghdfe_redund_df", (ST_double)redund_df);
+            if (!g_civreghdfe_noreturn) {
+                ctools_scal_save("__civreghdfe_redund_stat", redund_stat);
+                ctools_scal_save("__civreghdfe_redund_df", (ST_double)redund_df);
+            }
 
             free(redund_indices);
         }

@@ -89,7 +89,7 @@ static inline size_t xoshiro256_uniform(xoshiro256_state *state, size_t n) {
 }
 
 /* ===========================================================================
-   Group Detection (same pattern as cwinsor)
+   Group Detection
    =========================================================================== */
 
 typedef struct {
@@ -97,82 +97,108 @@ typedef struct {
     size_t count;
 } group_info;
 
-typedef struct {
-    double **by_data;
-    size_t nby;
-} sort_context;
+/* Check if two adjacent observations are in the same group */
+static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
+    for (size_t b = 0; b < nvars; b++) {
+        double prev = data->vars[b].data.dbl[i - 1];
+        double curr = data->vars[b].data.dbl[i];
 
-static sort_context g_sort_ctx;
+        int prev_miss = (prev >= miss);
+        int curr_miss = (curr >= miss);
 
-static int compare_by_indices(const void *a, const void *b) {
-    size_t ia = *(const size_t *)a;
-    size_t ib = *(const size_t *)b;
-    const double miss = SV_missval;
-
-    for (size_t k = 0; k < g_sort_ctx.nby; k++) {
-        double va = g_sort_ctx.by_data[k][ia];
-        double vb = g_sort_ctx.by_data[k][ib];
-
-        int ma = (va >= miss);
-        int mb = (vb >= miss);
-
-        if (ma && mb) continue;
-        if (ma) return 1;
-        if (mb) return -1;
-
-        if (va < vb) return -1;
-        if (va > vb) return 1;
+        if (prev_miss && curr_miss) continue;
+        if (prev_miss || curr_miss || prev != curr) {
+            return 0;
+        }
     }
-    return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+    return 1;
 }
 
-static void argsort_by_vars(double **by_data, size_t nobs, size_t nby, size_t *indices) {
-    for (size_t i = 0; i < nobs; i++) {
-        indices[i] = i;
-    }
-    g_sort_ctx.by_data = by_data;
-    g_sort_ctx.nby = nby;
-    qsort(indices, nobs, sizeof(size_t), compare_by_indices);
-}
-
-static void detect_groups(double **by_data, size_t nobs, size_t nby,
-                          group_info *groups, size_t *ngroups) {
+/* Detect groups from sorted stata_data (data must already be sorted/permuted)
+   Parallelized for large datasets using boundary detection */
+static void detect_groups_from_data(stata_data *data, size_t nvars,
+                                     group_info *groups, size_t *ngroups) {
+    size_t nobs = data->nobs;
     if (nobs == 0) {
         *ngroups = 0;
         return;
     }
 
     const double miss = SV_missval;
-    size_t g = 0;
-    groups[0].start = 0;
-    groups[0].count = 1;
 
-    for (size_t i = 1; i < nobs; i++) {
-        int same_group = 1;
+    #ifdef _OPENMP
+    int num_threads = omp_get_max_threads();
 
-        for (size_t b = 0; b < nby && same_group; b++) {
-            double prev = by_data[b][i - 1];
-            double curr = by_data[b][i];
+    /* For small datasets or few threads, use sequential version */
+    if (nobs < 10000 || num_threads <= 1) {
+    #endif
+        /* Sequential version */
+        size_t g = 0;
+        groups[0].start = 0;
+        groups[0].count = 1;
 
-            int prev_miss = (prev >= miss);
-            int curr_miss = (curr >= miss);
-
-            if (prev_miss && curr_miss) continue;
-            if (prev_miss || curr_miss || prev != curr) {
-                same_group = 0;
+        for (size_t i = 1; i < nobs; i++) {
+            if (same_group_check(data, nvars, i, miss)) {
+                groups[g].count++;
+            } else {
+                g++;
+                groups[g].start = i;
+                groups[g].count = 1;
             }
         }
+        *ngroups = g + 1;
+        return;
+    #ifdef _OPENMP
+    }
 
-        if (same_group) {
-            groups[g].count++;
-        } else {
-            g++;
-            groups[g].start = i;
-            groups[g].count = 1;
+    /* Parallel version: first find all group boundaries */
+    uint8_t *boundaries = (uint8_t *)calloc(nobs, sizeof(uint8_t));
+    if (!boundaries) {
+        /* Fallback to sequential */
+        size_t g = 0;
+        groups[0].start = 0;
+        groups[0].count = 1;
+        for (size_t i = 1; i < nobs; i++) {
+            if (same_group_check(data, nvars, i, miss)) {
+                groups[g].count++;
+            } else {
+                g++;
+                groups[g].start = i;
+                groups[g].count = 1;
+            }
+        }
+        *ngroups = g + 1;
+        return;
+    }
+
+    boundaries[0] = 1;  /* First obs is always a boundary */
+
+    /* Phase 1: Parallel boundary detection */
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 1; i < nobs; i++) {
+        if (!same_group_check(data, nvars, i, miss)) {
+            boundaries[i] = 1;
         }
     }
 
-    *ngroups = g + 1;
+    /* Phase 2: Sequential group construction */
+    size_t g = 0;
+    for (size_t i = 0; i < nobs; i++) {
+        if (boundaries[i]) {
+            if (g > 0) {
+                groups[g - 1].count = i - groups[g - 1].start;
+            }
+            groups[g].start = i;
+            g++;
+        }
+    }
+    if (g > 0) {
+        groups[g - 1].count = nobs - groups[g - 1].start;
+    }
+
+    free(boundaries);
+    *ngroups = g;
+    #endif
 }
 
 /* ===========================================================================
@@ -241,14 +267,18 @@ static int parse_int_array(int *arr, size_t count, const char **start) {
 ST_retcode csample_main(const char *args) {
     double t_start, t_load, t_sort, t_sample, t_store;
     int *by_indices = NULL;
-    double **by_data = NULL;
+    int *sort_vars = NULL;
     uint8_t *keep_flags = NULL;
     group_info *groups = NULL;
-    size_t *sort_indices = NULL;
+    perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
     size_t *work_indices = NULL;
+    ctools_filtered_data by_filtered;
+    perm_idx_t *obs_map = NULL;
+    stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
 
+    ctools_filtered_data_init(&by_filtered);
     t_start = ctools_timer_seconds();
     t_sort = 0.0;
 
@@ -307,16 +337,6 @@ ST_retcode csample_main(const char *args) {
         }
     }
 
-    ST_int obs1 = SF_in1();
-    ST_int obs2 = SF_in2();
-    size_t nobs = (size_t)(obs2 - obs1 + 1);
-
-    if (nobs == 0) {
-        if (by_indices) free(by_indices);
-        ctools_error(CSAMPLE_MODULE, "no observations");
-        return 2000;
-    }
-
     #ifdef _OPENMP
     num_threads = omp_get_max_threads();
     #endif
@@ -326,59 +346,82 @@ ST_retcode csample_main(const char *args) {
         config.seed = (uint64_t)time(NULL) ^ ((uint64_t)clock() << 32);
     }
 
-    /* === Load Phase === */
+    /* === Load Phase using ctools_data_load === */
     double load_start = ctools_timer_seconds();
+
+    size_t nobs;
+    size_t ngroups = 1;
+
+    /* Load by-variables if specified using filtered loading */
+    if (nby > 0) {
+        rc = ctools_data_load(&by_filtered, by_indices, nby, 0, 0, 0);
+        if (rc != STATA_OK) {
+            free(by_indices);
+            ctools_error(CSAMPLE_MODULE, "failed to load data");
+            return 920;
+        }
+        nobs = by_filtered.data.nobs;
+        obs_map = by_filtered.obs_map;
+    } else {
+        /* No by-variables - build obs_map directly from SF_ifobs */
+        ST_int in1 = SF_in1();
+        ST_int in2 = SF_in2();
+
+        /* First pass: count filtered observations */
+        nobs = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) nobs++;
+        }
+
+        if (nobs == 0) {
+            if (by_indices) free(by_indices);
+            ctools_error(CSAMPLE_MODULE, "no observations");
+            return 2000;
+        }
+
+        /* Allocate and build obs_map */
+        obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (!obs_map) {
+            if (by_indices) free(by_indices);
+            ctools_error_alloc(CSAMPLE_MODULE);
+            return 920;
+        }
+
+        size_t idx = 0;
+        for (ST_int obs = in1; obs <= in2; obs++) {
+            if (SF_ifobs(obs)) {
+                obs_map[idx++] = (perm_idx_t)obs;
+            }
+        }
+    }
+
+    if (nobs == 0) {
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
+        if (by_indices) free(by_indices);
+        ctools_error(CSAMPLE_MODULE, "no observations");
+        return 2000;
+    }
 
     /* Allocate keep flags */
     keep_flags = (uint8_t *)calloc(nobs, sizeof(uint8_t));
     if (!keep_flags) {
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
         return 920;
     }
 
-    /* Load by-variables if specified */
-    if (nby > 0) {
-        by_data = (double **)malloc(nby * sizeof(double *));
-        if (!by_data) {
-            free(keep_flags);
-            free(by_indices);
-            ctools_error_alloc(CSAMPLE_MODULE);
-            return 920;
-        }
-
-        for (size_t b = 0; b < nby; b++) {
-            by_data[b] = (double *)malloc(nobs * sizeof(double));
-            if (!by_data[b]) {
-                for (size_t j = 0; j < b; j++) free(by_data[j]);
-                free(by_data);
-                free(keep_flags);
-                free(by_indices);
-                ctools_error_alloc(CSAMPLE_MODULE);
-                return 920;
-            }
-
-            int idx = by_indices[b];
-            for (size_t i = 0; i < nobs; i++) {
-                double val;
-                if (SF_vdata(idx, (ST_int)(obs1 + i), &val) != 0) val = SV_missval;
-                by_data[b][i] = val;
-            }
-        }
-    }
-
     t_load = ctools_timer_seconds() - load_start;
 
-    /* === Sort Phase (if by-variables) === */
+    /* === Sort Phase using ctools_sort_dispatch (if by-variables) === */
     double sort_start = ctools_timer_seconds();
 
-    size_t ngroups = 1;
     groups = (group_info *)malloc((nobs + 1) * sizeof(group_info));
     if (!groups) {
-        if (by_data) {
-            for (size_t b = 0; b < nby; b++) free(by_data[b]);
-            free(by_data);
-        }
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
+        else if (obs_map) free(obs_map);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -386,41 +429,63 @@ ST_retcode csample_main(const char *args) {
     }
 
     if (nby > 0) {
-        sort_indices = (size_t *)malloc(nobs * sizeof(size_t));
-        if (!sort_indices) {
+        /* Build sort_vars array (1-based indices into loaded data) */
+        sort_vars = (int *)malloc(nby * sizeof(int));
+        if (!sort_vars) {
             free(groups);
-            for (size_t b = 0; b < nby; b++) free(by_data[b]);
-            free(by_data);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error_alloc(CSAMPLE_MODULE);
             return 920;
         }
+        for (size_t i = 0; i < nby; i++) {
+            sort_vars[i] = (int)(i + 1);  /* 1-based */
+        }
 
-        argsort_by_vars(by_data, nobs, nby, sort_indices);
-
-        /* Reorder by_data arrays by sort order */
-        double *temp = (double *)malloc(nobs * sizeof(double));
-        if (!temp) {
-            free(sort_indices);
+        /* Sort using counting sort for integer group variables (optimal for ties),
+           fall back to LSD radix if data isn't suitable for counting sort */
+        rc = ctools_sort_dispatch(&by_filtered.data, sort_vars, nby, SORT_ALG_COUNTING);
+        if (rc != STATA_OK) {
+            free(sort_vars);
             free(groups);
-            for (size_t b = 0; b < nby; b++) free(by_data[b]);
-            free(by_data);
+            ctools_filtered_data_free(&by_filtered);
+            free(keep_flags);
+            free(by_indices);
+            ctools_error(CSAMPLE_MODULE, "sort failed");
+            return 920;
+        }
+
+        /* Save the sort permutation before applying (for mapping back to original indices) */
+        sort_perm = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+        if (!sort_perm) {
+            free(sort_vars);
+            free(groups);
+            ctools_filtered_data_free(&by_filtered);
             free(keep_flags);
             free(by_indices);
             ctools_error_alloc(CSAMPLE_MODULE);
             return 920;
         }
+        memcpy(sort_perm, by_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
 
-        for (size_t b = 0; b < nby; b++) {
-            for (size_t i = 0; i < nobs; i++) {
-                temp[i] = by_data[b][sort_indices[i]];
-            }
-            memcpy(by_data[b], temp, nobs * sizeof(double));
+        /* Apply permutation to physically reorder the data */
+        rc = ctools_apply_permutation(&by_filtered.data);
+        if (rc != STATA_OK) {
+            free(sort_perm);
+            free(sort_vars);
+            free(groups);
+            ctools_filtered_data_free(&by_filtered);
+            free(keep_flags);
+            free(by_indices);
+            ctools_error(CSAMPLE_MODULE, "permutation failed");
+            return 920;
         }
-        free(temp);
 
-        detect_groups(by_data, nobs, nby, groups, &ngroups);
+        free(sort_vars);
+
+        /* Detect groups from sorted data */
+        detect_groups_from_data(&by_filtered.data, nby, groups, &ngroups);
     } else {
         groups[0].start = 0;
         groups[0].count = nobs;
@@ -434,21 +499,13 @@ ST_retcode csample_main(const char *args) {
     /* Allocate thread-local RNGs */
     thread_rngs = (xoshiro256_state *)malloc(num_threads * sizeof(xoshiro256_state));
     if (!thread_rngs) {
-        if (sort_indices) free(sort_indices);
+        if (sort_perm) free(sort_perm);
         free(groups);
-        if (by_data) {
-            for (size_t b = 0; b < nby; b++) free(by_data[b]);
-            free(by_data);
-        }
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
         return 920;
-    }
-
-    /* Seed each thread's RNG uniquely */
-    for (int t = 0; t < num_threads; t++) {
-        xoshiro256_seed(&thread_rngs[t], config.seed + (uint64_t)t * 0x9e3779b97f4a7c15ULL);
     }
 
     /* Allocate work indices (max group size needed) */
@@ -461,12 +518,9 @@ ST_retcode csample_main(const char *args) {
     work_indices = (size_t *)malloc(num_threads * max_group_size * sizeof(size_t));
     if (!work_indices) {
         free(thread_rngs);
-        if (sort_indices) free(sort_indices);
+        if (sort_perm) free(sort_perm);
         free(groups);
-        if (by_data) {
-            for (size_t b = 0; b < nby; b++) free(by_data[b]);
-            free(by_data);
-        }
+        if (nby > 0) ctools_filtered_data_free(&by_filtered);
         free(keep_flags);
         if (by_indices) free(by_indices);
         ctools_error_alloc(CSAMPLE_MODULE);
@@ -503,7 +557,7 @@ ST_retcode csample_main(const char *args) {
         if (keep_count == count) {
             /* Keep all - mark all as selected */
             for (size_t i = 0; i < count; i++) {
-                size_t obs_idx = (nby > 0) ? sort_indices[start + i] : (start + i);
+                size_t obs_idx = (nby > 0) ? sort_perm[start + i] : (start + i);
                 keep_flags[obs_idx] = 1;
             }
         } else if (keep_count == 0) {
@@ -517,8 +571,11 @@ ST_retcode csample_main(const char *args) {
                 indices[i] = i;
             }
 
-            /* Fisher-Yates partial shuffle */
+            /* Seed RNG based on group index (not thread) for reproducibility */
+            xoshiro256_seed(&thread_rngs[tid], config.seed + (uint64_t)g * 0x9e3779b97f4a7c15ULL);
             xoshiro256_state *rng = &thread_rngs[tid];
+
+            /* Fisher-Yates partial shuffle */
             for (size_t i = 0; i < keep_count; i++) {
                 size_t j = i + xoshiro256_uniform(rng, count - i);
                 size_t tmp = indices[i];
@@ -529,7 +586,7 @@ ST_retcode csample_main(const char *args) {
             /* Mark selected observations */
             for (size_t i = 0; i < keep_count; i++) {
                 size_t local_idx = indices[i];
-                size_t obs_idx = (nby > 0) ? sort_indices[start + local_idx] : (start + local_idx);
+                size_t obs_idx = (nby > 0) ? sort_perm[start + local_idx] : (start + local_idx);
                 keep_flags[obs_idx] = 1;
             }
         }
@@ -537,24 +594,22 @@ ST_retcode csample_main(const char *args) {
 
     t_sample = ctools_timer_seconds() - sample_start;
 
-    /* === Store Phase === */
+    /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    /* Write keep flags to Stata */
-    size_t obs_idx = 0;  /* Index into keep_flags array */
-    for (ST_int obs = obs1; obs <= obs2; obs++) {
-        /* Only process observations that satisfy the if condition */
-        if (!SF_ifobs(obs)) continue;
-
-        double val = keep_flags[obs_idx] ? 1.0 : 0.0;
-        SF_vstore(keep_idx, obs, val);
-        obs_idx++;
+    /* Write keep flags to Stata using obs_map */
+    for (size_t i = 0; i < nobs; i++) {
+        double val = keep_flags[i] ? 1.0 : 0.0;
+        SF_vstore(keep_idx, (ST_int)obs_map[i], val);
     }
 
     t_store = ctools_timer_seconds() - store_start;
 
-    /* Count kept/dropped */
+    /* Count kept/dropped with parallel reduction */
     size_t kept = 0;
+    #ifdef _OPENMP
+    #pragma omp parallel for reduction(+:kept) schedule(static)
+    #endif
     for (size_t i = 0; i < nobs; i++) {
         if (keep_flags[i]) kept++;
     }
@@ -563,11 +618,12 @@ ST_retcode csample_main(const char *args) {
     /* === Cleanup === */
     free(work_indices);
     free(thread_rngs);
-    if (sort_indices) free(sort_indices);
+    if (sort_perm) free(sort_perm);
     free(groups);
-    if (by_data) {
-        for (size_t b = 0; b < nby; b++) free(by_data[b]);
-        free(by_data);
+    if (nby > 0) {
+        ctools_filtered_data_free(&by_filtered);
+    } else if (obs_map) {
+        free(obs_map);
     }
     free(keep_flags);
     if (by_indices) free(by_indices);

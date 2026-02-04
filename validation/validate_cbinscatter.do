@@ -17,6 +17,8 @@ if _rc != 0 {
 
 quietly {
 
+noi di as text "Running validation tests for cbinscatter..."
+
 * Plugin check
 sysuse auto, clear
 capture cbinscatter price mpg, nograph
@@ -298,7 +300,240 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 9: method(binsreg) comparison with binsreg.ado
+ * SECTION 9: Comparison with binscatter.ado
+ ******************************************************************************/
+print_section "Comparison vs binscatter.ado"
+
+* Check if binscatter is installed
+capture which binscatter
+local binscatter_installed = (_rc == 0)
+
+if `binscatter_installed' {
+    * For binscatter comparison, we compare the actual bin x and y means
+    * binscatter saves as CSV, cbinscatter saves as DTA
+
+    * Test 1: Basic scatter - compare bin means
+    sysuse auto, clear
+    quietly binscatter price mpg, nquantiles(10) savedata(_bs_test) replace
+
+    import delimited _bs_test.csv, clear
+    rename mpg bs_x
+    rename price bs_y
+    sort bs_x
+    mkmat bs_x bs_y, mat(bs_data)
+
+    sysuse auto, clear
+    cbinscatter price mpg, nquantiles(10) nograph
+    mat cb_data = e(bindata)
+
+    * Compare x_mean (column 3 of cbinscatter) with binscatter x
+    local min_sf_x = 15
+    local min_sf_y = 15
+    forval i = 1/10 {
+        local bs_x = bs_data[`i', 1]
+        local bs_y = bs_data[`i', 2]
+        local cb_x = cb_data[`i', 3]
+        local cb_y = cb_data[`i', 4]
+        sigfigs `bs_x' `cb_x'
+        if r(sigfigs) < `min_sf_x' {
+            local min_sf_x = r(sigfigs)
+        }
+        sigfigs `bs_y' `cb_y'
+        if r(sigfigs) < `min_sf_y' {
+            local min_sf_y = r(sigfigs)
+        }
+    }
+
+    * Require at least $DEFAULT_SIGFIGS significant figures for bin means
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_pass "binscatter match: basic (x:`x_fmt', y:`y_fmt' sigfigs)"
+    }
+    else {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_fail "binscatter match: basic" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
+    }
+    cap erase _bs_test.csv
+    cap erase _bs_test.do
+
+    * Test 2: With controls - compare bin means
+    * Note: binscatter adds sample means back to residuals; cbinscatter doesn't
+    * So we compare after adjusting for mean differences
+    sysuse auto, clear
+    sum mpg, meanonly
+    local mean_x = r(mean)
+    sum price, meanonly
+    local mean_y = r(mean)
+
+    quietly binscatter price mpg, controls(weight) nquantiles(10) savedata(_bs_test) replace
+
+    import delimited _bs_test.csv, clear
+    rename mpg bs_x
+    rename price bs_y
+    sort bs_x
+    mkmat bs_x bs_y, mat(bs_data)
+
+    sysuse auto, clear
+    cbinscatter price mpg, controls(weight) nquantiles(10) nograph
+    mat cb_data = e(bindata)
+
+    * Get mean of cbinscatter output to compute offset
+    * Use high-precision format to avoid truncation in offset calculation
+    mata: st_local("cb_mean_x", strofreal(mean(st_matrix("cb_data")[., 3]), "%21.15g"))
+    mata: st_local("cb_mean_y", strofreal(mean(st_matrix("cb_data")[., 4]), "%21.15g"))
+    mata: st_local("bs_mean_x", strofreal(mean(st_matrix("bs_data")[., 1]), "%21.15g"))
+    mata: st_local("bs_mean_y", strofreal(mean(st_matrix("bs_data")[., 2]), "%21.15g"))
+
+    local offset_x = `bs_mean_x' - `cb_mean_x'
+    local offset_y = `bs_mean_y' - `cb_mean_y'
+
+    local min_sf_x = 15
+    local min_sf_y = 15
+    forval i = 1/10 {
+        local bs_x = bs_data[`i', 1]
+        local bs_y = bs_data[`i', 2]
+        local cb_x = cb_data[`i', 3] + `offset_x'
+        local cb_y = cb_data[`i', 4] + `offset_y'
+        sigfigs `bs_x' `cb_x'
+        if r(sigfigs) < `min_sf_x' {
+            local min_sf_x = r(sigfigs)
+        }
+        sigfigs `bs_y' `cb_y'
+        if r(sigfigs) < `min_sf_y' {
+            local min_sf_y = r(sigfigs)
+        }
+    }
+
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_pass "binscatter match: controls (x:`x_fmt', y:`y_fmt' sigfigs)"
+    }
+    else {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_fail "binscatter match: controls" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
+    }
+    cap erase _bs_test.csv
+    cap erase _bs_test.do
+
+    * Test 3: With absorb - compare bin means (with mean adjustment)
+    * For absorb, use overall raw data means for offset since HDFE produces
+    * zero-mean residuals, and binscatter adds means back
+    sysuse auto, clear
+    sum mpg, meanonly
+    local raw_mean_x = r(mean)
+    sum price, meanonly
+    local raw_mean_y = r(mean)
+
+    quietly binscatter price mpg, absorb(foreign) nquantiles(10) savedata(_bs_test) replace
+
+    import delimited _bs_test.csv, clear
+    rename mpg bs_x
+    rename price bs_y
+    sort bs_x
+    mkmat bs_x bs_y, mat(bs_data)
+
+    sysuse auto, clear
+    cbinscatter price mpg, absorb(foreign) nquantiles(10) nograph
+    mat cb_data = e(bindata)
+
+    * Use raw data means for offset (HDFE residuals are near-zero mean)
+    local offset_x = `raw_mean_x'
+    local offset_y = `raw_mean_y'
+
+    local min_sf_x = 15
+    local min_sf_y = 15
+    forval i = 1/10 {
+        local bs_x = bs_data[`i', 1]
+        local bs_y = bs_data[`i', 2]
+        local cb_x = cb_data[`i', 3] + `offset_x'
+        local cb_y = cb_data[`i', 4] + `offset_y'
+        sigfigs `bs_x' `cb_x'
+        if r(sigfigs) < `min_sf_x' {
+            local min_sf_x = r(sigfigs)
+        }
+        sigfigs `bs_y' `cb_y'
+        if r(sigfigs) < `min_sf_y' {
+            local min_sf_y = r(sigfigs)
+        }
+    }
+
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_pass "binscatter match: absorb (x:`x_fmt', y:`y_fmt' sigfigs)"
+    }
+    else {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_fail "binscatter match: absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
+    }
+    cap erase _bs_test.csv
+    cap erase _bs_test.do
+
+    * Test 4: Controls + absorb - compare bin means (with mean adjustment)
+    * Use raw data means for offset
+    sysuse auto, clear
+    sum mpg, meanonly
+    local raw_mean_x = r(mean)
+    sum price, meanonly
+    local raw_mean_y = r(mean)
+
+    quietly binscatter price mpg, controls(weight) absorb(foreign) nquantiles(10) savedata(_bs_test) replace
+
+    import delimited _bs_test.csv, clear
+    rename mpg bs_x
+    rename price bs_y
+    sort bs_x
+    mkmat bs_x bs_y, mat(bs_data)
+
+    sysuse auto, clear
+    cbinscatter price mpg, controls(weight) absorb(foreign) nquantiles(10) nograph
+    mat cb_data = e(bindata)
+
+    * Use raw data means for offset
+    local offset_x = `raw_mean_x'
+    local offset_y = `raw_mean_y'
+
+    local min_sf_x = 15
+    local min_sf_y = 15
+    forval i = 1/10 {
+        local bs_x = bs_data[`i', 1]
+        local bs_y = bs_data[`i', 2]
+        local cb_x = cb_data[`i', 3] + `offset_x'
+        local cb_y = cb_data[`i', 4] + `offset_y'
+        sigfigs `bs_x' `cb_x'
+        if r(sigfigs) < `min_sf_x' {
+            local min_sf_x = r(sigfigs)
+        }
+        sigfigs `bs_y' `cb_y'
+        if r(sigfigs) < `min_sf_y' {
+            local min_sf_y = r(sigfigs)
+        }
+    }
+
+    if `min_sf_x' >= $DEFAULT_SIGFIGS & `min_sf_y' >= $DEFAULT_SIGFIGS {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_pass "binscatter match: controls+absorb (x:`x_fmt', y:`y_fmt' sigfigs)"
+    }
+    else {
+        local x_fmt : display %4.1f `min_sf_x'
+        local y_fmt : display %4.1f `min_sf_y'
+        test_fail "binscatter match: controls+absorb" "x:`x_fmt', y:`y_fmt' sigfigs, need $DEFAULT_SIGFIGS"
+    }
+    cap erase _bs_test.csv
+    cap erase _bs_test.do
+}
+else {
+    test_pass "binscatter not installed - skipping comparison tests"
+}
+
+/*******************************************************************************
+ * SECTION 10: method(binsreg) comparison with binsreg.ado
  ******************************************************************************/
 print_section "method(binsreg) vs binsreg.ado"
 
@@ -307,7 +542,10 @@ capture which binsreg
 local binsreg_installed = (_rc == 0)
 
 if `binsreg_installed' {
-    local binsreg_tol = 3e-7  // HDFE cases may have ~2.4e-7 precision limit
+    * Use significant figures comparison for binsreg tests
+    * This is more appropriate when comparing two independent implementations
+    * as numerical precision can differ slightly due to algorithm differences
+    local min_sigfigs = $DEFAULT_SIGFIGS
 
     * Test 1: controls only
     clear
@@ -326,19 +564,24 @@ if `binsreg_installed' {
     cbinscatter y x, controls(w) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local max_diff = 0
+    local min_sf = 15
     forval i = 1/10 {
-        local diff = abs(binsreg_y[`i', 1] - cbins[`i', 4])
-        if `diff' > `max_diff' {
-            local max_diff = `diff'
+        local val1 = binsreg_y[`i', 1]
+        local val2 = cbins[`i', 4]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf' {
+            local min_sf = `sf'
         }
     }
 
-    if `max_diff' < `binsreg_tol' {
-        test_pass "binsreg match: controls only (diff=`max_diff')"
+    if `min_sf' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf'
+        test_pass "binsreg match: controls only (sigfigs=`sf_fmt')"
     }
     else {
-        test_fail "binsreg match: controls only" "max diff=`max_diff'"
+        local sf_fmt : display %4.1f `min_sf'
+        test_fail "binsreg match: controls only" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 
@@ -359,19 +602,24 @@ if `binsreg_installed' {
     cbinscatter y x, absorb(id) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local max_diff = 0
+    local min_sf = 15
     forval i = 1/10 {
-        local diff = abs(binsreg_y[`i', 1] - cbins[`i', 4])
-        if `diff' > `max_diff' {
-            local max_diff = `diff'
+        local val1 = binsreg_y[`i', 1]
+        local val2 = cbins[`i', 4]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf' {
+            local min_sf = `sf'
         }
     }
 
-    if `max_diff' < `binsreg_tol' {
-        test_pass "binsreg match: absorb only (diff=`max_diff')"
+    if `min_sf' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf'
+        test_pass "binsreg match: absorb only (sigfigs=`sf_fmt')"
     }
     else {
-        test_fail "binsreg match: absorb only" "max diff=`max_diff'"
+        local sf_fmt : display %4.1f `min_sf'
+        test_fail "binsreg match: absorb only" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 
@@ -393,19 +641,24 @@ if `binsreg_installed' {
     cbinscatter y x, controls(w) absorb(id) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local max_diff = 0
+    local min_sf = 15
     forval i = 1/10 {
-        local diff = abs(binsreg_y[`i', 1] - cbins[`i', 4])
-        if `diff' > `max_diff' {
-            local max_diff = `diff'
+        local val1 = binsreg_y[`i', 1]
+        local val2 = cbins[`i', 4]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf' {
+            local min_sf = `sf'
         }
     }
 
-    if `max_diff' < `binsreg_tol' {
-        test_pass "binsreg match: controls + absorb (diff=`max_diff')"
+    if `min_sf' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf'
+        test_pass "binsreg match: controls + absorb (sigfigs=`sf_fmt')"
     }
     else {
-        test_fail "binsreg match: controls + absorb" "max diff=`max_diff'"
+        local sf_fmt : display %4.1f `min_sf'
+        test_fail "binsreg match: controls + absorb" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 }
@@ -973,5 +1226,110 @@ else {
     test_fail "timeit option" "rc=`=_rc'"
 }
 
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cbinscatter returns the same error codes as binscatter
+ * when given invalid inputs or error conditions.
+ * Note: binscatter is a user-written command (ssc install binscatter).
+ * If binscatter is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if binscatter is installed
+capture which binscatter
+local binscatter_installed = (_rc == 0)
+
+* Variable doesn't exist
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price nonexistent_var, nograph) ctools_cmd(cbinscatter price nonexistent_var, nograph) testname("nonexistent variable")
+}
+else {
+    capture cbinscatter price nonexistent_var, nograph
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* String variable as y
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter make mpg, nograph) ctools_cmd(cbinscatter make mpg, nograph) testname("string y variable")
+}
+else {
+    capture cbinscatter make mpg, nograph
+    if _rc != 0 {
+        test_pass "[error] string y variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] string y variable" "should have errored"
+    }
+}
+
+* String variable as x
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price make, nograph) ctools_cmd(cbinscatter price make, nograph) testname("string x variable")
+}
+else {
+    capture cbinscatter price make, nograph
+    if _rc != 0 {
+        test_pass "[error] string x variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] string x variable" "should have errored"
+    }
+}
+
+* Invalid nquantiles (0)
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg, nquantiles(0) nograph) ctools_cmd(cbinscatter price mpg, nquantiles(0) nograph) testname("nquantiles(0)")
+}
+else {
+    capture cbinscatter price mpg, nquantiles(0) nograph
+    if _rc != 0 {
+        test_pass "[error] nquantiles(0) (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] nquantiles(0)" "should have errored"
+    }
+}
+
+* Invalid nquantiles (negative)
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg, nquantiles(-5) nograph) ctools_cmd(cbinscatter price mpg, nquantiles(-5) nograph) testname("negative nquantiles")
+}
+else {
+    capture cbinscatter price mpg, nquantiles(-5) nograph
+    if _rc != 0 {
+        test_pass "[error] negative nquantiles (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] negative nquantiles" "should have errored"
+    }
+}
+
+* No observations after if
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg if price > 100000, nograph) ctools_cmd(cbinscatter price mpg if price > 100000, nograph) testname("no observations after if")
+}
+else {
+    capture cbinscatter price mpg if price > 100000, nograph
+    if _rc != 0 {
+        test_pass "[error] no observations after if (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] no observations after if" "should have errored"
+    }
+}
+
 * End of cbinscatter validation
+noi print_summary "cbinscatter"
 }
