@@ -26,7 +26,7 @@ The original `binscatter` package uses the "classic" method for covariate contro
 
 **ctools adds:**
 
-- **Binsreg methodology**: `method(binsreg)` implements the Cattaneo et al. (2024) "On Binscatter" approach, which creates bins on raw x values and then residualizes within bins. This avoids distortions that can occur with the classic method when the conditional expectation function is nonlinear.
+- **Binsreg controls**: `method(binsreg)` implements the method to control for covariates described by Cattaneo et al. (AER 2024). Cattaneo et al. (2024) make the point that if covariates enter nonlinearly into a given condiitonal expectation function, then the Frisch-Waugh method of partialing out Y and X with respect to these covariates and running the binned scatterplot on the resiuals is not easily interpretible. They propose a simpler method, which is basically to construct bins of X based on the observed (non-residualized) distribution of X, regress Y on X and Z, and evaluate predictions holding fixed Z (e.g. evaluate the model with Z = 0, X = means within bin).
 
 ```stata
 * Use the binsreg covariate control method

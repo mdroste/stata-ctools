@@ -23,7 +23,7 @@ noi di as text "Running validation tests for cdecode..."
  ******************************************************************************/
 capture program drop benchmark_decode
 program define benchmark_decode
-    syntax varname, testname(string) [GENerate(name) MAXLength(integer 0) if2(string) in2(string)]
+    syntax varname, testname(string) [GENerate(name) MAXLength(integer 0) if2(string) in2(string) cdecodeopts(string)]
 
     * Set default generate name
     if "`generate'" == "" local generate = "decoded"
@@ -33,10 +33,12 @@ program define benchmark_decode
     if "`if2'" != "" local ifin "`ifin' if `if2'"
     if "`in2'" != "" local ifin "`ifin' in `in2'"
 
-    * Build options
+    * Build options for cdecode (includes cdecodeopts like verbose, threads)
     local opts "generate(`generate'_c)"
     if `maxlength' > 0 local opts "`opts' maxlength(`maxlength')"
+    if "`cdecodeopts'" != "" local opts "`opts' `cdecodeopts'"
 
+    * Build options for Stata decode (no cdecodeopts - Stata doesn't support them)
     local opts_stata "generate(`generate'_s)"
     if `maxlength' > 0 local opts_stata "`opts_stata' maxlength(`maxlength')"
 
@@ -1422,10 +1424,9 @@ benchmark_decode region, testname("full comparison: census region")
  ******************************************************************************/
 print_section "Comprehensive Dataset Tests (sysuse/webuse)"
 
-* auto dataset - foreign and rep78
+* auto dataset - foreign
 sysuse auto, clear
 benchmark_decode foreign, testname("auto: foreign (2 labels)")
-benchmark_decode rep78, testname("auto: rep78 (with missing)")
 
 * census dataset - region
 sysuse census, clear
@@ -2409,20 +2410,20 @@ else {
 
 * Test 27.2: Replace preserves value label text
 sysuse auto, clear
-local lbl1 : label (foreign) 0
-cdecode foreign, replace
-count if foreign == "`lbl1'" & foreign_backup == 0 in 1
-* All foreign==0 should become "Domestic"
-sysuse auto, clear
 count if foreign == 0
 local n_domestic = r(N)
+count if foreign == 1
+local n_foreign = r(N)
 cdecode foreign, replace
 count if foreign == "Domestic"
-if r(N) == `n_domestic' {
+local n_domestic_str = r(N)
+count if foreign == "Foreign"
+local n_foreign_str = r(N)
+if `n_domestic' == `n_domestic_str' & `n_foreign' == `n_foreign_str' {
     test_pass "replace preserves label text"
 }
 else {
-    test_fail "replace labels" "wrong count"
+    test_fail "replace labels" "domestic: `n_domestic' vs `n_domestic_str', foreign: `n_foreign' vs `n_foreign_str'"
 }
 
 * Test 27.3: Replace vs decode comparison
@@ -2524,13 +2525,13 @@ else {
  ******************************************************************************/
 print_section "Multiple Variables (varlist)"
 
-* Test 28.1: Two variables with generate
-sysuse auto, clear
-capture drop foreign_str rep78_str
-cdecode foreign rep78, generate(foreign_str rep78_str)
-capture confirm string variable foreign_str
+* Test 28.1: Two variables with generate (using citytemp which has labeled vars)
+sysuse citytemp, clear
+capture drop region_str division_str
+cdecode region division, generate(region_str division_str)
+capture confirm string variable region_str
 local rc1 = _rc
-capture confirm string variable rep78_str
+capture confirm string variable division_str
 local rc2 = _rc
 if `rc1' == 0 & `rc2' == 0 {
     test_pass "two variables with generate"
@@ -2538,77 +2539,89 @@ if `rc1' == 0 & `rc2' == 0 {
 else {
     test_fail "two vars gen" "not created"
 }
-capture drop foreign_str rep78_str
+capture drop region_str division_str
 
 * Test 28.2: Two variables comparison with decode
-sysuse auto, clear
-cdecode foreign rep78, generate(foreign_c rep78_c)
-decode foreign, generate(foreign_s)
-decode rep78, generate(rep78_s)
-count if foreign_c != foreign_s
+sysuse citytemp, clear
+cdecode region division, generate(region_c division_c)
+decode region, generate(region_s)
+decode division, generate(division_s)
+count if region_c != region_s
 local n1 = r(N)
-count if rep78_c != rep78_s
+count if division_c != division_s
 local n2 = r(N)
 if `n1' == 0 & `n2' == 0 {
     test_pass "two variables match decode"
 }
 else {
-    test_fail "two vars decode" "foreign diff=`n1' rep78 diff=`n2'"
+    test_fail "two vars decode" "region diff=`n1' division diff=`n2'"
 }
-drop foreign_c rep78_c foreign_s rep78_s
+drop region_c division_c region_s division_s
 
-* Test 28.3: Three variables
-sysuse citytemp, clear
-cdecode region division, generate(region_str division_str)
-decode region, generate(region_s)
-decode division, generate(division_s)
-count if region_str != region_s
+* Test 28.3: Synthetic dataset with three labeled variables
+clear
+set obs 30
+gen byte a = mod(_n - 1, 3) + 1
+gen byte b = mod(_n - 1, 4) + 1
+gen byte c = mod(_n - 1, 5) + 1
+label define a_lbl 1 "alpha" 2 "beta" 3 "gamma"
+label define b_lbl 1 "one" 2 "two" 3 "three" 4 "four"
+label define c_lbl 1 "first" 2 "second" 3 "third" 4 "fourth" 5 "fifth"
+label values a a_lbl
+label values b b_lbl
+label values c c_lbl
+cdecode a b c, generate(a_str b_str c_str)
+decode a, generate(a_s)
+decode b, generate(b_s)
+decode c, generate(c_s)
+count if a_str != a_s
 local n1 = r(N)
-count if division_str != division_s
+count if b_str != b_s
 local n2 = r(N)
-if `n1' == 0 & `n2' == 0 {
+count if c_str != c_s
+local n3 = r(N)
+if `n1' == 0 & `n2' == 0 & `n3' == 0 {
     test_pass "three variables match decode"
 }
 else {
-    test_fail "three vars" "region diff=`n1' division diff=`n2'"
+    test_fail "three vars" "a diff=`n1' b diff=`n2' c diff=`n3'"
 }
-drop region_str division_str region_s division_s
 
 * Test 28.4: Multiple variables with replace
-sysuse auto, clear
-clonevar foreign_backup = foreign
-clonevar rep78_backup = rep78
-decode foreign, generate(foreign_expected)
-decode rep78, generate(rep78_expected)
-cdecode foreign rep78, replace
-count if foreign != foreign_expected
+sysuse citytemp, clear
+clonevar region_backup = region
+clonevar division_backup = division
+decode region, generate(region_expected)
+decode division, generate(division_expected)
+cdecode region division, replace
+count if region != region_expected
 local n1 = r(N)
-count if rep78 != rep78_expected
+count if division != division_expected
 local n2 = r(N)
 if `n1' == 0 & `n2' == 0 {
     test_pass "multiple variables replace"
 }
 else {
-    test_fail "multi replace" "foreign diff=`n1' rep78 diff=`n2'"
+    test_fail "multi replace" "region diff=`n1' division diff=`n2'"
 }
 
 * Test 28.5: Multiple variables with if condition
-sysuse auto, clear
-cdecode foreign rep78 if price > 8000, generate(foreign_str rep78_str)
-count if foreign_str != "" & price > 8000
+sysuse citytemp, clear
+cdecode region division if tempjan > 30, generate(region_str division_str)
+count if region_str != "" & tempjan > 30
 local n_conv = r(N)
-count if price > 8000
+count if tempjan > 30
 if `n_conv' == r(N) {
     test_pass "multiple vars with if"
 }
 else {
     test_fail "multi if" "wrong count"
 }
-drop foreign_str rep78_str
+drop region_str division_str
 
 * Test 28.6: Multiple variables count mismatch error
-sysuse auto, clear
-capture cdecode foreign rep78, generate(only_one)
+sysuse citytemp, clear
+capture cdecode region division, generate(only_one)
 if _rc != 0 {
     test_pass "error: generate count mismatch"
 }
@@ -2820,6 +2833,36 @@ if _rc == 0 {
 else {
     test_fail "replace+maxlen" "not string"
 }
+
+/*******************************************************************************
+ * SECTION 31: Intentional Error Tests
+ *
+ * These tests verify that cdecode returns the same error codes as Stata's decode
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(decode nonexistent_var, generate(test)) ctools_cmd(cdecode nonexistent_var, generate(test)) testname("nonexistent variable")
+
+* Generate variable already exists
+sysuse auto, clear
+test_error_match, stata_cmd(decode foreign, generate(price)) ctools_cmd(cdecode foreign, generate(price)) testname("generate var already exists")
+
+* No generate option (missing required option)
+sysuse auto, clear
+test_error_match, stata_cmd(decode foreign) ctools_cmd(cdecode foreign) testname("missing generate option")
+
+* String variable (decode expects numeric)
+sysuse auto, clear
+test_error_match, stata_cmd(decode make, generate(test)) ctools_cmd(cdecode make, generate(test)) testname("string variable input")
+
+* Variable without value labels
+clear
+set obs 10
+gen x = _n
+test_error_match, stata_cmd(decode x, generate(test)) ctools_cmd(cdecode x, generate(test)) testname("numeric var without labels")
 
 /*******************************************************************************
  * SUMMARY

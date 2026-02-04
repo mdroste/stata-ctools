@@ -2078,6 +2078,42 @@ else {
 capture erase "temp/excel_auto_opts.xlsx"
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cexport returns the same error codes as export delimited
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(export delimited nonexistent_var using "temp/error_test.csv", replace) ctools_cmd(cexport delimited nonexistent_var using "temp/error_test.csv", replace) testname("nonexistent variable")
+
+* No data loaded (empty dataset with no variables)
+clear
+test_error_match, stata_cmd(export delimited using "temp/error_test.csv", replace) ctools_cmd(cexport delimited using "temp/error_test.csv", replace) testname("no data loaded")
+
+* Invalid path (directory doesn't exist)
+sysuse auto, clear
+test_error_match, stata_cmd(export delimited using "nonexistent_dir/test.csv", replace) ctools_cmd(cexport delimited using "nonexistent_dir/test.csv", replace) testname("invalid path")
+
+* File already exists without replace
+sysuse auto, clear
+export delimited using "temp/exist_test.csv", replace
+sysuse auto, clear
+capture export delimited using "temp/exist_test.csv"
+local stata_rc = _rc
+capture cexport delimited using "temp/exist_test.csv"
+local cexport_rc = _rc
+if `stata_rc' == `cexport_rc' {
+    test_pass "[error] file exists without replace (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] file exists without replace" "stata rc=`stata_rc', cexport rc=`cexport_rc'"
+}
+capture erase "temp/exist_test.csv"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

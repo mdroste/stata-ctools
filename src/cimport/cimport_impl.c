@@ -614,6 +614,9 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->skip_rows = skip_rows;
     ctx->bindquotes = bindquotes;
     ctx->filename = strdup(filename);
+    if (ctx->filename == NULL) {
+        return NULL;
+    }
     ctx->verbose = verbose;
     atomic_init(&ctx->error_code, 0);
 
@@ -1562,4 +1565,14 @@ ST_retcode cimport_main(const char *args) {
         cimport_display_error("cimport: invalid mode. Use 'scan' or 'load'\n");
         return 198;
     }
+}
+
+/* ============================================================================
+ * Cleanup function for ctools_cleanup system
+ * ============================================================================ */
+
+void cimport_cleanup_cache(void)
+{
+    /* Reuse existing cleanup function */
+    cimport_clear_cached_context();
 }

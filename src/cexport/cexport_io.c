@@ -791,10 +791,15 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
         } else {
             /* Older macOS: combine buffers into single pwrite (avoids N syscalls) */
             size_t total_len = 0;
+            int overflow = 0;
             for (size_t i = 0; i < count; i++) {
+                if (entries[i].len > SIZE_MAX - total_len) {
+                    overflow = 1;
+                    break;
+                }
                 total_len += entries[i].len;
             }
-            char *combined = (char *)malloc(total_len);
+            char *combined = overflow ? NULL : (char *)malloc(total_len);
             if (combined != NULL) {
                 char *ptr = combined;
                 for (size_t i = 0; i < count; i++) {

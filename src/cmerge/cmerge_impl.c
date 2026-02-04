@@ -258,10 +258,14 @@ static ST_retcode cmerge_load_using(const char *args)
             double t_load_keepusing_start = ctools_timer_ms();
             rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
             if (rc != STATA_OK) {
+                ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return 459;
             }
             if (g_using_cache.keepusing.data.vars == NULL) {
+                ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
@@ -275,11 +279,13 @@ static ST_retcode cmerge_load_using(const char *args)
         double t_load_keys_start = ctools_timer_ms();
         rc = ctools_data_load(&g_using_cache.keys, key_indices, nkeys, 0, 0, CTOOLS_LOAD_SKIP_IF);
         if (rc != STATA_OK) {
+            ctools_filtered_data_free(&g_using_cache.keys);
             SF_error("cmerge: Failed to load using keys\n");
             return 459;
         }
         /* Critical null check - prevents crash if load failed silently */
         if (g_using_cache.keys.data.vars == NULL) {
+            ctools_filtered_data_free(&g_using_cache.keys);
             SF_error("cmerge: FATAL - keys.vars is NULL after load\n");
             return 920;
         }
@@ -291,12 +297,14 @@ static ST_retcode cmerge_load_using(const char *args)
             rc = ctools_data_load(&g_using_cache.keepusing, keepusing_indices, n_keepusing, 0, 0, CTOOLS_LOAD_SKIP_IF);
             if (rc != STATA_OK) {
                 ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
                 SF_error("cmerge: Failed to load keepusing variables\n");
                 return 459;
             }
             /* Critical null check */
             if (g_using_cache.keepusing.data.vars == NULL) {
                 ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
                 SF_error("cmerge: FATAL - keepusing.vars is NULL after load\n");
                 return 920;
             }
@@ -1091,6 +1099,10 @@ static ST_retcode cmerge_execute(const char *args)
     /* Track allocation failures in parallel loop (must be int for OpenMP atomic) */
     int alloc_failed = 0;
 
+    /* Capture bounds for sorted_row validation - used in parallel loop */
+    const size_t master_nobs_bound = master_data.data.nobs;
+    const size_t using_nobs_bound = g_using_cache.nobs;
+
     /* Apply permutation to each variable (can be parallelized with OpenMP)
      * Use static scheduling for better cache locality since work is evenly distributed */
     #ifdef _OPENMP
@@ -1144,10 +1156,20 @@ static ST_retcode cmerge_execute(const char *args)
                 for (size_t i = 0; i < output_nobs; i++) {
                     int64_t sorted_row = output_specs[i].master_sorted_row;
                     if (sorted_row >= 0) {
-                        dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
+                        /* Bounds check: sorted_row must be valid index into master data */
+                        if ((size_t)sorted_row >= master_nobs_bound) {
+                            dst_var->data.dbl[i] = SV_missval;  /* Out of bounds - treat as missing */
+                        } else {
+                            dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
+                        }
                     } else if (using_key_data != NULL) {
                         int64_t using_row = output_specs[i].using_sorted_row;
-                        dst_var->data.dbl[i] = (using_row >= 0) ? using_key_data[using_row] : SV_missval;
+                        /* Bounds check for using data */
+                        if (using_row >= 0 && (size_t)using_row < using_nobs_bound) {
+                            dst_var->data.dbl[i] = using_key_data[using_row];
+                        } else {
+                            dst_var->data.dbl[i] = SV_missval;
+                        }
                     } else {
                         dst_var->data.dbl[i] = SV_missval;
                     }
@@ -1185,11 +1207,15 @@ static ST_retcode cmerge_execute(const char *args)
                 /* Use master_sorted_row to index into sorted master_data */
                 for (size_t i = 0; i < output_nobs; i++) {
                     int64_t sorted_row = output_specs[i].master_sorted_row;
-                    if (sorted_row >= 0 && src_var->data.str[sorted_row]) {
+                    /* Bounds check: sorted_row must be valid index into master data */
+                    if (sorted_row >= 0 && (size_t)sorted_row < master_nobs_bound &&
+                        src_var->data.str[sorted_row]) {
                         dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[sorted_row]);
                     } else if (using_key_data != NULL) {
                         int64_t using_row = output_specs[i].using_sorted_row;
-                        if (using_row >= 0 && using_key_data[using_row]) {
+                        /* Bounds check for using data */
+                        if (using_row >= 0 && (size_t)using_row < using_nobs_bound &&
+                            using_key_data[using_row]) {
                             dst_var->data.str[i] = cmerge_arena_strdup(str_arena, using_key_data[using_row]);
                         } else {
                             dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
@@ -1480,4 +1506,31 @@ ST_retcode cmerge_main(const char *args)
         SF_error(msg);
         return 198;
     }
+}
+
+/* ============================================================================
+ * Cleanup function for ctools_cleanup system
+ * ============================================================================ */
+
+void cmerge_cleanup_cache(void)
+{
+    cache_lock_acquire();
+
+    /* Don't clean if cache is currently in use by execute */
+    if (g_cache_in_use) {
+        cache_lock_release();
+        return;
+    }
+
+    if (g_using_cache.loaded) {
+        ctools_filtered_data_free(&g_using_cache.keys);
+        ctools_filtered_data_free(&g_using_cache.keepusing);
+        g_using_cache.loaded = 0;
+        g_using_cache.nobs = 0;
+        g_using_cache.nkeys = 0;
+        g_using_cache.n_keepusing = 0;
+        g_using_cache.merge_by_n = 0;
+    }
+
+    cache_lock_release();
 }

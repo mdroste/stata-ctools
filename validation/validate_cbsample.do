@@ -561,6 +561,43 @@ else {
     test_fail "threads option runs without error" "rc=`=_rc'"
 }
 
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cbsample returns the same error codes as Stata's bsample
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Weight variable doesn't exist
+clear
+set obs 100
+gen id = _n
+test_error_match, stata_cmd(bsample, weight(nonexistent_var)) ctools_cmd(cbsample, weight(nonexistent_var)) testname("nonexistent weight variable")
+
+* Empty dataset
+clear
+set obs 0
+gen id = .
+gen bsweight = .
+capture bsample, weight(bsweight)
+local stata_rc = _rc
+capture cbsample, weight(bsweight)
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "[error] empty dataset (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] empty dataset" "stata rc=`stata_rc', cbsample rc=`ctools_rc'"
+}
+
+* Strata variable doesn't exist
+clear
+set obs 100
+gen id = _n
+gen bsweight = .
+test_error_match, stata_cmd(bsample, weight(bsweight) strata(nonexistent_var)) ctools_cmd(cbsample, weight(bsweight) strata(nonexistent_var)) testname("nonexistent strata variable")
+
 * End of cbsample validation
 noi print_summary "cbsample"
 }

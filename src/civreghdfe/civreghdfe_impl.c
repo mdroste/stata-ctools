@@ -25,6 +25,7 @@
 #include "../ctools_timer.h"
 #include "../ctools_ols.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
+#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
@@ -234,19 +235,22 @@ static ST_retcode do_iv_regression(void)
     for (ST_int g = 0; g < G; g++) {
         double *src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
         for (i = 0; i < N_total; i++) {
-            fe_levels[g][i] = (ST_int)src[i];
+            /* Use -1 as sentinel for missing FE values to avoid undefined cast behavior */
+            fe_levels[g][i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
         }
     }
     if (has_cluster) {
         double *src = filtered.data.vars[var_cluster_idx].data.dbl;
         for (i = 0; i < N_total; i++) {
-            cluster_ids[i] = (ST_int)src[i];
+            /* Use -1 as sentinel for missing cluster values */
+            cluster_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
         }
     }
     if (has_cluster2) {
         double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
         for (i = 0; i < N_total; i++) {
-            cluster2_ids[i] = (ST_int)src[i];
+            /* Use -1 as sentinel for missing cluster2 values */
+            cluster2_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
         }
     }
     if (has_weights) {
@@ -285,16 +289,23 @@ static ST_retcode do_iv_regression(void)
             if (SF_is_missing(Z[k * N_total + i])) is_valid = 0;
         }
 
-        /* Check FE - already loaded and converted to int, check for very large negative values
-           (which could indicate missing - Stata missing values become very large when cast to int) */
-        /* Note: FE values were already validated as non-missing during the data load */
+        /* Check FE variables for missing values (marked as -1 during extraction) */
+        for (ST_int g = 0; g < G && is_valid; g++) {
+            if (fe_levels[g][i] < 0) is_valid = 0;
+        }
 
         /* Check weights */
         if (has_weights && is_valid) {
             if (SF_is_missing(weights[i]) || weights[i] <= 0) is_valid = 0;
         }
 
-        /* Check cluster - already loaded as int, was already validated during data load */
+        /* Check cluster variables for missing values (marked as -1 during extraction) */
+        if (has_cluster && is_valid) {
+            if (cluster_ids[i] < 0) is_valid = 0;
+        }
+        if (has_cluster2 && is_valid) {
+            if (cluster2_ids[i] < 0) is_valid = 0;
+        }
 
         valid_mask[i] = is_valid;
         if (is_valid) N_valid++;
@@ -920,7 +931,7 @@ static ST_retcode do_iv_regression(void)
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
         char scalar_name[64];
         snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_num_levels_%d", (int)(g + 1));
-        SF_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
+        ctools_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
     }
 
     /* Compute connected components for multi-way FEs (same algorithm as creghdfe) */
@@ -953,7 +964,7 @@ static ST_retcode do_iv_regression(void)
     }
 
     /* Save mobility groups for absorbed DOF table display */
-    SF_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups);
+    ctools_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups);
 
     /* For VCE calculation when FE is nested in cluster:
        - nested FE levels don't contribute to df_a for VCE
@@ -1076,7 +1087,7 @@ static ST_retcode do_iv_regression(void)
             /* Store nested status to Stata scalar */
             char scalar_name[64];
             snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
-            SF_scal_save(scalar_name, (ST_double)is_nested);
+            ctools_scal_save(scalar_name, (ST_double)is_nested);
         }
 
         if (verbose) {
@@ -1099,6 +1110,38 @@ static ST_retcode do_iv_regression(void)
     ST_double *beta = (ST_double *)calloc(K_total, sizeof(ST_double));
     ST_double *V = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     ST_double *first_stage_F = (ST_double *)calloc(K_endog, sizeof(ST_double));
+
+    /* Check allocations - critical for preventing NULL pointer dereference */
+    if (!beta || !V || !first_stage_F) {
+        SF_error("civreghdfe: Memory allocation failed for output arrays\n");
+        free(beta); free(V); free(first_stage_F);
+        free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        /* Cleanup state */
+        for (ST_int t = 0; t < num_threads; t++) {
+            free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
+            free(state->thread_cg_v[t]); free(state->thread_proj[t]);
+            for (ST_int g = 0; g < G; g++) {
+                if (state->thread_fe_means[t * G + g])
+                    free(state->thread_fe_means[t * G + g]);
+            }
+        }
+        free(state->thread_cg_r); free(state->thread_cg_u);
+        free(state->thread_cg_v); free(state->thread_proj);
+        free(state->thread_fe_means);
+        for (ST_int g = 0; g < G; g++) {
+            free(state->factors[g].levels);
+            free(state->factors[g].counts);
+            if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
+            if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
+            if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
+            free(state->factors[g].means);
+        }
+        free(state->factors);
+        free(state);
+        g_state = NULL;
+        return 920;  /* Memory allocation error */
+    }
 
     /* End post-processing timing, start estimation timing */
     t_postproc = ctools_timer_seconds() - t_postproc_start;
@@ -1236,33 +1279,33 @@ static ST_retcode do_iv_regression(void)
     double t_stats = ctools_timer_seconds() - t_stats_start;
     double t_store_start = ctools_timer_seconds();
 
-    /* Store results to Stata */
-    /* Scalars */
-    SF_scal_save("__civreghdfe_N", (ST_double)N);
-    SF_scal_save("__civreghdfe_df_r", (ST_double)df_r_val);
-    SF_scal_save("__civreghdfe_df_a", (ST_double)df_a);
-    SF_scal_save("__civreghdfe_df_a_for_vce", (ST_double)df_a_for_vce);
-    SF_scal_save("__civreghdfe_K", (ST_double)K_total);
-    SF_scal_save("__civreghdfe_rss", rss);
-    SF_scal_save("__civreghdfe_tss", tss);
-    SF_scal_save("__civreghdfe_r2", r2);
-    SF_scal_save("__civreghdfe_rmse", rmse);
-    SF_scal_save("__civreghdfe_F", f_stat);
+    /* Store results to Stata using checked wrappers */
+    /* Scalars - use error-checking wrappers to prevent silent failures */
+    ctools_scal_save("__civreghdfe_N", (ST_double)N);
+    ctools_scal_save("__civreghdfe_df_r", (ST_double)df_r_val);
+    ctools_scal_save("__civreghdfe_df_a", (ST_double)df_a);
+    ctools_scal_save("__civreghdfe_df_a_for_vce", (ST_double)df_a_for_vce);
+    ctools_scal_save("__civreghdfe_K", (ST_double)K_total);
+    ctools_scal_save("__civreghdfe_rss", rss);
+    ctools_scal_save("__civreghdfe_tss", tss);
+    ctools_scal_save("__civreghdfe_r2", r2);
+    ctools_scal_save("__civreghdfe_rmse", rmse);
+    ctools_scal_save("__civreghdfe_F", f_stat);
 
     if (vce_type == 4 && dkraay_T > 0) {
         /* Driscoll-Kraay: N_clust = number of time periods */
-        SF_scal_save("__civreghdfe_N_clust", (ST_double)dkraay_T);
+        ctools_scal_save("__civreghdfe_N_clust", (ST_double)dkraay_T);
     } else if (has_cluster) {
-        SF_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
+        ctools_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
     }
 
     if (has_cluster2) {
-        SF_scal_save("__civreghdfe_N_clust2", (ST_double)num_clusters2);
+        ctools_scal_save("__civreghdfe_N_clust2", (ST_double)num_clusters2);
     }
 
     /* Store lambda for LIML/Fuller */
     if (est_method == 1 || est_method == 2) {
-        SF_scal_save("__civreghdfe_lambda", lambda);
+        ctools_scal_save("__civreghdfe_lambda", lambda);
     }
 
     /* Matrices: e(b) and e(V) - reorder from [exog, endog] to [endog, exog] */
@@ -1271,10 +1314,10 @@ static ST_retcode do_iv_regression(void)
 
     /* Store beta in [endog, exog] order */
     for (ST_int e = 0; e < K_endog; e++) {
-        SF_mat_store("__civreghdfe_b", 1, e + 1, beta[K_exog + e]);
+        ctools_mat_store("__civreghdfe_b", 1, e + 1, beta[K_exog + e]);
     }
     for (ST_int x = 0; x < K_exog; x++) {
-        SF_mat_store("__civreghdfe_b", 1, K_endog + x + 1, beta[x]);
+        ctools_mat_store("__civreghdfe_b", 1, K_endog + x + 1, beta[x]);
     }
 
     /* Store V in [endog, exog] order - need to reorder rows and columns */
@@ -1285,7 +1328,7 @@ static ST_retcode do_iv_regression(void)
         ST_int old_i = (new_i < K_endog) ? (K_exog + new_i) : (new_i - K_endog);
         for (ST_int new_j = 0; new_j < K_total; new_j++) {
             ST_int old_j = (new_j < K_endog) ? (K_exog + new_j) : (new_j - K_endog);
-            SF_mat_store("__civreghdfe_V", new_i + 1, new_j + 1, V[old_j * K_total + old_i]);
+            ctools_mat_store("__civreghdfe_V", new_i + 1, new_j + 1, V[old_j * K_total + old_i]);
         }
     }
 
@@ -1293,24 +1336,24 @@ static ST_retcode do_iv_regression(void)
     for (ST_int e = 0; e < K_endog; e++) {
         char name[64];
         snprintf(name, sizeof(name), "__civreghdfe_F1_%d", (int)(e + 1));
-        SF_scal_save(name, first_stage_F[e]);
+        ctools_scal_save(name, first_stage_F[e]);
     }
 
     /* End store timing, compute total */
     t_store = ctools_timer_seconds() - t_store_start;
     double t_total = ctools_timer_seconds() - t_total_start;
 
-    /* Save timing scalars */
-    SF_scal_save("_civreghdfe_time_load", t_load + t_missing);  /* Combine load and missing check */
-    SF_scal_save("_civreghdfe_time_singleton", t_singleton);
-    SF_scal_save("_civreghdfe_time_setup", t_hdfe_setup);
-    SF_scal_save("_civreghdfe_time_fwl", t_fwl);
-    SF_scal_save("_civreghdfe_time_partial", t_partial_out);
-    SF_scal_save("_civreghdfe_time_postproc", t_postproc);
-    SF_scal_save("_civreghdfe_time_estimate", t_estimate);
-    SF_scal_save("_civreghdfe_time_stats", t_stats);
-    SF_scal_save("_civreghdfe_time_store", t_store);
-    SF_scal_save("_civreghdfe_time_total", t_total);
+    /* Save timing scalars - less critical but still use checked wrappers */
+    ctools_scal_save("_civreghdfe_time_load", t_load + t_missing);  /* Combine load and missing check */
+    ctools_scal_save("_civreghdfe_time_singleton", t_singleton);
+    ctools_scal_save("_civreghdfe_time_setup", t_hdfe_setup);
+    ctools_scal_save("_civreghdfe_time_fwl", t_fwl);
+    ctools_scal_save("_civreghdfe_time_partial", t_partial_out);
+    ctools_scal_save("_civreghdfe_time_postproc", t_postproc);
+    ctools_scal_save("_civreghdfe_time_estimate", t_estimate);
+    ctools_scal_save("_civreghdfe_time_stats", t_stats);
+    ctools_scal_save("_civreghdfe_time_store", t_store);
+    ctools_scal_save("_civreghdfe_time_total", t_total);
     CTOOLS_SAVE_THREAD_INFO("_civreghdfe");
 
     /* Cleanup */
@@ -1366,4 +1409,27 @@ ST_retcode civreghdfe_main(const char *args)
 
     SF_error("civreghdfe: Unknown subcommand\n");
     return 198;
+}
+
+/*
+ * Global flag to skip saving results to Stata (for debugging).
+ * When set to 1, all SF_scal_save and SF_mat_store calls are skipped.
+ */
+int g_civreghdfe_noreturn = 0;
+
+/*
+ * Cleanup function for civreghdfe persistent state.
+ * Frees the global HDFE state if allocated.
+ * Safe to call multiple times (idempotent).
+ */
+void civreghdfe_cleanup_state(void)
+{
+    /* civreghdfe cleans up g_state at the end of do_iv_regression(),
+       so this is just a safety measure for interrupted execution */
+    if (g_state != NULL) {
+        /* Note: Full cleanup would require knowing G and num_threads,
+           which we don't have here. The main function handles full cleanup.
+           This just nulls the pointer to prevent double-free issues. */
+        g_state = NULL;
+    }
 }

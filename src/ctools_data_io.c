@@ -770,6 +770,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
     size_t i;
     ST_int stata_var = (ST_int)var_idx;
     int is_string = SF_var_is_string(stata_var);
+    ST_int nobs_max = SF_nobs();
 
     if (is_string) {
         /* String variable: allocate buffer, gather, scatter (overflow-safe) */
@@ -796,7 +797,42 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             }
 
             if (source_rows[i] >= 0) {
-                SF_sdata(stata_var, (ST_int)(source_rows[i] + obs1), strbuf);
+                /* Overflow check: ensure addition doesn't overflow int64_t */
+                if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
+                    char errbuf[128];
+                    snprintf(errbuf, sizeof(errbuf),
+                             "ctools: source_rows[%zu]=%lld + obs1=%zu would overflow\n",
+                             i, (long long)source_rows[i], obs1);
+                    SF_error(errbuf);
+                    /* Cleanup */
+                    for (size_t j = 0; j < i; j++) {
+                        if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
+                            free(buf[j]);
+                        }
+                    }
+                    ctools_string_arena_free(arena);
+                    ctools_aligned_free(buf);
+                    return STATA_ERR_INVALID_INPUT;
+                }
+                /* Bounds check: source observation must be within valid Stata range */
+                int64_t src_obs = source_rows[i] + (int64_t)obs1;
+                if (src_obs < 1 || src_obs > nobs_max) {
+                    char errbuf[128];
+                    snprintf(errbuf, sizeof(errbuf),
+                             "ctools: source_rows[%zu]=%lld -> obs %lld out of bounds [1,%d]\n",
+                             i, (long long)source_rows[i], (long long)src_obs, (int)nobs_max);
+                    SF_error(errbuf);
+                    /* Cleanup */
+                    for (size_t j = 0; j < i; j++) {
+                        if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
+                            free(buf[j]);
+                        }
+                    }
+                    ctools_string_arena_free(arena);
+                    ctools_aligned_free(buf);
+                    return STATA_ERR_INVALID_INPUT;
+                }
+                SF_sdata(stata_var, (ST_int)src_obs, strbuf);
                 buf[i] = ctools_string_arena_strdup(arena, strbuf);
             } else {
                 buf[i] = ctools_string_arena_strdup(arena, "");  /* Missing -> empty string */
@@ -852,7 +888,28 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             }
 
             if (source_rows[i] >= 0) {
-                SF_vdata(stata_var, (ST_int)(source_rows[i] + obs1), &buf[i]);
+                /* Overflow check: ensure addition doesn't overflow int64_t */
+                if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
+                    char errbuf[128];
+                    snprintf(errbuf, sizeof(errbuf),
+                             "ctools: source_rows[%zu]=%lld + obs1=%zu would overflow\n",
+                             i, (long long)source_rows[i], obs1);
+                    SF_error(errbuf);
+                    ctools_aligned_free(buf);
+                    return STATA_ERR_INVALID_INPUT;
+                }
+                /* Bounds check: source observation must be within valid Stata range */
+                int64_t src_obs = source_rows[i] + (int64_t)obs1;
+                if (src_obs < 1 || src_obs > nobs_max) {
+                    char errbuf[128];
+                    snprintf(errbuf, sizeof(errbuf),
+                             "ctools: source_rows[%zu]=%lld -> obs %lld out of bounds [1,%d]\n",
+                             i, (long long)source_rows[i], (long long)src_obs, (int)nobs_max);
+                    SF_error(errbuf);
+                    ctools_aligned_free(buf);
+                    return STATA_ERR_INVALID_INPUT;
+                }
+                SF_vdata(stata_var, (ST_int)src_obs, &buf[i]);
             } else {
                 buf[i] = SV_missval;  /* Missing value */
             }
@@ -1390,10 +1447,21 @@ stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
     }
 
     ST_int stata_var = (ST_int)var_idx;
+    ST_int nobs_max = SF_nobs();
 
     /* Write values using obs_map for indexing */
     for (size_t i = 0; i < n_filtered; i++) {
-        SF_vstore(stata_var, (ST_int)obs_map[i], values[i]);
+        /* Bounds check: obs_map values must be valid 1-based Stata observation indices */
+        perm_idx_t obs = obs_map[i];
+        if (obs < 1 || obs > (perm_idx_t)nobs_max) {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                     "ctools: obs_map[%zu]=%u out of bounds [1,%d]\n",
+                     i, (unsigned)obs, (int)nobs_max);
+            SF_error(buf);
+            return STATA_ERR_INVALID_INPUT;
+        }
+        SF_vstore(stata_var, (ST_int)obs, values[i]);
     }
 
     return STATA_OK;
@@ -1410,10 +1478,21 @@ stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
     }
 
     ST_int stata_var = (ST_int)var_idx;
+    ST_int nobs_max = SF_nobs();
 
     /* Write strings using obs_map for indexing */
     for (size_t i = 0; i < n_filtered; i++) {
-        SF_sstore(stata_var, (ST_int)obs_map[i], strings[i] ? strings[i] : "");
+        /* Bounds check: obs_map values must be valid 1-based Stata observation indices */
+        perm_idx_t obs = obs_map[i];
+        if (obs < 1 || obs > (perm_idx_t)nobs_max) {
+            char buf[128];
+            snprintf(buf, sizeof(buf),
+                     "ctools: obs_map[%zu]=%u out of bounds [1,%d]\n",
+                     i, (unsigned)obs, (int)nobs_max);
+            SF_error(buf);
+            return STATA_ERR_INVALID_INPUT;
+        }
+        SF_sstore(stata_var, (ST_int)obs, strings[i] ? strings[i] : "");
     }
 
     return STATA_OK;

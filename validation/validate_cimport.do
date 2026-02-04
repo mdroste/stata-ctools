@@ -2529,6 +2529,44 @@ capture erase "temp/excel_noheader.xlsx"
 capture erase "temp/excel_uppercase.xlsx"
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cimport returns the same error codes as import delimited
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* File doesn't exist
+test_error_match, stata_cmd(import delimited using "nonexistent_file.csv", clear) ctools_cmd(cimport delimited using "nonexistent_file.csv", clear) testname("file doesn't exist")
+
+* Invalid delimiter option (not a real test since delimiter is flexible, but test format)
+* Create a test file first
+clear
+set obs 5
+gen x = _n
+gen y = _n * 2
+export delimited using "temp/error_test.csv", replace
+clear
+
+* Try to import with invalid options - Note: Stata's import is forgiving about most options
+* Test empty file scenario instead
+clear
+file open test using "temp/empty_test.csv", write replace
+file close test
+capture import delimited using "temp/empty_test.csv", clear
+local stata_rc = _rc
+capture cimport delimited using "temp/empty_test.csv", clear
+local cimport_rc = _rc
+if `stata_rc' == `cimport_rc' {
+    test_pass "[error] empty file (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] empty file" "stata rc=`stata_rc', cimport rc=`cimport_rc'"
+}
+capture erase "temp/empty_test.csv"
+capture erase "temp/error_test.csv"
+
+/*******************************************************************************
  * Cleanup and summary
  ******************************************************************************/
 

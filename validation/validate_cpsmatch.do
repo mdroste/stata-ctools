@@ -867,6 +867,108 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cpsmatch returns the same error codes as psmatch2
+ * when given invalid inputs or error conditions.
+ * Note: psmatch2 is a user-written command (ssc install psmatch2).
+ * If psmatch2 is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if psmatch2 is installed
+capture which psmatch2
+local psmatch2_installed = (_rc == 0)
+
+* Variable doesn't exist
+clear
+set obs 100
+gen treat = runiform() > 0.5
+gen x = rnormal()
+if `psmatch2_installed' {
+    test_error_match, stata_cmd(psmatch2 treat nonexistent_var) ctools_cmd(cpsmatch treat nonexistent_var) testname("nonexistent variable")
+}
+else {
+    capture cpsmatch treat nonexistent_var
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [psmatch2 not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* Treatment variable doesn't exist
+clear
+set obs 100
+gen x = rnormal()
+if `psmatch2_installed' {
+    test_error_match, stata_cmd(psmatch2 nonexistent_treat x) ctools_cmd(cpsmatch nonexistent_treat x) testname("nonexistent treatment variable")
+}
+else {
+    capture cpsmatch nonexistent_treat x
+    if _rc != 0 {
+        test_pass "[error] nonexistent treatment variable (rc=`=_rc') [psmatch2 not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent treatment variable" "should have errored"
+    }
+}
+
+* String treatment variable
+clear
+set obs 100
+gen str10 treat = cond(runiform() > 0.5, "yes", "no")
+gen x = rnormal()
+if `psmatch2_installed' {
+    test_error_match, stata_cmd(psmatch2 treat x) ctools_cmd(cpsmatch treat x) testname("string treatment variable")
+}
+else {
+    capture cpsmatch treat x
+    if _rc != 0 {
+        test_pass "[error] string treatment variable (rc=`=_rc') [psmatch2 not installed]"
+    }
+    else {
+        test_fail "[error] string treatment variable" "should have errored"
+    }
+}
+
+* No covariates specified
+clear
+set obs 100
+gen treat = runiform() > 0.5
+if `psmatch2_installed' {
+    test_error_match, stata_cmd(psmatch2 treat) ctools_cmd(cpsmatch treat) testname("no covariates specified")
+}
+else {
+    capture cpsmatch treat
+    if _rc != 0 {
+        test_pass "[error] no covariates specified (rc=`=_rc') [psmatch2 not installed]"
+    }
+    else {
+        test_fail "[error] no covariates specified" "should have errored"
+    }
+}
+
+* All treated or all control
+clear
+set obs 100
+gen treat = 1
+gen x = rnormal()
+if `psmatch2_installed' {
+    test_error_match, stata_cmd(psmatch2 treat x) ctools_cmd(cpsmatch treat x) testname("all treated observations")
+}
+else {
+    capture cpsmatch treat x
+    if _rc != 0 {
+        test_pass "[error] all treated observations (rc=`=_rc') [psmatch2 not installed]"
+    }
+    else {
+        test_fail "[error] all treated observations" "should have errored"
+    }
+}
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 noi print_summary "cpsmatch"

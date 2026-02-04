@@ -1539,6 +1539,596 @@ replace x = "0.000123456789" in 5
 benchmark_destring x, testname("vs destring: float precision") generate(x) float
 
 /*******************************************************************************
+ * SECTION 14: Empty dataset and boundary tests
+ ******************************************************************************/
+print_section "Empty Dataset and Boundary Tests"
+
+* Test 14.1: Empty dataset with generate - compare with Stata
+clear
+set obs 0
+gen str10 x = ""
+capture destring x, generate(x_num_s)
+local stata_rc = _rc
+capture cdestring x, generate(x_num_c)
+local cdestring_rc = _rc
+if `stata_rc' == `cdestring_rc' {
+    test_pass "empty dataset with generate - matches Stata"
+}
+else {
+    test_fail "empty gen" "cdestring rc=`cdestring_rc' but destring rc=`stata_rc'"
+}
+
+* Test 14.2: Empty dataset with replace - compare with Stata
+clear
+set obs 0
+gen str10 x = ""
+capture clonevar x_s = x
+capture destring x_s, replace
+local stata_rc = _rc
+capture clonevar x_c = x
+capture cdestring x_c, replace
+local cdestring_rc = _rc
+if `stata_rc' == `cdestring_rc' {
+    test_pass "empty dataset with replace - matches Stata"
+}
+else {
+    test_fail "empty replace" "cdestring rc=`cdestring_rc' but destring rc=`stata_rc'"
+}
+
+* Test 14.3: Single observation
+clear
+set obs 1
+gen str10 x = "42"
+benchmark_destring x, testname("single observation") generate(x)
+
+* Test 14.4: Single observation with non-numeric
+clear
+set obs 1
+gen str10 x = "abc"
+benchmark_destring x, testname("single non-numeric with force") generate(x) force
+
+* Test 14.5: Two observations
+clear
+set obs 2
+gen str10 x = string(_n)
+benchmark_destring x, testname("two observations") generate(x)
+
+/*******************************************************************************
+ * SECTION 15: Comprehensive option combinations
+ ******************************************************************************/
+print_section "Option Combinations"
+
+* Test 15.1: ignore + force
+clear
+set obs 20
+gen str20 x = "$" + cond(mod(_n, 4) == 0, "NA", string(_n * 10))
+benchmark_destring x, testname("ignore + force") generate(x) ignore("$") force
+
+* Test 15.2: ignore + percent
+clear
+set obs 20
+gen str20 x = "$" + string(_n) + "%"
+benchmark_destring x, testname("ignore $ + percent") generate(x) ignore("$") percent
+
+* Test 15.3: dpcomma + force
+clear
+set obs 20
+gen str20 x = cond(mod(_n, 5) == 0, "NA", subinstr(string(_n / 3, "%10.2f"), ".", ",", 1))
+benchmark_destring x, testname("dpcomma + force") generate(x) dpcomma force
+
+* Test 15.4: dpcomma + ignore + force
+clear
+set obs 20
+gen str20 x = cond(mod(_n, 5) == 0, "NA", "€" + subinstr(string(_n * 100, "%10.2f"), ".", ",", 1))
+benchmark_destring x, testname("dpcomma + ignore + force") generate(x) dpcomma ignore("€") force
+
+* Test 15.5: percent + force
+clear
+set obs 20
+gen str15 x = cond(mod(_n, 4) == 0, "N/A%", string(_n * 5) + "%")
+benchmark_destring x, testname("percent + force") generate(x) percent force
+
+* Test 15.6: float + force
+clear
+set obs 30
+gen str20 x = cond(mod(_n, 6) == 0, "missing", string(_n / 7, "%10.4f"))
+benchmark_destring x, testname("float + force") generate(x) float force
+
+* Test 15.7: float + ignore
+clear
+set obs 30
+gen str20 x = "$" + string(_n / 3, "%10.3f")
+benchmark_destring x, testname("float + ignore") generate(x) float ignore("$")
+
+* Test 15.8: float + percent
+clear
+set obs 30
+gen str15 x = string(_n * 2) + "%"
+benchmark_destring x, testname("float + percent") generate(x) float percent
+
+* Test 15.9: Multiple ignore characters + force
+clear
+set obs 30
+gen str30 x = cond(mod(_n, 5) == 0, "N/A", "$" + string(_n * 1000, "%15.0gc"))
+benchmark_destring x, testname("ignore $, + force") generate(x) ignore("$,") force
+
+* Test 15.10: All options combined (ignore + force + float)
+clear
+set obs 30
+gen str30 x = cond(mod(_n, 7) == 0, "NA", "£" + string(_n / 5, "%10.2f"))
+benchmark_destring x, testname("ignore + force + float") generate(x) ignore("£") force float
+
+/*******************************************************************************
+ * SECTION 16: Missing string patterns
+ ******************************************************************************/
+print_section "Missing String Patterns"
+
+* Test 16.1: All empty strings
+clear
+set obs 20
+gen str10 x = ""
+cdestring x, generate(x_num) force
+count if missing(x_num)
+if r(N) == 20 {
+    test_pass "all empty -> all missing"
+}
+else {
+    test_fail "all empty" "not all missing"
+}
+
+* Test 16.2: Mixed empty and numeric
+clear
+set obs 20
+gen str10 x = cond(mod(_n, 2) == 0, "", string(_n))
+benchmark_destring x, testname("mixed empty and numeric") generate(x) force
+
+* Test 16.3: First observation empty
+clear
+set obs 10
+gen str10 x = string(_n)
+replace x = "" in 1
+benchmark_destring x, testname("first observation empty") generate(x) force
+
+* Test 16.4: Last observation empty
+clear
+set obs 10
+gen str10 x = string(_n)
+replace x = "" in 10
+benchmark_destring x, testname("last observation empty") generate(x) force
+
+* Test 16.5: Consecutive empties
+clear
+set obs 20
+gen str10 x = string(_n)
+replace x = "" in 5/10
+benchmark_destring x, testname("consecutive empties") generate(x) force
+
+* Test 16.6: Only first non-empty
+clear
+set obs 20
+gen str10 x = ""
+replace x = "42" in 1
+cdestring x, generate(x_num) force
+if x_num[1] == 42 & missing(x_num[2]) {
+    test_pass "only first non-empty"
+}
+else {
+    test_fail "only first" "wrong pattern"
+}
+
+* Test 16.7: Only last non-empty
+clear
+set obs 20
+gen str10 x = ""
+replace x = "99" in 20
+cdestring x, generate(x_num) force
+if x_num[20] == 99 & missing(x_num[1]) {
+    test_pass "only last non-empty"
+}
+else {
+    test_fail "only last" "wrong pattern"
+}
+
+/*******************************************************************************
+ * SECTION 17: Special number formats
+ ******************************************************************************/
+print_section "Special Number Formats"
+
+* Test 17.1: Hexadecimal-looking strings (treated as non-numeric)
+clear
+set obs 5
+gen str10 x = ""
+replace x = "0x10" in 1
+replace x = "0xFF" in 2
+replace x = "1A2B" in 3
+replace x = "CAFE" in 4
+replace x = "100" in 5
+benchmark_destring x, testname("hex-looking strings") generate(x) force
+
+* Test 17.2: Infinity-looking strings
+clear
+set obs 5
+gen str10 x = ""
+replace x = "Inf" in 1
+replace x = "-Inf" in 2
+replace x = "inf" in 3
+replace x = "+Inf" in 4
+replace x = "100" in 5
+benchmark_destring x, testname("infinity-looking") generate(x) force
+
+* Test 17.3: NaN-looking strings
+clear
+set obs 5
+gen str10 x = ""
+replace x = "NaN" in 1
+replace x = "nan" in 2
+replace x = "NA" in 3
+replace x = "N/A" in 4
+replace x = "100" in 5
+benchmark_destring x, testname("NaN-looking") generate(x) force
+
+* Test 17.4: Currency formats
+clear
+set obs 10
+gen str20 x = ""
+replace x = "$100" in 1
+replace x = "£200" in 2
+replace x = "€300" in 3
+replace x = "¥400" in 4
+replace x = "500 USD" in 5
+replace x = "600" in 6
+replace x = "-$100" in 7
+replace x = "$-100" in 8
+replace x = "($100)" in 9
+replace x = "100$" in 10
+benchmark_destring x, testname("currency formats") generate(x) force
+
+* Test 17.5: Accounting format (parentheses for negative)
+clear
+set obs 5
+gen str20 x = ""
+replace x = "(100)" in 1
+replace x = "(200.50)" in 2
+replace x = "300" in 3
+replace x = "(0)" in 4
+replace x = "()" in 5
+benchmark_destring x, testname("accounting format") generate(x) ignore("()") force
+
+* Test 17.6: Number with units
+clear
+set obs 10
+gen str20 x = ""
+replace x = "100kg" in 1
+replace x = "200lb" in 2
+replace x = "300m" in 3
+replace x = "400km" in 4
+replace x = "500ml" in 5
+replace x = "600" in 6
+replace x = "1.5kg" in 7
+replace x = "-2.5lb" in 8
+replace x = "0.001m" in 9
+replace x = "1e3km" in 10
+benchmark_destring x, testname("numbers with units") generate(x) ignore("kglbmm") force
+
+/*******************************************************************************
+ * SECTION 18: Verbose and threads options
+ ******************************************************************************/
+print_section "Verbose and Threads Options"
+
+* Test 18.1: verbose verifies correctness
+clear
+set obs 100
+gen str10 x = string(_n)
+cdestring x, generate(x_c) verbose
+destring x, generate(x_s)
+count if x_c != x_s
+if r(N) == 0 {
+    test_pass "[syntax] verbose option verifies correctness"
+}
+else {
+    test_fail "verbose" "`=r(N)' differ"
+}
+drop x_c x_s
+
+* Test 18.2: threads(1) matches destring
+clear
+set obs 1000
+gen str10 x = string(_n)
+cdestring x, generate(x_c) threads(1)
+destring x, generate(x_s)
+count if x_c != x_s
+if r(N) == 0 {
+    test_pass "threads(1) matches destring"
+}
+else {
+    test_fail "threads(1)" "`=r(N)' differ"
+}
+drop x_c x_s
+
+* Test 18.3: threads(2) matches destring
+clear
+set obs 1000
+gen str10 x = string(_n)
+cdestring x, generate(x_c) threads(2)
+destring x, generate(x_s)
+count if x_c != x_s
+if r(N) == 0 {
+    test_pass "threads(2) matches destring"
+}
+else {
+    test_fail "threads(2)" "`=r(N)' differ"
+}
+drop x_c x_s
+
+* Test 18.4: threads(4) matches destring
+clear
+set obs 5000
+gen str15 x = string(_n / 3, "%10.5f")
+cdestring x, generate(x_c) threads(4)
+destring x, generate(x_s)
+count if abs(x_c - x_s) > $DEFAULT_TOL & !missing(x_c) & !missing(x_s)
+if r(N) == 0 {
+    test_pass "threads(4) matches destring"
+}
+else {
+    test_fail "threads(4)" "`=r(N)' differ"
+}
+drop x_c x_s
+
+* Test 18.5: verbose + threads
+clear
+set obs 500
+gen str10 x = string(_n)
+capture cdestring x, generate(x_num) verbose threads(2)
+if _rc == 0 {
+    count if x_num == _n
+    if r(N) == 500 {
+        test_pass "[syntax] verbose + threads"
+    }
+    else {
+        test_fail "verbose+threads" "wrong values"
+    }
+}
+else {
+    test_fail "verbose+threads" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 19: if/in with various options
+ ******************************************************************************/
+print_section "if/in with Options"
+
+* Test 19.1: if with force (destring doesn't support if/in, just verify cdestring works)
+clear
+set obs 50
+gen str20 x = cond(mod(_n, 3) == 0, "NA", string(_n))
+gen flag = mod(_n, 2)
+cdestring x if flag == 1, generate(x_num) force
+count if !missing(x_num) & flag == 1 & mod(_n, 3) != 0
+local n_conv = r(N)
+* Should convert numeric values where flag==1 and not "NA"
+if `n_conv' > 0 {
+    test_pass "if with force"
+}
+else {
+    test_fail "if+force" "no conversions"
+}
+
+* Test 19.2: if with ignore
+clear
+set obs 50
+gen str20 x = "$" + string(_n)
+gen flag = mod(_n, 2)
+cdestring x if flag == 1, generate(x_num) ignore("$")
+count if !missing(x_num) & flag == 1
+local n_conv = r(N)
+count if flag == 1
+if `n_conv' == r(N) {
+    test_pass "if with ignore"
+}
+else {
+    test_fail "if+ignore" "wrong count"
+}
+
+* Test 19.3: if with percent
+clear
+set obs 50
+gen str15 x = string(_n * 2) + "%"
+gen flag = mod(_n, 2)
+cdestring x if flag == 1, generate(x_num) percent
+count if !missing(x_num) & flag == 1
+local n_conv = r(N)
+count if flag == 1
+if `n_conv' == r(N) {
+    test_pass "if with percent"
+}
+else {
+    test_fail "if+percent" "wrong count"
+}
+
+* Test 19.4: in with force
+clear
+set obs 100
+gen str20 x = cond(mod(_n, 5) == 0, "NA", string(_n))
+cdestring x in 1/50, generate(x_num) force
+count if !missing(x_num) in 1/50
+local n_conv = r(N)
+* 50 observations, 10 are "NA" -> 40 should convert
+if `n_conv' == 40 {
+    test_pass "in with force"
+}
+else {
+    test_fail "in+force" "expected 40, got `n_conv'"
+}
+
+* Test 19.5: in with dpcomma
+clear
+set obs 100
+gen str20 x = subinstr(string(_n / 3, "%10.2f"), ".", ",", 1)
+cdestring x in 20/70, generate(x_num) dpcomma
+count if !missing(x_num) in 20/70
+if r(N) == 51 {
+    test_pass "in with dpcomma"
+}
+else {
+    test_fail "in+dpcomma" "expected 51, got `=r(N)'"
+}
+
+* Test 19.6: Combined if and in with options
+clear
+set obs 100
+gen str20 x = "$" + string(_n)
+gen flag = mod(_n, 3) == 0
+cdestring x if flag == 1 in 1/60, generate(x_num) ignore("$")
+* Should convert multiples of 3 up to 60: 3,6,9,...,60 = 20 values
+count if !missing(x_num)
+if r(N) == 20 {
+    test_pass "if + in + ignore"
+}
+else {
+    test_fail "if+in+ignore" "expected 20, got `=r(N)'"
+}
+
+/*******************************************************************************
+ * SECTION 20: String variable types
+ ******************************************************************************/
+print_section "String Variable Types"
+
+* Test 20.1: str1 variable
+clear
+set obs 10
+gen str1 x = string(mod(_n - 1, 10))
+benchmark_destring x, testname("str1 variable") generate(x)
+
+* Test 20.2: str10 variable
+clear
+set obs 100
+gen str10 x = string(_n)
+benchmark_destring x, testname("str10 variable") generate(x)
+
+* Test 20.3: str50 variable
+clear
+set obs 50
+gen str50 x = string(_n, "%50.10f")
+benchmark_destring x, testname("str50 variable") generate(x)
+
+* Test 20.4: str100 variable
+clear
+set obs 30
+gen str100 x = string(_n / 7, "%100.20f")
+benchmark_destring x, testname("str100 variable") generate(x)
+
+* Test 20.5: str244 variable (max fixed string)
+clear
+set obs 20
+gen str244 x = string(_n / 3, "%20.10f")
+benchmark_destring x, testname("str244 variable") generate(x)
+
+* Test 20.6: strL variable
+clear
+set obs 20
+gen strL x = string(_n * 100)
+capture cdestring x, generate(x_c)
+local cdestring_rc = _rc
+capture destring x, generate(x_s)
+local destring_rc = _rc
+if `cdestring_rc' == `destring_rc' {
+    if `cdestring_rc' == 0 {
+        count if x_c != x_s
+        if r(N) == 0 {
+            test_pass "strL variable"
+        }
+        else {
+            test_fail "strL" "`=r(N)' differ"
+        }
+    }
+    else {
+        test_pass "strL - both error as expected"
+    }
+}
+else {
+    test_fail "strL" "cdestring rc=`cdestring_rc' destring rc=`destring_rc'"
+}
+
+/*******************************************************************************
+ * SECTION 21: Replace option comprehensive
+ ******************************************************************************/
+print_section "Replace Option Comprehensive"
+
+* Test 21.1: Replace with force
+clear
+set obs 30
+gen str20 x = cond(mod(_n, 4) == 0, "NA", string(_n))
+benchmark_destring x, testname("replace with force") replace force
+
+* Test 21.2: Replace with ignore + force
+clear
+set obs 30
+gen str20 x = "$" + cond(mod(_n, 5) == 0, "NA", string(_n))
+benchmark_destring x, testname("replace ignore + force") replace ignore("$") force
+
+* Test 21.3: Replace with percent
+clear
+set obs 30
+gen str15 x = string(_n * 3) + "%"
+benchmark_destring x, testname("replace with percent") replace percent
+
+* Test 21.4: Replace with dpcomma
+clear
+set obs 30
+gen str20 x = subinstr(string(_n / 5, "%10.3f"), ".", ",", 1)
+benchmark_destring x, testname("replace with dpcomma") replace dpcomma
+
+* Test 21.5: Replace with float
+clear
+set obs 30
+gen str20 x = string(_n / 7, "%10.5f")
+benchmark_destring x, testname("replace with float") replace float
+
+* Test 21.6: Replace multiple variables with force
+clear
+set obs 30
+gen str20 a = cond(mod(_n, 3) == 0, "NA", string(_n))
+gen str20 b = cond(mod(_n, 4) == 0, "NA", string(_n * 2))
+gen str20 c = cond(mod(_n, 5) == 0, "NA", string(_n * 3))
+benchmark_destring a b c, testname("replace multi with force") replace force
+
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cdestring returns the same error codes as Stata's destring
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(destring nonexistent_var, generate(test)) ctools_cmd(cdestring nonexistent_var, generate(test)) testname("nonexistent variable")
+
+* Already numeric variable
+sysuse auto, clear
+test_error_match, stata_cmd(destring price, generate(test)) ctools_cmd(cdestring price, generate(test)) testname("numeric variable input")
+
+* Missing generate or replace option
+clear
+set obs 10
+gen str10 x = string(_n)
+test_error_match, stata_cmd(destring x) ctools_cmd(cdestring x) testname("missing generate/replace option")
+
+* Generate variable already exists
+clear
+set obs 10
+gen str10 x = string(_n)
+gen y = _n
+test_error_match, stata_cmd(destring x, generate(y)) ctools_cmd(cdestring x, generate(y)) testname("generate var already exists")
+
+* Non-numeric string without force
+clear
+set obs 5
+gen str10 x = "abc"
+test_error_match, stata_cmd(destring x, generate(test)) ctools_cmd(cdestring x, generate(test)) testname("non-numeric string without force")
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 * End of cdestring validation

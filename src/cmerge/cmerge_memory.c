@@ -16,9 +16,9 @@
 
 cmerge_string_arena *cmerge_arena_create(size_t capacity)
 {
-    /* Create arena with STRDUP_FALLBACK mode - uses strdup() when arena is full.
-     * This preserves actual string data (unlike STATIC_FALLBACK which returns empty strings). */
-    return ctools_string_arena_create(capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
+    /* Create arena with STATIC_FALLBACK mode - returns static empty string when arena is full.
+     * This guarantees non-NULL return values as documented in the header. */
+    return ctools_string_arena_create(capacity, CTOOLS_STRING_ARENA_STATIC_FALLBACK);
 }
 
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)

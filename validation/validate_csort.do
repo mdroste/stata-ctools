@@ -1162,7 +1162,7 @@ sysuse auto, clear
 capture csort price, verbose
 if _rc == 0 {
     * Verify sort still produces correct result with verbose
-    sort, stable price
+    sort price, stable
     tempfile expected
     save `expected', replace
 
@@ -1376,6 +1376,41 @@ foreach alg in lsd msd timsort sample merge ips4o {
     gen str25 val_str = "obs" + string(_n, "%04.0f") + "_grp" + string(mod(_n, 10))
     gen float val_flt = exp(-_n/1000)
     benchmark_sort key1 key2, testname("two keys with witness") algorithm(`alg')
+}
+
+/*******************************************************************************
+ * SECTION 24: Intentional Error Tests
+ *
+ * These tests verify that csort returns the same error codes as Stata's sort
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(sort nonexistent_var) ctools_cmd(csort nonexistent_var) testname("nonexistent variable")
+
+* No variables specified
+sysuse auto, clear
+test_error_match, stata_cmd(sort) ctools_cmd(csort) testname("no variables specified")
+
+* Invalid variable name (number)
+sysuse auto, clear
+test_error_match, stata_cmd(sort 123abc) ctools_cmd(csort 123abc) testname("invalid variable name")
+
+* Constant variable (should succeed but test edge case)
+clear
+set obs 100
+gen x = 1
+capture sort x
+local stata_rc = _rc
+capture csort x
+local csort_rc = _rc
+if `stata_rc' == `csort_rc' {
+    test_pass "[error] constant variable (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] constant variable" "stata rc=`stata_rc', csort rc=`csort_rc'"
 }
 
 * End of csort validation

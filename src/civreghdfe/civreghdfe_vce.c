@@ -399,7 +399,17 @@ void ivvce_compute_twoway(
     /* Simple approach: map (c1, c2) to unique integer */
     /* Use hash: intersection_id = c1 * max_c2 + c2 */
     /* Then compact to 1..num_intersection */
-    ST_int *pair_to_int = (ST_int *)calloc((num_clusters1 + 1) * (num_clusters2 + 1), sizeof(ST_int));
+    /* Check for overflow: (num_clusters1 + 1) * (num_clusters2 + 1) */
+    size_t pair_array_size;
+    if (ctools_safe_alloc_size((size_t)(num_clusters1 + 1), (size_t)(num_clusters2 + 1),
+                               sizeof(ST_int), &pair_array_size) != 0) {
+        /* Overflow - fall back to direct intersection computation */
+        free(PzX); free(meat1); free(meat2); free(meat_int);
+        free(V1); free(V2); free(V_int); free(temp_v);
+        free(intersection_ids);
+        return;
+    }
+    ST_int *pair_to_int = (ST_int *)calloc(1, pair_array_size);
     if (!pair_to_int) {
         free(PzX); free(meat1); free(meat2); free(meat_int);
         free(V1); free(V2); free(V_int); free(temp_v);
@@ -411,7 +421,7 @@ void ivvce_compute_twoway(
     for (i = 0; i < N; i++) {
         ST_int c1 = cluster1_ids[i];
         ST_int c2 = cluster2_ids[i];
-        ST_int pair_idx = c1 * (num_clusters2 + 1) + c2;
+        size_t pair_idx = (size_t)c1 * (size_t)(num_clusters2 + 1) + (size_t)c2;
         if (pair_to_int[pair_idx] == 0) {
             num_intersection++;
             pair_to_int[pair_idx] = num_intersection;
@@ -768,10 +778,19 @@ void ivvce_compute_full(
             }
         }
 
-        /* Apply HAC kernel to time series of cluster sums */
-        for (ST_int lag = 0; lag <= bw && lag < num_clusters; lag++) {
+        /* Apply HAC kernel to time series of cluster sums
+           For spectral windows (QS=3, Danielle=6, Tent=7), loop through all lags up to T-1.
+           For lag windows (Bartlett=1, Parzen=2, Truncated=4, Tukey-Hanning=5), loop through bw.
+           Following ivreg2's m_omega approach. */
+        ST_int is_spectral = (kernel_type == 3);  /* QS is spectral */
+        ST_int max_lag = is_spectral ? (num_clusters - 1) : bw;
+        if (max_lag >= num_clusters) max_lag = num_clusters - 1;
+
+        for (ST_int lag = 0; lag <= max_lag; lag++) {
             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-            if (kw < 1e-10) continue;
+            /* Skip if weight is essentially zero. Note: spectral kernels can have
+               negative weights, so we use fabs() to check magnitude, not value. */
+            if (fabs(kw) < 1e-10) continue;
 
             if (lag == 0) {
                 /* Diagonal: sum_t u_t * u_t' */
@@ -943,7 +962,7 @@ void ivvce_compute_full(
                         ST_int i2 = obs_by_panel[start + t2];
                         ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
                         ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                        if (kw < 1e-10) continue;
+                        if (fabs(kw) < 1e-10) continue;  /* Use fabs for spectral kernels with negative weights */
 
                         /* Use full (l, m) loop without premature symmetrization.
                            Each (i1, i2) contribution uZ[l,i1]*uZ[m,i2] is NOT symmetric in l,m.
@@ -961,10 +980,16 @@ void ivvce_compute_full(
             free(panel_counts); free(panel_starts); free(obs_by_panel);
 
         } else {
-            /* Standard (non-panel) HAC in Z-space */
-            for (ST_int lag = 0; lag <= bw; lag++) {
+            /* Standard (non-panel) HAC in Z-space
+               For spectral windows (QS), loop through all lags up to N-1.
+               For lag windows, loop through bw. */
+            ST_int is_spectral = (kernel_type == 3);  /* QS is spectral */
+            ST_int max_lag = is_spectral ? (N - 1) : bw;
+            if (max_lag >= N) max_lag = N - 1;
+
+            for (ST_int lag = 0; lag <= max_lag; lag++) {
                 ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                if (kw < 1e-10) continue;
+                if (fabs(kw) < 1e-10) continue;
 
                 if (lag == 0) {
                     /* Gamma(0) = Σ_i uZ_i * uZ_i' */

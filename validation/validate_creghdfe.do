@@ -1728,6 +1728,100 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that creghdfe returns the same error codes as reghdfe
+ * when given invalid inputs or error conditions.
+ * Note: reghdfe is a user-written command (ssc install reghdfe).
+ * If reghdfe is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if reghdfe is installed
+capture which reghdfe
+local reghdfe_installed = (_rc == 0)
+
+* Variable doesn't exist
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price nonexistent_var, absorb(foreign)) ctools_cmd(creghdfe price nonexistent_var, absorb(foreign)) testname("nonexistent variable")
+}
+else {
+    capture creghdfe price nonexistent_var, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* Missing absorb option
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg) ctools_cmd(creghdfe price mpg) testname("missing absorb option")
+}
+else {
+    capture creghdfe price mpg
+    if _rc != 0 {
+        test_pass "[error] missing absorb option (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] missing absorb option" "should have errored"
+    }
+}
+
+* No observations after if condition
+sysuse auto, clear
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg if price > 100000, absorb(foreign)) ctools_cmd(creghdfe price mpg if price > 100000, absorb(foreign)) testname("no observations after if")
+}
+else {
+    capture creghdfe price mpg if price > 100000, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] no observations after if (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] no observations after if" "should have errored"
+    }
+}
+
+* Constant dependent variable (singleton groups)
+clear
+set obs 10
+gen y = 1
+gen x = runiform()
+gen group = 1
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe y x, absorb(group)) ctools_cmd(creghdfe y x, absorb(group)) testname("constant dependent variable")
+}
+else {
+    capture creghdfe y x, absorb(group)
+    if _rc != 0 {
+        test_pass "[error] constant dependent variable (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] constant dependent variable" "should have errored"
+    }
+}
+
+* Collinear variables
+sysuse auto, clear
+gen mpg2 = mpg * 2
+if `reghdfe_installed' {
+    test_error_match, stata_cmd(reghdfe price mpg mpg2, absorb(foreign)) ctools_cmd(creghdfe price mpg mpg2, absorb(foreign)) testname("collinear variables")
+}
+else {
+    capture creghdfe price mpg mpg2, absorb(foreign)
+    if _rc != 0 {
+        test_pass "[error] collinear variables (rc=`=_rc') [reghdfe not installed]"
+    }
+    else {
+        test_fail "[error] collinear variables" "should have errored"
+    }
+}
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 

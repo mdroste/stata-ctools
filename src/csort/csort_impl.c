@@ -243,7 +243,14 @@ ST_retcode csort_main(const char *args)
 
     /* Get observation range and variable count from Stata */
     obs1 = SF_in1();
+    size_t obs2 = SF_in2();
     nvars = SF_nvars();
+
+    /* Handle empty dataset case - nothing to sort, return success */
+    if (obs2 < obs1) {
+        free(sort_vars);
+        return 0;  /* Success - nothing to do */
+    }
 
     if (nvars == 0) {
         SF_error("csort: no variables in dataset\n");

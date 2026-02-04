@@ -10,6 +10,7 @@
     - Endogeneity tests (Durbin-Wu-Hausman)
 */
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -321,7 +322,11 @@ void civreghdfe_compute_underid_test(
             ST_double *shat0 = (ST_double *)calloc(L * L, sizeof(ST_double));
             ST_double *shat0_inv = (ST_double *)calloc(L * L, sizeof(ST_double));
             if (!shat0 || !shat0_inv) {
+                free(X_endog_partial); free(Z_excl_partial);
                 free(v); free(shat0); free(shat0_inv);
+                if (ZtZ_excl) free(ZtZ_excl);
+                if (ZtX) free(ZtX);
+                if (pi_excl) free(pi_excl);
                 return;
             }
 
@@ -373,7 +378,7 @@ void civreghdfe_compute_underid_test(
                                 ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                 ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                if (kw == 0.0) continue;
+                                if (fabs(kw) < 1e-10) continue;
 
                                 ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                 ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -396,7 +401,11 @@ void civreghdfe_compute_underid_test(
                 /* Cluster-robust or HAC (Driscoll-Kraay) */
                 ST_double *cluster_Zv = (ST_double *)calloc(num_clusters * L, sizeof(ST_double));
                 if (!cluster_Zv) {
+                    free(X_endog_partial); free(Z_excl_partial);
                     free(v); free(shat0); free(shat0_inv);
+                    if (ZtZ_excl) free(ZtZ_excl);
+                    if (ZtX) free(ZtX);
+                    if (pi_excl) free(pi_excl);
                     return;
                 }
 
@@ -418,7 +427,7 @@ void civreghdfe_compute_underid_test(
                         for (ST_int s = 0; s < num_clusters; s++) {
                             ST_int lag = (t > s) ? (t - s) : (s - t);
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                            if (kw == 0.0) continue;  /* Skip if no weight */
+                            if (fabs(kw) < 1e-10) continue;  /* Skip if no weight */
 
                             for (ST_int ki = 0; ki < L; ki++) {
                                 for (ST_int kj = 0; kj < L; kj++) {
@@ -440,9 +449,6 @@ void civreghdfe_compute_underid_test(
                     }
                 }
                 free(cluster_Zv);
-
-                /* No small-sample adjustment to shat0 - the adjustment is
-                   handled through the denominator and dof in the formula */
             } else {
                 /* HC robust */
                 for (i = 0; i < N; i++) {
@@ -515,7 +521,7 @@ void civreghdfe_compute_underid_test(
                                     ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                     ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                    if (kw == 0.0) continue;
+                                    if (fabs(kw) < 1e-10) continue;
 
                                     ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                     ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -540,7 +546,7 @@ void civreghdfe_compute_underid_test(
                         for (ST_int s = 0; s < N; s++) {
                             ST_int lag = (t > s) ? (t - s) : (s - t);
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                            if (kw == 0.0) continue;
+                            if (fabs(kw) < 1e-10) continue;
 
                             ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
                             ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
@@ -652,11 +658,12 @@ void civreghdfe_compute_underid_test(
                             ST_double cluster_adj;
                             if (vce_type == CIVREGHDFE_VCE_CLUSTER || vce_type == CIVREGHDFE_VCE_DKRAAY ||
                                 ((kiefer) && kernel_type > 0 && bw > 0)) {
-                                /* Regular cluster: single (G-1)/G adjustment
-                                   For cluster VCE, ivreghdfe uses sdofminus = 1 (for the constant),
-                                   not the full df_a, because cluster handles the FE adjustment.
-                                   dof = N - K_iv - 1 */
-                                dof = N - K_iv - 1;
+                                /* Cluster/dkraay: (G-1)/G adjustment
+                                   ivreghdfe formula (lines 1832-1835):
+                                   rkf = chi2/(N-1) * (N - K - sdofminus - dofminus) * (G-1)/G / L
+                                   where sdofminus = partial_ct (absorbed FE count + constant)
+                                   So dof = N - K_iv - df_a (which includes absorbed FE) */
+                                dof = N - K_iv - df_a;
                                 denom = (ST_double)(N - 1);
                                 cluster_adj = (ST_double)(num_clusters - 1) / (ST_double)num_clusters;
                             } else {
@@ -670,6 +677,10 @@ void civreghdfe_compute_underid_test(
                             }
                             if (dof <= 0) dof = 1;
 
+                            /* ivreghdfe formula:
+                               rkf = r(chi2)/(N-1) * (N - iv1_ct - sdofminus) * (G-1)/G / L
+                               r(chi2) from ranktest already has scaling adjustments.
+                               Our kp_wald_raw needs similar scaling. */
                             *kp_f = kp_wald_raw / denom * (ST_double)dof * cluster_adj / (ST_double)L;
 
                                 free(ZtZ_shat0_inv_ZtX);
@@ -812,7 +823,7 @@ void civreghdfe_compute_underid_test(
                                             ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                             ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                            if (kw == 0.0) continue;
+                                            if (fabs(kw) < 1e-10) continue;
 
                                             ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                             ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -851,7 +862,7 @@ void civreghdfe_compute_underid_test(
                                         for (ST_int s = 0; s < num_clusters; s++) {
                                             ST_int lag = (t > s) ? (t - s) : (s - t);
                                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                                            if (kw == 0.0) continue;
+                                            if (fabs(kw) < 1e-10) continue;
 
                                             for (ST_int ki = 0; ki < L; ki++) {
                                                 for (ST_int kj = 0; kj < L; kj++) {
@@ -922,7 +933,7 @@ void civreghdfe_compute_underid_test(
                                             ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                             ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                            if (kw == 0.0) continue;
+                                            if (fabs(kw) < 1e-10) continue;
 
                                             ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                             ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -949,7 +960,7 @@ void civreghdfe_compute_underid_test(
                                 for (ST_int s = 0; s < N; s++) {
                                     ST_int lag = (t > s) ? (t - s) : (s - t);
                                     ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                                    if (kw == 0.0) continue;
+                                    if (fabs(kw) < 1e-10) continue;
 
                                     ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
                                     ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;
@@ -1306,7 +1317,7 @@ void civreghdfe_compute_sargan_j(
                             ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                            if (kw == 0.0) continue;
+                            if (fabs(kw) < 1e-10) continue;
 
                             ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                             ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -1345,7 +1356,7 @@ void civreghdfe_compute_sargan_j(
                         for (ST_int s = 0; s < num_clusters; s++) {
                             ST_int lag = (t > s) ? (t - s) : (s - t);
                             ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                            if (kw == 0.0) continue;
+                            if (fabs(kw) < 1e-10) continue;
 
                             for (ST_int ki = 0; ki < K_iv; ki++) {
                                 for (ST_int kj = 0; kj < K_iv; kj++) {
@@ -1411,7 +1422,7 @@ void civreghdfe_compute_sargan_j(
                                 ST_int time_lag = (t1 > t2) ? (t1 - t2) : (t2 - t1);
 
                                 ST_double kw = civreghdfe_kernel_weight(kernel_type, time_lag, bw);
-                                if (kw == 0.0) continue;
+                                if (fabs(kw) < 1e-10) continue;
 
                                 ST_double w1 = (weights && weight_type != 0) ? weights[i1] : 1.0;
                                 ST_double w2 = (weights && weight_type != 0) ? weights[i2] : 1.0;
@@ -1435,7 +1446,7 @@ void civreghdfe_compute_sargan_j(
                     for (ST_int s = 0; s < N; s++) {
                         ST_int lag = (t > s) ? (t - s) : (s - t);
                         ST_double kw = civreghdfe_kernel_weight(kernel_type, lag, bw);
-                        if (kw == 0.0) continue;
+                        if (fabs(kw) < 1e-10) continue;
 
                         ST_double wt = (weights && weight_type != 0) ? weights[t] : 1.0;
                         ST_double ws = (weights && weight_type != 0) ? weights[s] : 1.0;

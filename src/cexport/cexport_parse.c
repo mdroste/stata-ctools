@@ -95,6 +95,10 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
         if (arg_idx == 0) {
             /* First arg: filename */
             ctx->filename = strdup(token);
+            if (ctx->filename == NULL) {
+                free(args_copy);
+                return -1;
+            }
         } else if (arg_idx == 1) {
             /* Second arg: delimiter */
             if (strlen(token) == 1) {

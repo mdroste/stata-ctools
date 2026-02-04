@@ -323,13 +323,15 @@ ST_retcode cdecode_main(const char *args)
     t_decode = ctools_timer_seconds();
     t_total = t_decode - t_start;
 
+    /* Save count before freeing */
+    size_t n_labels = ht.count;
     cdecode_hash_free(&ht);
 
     /* Store results */
     SF_scal_save("_cdecode_n_decoded", (double)n_decoded);
     SF_scal_save("_cdecode_n_missing", (double)n_missing);
     SF_scal_save("_cdecode_n_unlabeled", (double)n_unlabeled);
-    SF_scal_save("_cdecode_n_labels", (double)ht.count);
+    SF_scal_save("_cdecode_n_labels", (double)n_labels);
     SF_scal_save("_cdecode_max_len", (double)detected_maxlen);
     SF_scal_save("_cdecode_time_parse", t_parse - t_start);
     SF_scal_save("_cdecode_time_decode", t_decode - t_parse);

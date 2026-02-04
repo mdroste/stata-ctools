@@ -98,4 +98,19 @@ ST_retcode compute_2sls(
     ST_int bw
 );
 
+/*
+ * Cleanup function for civreghdfe persistent state.
+ * Frees the global HDFE state if allocated.
+ * Safe to call multiple times (idempotent).
+ * Note: civreghdfe normally cleans up after itself, but this
+ * handles cases where execution was interrupted.
+ */
+void civreghdfe_cleanup_state(void);
+
+/*
+ * Global flag to skip saving results to Stata (for debugging heap corruption).
+ * When set to 1, all SF_scal_save and SF_mat_store calls are skipped.
+ */
+extern int g_civreghdfe_noreturn;
+
 #endif /* CIVREGHDFE_IMPL_H */

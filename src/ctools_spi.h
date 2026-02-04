@@ -4,6 +4,8 @@
  * Provides optimized batch read/write macros for Stata data access.
  * These macros reduce function call overhead through loop unrolling.
  *
+ * For error-checking wrappers around SPI write functions, see ctools_spi_checked.h.
+ *
  * Part of the ctools suite for Stata.
  */
 

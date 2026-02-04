@@ -2039,6 +2039,34 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cqreg returns the same error codes as qreg
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Variable doesn't exist
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price nonexistent_var) ctools_cmd(cqreg price nonexistent_var) testname("nonexistent variable")
+
+* Invalid quantile (> 1)
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg, quantile(1.5)) ctools_cmd(cqreg price mpg, quantile(1.5)) testname("invalid quantile > 1")
+
+* Invalid quantile (< 0)
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg, quantile(-0.5)) ctools_cmd(cqreg price mpg, quantile(-0.5)) testname("invalid quantile < 0")
+
+* No observations after if condition
+sysuse auto, clear
+test_error_match, stata_cmd(qreg price mpg if price > 100000) ctools_cmd(cqreg price mpg if price > 100000) testname("no observations after if")
+
+* String variable as dependent
+sysuse auto, clear
+test_error_match, stata_cmd(qreg make mpg) ctools_cmd(cqreg make mpg) testname("string dependent variable")
+
+/*******************************************************************************
  * Summary
  ******************************************************************************/
 

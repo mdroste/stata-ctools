@@ -1185,6 +1185,119 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that crangestat returns the same error codes as rangestat
+ * when given invalid inputs or error conditions.
+ * Note: rangestat is a user-written command (ssc install rangestat).
+ * If rangestat is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if rangestat is installed
+capture which rangestat
+local rangestat_installed = (_rc == 0)
+
+* Variable doesn't exist
+clear
+set obs 100
+gen t = _n
+gen x = runiform()
+if `rangestat_installed' {
+    test_error_match, stata_cmd(rangestat (mean) result=nonexistent_var, interval(t -5 5)) ctools_cmd(crangestat (mean) result=nonexistent_var, interval(t -5 5)) testname("nonexistent variable")
+}
+else {
+    capture crangestat (mean) result=nonexistent_var, interval(t -5 5)
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [rangestat not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* Interval variable doesn't exist
+clear
+set obs 100
+gen t = _n
+gen x = runiform()
+if `rangestat_installed' {
+    test_error_match, stata_cmd(rangestat (mean) result=x, interval(nonexistent_t -5 5)) ctools_cmd(crangestat (mean) result=x, interval(nonexistent_t -5 5)) testname("nonexistent interval variable")
+}
+else {
+    capture crangestat (mean) result=x, interval(nonexistent_t -5 5)
+    if _rc != 0 {
+        test_pass "[error] nonexistent interval variable (rc=`=_rc') [rangestat not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent interval variable" "should have errored"
+    }
+}
+
+* Missing interval option
+clear
+set obs 100
+gen t = _n
+gen x = runiform()
+if `rangestat_installed' {
+    test_error_match, stata_cmd(rangestat (mean) result=x) ctools_cmd(crangestat (mean) result=x) testname("missing interval option")
+}
+else {
+    capture crangestat (mean) result=x
+    if _rc != 0 {
+        test_pass "[error] missing interval option (rc=`=_rc') [rangestat not installed]"
+    }
+    else {
+        test_fail "[error] missing interval option" "should have errored"
+    }
+}
+
+* Invalid statistic function
+clear
+set obs 100
+gen t = _n
+gen x = runiform()
+if `rangestat_installed' {
+    test_error_match, stata_cmd(rangestat (invalid_stat) result=x, interval(t -5 5)) ctools_cmd(crangestat (invalid_stat) result=x, interval(t -5 5)) testname("invalid statistic function")
+}
+else {
+    capture crangestat (invalid_stat) result=x, interval(t -5 5)
+    if _rc != 0 {
+        test_pass "[error] invalid statistic function (rc=`=_rc') [rangestat not installed]"
+    }
+    else {
+        test_fail "[error] invalid statistic function" "should have errored"
+    }
+}
+
+* Empty dataset
+clear
+set obs 0
+gen t = .
+gen x = .
+if `rangestat_installed' {
+    capture rangestat (mean) result=x, interval(t -5 5)
+    local stata_rc = _rc
+    capture crangestat (mean) result=x, interval(t -5 5)
+    local ctools_rc = _rc
+    if `stata_rc' == `ctools_rc' {
+        test_pass "[error] empty dataset (rc=`stata_rc')"
+    }
+    else {
+        test_fail "[error] empty dataset" "rangestat rc=`stata_rc', crangestat rc=`ctools_rc'"
+    }
+}
+else {
+    capture crangestat (mean) result=x, interval(t -5 5)
+    if _rc != 0 {
+        test_pass "[error] empty dataset (rc=`=_rc') [rangestat not installed]"
+    }
+    else {
+        test_fail "[error] empty dataset" "should have errored"
+    }
+}
+
+/*******************************************************************************
  * SUMMARY
  ******************************************************************************/
 * End of crangestat validation

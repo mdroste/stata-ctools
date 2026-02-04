@@ -5,9 +5,11 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "cmerge_join.h"
 #include "cmerge_keys.h"
 #include "cmerge_group_search.h"
+#include "../ctools_config.h"  /* For ctools_safe_mul_size */
 
 /* Prefetch hint macro for read-ahead optimization */
 #if defined(__GNUC__) || defined(__clang__)
@@ -36,45 +38,95 @@ int64_t cmerge_sorted_join(
     /* OPTIMIZATION 1: Better initial capacity estimation
        Based on merge type and dataset sizes to minimize reallocations */
     size_t capacity;
+
+    /* Overflow-safe capacity calculation */
+    /* Maximum safe capacity to avoid overflow in size calculations */
+    const size_t MAX_SAFE_CAPACITY = SIZE_MAX / sizeof(cmerge_output_spec_t) / 2;
+
     switch (merge_type) {
         case MERGE_1_1:
-            /* Max possible: all unique = m + u, typical: max(m,u) */
-            capacity = m_nobs + u_nobs;
-            break;
         case MERGE_M_1:
-            /* Output = master rows (each gets one using match or none) */
-            capacity = m_nobs + u_nobs;
-            break;
-        case MERGE_1_M:
-            /* Output can expand: each master can match multiple using */
-            capacity = m_nobs + u_nobs + u_nobs / 2;
-            break;
         case MERGE_M_M:
         default:
-            /* Sequential pairing with expansion: output count = max of group counts */
-            capacity = m_nobs + u_nobs;
+            /* Max possible: m + u - check for overflow */
+            if (m_nobs > SIZE_MAX - u_nobs) {
+                /* Overflow would occur - cap at safe maximum */
+                capacity = MAX_SAFE_CAPACITY;
+            } else {
+                capacity = m_nobs + u_nobs;
+            }
+            break;
+        case MERGE_1_M:
+            /* Output can expand: m + u + u/2 - check for overflow */
+            if (m_nobs > SIZE_MAX - u_nobs) {
+                capacity = MAX_SAFE_CAPACITY;
+            } else {
+                size_t base = m_nobs + u_nobs;
+                size_t extra = u_nobs / 2;
+                if (base > SIZE_MAX - extra) {
+                    capacity = MAX_SAFE_CAPACITY;
+                } else {
+                    capacity = base + extra;
+                }
+            }
             break;
     }
-    /* Round up to power of 2 for better realloc behavior */
-    size_t pow2 = 1024;
-    while (pow2 < capacity) pow2 *= 2;
-    capacity = pow2;
 
-    cmerge_output_spec_t *specs = malloc(capacity * sizeof(cmerge_output_spec_t));
+    /* Cap capacity at safe maximum */
+    if (capacity > MAX_SAFE_CAPACITY) {
+        capacity = MAX_SAFE_CAPACITY;
+    }
+
+    /* Round up to power of 2 for better realloc behavior - with overflow protection */
+    size_t pow2 = 1024;
+    while (pow2 < capacity && pow2 <= SIZE_MAX / 2) {
+        pow2 *= 2;
+    }
+    /* If pow2 would overflow, use capacity directly */
+    if (pow2 >= capacity) {
+        capacity = pow2;
+    }
+
+    /* Safe allocation size calculation */
+    size_t alloc_size;
+    if (ctools_safe_mul_size(capacity, sizeof(cmerge_output_spec_t), &alloc_size) != 0) {
+        return -1;  /* Overflow in allocation size */
+    }
+    cmerge_output_spec_t *specs = malloc(alloc_size);
     if (!specs) return -1;
 
     size_t count = 0;
     size_t m_idx = 0;
     size_t u_idx = 0;
 
-    /* Macro to ensure capacity - reduces code duplication */
+    /* Macro to ensure capacity - with overflow protection */
     #define ENSURE_CAPACITY(needed) \
         do { \
-            if (count + (needed) > capacity) { \
-                while (capacity < count + (needed)) capacity *= 2; \
-                cmerge_output_spec_t *new_specs = realloc(specs, capacity * sizeof(cmerge_output_spec_t)); \
+            size_t _needed = (needed); \
+            /* Check for overflow in count + needed */ \
+            if (_needed > SIZE_MAX - count) { \
+                free(specs); return -1; /* Overflow */ \
+            } \
+            if (count + _needed > capacity) { \
+                size_t new_capacity = capacity; \
+                size_t target = count + _needed; \
+                /* Double capacity until sufficient, with overflow check */ \
+                while (new_capacity < target) { \
+                    if (new_capacity > SIZE_MAX / 2) { \
+                        /* Can't double - try exact fit */ \
+                        new_capacity = target; \
+                        break; \
+                    } \
+                    new_capacity *= 2; \
+                } \
+                /* Check allocation size for overflow */ \
+                if (new_capacity > SIZE_MAX / sizeof(cmerge_output_spec_t)) { \
+                    free(specs); return -1; /* Allocation would overflow */ \
+                } \
+                cmerge_output_spec_t *new_specs = realloc(specs, new_capacity * sizeof(cmerge_output_spec_t)); \
                 if (!new_specs) { free(specs); return -1; } \
                 specs = new_specs; \
+                capacity = new_capacity; \
             } \
         } while (0)
 

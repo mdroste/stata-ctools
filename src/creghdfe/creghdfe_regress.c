@@ -15,6 +15,7 @@
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
+#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -221,8 +222,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     if (verbose >= 1) {
-        sprintf(msg, "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
-                N_orig, K, G, num_threads);
+        snprintf(msg, sizeof(msg), "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
+                 N_orig, K, G, num_threads);
         SF_display(msg);
     }
 
@@ -474,9 +475,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Check if all observations were dropped as singletons */
     if (N == 0) {
-        SF_scal_save("__creghdfe_N", 0.0);
-        SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
-        SF_scal_save("__creghdfe_K_keep", 0.0);
+        ctools_scal_save("__creghdfe_N", 0.0);
+        ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+        ctools_scal_save("__creghdfe_K_keep", 0.0);
         SF_error("creghdfe: all observations are singletons\n");
         for (g = 0; g < G; g++) {
             if (factors[g].levels) free(factors[g].levels);
@@ -645,7 +646,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
     t_dof = get_time_sec();
 
     if (verbose >= 2) {
-        sprintf(msg, "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
+        snprintf(msg, sizeof(msg), "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
         SF_display(msg);
     }
 
@@ -1028,10 +1029,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
     if (max_iters < 0) max_iters = -max_iters;  /* Handle failure indicator */
 
     /* Save iteration count to Stata scalar */
-    SF_scal_save("__creghdfe_iterations", (ST_double)max_iters);
+    ctools_scal_save("__creghdfe_iterations", (ST_double)max_iters);
 
     if (verbose >= 1) {
-        sprintf(msg, "{txt}   Converged in %d iterations\n", max_iters);
+        snprintf(msg, sizeof(msg), "{txt}   Converged in %d iterations\n", max_iters);
         SF_display(msg);
     }
 
@@ -1078,8 +1079,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         if (xx_orig > 0 && (xx_partial / xx_orig) <= collinear_tol && xx_partial < 1e-30) {
             is_collinear[k] = 1;
             num_collinear++;
-            sprintf(scalar_name, "__creghdfe_collinear_varnum_%d", k + 1);
-            SF_scal_save(scalar_name, 1.0);
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_collinear_varnum_%d", k + 1);
+            ctools_scal_save(scalar_name, 1.0);
         }
     }
 
@@ -1114,36 +1115,36 @@ ST_retcode do_full_regression(int argc, char *argv[])
     K_keep = K_x - num_collinear;
 
     if (verbose >= 1 && num_collinear > 0) {
-        sprintf(msg, "{txt}   Dropped %d collinear variable%s\n",
-                num_collinear, num_collinear == 1 ? "" : "s");
+        snprintf(msg, sizeof(msg), "{txt}   Dropped %d collinear variable%s\n",
+                 num_collinear, num_collinear == 1 ? "" : "s");
         SF_display(msg);
     }
 
     /* Store collinearity flags */
-    SF_scal_save("__creghdfe_num_collinear", (ST_double)num_collinear);
+    ctools_scal_save("__creghdfe_num_collinear", (ST_double)num_collinear);
     for (k = 0; k < K_x; k++) {
-        sprintf(scalar_name, "__creghdfe_collinear_%d", k + 1);
-        SF_scal_save(scalar_name, (ST_double)is_collinear[k]);
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_collinear_%d", k + 1);
+        ctools_scal_save(scalar_name, (ST_double)is_collinear[k]);
     }
 
     if (K_keep == 0) {
         /* All X variables are collinear with FE - report as omitted (like reghdfe) */
-        SF_scal_save("__creghdfe_K_keep", 0.0);
-        SF_scal_save("__creghdfe_ols_N", (ST_double)N);
-        SF_scal_save("__creghdfe_N", (ST_double)N);
-        SF_scal_save("__creghdfe_has_cons", 1.0);
-        SF_scal_save("__creghdfe_cons", means[0]);  /* Constant = mean(y) */
-        SF_scal_save("__creghdfe_rss", tss[0]);  /* RSS = TSS when no X vars */
-        SF_scal_save("__creghdfe_tss", tss[0]);  /* Total TSS */
-        SF_scal_save("__creghdfe_tss_within", tss[0]);
-        SF_scal_save("__creghdfe_df_a", (ST_double)df_a);
-        SF_scal_save("__creghdfe_df_a_nested_computed", 0.0);
-        SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
-        SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+        ctools_scal_save("__creghdfe_K_keep", 0.0);
+        ctools_scal_save("__creghdfe_ols_N", (ST_double)N);
+        ctools_scal_save("__creghdfe_N", (ST_double)N);
+        ctools_scal_save("__creghdfe_has_cons", 1.0);
+        ctools_scal_save("__creghdfe_cons", means[0]);  /* Constant = mean(y) */
+        ctools_scal_save("__creghdfe_rss", tss[0]);  /* RSS = TSS when no X vars */
+        ctools_scal_save("__creghdfe_tss", tss[0]);  /* Total TSS */
+        ctools_scal_save("__creghdfe_tss_within", tss[0]);
+        ctools_scal_save("__creghdfe_df_a", (ST_double)df_a);
+        ctools_scal_save("__creghdfe_df_a_nested_computed", 0.0);
+        ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
+        ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
         /* Save number of FE levels */
         for (g = 0; g < G; g++) {
-            sprintf(scalar_name, "__creghdfe_num_levels_%d", g + 1);
-            SF_scal_save(scalar_name, (ST_double)factors[g].num_levels);
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_num_levels_%d", g + 1);
+            ctools_scal_save(scalar_name, (ST_double)factors[g].num_levels);
         }
         free(xtx); free(is_collinear);
         cleanup_state();
@@ -1434,8 +1435,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 if (g == cluster_matches_fe) {
                     /* This FE is the cluster variable - it's nested */
                     df_a_nested_computed += g_state->factors[g].num_levels;
-                    sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
-                    SF_scal_save(scalar_name, 1.0);
+                    snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                    ctools_scal_save(scalar_name, 1.0);
                 } else {
                     /* Check if this FE is nested within cluster */
                     ST_int *fe_levels_g = g_state->factors[g].levels;
@@ -1458,8 +1459,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
                         if (is_nested) df_a_nested_computed += num_fe_levels;
                         free(fe_to_cluster);
                     }
-                    sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
-                    SF_scal_save(scalar_name, (ST_double)is_nested);
+                    snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                    ctools_scal_save(scalar_name, (ST_double)is_nested);
                 }
             }
         } else {
@@ -1564,8 +1565,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
                     if (is_nested) df_a_nested_computed += num_fe_levels;
                     free(fe_to_cluster);
                 }
-                sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
-                SF_scal_save(scalar_name, (ST_double)is_nested);
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                ctools_scal_save(scalar_name, (ST_double)is_nested);
             }
         }
 
@@ -1574,8 +1575,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     } else {
         /* No clustering - save 0 for all FE nested status */
         for (g = 0; g < G; g++) {
-            sprintf(scalar_name, "__creghdfe_fe_nested_%d", g + 1);
-            SF_scal_save(scalar_name, 0.0);
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+            ctools_scal_save(scalar_name, 0.0);
         }
     }
 
@@ -1684,8 +1685,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
      * Uses obs_map to write to correct Stata observations. */
     if (compute_resid && resid_var_idx > 0 && resid) {
         if (verbose) {
-            sprintf(msg, "{txt}   Storing residuals: resid_var_idx=%d, N=%d, N_orig=%d\n",
-                    resid_var_idx, N, N_orig);
+            snprintf(msg, sizeof(msg), "{txt}   Storing residuals: resid_var_idx=%d, N=%d, N_orig=%d\n",
+                     resid_var_idx, N, N_orig);
             SF_display(msg);
         }
 
@@ -1699,7 +1700,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
         }
         if (verbose) {
-            sprintf(msg, "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
+            snprintf(msg, sizeof(msg), "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
             SF_display(msg);
         }
     }
@@ -1782,59 +1783,59 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* HDFE init results */
     /* For fweight, report N as sum of weights (like reghdfe) */
     if (weight_type == 2 && has_weights) {
-        SF_scal_save("__creghdfe_N", g_state->sum_weights);
+        ctools_scal_save("__creghdfe_N", g_state->sum_weights);
     } else {
-        SF_scal_save("__creghdfe_N", (ST_double)N);
+        ctools_scal_save("__creghdfe_N", (ST_double)N);
     }
-    SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+    ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
     for (g = 0; g < G; g++) {
-        sprintf(scalar_name, "__creghdfe_num_levels_%d", g + 1);
-        SF_scal_save(scalar_name, (ST_double)factors[g].num_levels);
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_num_levels_%d", g + 1);
+        ctools_scal_save(scalar_name, (ST_double)factors[g].num_levels);
     }
-    SF_scal_save("__creghdfe_df_a", (ST_double)df_a);
-    SF_scal_save("__creghdfe_df_a_nested_computed", (ST_double)df_a_nested);
-    SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
+    ctools_scal_save("__creghdfe_df_a", (ST_double)df_a);
+    ctools_scal_save("__creghdfe_df_a_nested_computed", (ST_double)df_a_nested);
+    ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
 
     /* OLS results */
     /* For fweight, report N as sum of weights (like reghdfe) */
     if (weight_type == 2 && has_weights) {
-        SF_scal_save("__creghdfe_ols_N", g_state->sum_weights);
+        ctools_scal_save("__creghdfe_ols_N", g_state->sum_weights);
     } else {
-        SF_scal_save("__creghdfe_ols_N", (ST_double)N);
+        ctools_scal_save("__creghdfe_ols_N", (ST_double)N);
     }
-    SF_scal_save("__creghdfe_K_keep", (ST_double)K_keep);
-    SF_scal_save("__creghdfe_has_cons", 1.0);
-    SF_scal_save("__creghdfe_rss", rss);
-    SF_scal_save("__creghdfe_tss_within", tss_within);
-    SF_scal_save("__creghdfe_tss", tss[0]);
+    ctools_scal_save("__creghdfe_K_keep", (ST_double)K_keep);
+    ctools_scal_save("__creghdfe_has_cons", 1.0);
+    ctools_scal_save("__creghdfe_rss", rss);
+    ctools_scal_save("__creghdfe_tss_within", tss_within);
+    ctools_scal_save("__creghdfe_tss", tss[0]);
 
     /* Store betas */
     for (k = 0; k < K_keep; k++) {
-        sprintf(scalar_name, "__creghdfe_beta_%d", k + 1);
-        SF_scal_save(scalar_name, beta_keep[k]);
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_beta_%d", k + 1);
+        ctools_scal_save(scalar_name, beta_keep[k]);
     }
-    SF_scal_save("__creghdfe_cons", beta_keep[K_keep]);
+    ctools_scal_save("__creghdfe_cons", beta_keep[K_keep]);
 
     /* Store VCE matrix directly */
     for (i = 0; i < K_with_cons; i++) {
         for (j = 0; j < K_with_cons; j++) {
-            SF_mat_store("__creghdfe_V", i + 1, j + 1, V_keep[i * K_with_cons + j]);
+            ctools_mat_store("__creghdfe_V", i + 1, j + 1, V_keep[i * K_with_cons + j]);
         }
     }
 
     /* Store number of clusters */
     if (vcetype == 2 && num_clusters > 0) {
-        SF_scal_save("__creghdfe_N_clust", (ST_double)num_clusters);
+        ctools_scal_save("__creghdfe_N_clust", (ST_double)num_clusters);
     }
 
     /* Save timing results to Stata scalars */
-    SF_scal_save("_creghdfe_time_read", t_read - t_start);
-    SF_scal_save("_creghdfe_time_singleton", t_singleton - t_read);
-    SF_scal_save("_creghdfe_time_dof", t_dof - t_singleton);
-    SF_scal_save("_creghdfe_time_partial", t_partial - t_dof);
-    SF_scal_save("_creghdfe_time_ols", t_ols - t_partial);
-    SF_scal_save("_creghdfe_time_vce", t_vce - t_ols);
-    SF_scal_save("_creghdfe_time_total", t_vce - t_start);
+    ctools_scal_save("_creghdfe_time_read", t_read - t_start);
+    ctools_scal_save("_creghdfe_time_singleton", t_singleton - t_read);
+    ctools_scal_save("_creghdfe_time_dof", t_dof - t_singleton);
+    ctools_scal_save("_creghdfe_time_partial", t_partial - t_dof);
+    ctools_scal_save("_creghdfe_time_ols", t_ols - t_partial);
+    ctools_scal_save("_creghdfe_time_vce", t_vce - t_ols);
+    ctools_scal_save("_creghdfe_time_total", t_vce - t_start);
     CTOOLS_SAVE_THREAD_INFO("_creghdfe");
 
     /* ================================================================

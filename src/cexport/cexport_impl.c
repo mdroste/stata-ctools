@@ -845,3 +845,15 @@ ST_retcode cexport_main(const char *args)
     cexport_context_cleanup(&g_ctx);
     return 0;
 }
+
+/* ============================================================================
+ * Cleanup function for ctools_cleanup system
+ * ============================================================================ */
+
+void cexport_cleanup_state(void)
+{
+    /* cexport uses a static context that is cleaned up at the end of each
+     * operation, so this is typically a no-op. Call cleanup for safety
+     * in case of interrupted operations. */
+    cexport_context_cleanup(&g_ctx);
+}

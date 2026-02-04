@@ -14,9 +14,10 @@ program define civreghdfe, eclass
 
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
+    * absorb() is optional - without it, runs as regular IV (no FE absorption)
     syntax anything(name=0 equalok) [if] [in] [aw fw pw/], ///
-        Absorb(varlist) ///
-        [vce(string) ///
+        [Absorb(varlist) ///
+        vce(string) ///
         Robust ///
         CLuster(varlist) ///
         TOLerance(real 1e-8) ///
@@ -69,7 +70,8 @@ program define civreghdfe, eclass
         SAVEFPrefix(string) ///
         SAVERF ///
         SAVERFPrefix(string) ///
-        THReads(integer 0)]
+        THReads(integer 0) ///
+        NORETURN]
 
     * Clean up any leftover scalars from previous runs to prevent state contamination
     capture scalar drop __civreghdfe_n_orthog
@@ -134,42 +136,55 @@ program define civreghdfe, eclass
     local exog_before = strtrim("`exog_before'")
 
     * Check for parentheses containing endogenous = instruments
+    * If no parentheses, treat remaining vars as exogenous and run as OLS (no IV)
+    local is_iv_model = 0
     if strpos("`rest'", "(") == 0 {
-        di as error "civreghdfe requires (endogvars = instruments) specification"
-        exit 198
+        * No IV specification - treat rest as exogenous vars, run as OLS
+        local exog_after = strtrim("`rest'")
+        local paren_content ""
+        local endogvars ""
+        local instruments ""
     }
+    else {
+        local is_iv_model = 1
 
-    * Extract content within parentheses
-    local rest = strtrim("`rest'")
-    if substr("`rest'", 1, 1) == "(" {
-        local rest = substr("`rest'", 2, .)
+        * Extract content within parentheses
+        local rest = strtrim("`rest'")
+        if substr("`rest'", 1, 1) == "(" {
+            local rest = substr("`rest'", 2, .)
+        }
+
+        local paren_end = strpos("`rest'", ")")
+        if `paren_end' == 0 {
+            di as error "Unmatched parenthesis in variable specification"
+            exit 198
+        }
+
+        local paren_content = substr("`rest'", 1, `paren_end' - 1)
+        local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
+
+        * Parse endogenous = instruments
+        local eq_pos = strpos("`paren_content'", "=")
+        if `eq_pos' == 0 {
+            di as error "Must specify instruments after '=' in parentheses"
+            exit 198
+        }
+
+        local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
+        local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
     }
-
-    local paren_end = strpos("`rest'", ")")
-    if `paren_end' == 0 {
-        di as error "Unmatched parenthesis in variable specification"
-        exit 198
-    }
-
-    local paren_content = substr("`rest'", 1, `paren_end' - 1)
-    local exog_after = strtrim(substr("`rest'", `paren_end' + 1, .))
 
     * Combine exogenous variables from before and after parentheses
     local exogvars `exog_before' `exog_after'
     local exogvars = strtrim("`exogvars'")
 
-    * Parse endogenous = instruments
-    local eq_pos = strpos("`paren_content'", "=")
-    if `eq_pos' == 0 {
-        di as error "Must specify instruments after '=' in parentheses"
-        exit 198
-    }
-
-    local endogvars = strtrim(substr("`paren_content'", 1, `eq_pos' - 1))
-    local instruments = strtrim(substr("`paren_content'", `eq_pos' + 1, .))
-
-    * Validate dependent variable exists
+    * Validate dependent variable exists and is numeric (error 109 for string vars)
     foreach v of local depvar {
+        capture confirm string variable `v'
+        if _rc == 0 {
+            di as error "type mismatch"
+            exit 109
+        }
         confirm numeric variable `v'
     }
     foreach v of local absorb {
@@ -179,6 +194,13 @@ program define civreghdfe, eclass
     * Mark sample early for fvrevar
     marksample touse
     markout `touse' `depvar' `absorb'
+
+    * Early check for no observations (before _rmcoll which throws error 2000)
+    qui count if `touse'
+    if r(N) == 0 {
+        di as error "no observations"
+        exit 2001
+    }
 
     * Expand factor variables for endogenous variables
     local endogvars_coef ""
@@ -395,8 +417,8 @@ program define civreghdfe, eclass
     local N = r(N)
 
     if `N' == 0 {
-        di as error "No observations"
-        exit 2000
+        di as error "no observations"
+        exit 2001
     }
 
     * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)
@@ -685,6 +707,7 @@ program define civreghdfe, eclass
     scalar __civreghdfe_sdofminus = `sdofminus'
     scalar __civreghdfe_nopartialsmall = ("`nopartialsmall'" != "")
     scalar __civreghdfe_center = ("`center'" != "")
+    scalar __civreghdfe_noreturn = ("`noreturn'" != "")
 
     * Update cluster scalars after Kiefer/dkraay handling
     * vce_type 4 = dkraay, which also uses cluster variable (time)
@@ -887,6 +910,15 @@ program define civreghdfe, eclass
     local t_plugin = r(t99)
     timer clear 98
     timer on 98
+
+    * If noreturn specified, skip all result retrieval and e() posting
+    if "`noreturn'" != "" {
+        timer off 98
+        di as text "(noreturn specified - skipping result storage)"
+        * Clean up the noreturn scalar
+        capture scalar drop __civreghdfe_noreturn
+        exit 0
+    }
 
     * Retrieve results
     local N_used = __civreghdfe_N
@@ -1737,6 +1769,7 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_sdofminus
     capture scalar drop __civreghdfe_nopartialsmall
     capture scalar drop __civreghdfe_center
+    capture scalar drop __civreghdfe_noreturn
     capture scalar drop __civreghdfe_has_b0
     capture matrix drop __civreghdfe_b0
     capture scalar drop __civreghdfe_sargan

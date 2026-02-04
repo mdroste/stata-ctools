@@ -380,10 +380,11 @@ if `binscatter_installed' {
     mat cb_data = e(bindata)
 
     * Get mean of cbinscatter output to compute offset
-    mata: st_local("cb_mean_x", strofreal(mean(st_matrix("cb_data")[., 3])))
-    mata: st_local("cb_mean_y", strofreal(mean(st_matrix("cb_data")[., 4])))
-    mata: st_local("bs_mean_x", strofreal(mean(st_matrix("bs_data")[., 1])))
-    mata: st_local("bs_mean_y", strofreal(mean(st_matrix("bs_data")[., 2])))
+    * Use high-precision format to avoid truncation in offset calculation
+    mata: st_local("cb_mean_x", strofreal(mean(st_matrix("cb_data")[., 3]), "%21.15g"))
+    mata: st_local("cb_mean_y", strofreal(mean(st_matrix("cb_data")[., 4]), "%21.15g"))
+    mata: st_local("bs_mean_x", strofreal(mean(st_matrix("bs_data")[., 1]), "%21.15g"))
+    mata: st_local("bs_mean_y", strofreal(mean(st_matrix("bs_data")[., 2]), "%21.15g"))
 
     local offset_x = `bs_mean_x' - `cb_mean_x'
     local offset_y = `bs_mean_y' - `cb_mean_y'
@@ -1223,6 +1224,110 @@ if _rc == 0 {
 }
 else {
     test_fail "timeit option" "rc=`=_rc'"
+}
+
+/*******************************************************************************
+ * SECTION: Intentional Error Tests
+ *
+ * These tests verify that cbinscatter returns the same error codes as binscatter
+ * when given invalid inputs or error conditions.
+ * Note: binscatter is a user-written command (ssc install binscatter).
+ * If binscatter is not installed, tests compare against expected behavior.
+ ******************************************************************************/
+print_section "Intentional Error Tests"
+
+* Check if binscatter is installed
+capture which binscatter
+local binscatter_installed = (_rc == 0)
+
+* Variable doesn't exist
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price nonexistent_var, nograph) ctools_cmd(cbinscatter price nonexistent_var, nograph) testname("nonexistent variable")
+}
+else {
+    capture cbinscatter price nonexistent_var, nograph
+    if _rc != 0 {
+        test_pass "[error] nonexistent variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] nonexistent variable" "should have errored"
+    }
+}
+
+* String variable as y
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter make mpg, nograph) ctools_cmd(cbinscatter make mpg, nograph) testname("string y variable")
+}
+else {
+    capture cbinscatter make mpg, nograph
+    if _rc != 0 {
+        test_pass "[error] string y variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] string y variable" "should have errored"
+    }
+}
+
+* String variable as x
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price make, nograph) ctools_cmd(cbinscatter price make, nograph) testname("string x variable")
+}
+else {
+    capture cbinscatter price make, nograph
+    if _rc != 0 {
+        test_pass "[error] string x variable (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] string x variable" "should have errored"
+    }
+}
+
+* Invalid nquantiles (0)
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg, nquantiles(0) nograph) ctools_cmd(cbinscatter price mpg, nquantiles(0) nograph) testname("nquantiles(0)")
+}
+else {
+    capture cbinscatter price mpg, nquantiles(0) nograph
+    if _rc != 0 {
+        test_pass "[error] nquantiles(0) (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] nquantiles(0)" "should have errored"
+    }
+}
+
+* Invalid nquantiles (negative)
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg, nquantiles(-5) nograph) ctools_cmd(cbinscatter price mpg, nquantiles(-5) nograph) testname("negative nquantiles")
+}
+else {
+    capture cbinscatter price mpg, nquantiles(-5) nograph
+    if _rc != 0 {
+        test_pass "[error] negative nquantiles (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] negative nquantiles" "should have errored"
+    }
+}
+
+* No observations after if
+sysuse auto, clear
+if `binscatter_installed' {
+    test_error_match, stata_cmd(binscatter price mpg if price > 100000, nograph) ctools_cmd(cbinscatter price mpg if price > 100000, nograph) testname("no observations after if")
+}
+else {
+    capture cbinscatter price mpg if price > 100000, nograph
+    if _rc != 0 {
+        test_pass "[error] no observations after if (rc=`=_rc') [binscatter not installed]"
+    }
+    else {
+        test_fail "[error] no observations after if" "should have errored"
+    }
 }
 
 * End of cbinscatter validation

@@ -9,6 +9,7 @@
 #include "creghdfe_utils.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
+#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
@@ -145,7 +146,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     }
 
     if (verbose >= 2) {
-        sprintf(msg, "{txt}   C plugin: HDFE init (N=%d, G=%d, compute_dof=%d)\n", N_orig, G, compute_dof);
+        snprintf(msg, sizeof(msg), "{txt}   C plugin: HDFE init (N=%d, G=%d, compute_dof=%d)\n", N_orig, G, compute_dof);
         SF_display(msg);
     }
 
@@ -198,6 +199,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
         if (!SF_ifobs(obs)) continue;
 
         /* Read all G FE values for this observation */
+        int has_missing_fe = 0;
         for (g = 0; g < G; g++) {
             if (SF_vdata(g + 1, obs, &val)) {
                 /* Cleanup on error */
@@ -212,8 +214,18 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
                 free(raw_values);
                 return 198;
             }
-            /* Hash and assign level immediately */
-            factors[g].levels[idx] = hash_insert_or_get(hash_tables[g], (ST_int)val);
+            /* Check for missing FE value before casting to avoid undefined behavior */
+            if (SF_is_missing(val)) {
+                has_missing_fe = 1;
+                factors[g].levels[idx] = -1;  /* Sentinel for missing */
+            } else {
+                /* Hash and assign level immediately */
+                factors[g].levels[idx] = hash_insert_or_get(hash_tables[g], (ST_int)val);
+            }
+        }
+        /* Mark observation for removal if any FE is missing */
+        if (has_missing_fe) {
+            mask[idx] = 0;
         }
         idx++;
     }
@@ -348,7 +360,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
         }
 
         if (verbose >= 2) {
-            sprintf(msg, "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
+            snprintf(msg, sizeof(msg), "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
             SF_display(msg);
         }
     }
@@ -447,22 +459,22 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     }
 
     /* Store results in scalars */
-    SF_scal_save("__creghdfe_N", (ST_double)N);
-    SF_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
+    ctools_scal_save("__creghdfe_N", (ST_double)N);
+    ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons);
 
     for (g = 0; g < G; g++) {
-        sprintf(scalar_name, "__creghdfe_num_levels_%d", g + 1);
-        SF_scal_save(scalar_name, (ST_double)factors[g].num_levels);
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_num_levels_%d", g + 1);
+        ctools_scal_save(scalar_name, (ST_double)factors[g].num_levels);
     }
 
     if (compute_dof) {
-        SF_scal_save("__creghdfe_df_a", (ST_double)df_a);
-        SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
+        ctools_scal_save("__creghdfe_df_a", (ST_double)df_a);
+        ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
     }
 
     if (verbose >= 2) {
-        sprintf(msg, "{txt}   HDFE init: read=%.3fs singleton=%.3fs dof=%.3fs write=%.3fs total=%.3fs\n",
-                t_read - t_start, t_singleton - t_read, t_dof - t_singleton, t_write - t_dof, t_write - t_start);
+        snprintf(msg, sizeof(msg), "{txt}   HDFE init: read=%.3fs singleton=%.3fs dof=%.3fs write=%.3fs total=%.3fs\n",
+                 t_read - t_start, t_singleton - t_read, t_dof - t_singleton, t_write - t_dof, t_write - t_start);
         SF_display(msg);
     }
 
@@ -524,8 +536,8 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
     SF_scal_use("__creghdfe_verbose", &val); verbose = (ST_int)val;
 
     if (verbose >= 2) {
-        sprintf(msg, "{txt}   C plugin: computing mobility groups (N=%d, L1=%d, L2=%d)\n",
-                N, num_levels1, num_levels2);
+        snprintf(msg, sizeof(msg), "{txt}   C plugin: computing mobility groups (N=%d, L1=%d, L2=%d)\n",
+                 N, num_levels1, num_levels2);
         SF_display(msg);
     }
 
@@ -547,25 +559,34 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
 
     /* Read FE values and hash to level indices */
     idx = 0;
+    ST_double val1, val2;
     for (obs = in1; obs <= in2; obs++) {
         if (!SF_ifobs(obs)) continue;
 
-        if (SF_vdata(1, obs, &val)) {
+        if (SF_vdata(1, obs, &val1)) {
             free(fe1_levels); free(fe2_levels);
             hash_destroy(ht1); hash_destroy(ht2);
             return 198;
         }
-        fe1_levels[idx] = hash_insert_or_get(ht1, (ST_int)val);
+        if (SF_vdata(2, obs, &val2)) {
+            free(fe1_levels); free(fe2_levels);
+            hash_destroy(ht1); hash_destroy(ht2);
+            return 198;
+        }
 
-        if (SF_vdata(2, obs, &val)) {
-            free(fe1_levels); free(fe2_levels);
-            hash_destroy(ht1); hash_destroy(ht2);
-            return 198;
+        /* Skip observations with missing FE values to avoid undefined cast behavior */
+        if (SF_is_missing(val1) || SF_is_missing(val2)) {
+            continue;
         }
-        fe2_levels[idx] = hash_insert_or_get(ht2, (ST_int)val);
+
+        fe1_levels[idx] = hash_insert_or_get(ht1, (ST_int)val1);
+        fe2_levels[idx] = hash_insert_or_get(ht2, (ST_int)val2);
 
         idx++;
     }
+
+    /* Update N to reflect observations actually used */
+    N = idx;
 
     /* Use actual number of unique levels found */
     num_levels1 = ht1->size;
@@ -590,16 +611,26 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
     }
 
     if (verbose >= 2) {
-        sprintf(msg, "{txt}   Mobility groups: %d (read=%.3fs, compute=%.3fs)\n",
-                mobility_groups, t_read - t_start, t_compute - t_read);
+        snprintf(msg, sizeof(msg), "{txt}   Mobility groups: %d (read=%.3fs, compute=%.3fs)\n",
+                 mobility_groups, t_read - t_start, t_compute - t_read);
         SF_display(msg);
     }
 
     /* Store result */
-    SF_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
+    ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
 
     free(fe1_levels);
     free(fe2_levels);
 
     return 0;
+}
+
+/* ============================================================================
+ * Cleanup function for ctools_cleanup system
+ * ============================================================================ */
+
+void creghdfe_cleanup_state(void)
+{
+    /* Reuse existing cleanup function */
+    cleanup_state();
 }

@@ -27,4 +27,13 @@
  */
 ST_retcode creghdfe_main(const char *args);
 
+/*
+ * Cleanup function for creghdfe persistent state.
+ * Frees the global HDFE state if allocated.
+ * Safe to call multiple times (idempotent).
+ * Note: creghdfe normally cleans up after itself, but this
+ * handles cases where execution was interrupted.
+ */
+void creghdfe_cleanup_state(void);
+
 #endif /* CREGHDFE_IMPL_H */

@@ -414,6 +414,55 @@ else {
     test_fail "negative percent errors correctly" "should have errored"
 }
 
+/*******************************************************************************
+ * SECTION: Additional Intentional Error Tests
+ *
+ * These tests verify that csample returns the same error codes as Stata's sample
+ * when given invalid inputs or error conditions.
+ ******************************************************************************/
+print_section "Additional Intentional Error Tests"
+
+* Empty dataset
+clear
+set obs 0
+gen id = .
+capture sample 50
+local stata_rc = _rc
+capture csample 50
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "[error] empty dataset (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] empty dataset" "stata rc=`stata_rc', csample rc=`ctools_rc'"
+}
+
+* Zero percent
+clear
+set obs 100
+gen id = _n
+capture sample 0
+local stata_rc = _rc
+local stata_n = _N
+clear
+set obs 100
+gen id = _n
+capture csample 0
+local ctools_rc = _rc
+local ctools_n = _N
+if `stata_rc' == `ctools_rc' {
+    test_pass "[error] zero percent (rc=`stata_rc')"
+}
+else {
+    test_fail "[error] zero percent" "stata rc=`stata_rc', csample rc=`ctools_rc'"
+}
+
+* By variable doesn't exist
+clear
+set obs 100
+gen id = _n
+test_error_match, stata_cmd(sample 50, by(nonexistent_var)) ctools_cmd(csample 50, by(nonexistent_var)) testname("nonexistent by variable")
+
 * End of csample validation
 noi print_summary "csample"
 }
