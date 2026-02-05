@@ -25,8 +25,8 @@
 #include <omp.h>
 #endif
 
-/* SIMD support */
-#if defined(__x86_64__) || defined(_M_X64)
+/* SIMD support - check for actual feature availability, not just architecture */
+#if defined(__AVX2__)
 #include <immintrin.h>
 #define CRANGESTAT_HAS_AVX2 1
 #elif defined(__aarch64__) || defined(_M_ARM64)

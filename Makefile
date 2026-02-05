@@ -345,7 +345,7 @@ LIBOMP_STATIC_X86 := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.a && \
 ifeq ($(LIBOMP_INTEL_EXISTS),yes)
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
-                     -march=x86-64 -mtune=haswell \
+                     -march=x86-64 -mtune=haswell -mavx2 \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
     ifeq ($(LIBOMP_STATIC_X86),yes)
         # Static linking - bundle libomp into the plugin
@@ -359,7 +359,7 @@ ifeq ($(LIBOMP_INTEL_EXISTS),yes)
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
-                     -march=x86-64 -mtune=haswell
+                     -march=x86-64 -mtune=haswell -mavx2
     LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -framework Accelerate
     MAC_X86_HAS_OMP = no
 endif
@@ -375,7 +375,7 @@ ifeq ($(DETECTED_OS),Windows)
     # Native Windows build - static link libgomp
     CC_WIN = gcc
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
+                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
     LDFLAGS_WIN = -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread
     WIN_HAS_OMP = yes
     WIN_OMP_STATIC = yes
@@ -383,7 +383,7 @@ else ifeq ($(LLVM_MINGW_EXISTS),yes)
     # Cross-compile with llvm-mingw (OpenMP requires DLL - bundle libomp.dll with plugin)
     CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
+                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
     LDFLAGS_WIN = -fopenmp -lpthread
     WIN_HAS_OMP = yes
     WIN_OMP_STATIC = no
@@ -392,7 +392,7 @@ else
     CC_WIN = x86_64-w64-mingw32-gcc
     MINGW_EXISTS := $(shell which x86_64-w64-mingw32-gcc 2>/dev/null && echo yes || echo no)
     CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
-                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing $(INCLUDE_DIRS)
+                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
     LDFLAGS_WIN = -static-libgcc -lpthread
     WIN_HAS_OMP = no
     WIN_OMP_STATIC = no
@@ -409,7 +409,7 @@ else
 endif
 
 LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE \
-                   -ffast-math -funroll-loops -ftree-vectorize -flto -fno-strict-aliasing $(INCLUDE_DIRS)
+                   -ffast-math -funroll-loops -ftree-vectorize -flto -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
 
 # Check for OpenMP support on Linux
 LINUX_HAS_OMP := $(shell which gcc >/dev/null 2>&1 && \
