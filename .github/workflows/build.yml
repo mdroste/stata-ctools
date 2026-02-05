@@ -167,7 +167,7 @@ jobs:
         run: |
           # Set compiler flags for Windows with OpenMP (statically linked)
           export CC=gcc
-          export CFLAGS="-O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing"
+          export CFLAGS="-O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2"
           # Use -Wl,-Bstatic to force static linking of libgomp
           # This avoids runtime dependency on libgomp-1.dll
           export LDFLAGS="-static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread"
