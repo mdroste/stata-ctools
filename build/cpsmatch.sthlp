@@ -109,9 +109,9 @@ may be included if there are ties at the boundary.
 {phang}
 {opth caliper(#)} specifies the maximum propensity score distance for a
 valid match. Observations without matches within the caliper are left
-unmatched. The caliper is specified in standard deviation units of the
-treated observations' propensity score when less than 1, or in absolute
-units otherwise.
+unmatched. The caliper is specified in absolute units of the propensity
+score (e.g., {cmd:caliper(0.05)} means a maximum distance of 0.05 on the
+propensity score scale).
 
 {phang}
 {opt radius} specifies radius matching, where each treated observation is

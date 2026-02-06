@@ -32,6 +32,7 @@
 {synopt:{opt a:bsorb(varlist)}}categorical variables to absorb as fixed effects{p_end}
 
 {syntab:Estimators}
+{synopt:{opt b0(matname)}}initial values matrix for CUE estimation{p_end}
 {synopt:{opt liml}}use limited-information maximum likelihood (LIML){p_end}
 {synopt:{opt fuller(#)}}use Fuller's modified LIML with parameter {it:#}{p_end}
 {synopt:{opt kclass(#)}}use k-class estimator with {it:k} = {it:#}{p_end}
@@ -165,6 +166,11 @@ when overidentified.
 coefficients and the optimal weighting matrix, providing better finite-sample
 properties than two-step GMM.
 
+{phang}
+{opt b0(matname)} specifies a matrix of initial coefficient values for iterative
+estimators like CUE. The matrix must be conformable with the coefficient vector.
+If not specified, 2SLS estimates are used as starting values.
+
 {dlgtab:VCE/SE}
 
 {phang}
@@ -232,8 +238,8 @@ effects, the constant is typically absorbed anyway.
 {dlgtab:Reporting}
 
 {phang}
-{opt first} reports first-stage regression statistics including F-statistics
-for testing instrument strength for each endogenous variable.
+{opt first} requests that first-stage statistics be computed. Use {opt ffirst}
+to display a formatted first-stage summary table.
 
 {phang}
 {opt ffirst} reports full first-stage regression summary statistics in a
@@ -302,10 +308,12 @@ endogenous. Results are stored in {cmd:e(cstat)}, {cmd:e(cstat_df)}, and {cmd:e(
 {phang}
 {opt endogtest(varlist)} requests the endogeneity test for the specified endogenous
 regressors. The test evaluates whether the specified variables can be treated as
-exogenous. This uses a Durbin-Wu-Hausman style augmented regression test applied
-to the subset of variables specified. Under H0 (that the specified regressors are
-exogenous), the test statistic ~ chi-sq(df) where df = number of tested regressors.
-A large test statistic (small p-value) supports treating these as endogenous.
+exogenous. This uses a difference-in-Sargan (C-statistic) approach: the tested
+endogenous variables are reclassified as exogenous, and the difference in
+overidentification statistics between the restricted and unrestricted models
+is computed. Under H0 (that the specified regressors are exogenous), the test
+statistic ~ chi-sq(df) where df = number of tested regressors. A large test
+statistic (small p-value) supports treating these as endogenous.
 Results are stored in {cmd:e(endogtest)}, {cmd:e(endogtest_df)}, and {cmd:e(endogtest_p)}.
 
 {phang}

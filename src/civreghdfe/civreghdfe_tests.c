@@ -1701,9 +1701,17 @@ void civreghdfe_compute_cstat(
     ST_int K_total = K_exog + K_endog;
     ST_int K_rest = K_iv - n_orthog;  /* Instruments not being tested */
 
+    /* Variables freed in cleanup — must be initialized before any goto */
+    ST_double *ZrZr = NULL, *ZrZr_inv = NULL;
+    ST_double *ZrX = NULL, *Zry = NULL;
+    ST_double *PZrX = NULL, *PZry = NULL, *temp_rv = NULL;
+    ST_double *PZrX_L = NULL, *PZrX_inv = NULL, *beta_rest = NULL;
+
     (void)vce_type;
     (void)cluster_ids;
     (void)num_clusters;
+    (void)weights;
+    (void)weight_type;
 
     *cstat = 0.0;
     *cstat_df = n_orthog;
@@ -1752,8 +1760,8 @@ void civreghdfe_compute_cstat(
        coefficients and residuals from the restricted instrument set. */
 
     /* Step 1: Z_rest'Z_rest and its inverse */
-    ST_double *ZrZr = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
-    ST_double *ZrZr_inv = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
+    ZrZr = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
+    ZrZr_inv = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
     if (!ZrZr || !ZrZr_inv) goto cleanup;
 
     ctools_matmul_atb(Z_rest, Z_rest, N, K_rest, K_rest, ZrZr);
@@ -1762,8 +1770,8 @@ void civreghdfe_compute_cstat(
     if (invert_from_cholesky(ZrZr_inv, K_rest, ZrZr_inv) != 0) goto cleanup;
 
     /* Step 2: Z_rest'X and Z_rest'y */
-    ST_double *ZrX = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double));
-    ST_double *Zry = (ST_double *)calloc(K_rest, sizeof(ST_double));
+    ZrX = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double));
+    Zry = (ST_double *)calloc(K_rest, sizeof(ST_double));
     if (!ZrX || !Zry) goto cleanup;
 
     ctools_matmul_atb(Z_rest, X_all, N, K_rest, K_total, ZrX);
@@ -1779,9 +1787,9 @@ void civreghdfe_compute_cstat(
        which simplifies to: beta_rest = (X'P_Zr X)^{-1} X'P_Zr y
        where P_Zr = Z_rest (Z_rest'Z_rest)^{-1} Z_rest'
        i.e., beta_rest = (ZrX' ZrZr_inv ZrX)^{-1} ZrX' ZrZr_inv Zry */
-    ST_double *PZrX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));  /* X'P_Zr X */
-    ST_double *PZry = (ST_double *)calloc(K_total, sizeof(ST_double));           /* X'P_Zr y */
-    ST_double *temp_rv = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double)); /* ZrZr_inv * ZrX */
+    PZrX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));  /* X'P_Zr X */
+    PZry = (ST_double *)calloc(K_total, sizeof(ST_double));           /* X'P_Zr y */
+    temp_rv = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double)); /* ZrZr_inv * ZrX */
     if (!PZrX || !PZry || !temp_rv) goto cleanup;
 
     /* temp_rv = ZrZr_inv * ZrX  (K_rest x K_total) */
@@ -1808,9 +1816,9 @@ void civreghdfe_compute_cstat(
     free(temp_ry);
 
     /* Solve beta_rest = PZrX^{-1} * PZry */
-    ST_double *PZrX_L = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    ST_double *PZrX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-    ST_double *beta_rest = (ST_double *)calloc(K_total, sizeof(ST_double));
+    PZrX_L = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    PZrX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    beta_rest = (ST_double *)calloc(K_total, sizeof(ST_double));
     if (!PZrX_L || !PZrX_inv || !beta_rest) goto cleanup;
 
     memcpy(PZrX_L, PZrX, K_total * K_total * sizeof(ST_double));
@@ -1870,16 +1878,16 @@ void civreghdfe_compute_cstat(
 cleanup:
     free(Z_rest);
     free(X_all);
-    if (ZrZr) free(ZrZr);
-    if (ZrZr_inv) free(ZrZr_inv);
-    if (ZrX) free(ZrX);
-    if (Zry) free(Zry);
-    if (PZrX) free(PZrX);
-    if (PZry) free(PZry);
-    if (temp_rv) free(temp_rv);
-    if (PZrX_L) free(PZrX_L);
-    if (PZrX_inv) free(PZrX_inv);
-    if (beta_rest) free(beta_rest);
+    free(ZrZr);
+    free(ZrZr_inv);
+    free(ZrX);
+    free(Zry);
+    free(PZrX);
+    free(PZry);
+    free(temp_rv);
+    free(PZrX_L);
+    free(PZrX_inv);
+    free(beta_rest);
 }
 
 /*

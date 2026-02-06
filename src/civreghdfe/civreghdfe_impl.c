@@ -115,14 +115,6 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_nopartialsmall", &dval); nopartialsmall = (ST_int)dval;
     SF_scal_use("__civreghdfe_center", &dval); center = (ST_int)dval;
 
-    if (verbose) {
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-                 "civreghdfe: N=%d, K_endog=%d, K_exog=%d, K_iv=%d, G=%d\n",
-                 (int)N_total, (int)K_endog, (int)K_exog, (int)K_iv, (int)G);
-        SF_display(buf);
-    }
-
     /* Calculate variable positions */
     /* Layout: [y, X_endog (Ke), X_exog (Kx), Z (Kz), FE (G), cluster?, cluster2?, weight?] */
     ST_int var_y_idx = 0;  /* Index in loaded_data.vars[] */
@@ -316,13 +308,6 @@ static ST_retcode do_iv_regression(void)
         if (is_valid) N_valid++;
     }
 
-    if (verbose) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "civreghdfe: %d valid observations (dropped %d)\n",
-                 (int)N_valid, (int)(N_total - N_valid));
-        SF_display(buf);
-    }
-
     if (N_valid < K_total + K_iv + 1) {
         SF_error("civreghdfe: Insufficient observations\n");
         free(y); free(X_endog); free(X_exog); free(Z);
@@ -467,8 +452,6 @@ static ST_retcode do_iv_regression(void)
         fe_levels_c = fe_levels_new;
 
         N = N_after;
-    } else if (verbose) {
-        SF_display("civreghdfe: No singletons found\n");
     }
     free(singleton_mask);
 
@@ -598,12 +581,6 @@ static ST_retcode do_iv_regression(void)
     }
 
     if (n_partial > 0 && K_exog > 0) {
-        if (verbose) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: Will partial out %d exogenous variable(s) iteratively with FE...\n", (int)n_partial);
-            SF_display(buf);
-        }
-
         /* Read partial variable indices (1-based indices into X_exog) */
         partial_indices = (ST_int *)malloc(n_partial * sizeof(ST_int));
         is_partial = (ST_int *)calloc(K_exog, sizeof(ST_int));  /* Mask for partial vars */
@@ -626,10 +603,6 @@ static ST_retcode do_iv_regression(void)
     double t_partial_start = ctools_timer_seconds();
 
     /* Partial out FEs from all variables using CG solver */
-    if (verbose) {
-        SF_display("civreghdfe: Partialling out fixed effects...\n");
-    }
-
     ST_int total_cols = 1 + K_endog + K_exog + K_iv;
 
     /* Combine all data into one array for parallel processing */
@@ -707,9 +680,6 @@ static ST_retcode do_iv_regression(void)
                           invert_from_cholesky(PtP_inv, n_partial, PtP_inv) == 0);
 
             if (!ptp_ok) {
-                if (verbose) {
-                    SF_display("civreghdfe: Warning - partial variables collinear, stopping iteration\n");
-                }
                 break;
             }
 
@@ -762,18 +732,7 @@ static ST_retcode do_iv_regression(void)
                 if (diff > max_change) max_change = diff;
             }
 
-            if (verbose && (iter < 3 || iter == max_iter - 1)) {
-                char buf[256];
-                snprintf(buf, sizeof(buf), "civreghdfe: FWL iteration %d, max_change = %g\n", iter + 1, max_change);
-                SF_display(buf);
-            }
-
             if (max_change < tol) {
-                if (verbose) {
-                    char buf[256];
-                    snprintf(buf, sizeof(buf), "civreghdfe: FWL converged in %d iterations\n", iter + 1);
-                    SF_display(buf);
-                }
                 break;
             }
         }
@@ -793,10 +752,6 @@ static ST_retcode do_iv_regression(void)
     /* End partial out timing, start post-processing timing */
     t_partial_out = ctools_timer_seconds() - t_partial_start;
     double t_postproc_start = ctools_timer_seconds();
-
-    if (verbose) {
-        SF_display("civreghdfe: Fixed effects partialled out\n");
-    }
 
     /* Extract demeaned data */
     ST_double *y_dem = all_data;
@@ -845,12 +800,6 @@ static ST_retcode do_iv_regression(void)
         K_iv = K_exog_new + K_excl;
         X_exog_dem = (K_exog > 0) ? all_data + N * (1 + K_endog) : NULL;
 
-        if (verbose) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: Partial variables removed, K_exog = %d\n", (int)K_exog);
-            SF_display(buf);
-        }
-
         free(partial_indices);
         free(is_partial);
         partial_indices = NULL;
@@ -880,13 +829,6 @@ static ST_retcode do_iv_regression(void)
         ctools_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
     }
 
-    if (verbose && G >= 2) {
-        char buf[256];
-        snprintf(buf, sizeof(buf), "civreghdfe: mobility_groups=%d (connected components)\n",
-                 (int)mobility_groups);
-        SF_display(buf);
-    }
-
     /* Save mobility groups for absorbed DOF table display */
     ctools_scal_save("__civreghdfe_mobility_groups", (ST_double)mobility_groups);
 
@@ -895,14 +837,6 @@ static ST_retcode do_iv_regression(void)
        - nested_adj = 1 to account for the constant */
     ST_int df_a_for_vce = df_a - df_a_nested;
     ST_int nested_adj = (df_a_nested > 0) ? 1 : 0;
-
-    if (verbose && has_cluster) {
-        char buf[512];
-        snprintf(buf, sizeof(buf),
-            "civreghdfe: nested_fe_index=%d, df_a=%d, df_a_nested=%d, df_a_for_vce=%d, nested_adj=%d\n",
-            (int)nested_fe_index, (int)df_a, (int)df_a_nested, (int)df_a_for_vce, (int)nested_adj);
-        SF_display(buf);
-    }
 
     /* Remap cluster IDs to contiguous 1-based indices using shared utility */
     ST_int num_clusters = 0;
@@ -949,16 +883,6 @@ static ST_retcode do_iv_regression(void)
             ctools_scal_save(scalar_name, (ST_double)is_nested);
         }
 
-        if (verbose) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: FE nested detection complete\n");
-            SF_display(buf);
-            for (ST_int g = 0; g < G; g++) {
-                snprintf(buf, sizeof(buf), "  FE %d: %s\n", (int)(g + 1),
-                         fe_nested[g] ? "nested" : "not nested");
-                SF_display(buf);
-            }
-        }
     }
     if (fe_nested) free(fe_nested);
 
@@ -1187,10 +1111,6 @@ static ST_retcode do_iv_regression(void)
     free(fe_levels_c);
     free(state);
     g_state = NULL;
-
-    if (verbose) {
-        SF_display("civreghdfe: Done\n");
-    }
 
     return STATA_OK;
 }

@@ -206,7 +206,8 @@ faster than the native {cmd:destring} command.
 {title:Stored results}
 
 {pstd}
-{cmd:cdestring} stores the following in {cmd:r()}:
+{cmd:cdestring} stores the following in global scalars (accessible via
+{cmd:scalar(_cdestring_...)}):
 
 {synoptset 28 tabbed}{...}
 {p2col 5 28 32 2: Scalars}{p_end}

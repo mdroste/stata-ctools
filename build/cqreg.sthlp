@@ -45,7 +45,7 @@
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
-{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-8)}{p_end}
+{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-12)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
 {synopt:{opt nopreprocess(#)}}disable preprocessing algorithm; default is {cmd:nopreprocess(0)}{p_end}
 {synoptline}
@@ -156,7 +156,7 @@ running multiple jobs simultaneously.
 
 {phang}
 {opt tolerance(#)} specifies the convergence tolerance for the IPM solver.
-The default is {cmd:tolerance(1e-8)}.
+The default is {cmd:tolerance(1e-12)}.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default

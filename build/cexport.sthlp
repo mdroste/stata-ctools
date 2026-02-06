@@ -56,6 +56,14 @@
 {synopt:{opt verbose}}display progress information{p_end}
 {synopt:{opt timeit}}display timing breakdown{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+
+{syntab:Advanced Performance}
+{synopt:{opt mmap}}use memory-mapped I/O (zero-copy formatting){p_end}
+{synopt:{opt nofsync}}skip final fsync for faster writes (less durable){p_end}
+{synopt:{opt direct}}use direct I/O bypassing OS cache (for very large files){p_end}
+{synopt:{opt prefault}}pre-fault mmap pages to avoid stalls{p_end}
+{synopt:{opt crlf}}use Windows-style CRLF line endings{p_end}
+{synopt:{opt noparallel}}disable parallel I/O (for debugging){p_end}
 {synoptline}
 
 {synoptset 24 tabbed}{...}
@@ -155,6 +163,31 @@ time, and throughput.
 data loading and export operations. By default, {cmd:cexport} uses all available
 CPU cores as reported by OpenMP. Use this option to limit parallelism, for
 example when running multiple jobs simultaneously.
+
+{dlgtab:Advanced Performance}
+
+{phang}
+{opt mmap} uses memory-mapped I/O for zero-copy formatting, which can improve
+performance for large files.
+
+{phang}
+{opt nofsync} skips the final fsync system call for faster writes. The file
+may not be fully flushed to disk when the command returns. Use when speed
+matters more than durability.
+
+{phang}
+{opt direct} uses direct I/O, bypassing the OS page cache. Useful for
+very large files to avoid evicting other data from cache.
+
+{phang}
+{opt prefault} pre-faults mmap pages to avoid page fault stalls during writing.
+
+{phang}
+{opt crlf} uses Windows-style CRLF ({cmd:\r\n}) line endings instead of the
+default Unix-style LF ({cmd:\n}).
+
+{phang}
+{opt noparallel} disables parallel I/O. Useful for debugging.
 
 
 {marker exceloptions}{...}

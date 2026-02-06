@@ -93,7 +93,8 @@ tab-delimited files.
 {opt varnames(rule)} specifies how variable names are determined.
 {opt varnames(1)} treats the first row as variable names (the default).
 {opt varnames(nonames)} treats the first row as data and generates default
-variable names (v1, v2, ...).
+variable names (v1, v2, ...). You can also specify {opt varnames(}{it:N}{opt )}
+to use row {it:N} as variable names (e.g., {opt varnames(3)} uses the third row).
 
 {phang}
 {opt case(option)} specifies the case of variable names. {opt preserve}
@@ -131,7 +132,8 @@ This overrides automatic type detection for these columns.
 
 {phang}
 {opt stripquotes} removes surrounding quotation marks from string values
-after parsing.
+after parsing. {bf:Note:} This option is currently accepted but not yet
+implemented in the C plugin.
 
 {phang}
 {opt encoding(encoding)} specifies the file encoding. Currently only UTF-8
@@ -139,8 +141,9 @@ is supported.
 
 {phang}
 {opt rowrange([start][:end])} specifies a range of rows to import.
-Use {opt rowrange(100:200)} to import rows 100-200, or {opt rowrange(100:)}
-to import from row 100 to the end.
+Use {opt rowrange(100:200)} to import rows 100-200, {opt rowrange(100:)}
+to import from row 100 to the end, or {opt rowrange(100)} to import only
+row 100.
 
 {phang}
 {opt colrange([start][:end])} specifies a range of columns to import.

@@ -72,6 +72,7 @@ exceed available memory.
 
 {pmore}
 The argument {it:#} specifies how many variables to process at a time (1-16).
+Values above 16 are capped at 16.
 Higher values use more memory but may improve performance by allowing better
 parallelization. For example, {cmd:stream(4)} processes 4 variables simultaneously,
 using approximately 4× the buffer memory of {cmd:stream(1)}.
@@ -160,6 +161,10 @@ variable is the secondary key, and so forth.
 Both numeric and string variables are supported. Numeric variables are sorted
 in ascending numerical order. String variables are sorted in ascending
 lexicographic (ASCII) order.
+
+{pstd}
+{bf:Limitations:} {cmd:csort} does not support datasets exceeding 2^31 - 1
+(2,147,483,647) observations.
 
 
 {marker examples}{...}

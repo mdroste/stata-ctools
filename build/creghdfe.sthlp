@@ -41,9 +41,12 @@
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 
 {syntab:Residuals}
-{synopt:{opt resid}}create residual variable named {cmd:_creghdfe_resid}{p_end}
+{synopt:{opt resid}}create residual variable named {cmd:_reghdfe_resid}{p_end}
 {synopt:{opt resid2(newvar)}}create residual variable with specified name{p_end}
 {synopt:{opt resid:uals(newvar)}}alias for {opt resid2()}{p_end}
+
+{syntab:Advanced}
+{synopt:{opt quad}}use quad-precision accumulation in CG solver{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
@@ -52,6 +55,7 @@
 
 {pstd}
 {it:weight}s are allowed; {opt aweight}s, {opt fweight}s, and {opt pweight}s are supported.
+Note: {opt pweight}s automatically imply {opt vce(robust)}.
 
 
 {marker description}{...}
@@ -122,10 +126,17 @@ option to limit parallelism, for example when running multiple jobs simultaneous
 {opt nostandardize} specifies that variables should not be standardized
 before the iterative algorithm. This may affect convergence speed.
 
+{dlgtab:Advanced}
+
+{phang}
+{opt quad} uses quad-precision (double-double) accumulation in the conjugate
+gradient solver for improved numerical accuracy. This is slower but may help
+with ill-conditioned problems.
+
 {dlgtab:Residuals}
 
 {phang}
-{opt resid} stores residuals in a new variable named {cmd:_creghdfe_resid}.
+{opt resid} stores residuals in a new variable named {cmd:_reghdfe_resid}.
 
 {phang}
 {opt resid2(newvar)} stores residuals in a new variable with the specified name.

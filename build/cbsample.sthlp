@@ -27,7 +27,7 @@
 {synopt:{opt n(#)}}size of bootstrap sample; default is {cmd:n(_N)}{p_end}
 {synopt:{opt cl:uster(varlist)}}variables identifying resampling clusters{p_end}
 {synopt:{opt str:ata(varlist)}}variables identifying strata{p_end}
-{synopt:{opt weight:var(newvar)}}store bootstrap weights instead of resampling{p_end}
+{synopt:{opt weight(newvar)}}store bootstrap weights instead of resampling{p_end}
 {synoptline}
 {syntab:Advanced}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
@@ -49,7 +49,7 @@ selected observations may appear multiple times (implemented by keeping one copy
 and dropping unselected observations by default).
 
 {pstd}
-With {opt weightvar()}, {cmd:cbsample} keeps all observations and stores
+With {opt weight()}, {cmd:cbsample} keeps all observations and stores
 frequency weights indicating how many times each observation was selected.
 This is useful for bootstrap estimation where weights are preferred over
 physical replication of observations.
@@ -78,7 +78,7 @@ performed independently within each stratum, maintaining the relative size of
 each stratum in the bootstrap sample.
 
 {phang}
-{opt weightvar(newvar)} creates a new variable {it:newvar} containing bootstrap
+{opt weight(newvar)} creates a new variable {it:newvar} containing bootstrap
 frequency weights. When this option is specified, all observations are kept and
 the weight variable indicates how many times each observation was selected
 (0 if not selected). This is more memory-efficient than physical replication
@@ -128,16 +128,16 @@ structure of the original data.
 
 {pstd}Store bootstrap weights instead of resampling{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
-{phang2}{cmd:. cbsample, weightvar(bsweight)}{p_end}
+{phang2}{cmd:. cbsample, weight(bsweight)}{p_end}
 {phang2}{cmd:. regress price mpg [fw=bsweight]}{p_end}
 
 {pstd}Stratified bootstrap{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
-{phang2}{cmd:. cbsample, strata(foreign) weightvar(bsweight)}{p_end}
+{phang2}{cmd:. cbsample, strata(foreign) weight(bsweight)}{p_end}
 
 {pstd}Cluster bootstrap{p_end}
 {phang2}{cmd:. webuse nlswork, clear}{p_end}
-{phang2}{cmd:. cbsample, cluster(idcode) weightvar(bsweight)}{p_end}
+{phang2}{cmd:. cbsample, cluster(idcode) weight(bsweight)}{p_end}
 
 {pstd}Reproducible bootstrap{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
@@ -149,13 +149,14 @@ structure of the original data.
 {title:Stored results}
 
 {pstd}
-{cmd:cbsample} stores the following in {cmd:r()}:
+{cmd:cbsample} stores the following in global scalars (accessible via
+{cmd:scalar(_cbsample_...)}):
 
-{synoptset 24 tabbed}{...}
-{p2col 5 24 28 2: Scalars}{p_end}
-{synopt:{cmd:r(N)}}number of observations in bootstrap sample{p_end}
-{synopt:{cmd:r(N_clust)}}number of clusters (if {opt cluster()} specified){p_end}
-{synopt:{cmd:r(N_strata)}}number of strata (if {opt strata()} specified){p_end}
+{synoptset 28 tabbed}{...}
+{p2col 5 28 32 2: Scalars}{p_end}
+{synopt:{cmd:_cbsample_n_selected}}number of observations in bootstrap sample{p_end}
+{synopt:{cmd:_cbsample_nclusters}}number of clusters (if {opt cluster()} specified){p_end}
+{synopt:{cmd:_cbsample_nstrata}}number of strata (if {opt strata()} specified){p_end}
 
 
 {marker author}{...}

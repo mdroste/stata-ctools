@@ -1727,7 +1727,7 @@ program define civreghdfe, eclass
         }
         local coefs = `cats' - `redundant'
         local total_coefs = `total_coefs' + `coefs'
-        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "   `nested_marker'{c |}"
+        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "    `nested_marker'{c |}"
     }
     di as text "{hline 13}{c BT}{hline 39}{c BRC}"
     if `has_nested' {

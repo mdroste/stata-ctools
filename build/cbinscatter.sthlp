@@ -140,9 +140,10 @@ identical results.
 Options are:
 
 {phang2}{opt none} - no fit line{p_end}
-{phang2}{opt linear} - linear fit (default){p_end}
+{phang2}{opt linear} (or {opt lfit} or {opt line}) - linear fit (default){p_end}
 {phang2}{opt qfit} or {opt quadratic} - quadratic fit{p_end}
 {phang2}{opt cubic} - cubic fit{p_end}
+{phang2}{opt connect} - connect bin means with lines (no fit){p_end}
 
 {pstd}
 Fit lines are computed from the underlying microdata, not the bin means.
@@ -177,10 +178,11 @@ graph and axis titles. Defaults for axis titles are the variable names.
 
 {phang}
 {opt msymbols(string)} specifies marker symbols for the scatter series.
-Default is filled circles (O).
+Default is filled circles (O). (Not yet implemented.)
 
 {phang}
 {opt mlabels(string)} specifies marker labels for the scatter series.
+(Not yet implemented.)
 
 {phang}
 {it:twoway_options} any other options are passed through to the underlying

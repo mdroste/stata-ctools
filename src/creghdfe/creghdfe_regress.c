@@ -48,7 +48,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
-    char msg[256];
     char scalar_name[64];
     double t_start, t_load, t_copy, t_remap, t_singleton, t_dof, t_partial, t_ols, t_vce;
     ST_int max_iter_singleton = 100;
@@ -159,14 +158,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 198;
     }
 
-    /* Debug output for verbose mode */
-    if (verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "creghdfe: K=%d G=%d vcetype=%d has_weights=%d in1=%d in2=%d\n",
-                 K, G, vcetype, has_weights, in1, in2);
-        SF_display(msg);
-    }
-
     /* Determine threads */
 #ifdef _OPENMP
     num_threads = omp_get_max_threads();
@@ -218,20 +209,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         ctools_filtered_data_free(&filtered);
         SF_error("creghdfe: no observations\n");
         return 198;
-    }
-
-    if (verbose >= 1) {
-        snprintf(msg, sizeof(msg), "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
-                 N_orig, K, G, num_threads);
-        SF_display(msg);
-    }
-
-    /* Debug output after load */
-    if (verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "creghdfe: loaded total_vars=%d, filtered.data.nvars=%zu, N_orig=%d\n",
-                 total_vars, filtered.data.nvars, N_orig);
-        SF_display(msg);
     }
 
     /* Verify all variables were loaded successfully (defensive check) */
@@ -648,11 +625,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     t_dof = get_time_sec();
 
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
-        SF_display(msg);
-    }
-
     /* ================================================================
      * STEP 4: Set up global state for CG solver (compacted data)
      * ================================================================ */
@@ -962,20 +934,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Partial out via CG solver using shared helper */
-    if (verbose >= 1) {
-        SF_display("{txt}   Partialling out and solving OLS...\n");
-    }
-
     ST_int max_iters = partial_out_columns(g_state, data, N, K, num_threads);
     if (max_iters < 0) max_iters = -max_iters;  /* Handle failure indicator */
 
     /* Save iteration count to Stata scalar */
     ctools_scal_save("__creghdfe_iterations", (ST_double)max_iters);
-
-    if (verbose >= 1) {
-        snprintf(msg, sizeof(msg), "{txt}   Converged in %d iterations\n", max_iters);
-        SF_display(msg);
-    }
 
     t_partial = get_time_sec();
 
@@ -1054,12 +1017,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     K_keep = K_x - num_collinear;
-
-    if (verbose >= 1 && num_collinear > 0) {
-        snprintf(msg, sizeof(msg), "{txt}   Dropped %d collinear variable%s\n",
-                 num_collinear, num_collinear == 1 ? "" : "s");
-        SF_display(msg);
-    }
 
     /* Store collinearity flags */
     ctools_scal_save("__creghdfe_num_collinear", (ST_double)num_collinear);
@@ -1592,24 +1549,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Store residuals back to Stata if requested.
      * Uses obs_map to write to correct Stata observations. */
     if (compute_resid && resid_var_idx > 0 && resid) {
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "{txt}   Storing residuals: resid_var_idx=%d, N=%d, N_orig=%d\n",
-                     resid_var_idx, N, N_orig);
-            SF_display(msg);
-        }
-
-        ST_int stored_count = 0;
         idx = 0;
         for (i = 0; i < N_orig; i++) {
             if (mask[i]) {
-                ST_retcode rc = SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
-                if (rc == 0) stored_count++;
+                SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
                 idx++;
             }
-        }
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
-            SF_display(msg);
         }
     }
 

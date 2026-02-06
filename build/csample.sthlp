@@ -130,12 +130,15 @@ Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
 {title:Stored results}
 
 {pstd}
-{cmd:csample} stores the following in {cmd:r()}:
+{cmd:csample} stores the following in global scalars (accessible via
+{cmd:scalar(_csample_...)}):
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Scalars}{p_end}
-{synopt:{cmd:r(N_kept)}}number of observations kept{p_end}
-{synopt:{cmd:r(N_dropped)}}number of observations dropped{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Scalars}{p_end}
+{synopt:{cmd:_csample_kept}}number of observations kept{p_end}
+{synopt:{cmd:_csample_dropped}}number of observations dropped{p_end}
+{synopt:{cmd:_csample_ngroups}}number of groups{p_end}
+{synopt:{cmd:_csample_threads}}number of threads used{p_end}
 
 
 {marker author}{...}
