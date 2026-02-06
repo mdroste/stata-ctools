@@ -84,7 +84,7 @@ program define cmerge, rclass
     else {
         di as error "cmerge: invalid merge type `merge_type'"
         di as error "Must be one of: 1:1, m:1, 1:m, m:m"
-        exit 198
+        exit 111
     }
 
     * Check for _n merge (merge by observation number)

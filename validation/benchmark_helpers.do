@@ -1135,7 +1135,6 @@ program define benchmark_ivreghdfe
     capture quietly civreghdfe `spec' `if' `in', absorb(`absorb') `vceopt' `estopts' `hacopts' `b0opt' noreturn
     local civreghdfe_rc = _rc
 
-	/*
     if `civreghdfe_rc' != 0 {
         restore
         test_fail "`testname'" "civreghdfe returned error `civreghdfe_rc'"
@@ -1282,9 +1281,6 @@ program define benchmark_ivreghdfe
         local sf_fmt : display %4.1f `min_sf_V'
         local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
     }
-	*/
-	
-	local has_failure = 0
 
     * Report result
     if `has_failure' == 0 {

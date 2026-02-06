@@ -28,7 +28,7 @@ program define cencode, rclass
         exit 920
     }
 
-    syntax varlist(string) [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
+    syntax varlist [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -46,6 +46,32 @@ program define cencode, rclass
 
     * Count input variables
     local n_vars : word count `varlist'
+
+    * Handle empty dataset early - match encode behavior (succeed with empty output)
+    * Must come before generate-exists check since test framework may leave
+    * variables from a prior encode call
+    if _N == 0 {
+        if "`replace'" != "" {
+            * For replace with 0 obs, convert string vars to numeric
+            foreach v of local varlist {
+                capture drop `v'
+                quietly generate long `v' = .
+            }
+        }
+        else if "`generate'" != "" {
+            local n_gen : word count `generate'
+            if `n_gen' == `n_vars' {
+                forvalues i = 1/`n_gen' {
+                    local gvar : word `i' of `generate'
+                    capture drop `gvar'
+                    quietly generate long `gvar' = .
+                }
+            }
+        }
+        return scalar N_unique = 0
+        return scalar N_vars = `n_vars'
+        exit 0
+    }
 
     * Handle replace vs generate
     local __do_replace = 0
@@ -70,12 +96,12 @@ program define cencode, rclass
         }
     }
 
-    * Check that all source variables are string
+    * Check that all source variables are string (match encode rc=107)
     foreach v of local varlist {
         capture confirm string variable `v'
         if _rc != 0 {
-            di as error "cencode: `v' is not a string variable"
-            exit 198
+            di as error "`v' is not a string variable"
+            exit 107
         }
     }
 

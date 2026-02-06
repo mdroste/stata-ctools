@@ -147,4 +147,38 @@ ST_int ctools_compact_matrix_double(
     ST_int K
 );
 
+/*
+    Union-Find (Disjoint Set Union) for connected components.
+    Used to efficiently count mobility groups in bipartite graphs.
+*/
+typedef struct {
+    ST_int *parent;
+    ST_int *rank;
+    ST_int size;
+} ctools_UnionFind;
+
+ctools_UnionFind *ctools_uf_create(ST_int size);
+void ctools_uf_destroy(ctools_UnionFind *uf);
+ST_int ctools_uf_find(ctools_UnionFind *uf, ST_int x);
+void ctools_uf_union(ctools_UnionFind *uf, ST_int x, ST_int y);
+
+/*
+    Count connected components in a bipartite graph.
+
+    Given two FE level vectors of length N, where:
+      - fe1_levels[i] is in [1, num_levels1]
+      - fe2_levels[i] is in [1, num_levels2]
+
+    Each observation creates an edge between fe1_levels[i] and fe2_levels[i].
+    Returns the number of connected components (mobility groups).
+    Returns -1 on error.
+*/
+ST_int ctools_count_connected_components(
+    const ST_int *fe1_levels,
+    const ST_int *fe2_levels,
+    ST_int N,
+    ST_int num_levels1,
+    ST_int num_levels2
+);
+
 #endif /* CTOOLS_HDFE_UTILS_H */

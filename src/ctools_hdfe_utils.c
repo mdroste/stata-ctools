@@ -288,3 +288,105 @@ ST_int ctools_compact_matrix_double(
 
     return idx;
 }
+
+/* ========================================================================
+ * Union-Find implementation for connected components
+ * ======================================================================== */
+
+ctools_UnionFind *ctools_uf_create(ST_int size)
+{
+    ctools_UnionFind *uf = (ctools_UnionFind *)malloc(sizeof(ctools_UnionFind));
+    if (!uf) return NULL;
+
+    uf->parent = (ST_int *)malloc(size * sizeof(ST_int));
+    uf->rank = (ST_int *)calloc(size, sizeof(ST_int));
+    uf->size = size;
+
+    if (!uf->parent || !uf->rank) {
+        if (uf->parent) free(uf->parent);
+        if (uf->rank) free(uf->rank);
+        free(uf);
+        return NULL;
+    }
+
+    for (ST_int i = 0; i < size; i++) {
+        uf->parent[i] = i;
+    }
+
+    return uf;
+}
+
+void ctools_uf_destroy(ctools_UnionFind *uf)
+{
+    if (uf) {
+        if (uf->parent) free(uf->parent);
+        if (uf->rank) free(uf->rank);
+        free(uf);
+    }
+}
+
+ST_int ctools_uf_find(ctools_UnionFind *uf, ST_int x)
+{
+    if (uf->parent[x] != x) {
+        uf->parent[x] = ctools_uf_find(uf, uf->parent[x]);
+    }
+    return uf->parent[x];
+}
+
+void ctools_uf_union(ctools_UnionFind *uf, ST_int x, ST_int y)
+{
+    ST_int root_x = ctools_uf_find(uf, x);
+    ST_int root_y = ctools_uf_find(uf, y);
+
+    if (root_x == root_y) return;
+
+    if (uf->rank[root_x] < uf->rank[root_y]) {
+        uf->parent[root_x] = root_y;
+    } else if (uf->rank[root_x] > uf->rank[root_y]) {
+        uf->parent[root_y] = root_x;
+    } else {
+        uf->parent[root_y] = root_x;
+        uf->rank[root_x]++;
+    }
+}
+
+ST_int ctools_count_connected_components(
+    const ST_int *fe1_levels,
+    const ST_int *fe2_levels,
+    ST_int N,
+    ST_int num_levels1,
+    ST_int num_levels2
+)
+{
+    ST_int total_nodes = num_levels1 + num_levels2;
+    ctools_UnionFind *uf = ctools_uf_create(total_nodes);
+    if (!uf) return -1;
+
+    ST_int i;
+
+    for (i = 0; i < N; i++) {
+        ST_int node1 = fe1_levels[i] - 1;
+        ST_int node2 = num_levels1 + fe2_levels[i] - 1;
+        ctools_uf_union(uf, node1, node2);
+    }
+
+    ST_int num_components = 0;
+    ST_int *seen_roots = (ST_int *)calloc(total_nodes, sizeof(ST_int));
+    if (!seen_roots) {
+        ctools_uf_destroy(uf);
+        return -1;
+    }
+
+    for (i = 0; i < num_levels1; i++) {
+        ST_int root = ctools_uf_find(uf, i);
+        if (!seen_roots[root]) {
+            seen_roots[root] = 1;
+            num_components++;
+        }
+    }
+
+    free(seen_roots);
+    ctools_uf_destroy(uf);
+
+    return num_components;
+}

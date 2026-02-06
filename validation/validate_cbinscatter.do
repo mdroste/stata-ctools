@@ -141,7 +141,7 @@ if `num_bins' == 10 {
     test_pass "discrete creates one bin per unique value"
 }
 else {
-    test_pass "discrete: `num_bins' bins (expected ~10)"
+    test_fail "discrete creates one bin per unique value" "got `num_bins' bins, expected 10"
 }
 
 /*******************************************************************************
@@ -846,7 +846,7 @@ gen y = 2*x + rnormal()
 replace y = . if _n <= 50
 
 cbinscatter y x, nograph
-if e(N) == 450 | e(N_dropped) == 50 {
+if e(N) == 450 & e(N_dropped) == 50 {
     test_pass "missing in y: handled correctly"
 }
 else {
@@ -862,7 +862,7 @@ replace x = . if _n <= 50
 gen y = 2*x + rnormal()
 
 cbinscatter y x, nograph
-if e(N) == 450 | e(N_dropped) >= 50 {
+if e(N) == 450 & e(N_dropped) >= 50 {
     test_pass "missing in x: handled correctly"
 }
 else {
@@ -1174,7 +1174,7 @@ if _rc == 0 {
     test_pass "collinear control (handled)"
 }
 else {
-    test_pass "collinear control (error rc=`=_rc')"
+    test_fail "collinear control" "unexpected error rc=`=_rc'"
 }
 
 * Single FE group (absorb with 1 level)

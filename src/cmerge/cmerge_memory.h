@@ -3,14 +3,15 @@
  * Memory allocation utilities for cmerge
  *
  * Provides:
- * - String arena allocator for efficient bulk string operations
+ * - Growing arena allocator for efficient bulk string operations
  *
  * Note: For cache-line aligned memory allocation, use the shared functions
  * from ctools_config.h: ctools_cacheline_alloc() and ctools_aligned_free()
  *
- * The cmerge string arena is now a typedef to the shared ctools_string_arena.
- * The cmerge_arena_* functions are thin wrappers that configure the arena
- * with STRDUP_FALLBACK mode (falls back to strdup when arena is full).
+ * The cmerge string arena uses the growing arena (ctools_arena) which
+ * allocates from a chain of blocks. When a block fills up, a new one is
+ * allocated automatically. This handles strings of any length up to
+ * Stata's str2045 limit without fallback to per-string malloc.
  */
 
 #ifndef CMERGE_MEMORY_H
@@ -24,29 +25,31 @@
 /* ============================================================================
  * String Arena Allocator
  *
- * Allocates strings from a contiguous block to reduce per-string malloc
- * overhead and enable O(1) bulk free instead of O(n) individual frees.
+ * Uses the growing arena (ctools_arena) which allocates from a chain of
+ * fixed-size blocks. Bump-pointer allocation within each block gives O(1)
+ * per-string cost. When a block is exhausted, a new block is added.
+ * All blocks are freed together in O(blocks) time.
  *
- * The cmerge arena uses STATIC_FALLBACK mode, meaning it ALWAYS returns a
- * valid pointer (never NULL) - falls back to static empty string.
+ * Thread safety: Each string variable gets its own arena, so parallel
+ * OpenMP loops have zero contention.
  * ============================================================================ */
 
-/* cmerge_string_arena is now a typedef to the shared implementation */
-typedef ctools_string_arena cmerge_string_arena;
+/* cmerge_string_arena wraps the growing arena */
+typedef ctools_arena cmerge_string_arena;
 
-/* Create a string arena with given capacity.
- * Uses STATIC_FALLBACK mode - strdup never returns NULL. */
-cmerge_string_arena *cmerge_arena_create(size_t capacity);
+/* Create a growing string arena with given initial block size.
+ * Returns NULL on allocation failure. */
+cmerge_string_arena *cmerge_arena_create(size_t block_size);
 
 /* Allocate a string copy from the arena.
- * Falls back to static empty string when arena is full.
- * ALWAYS returns a valid pointer (never NULL). */
+ * The arena grows automatically if the current block is full.
+ * Returns NULL only on malloc failure (new block allocation). */
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s);
 
-/* Check if a pointer was allocated from the arena (or is the static fallback) */
+/* Check if a pointer was allocated from this arena */
 int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr);
 
-/* Free the arena */
+/* Free the arena and all its blocks */
 void cmerge_arena_free(cmerge_string_arena *arena);
 
 #endif /* CMERGE_MEMORY_H */

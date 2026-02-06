@@ -35,11 +35,15 @@ program define cqreg, eclass
     * Capture full command line before parsing
     local cmdline "cqreg `0'"
 
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
+    syntax varlist(min=2 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
         VCE(string) DENmethod(string) BWmethod(string) Verbose TIMEIT TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
 
     * Validate quantile
-    if `quantile' <= 0 | `quantile' >= 1 {
+    if `quantile' >= 1 {
+        di as error "cqreg: quantile must be between 0 and 1"
+        exit 498
+    }
+    if `quantile' <= 0 {
         di as error "cqreg: quantile must be between 0 and 1"
         exit 198
     }

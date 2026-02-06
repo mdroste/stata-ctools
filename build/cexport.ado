@@ -54,6 +54,12 @@ program define cexport, rclass
         exit 198
     }
 
+    * Check that data is loaded (match export delimited rc=102)
+    if c(k) == 0 {
+        di as error "no variables defined"
+        exit 102
+    }
+
     * Parse the rest with export delimited-style syntax
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///

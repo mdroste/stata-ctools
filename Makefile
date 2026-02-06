@@ -72,6 +72,8 @@ COMMON_SRCS = $(SRC_DIR)/ctools_types.c \
               $(SRC_DIR)/ctools_spi_checked.c \
               $(SRC_DIR)/ctools_hdfe_utils.c \
               $(SRC_DIR)/ctools_ols.c \
+              $(SRC_DIR)/ctools_matrix.c \
+              $(SRC_DIR)/ctools_vce.c \
               $(SRC_DIR)/ctools_parse.c \
               $(SRC_DIR)/ctools_hash.c \
               $(SRC_DIR)/ctools_sort_pairs.c \
@@ -190,6 +192,8 @@ CORE_HEADERS = $(SRC_DIR)/stplugin.h \
                $(SRC_DIR)/ctools_cleanup.h \
                $(SRC_DIR)/ctools_hdfe_utils.h \
                $(SRC_DIR)/ctools_ols.h \
+               $(SRC_DIR)/ctools_matrix.h \
+               $(SRC_DIR)/ctools_vce.h \
                $(SRC_DIR)/ctools_config.h \
                $(SRC_DIR)/ctools_spi.h \
                $(SRC_DIR)/ctools_spi_checked.h \

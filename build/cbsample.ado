@@ -51,8 +51,7 @@ program define cbsample
     quietly count if `touse'
     local nobs_sample = r(N)
     if `nobs_sample' == 0 {
-        di as error "cbsample: no observations"
-        exit 2000
+        exit 0
     }
 
     * Parse n (positional argument, defaults to _N)

@@ -1062,39 +1062,9 @@ static ST_retcode cmerge_execute(const char *args)
     }
     memset(output_data.vars, 0, n_output_vars * sizeof(stata_variable));
 
-    /* Count string variables and estimate arena size */
-    size_t n_string_vars = 0;
-    for (size_t vi = 0; vi < n_output_vars; vi++) {
-        int src_var_idx = output_var_indices[vi];
-        if (master_data.data.vars[src_var_idx].type == STATA_TYPE_STRING) {
-            n_string_vars++;
-        }
-    }
-
-    /* Create string arena for merge output: estimate 64 bytes per string cell.
-     * Arena enables O(1) bulk free instead of O(n*m) individual frees. */
-    cmerge_string_arena *str_arena = NULL;
-    if (n_string_vars > 0) {
-        /* Overflow check for arena_size = n_string_vars * output_nobs * 64 */
-        size_t arena_size = 0;
-        if (n_string_vars > 0 && output_nobs > 0) {
-            /* Check n_string_vars * output_nobs */
-            if (n_string_vars > SIZE_MAX / output_nobs) {
-                /* Overflow - use a smaller fallback size */
-                arena_size = SIZE_MAX / 64;  /* Will likely fail, triggering strdup fallback */
-            } else {
-                size_t cell_count = n_string_vars * output_nobs;
-                /* Check cell_count * 64 */
-                if (cell_count > SIZE_MAX / 64) {
-                    arena_size = SIZE_MAX;  /* Will likely fail */
-                } else {
-                    arena_size = cell_count * 64;
-                }
-            }
-        }
-        str_arena = cmerge_arena_create(arena_size);
-        /* If arena creation fails, we fall back to strdup (no error) */
-    }
+    /* Per-variable growing arenas are created inside the parallel loop below.
+     * Each string variable gets its own arena, eliminating contention in
+     * OpenMP parallel execution and handling any string length automatically. */
 
     /* Track allocation failures in parallel loop (must be int for OpenMP atomic) */
     int alloc_failed = 0;
@@ -1186,16 +1156,19 @@ static ST_retcode cmerge_execute(const char *args)
                 continue;
             }
 
-            /* Mark this variable as using the shared arena */
-            dst_var->_arena = str_arena;
+            /* Create per-variable growing arena (handles any string length) */
+            size_t block_size = output_nobs * 64;
+            if (block_size < 4096) block_size = 4096;
+            cmerge_string_arena *var_arena = cmerge_arena_create(block_size);
+            dst_var->_arena = var_arena;
 
             /* OPTIMIZATION: Identity permutation fast path - direct pointer copy */
             if (is_identity_permutation) {
                 for (size_t i = 0; i < output_nobs; i++) {
                     if (src_var->data.str[i]) {
-                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[i]);
+                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, src_var->data.str[i]);
                     } else {
-                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, "");
                     }
                 }
             } else {
@@ -1210,18 +1183,18 @@ static ST_retcode cmerge_execute(const char *args)
                     /* Bounds check: sorted_row must be valid index into master data */
                     if (sorted_row >= 0 && (size_t)sorted_row < master_nobs_bound &&
                         src_var->data.str[sorted_row]) {
-                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, src_var->data.str[sorted_row]);
+                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, src_var->data.str[sorted_row]);
                     } else if (using_key_data != NULL) {
                         int64_t using_row = output_specs[i].using_sorted_row;
                         /* Bounds check for using data */
                         if (using_row >= 0 && (size_t)using_row < using_nobs_bound &&
                             using_key_data[using_row]) {
-                            dst_var->data.str[i] = cmerge_arena_strdup(str_arena, using_key_data[using_row]);
+                            dst_var->data.str[i] = cmerge_arena_strdup(var_arena, using_key_data[using_row]);
                         } else {
-                            dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                            dst_var->data.str[i] = cmerge_arena_strdup(var_arena, "");
                         }
                     } else {
-                        dst_var->data.str[i] = cmerge_arena_strdup(str_arena, "");
+                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, "");
                     }
                 }
             }
@@ -1233,20 +1206,17 @@ static ST_retcode cmerge_execute(const char *args)
         SF_error("cmerge: memory allocation failed during output assembly\n");
         /* Cleanup - free any successfully allocated buffers */
         for (size_t vi = 0; vi < n_output_vars; vi++) {
-            if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
-                /* Only free strings not owned by arena */
-                for (size_t i = 0; i < output_nobs; i++) {
-                    if (output_data.vars[vi].data.str[i] &&
-                        (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
-                        free(output_data.vars[vi].data.str[i]);
-                    }
+            if (output_data.vars[vi].type == STATA_TYPE_STRING) {
+                if (output_data.vars[vi]._arena) {
+                    cmerge_arena_free((cmerge_string_arena *)output_data.vars[vi]._arena);
                 }
-                free(output_data.vars[vi].data.str);
+                if (output_data.vars[vi].data.str) {
+                    free(output_data.vars[vi].data.str);
+                }
             } else if (output_data.vars[vi].data.dbl) {
                 ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
-        cmerge_arena_free(str_arena);
         ctools_aligned_free(output_data.vars);
         free(output_var_indices);
         free(output_var_stata_idx);
@@ -1261,10 +1231,6 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    /* Note: str_arena->has_fallback being set is normal behavior - it means
-     * some strings were allocated via strdup because the arena ran out of space.
-     * This is NOT an error; the fallback strings are freed in cleanup below. */
-
     double t_permute = ctools_timer_ms() - t_start;
 
     /* ===================================================================
@@ -1275,23 +1241,20 @@ static ST_retcode cmerge_execute(const char *args)
 
     rc = ctools_data_store_selective(&output_data, output_var_stata_idx, n_output_vars, 1);
     if (rc != STATA_OK) {
-        /* Cleanup on error - free only non-arena strings */
+        /* Cleanup on error - free per-variable arenas */
         for (size_t vi = 0; vi < n_output_vars; vi++) {
-            if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
-                /* Only free strings not owned by arena */
-                for (size_t i = 0; i < output_nobs; i++) {
-                    if (output_data.vars[vi].data.str[i] &&
-                        (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
-                        free(output_data.vars[vi].data.str[i]);
-                    }
+            if (output_data.vars[vi].type == STATA_TYPE_STRING) {
+                if (output_data.vars[vi]._arena) {
+                    cmerge_arena_free((cmerge_string_arena *)output_data.vars[vi]._arena);
                 }
-                free(output_data.vars[vi].data.str);
+                if (output_data.vars[vi].data.str) {
+                    free(output_data.vars[vi].data.str);
+                }
             } else if (output_data.vars[vi].data.dbl) {
                 ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
         }
         ctools_aligned_free(output_data.vars);
-        cmerge_arena_free(str_arena);  /* Free arena in one operation */
         free(output_var_indices);
         free(output_var_stata_idx);
         free(output_var_is_key);
@@ -1382,23 +1345,20 @@ static ST_retcode cmerge_execute(const char *args)
 
     double t_cleanup_start = ctools_timer_ms();
 
-    /* Free output data - use arena for O(1) string cleanup */
+    /* Free output data - per-variable arenas free all strings in O(blocks) */
     for (size_t vi = 0; vi < n_output_vars; vi++) {
-        if (output_data.vars[vi].type == STATA_TYPE_STRING && output_data.vars[vi].data.str) {
-            /* Only free strings that fell back to strdup (not owned by arena) */
-            for (size_t i = 0; i < output_nobs; i++) {
-                if (output_data.vars[vi].data.str[i] &&
-                    (!str_arena || !cmerge_arena_owns(str_arena, output_data.vars[vi].data.str[i]))) {
-                    free(output_data.vars[vi].data.str[i]);
-                }
+        if (output_data.vars[vi].type == STATA_TYPE_STRING) {
+            if (output_data.vars[vi]._arena) {
+                cmerge_arena_free((cmerge_string_arena *)output_data.vars[vi]._arena);
             }
-            free(output_data.vars[vi].data.str);
+            if (output_data.vars[vi].data.str) {
+                free(output_data.vars[vi].data.str);
+            }
         } else if (output_data.vars[vi].data.dbl) {
             ctools_aligned_free(output_data.vars[vi].data.dbl);
         }
     }
     ctools_aligned_free(output_data.vars);
-    cmerge_arena_free(str_arena);  /* O(1) cleanup of all arena strings */
 
     free(output_var_indices);
     free(output_var_stata_idx);

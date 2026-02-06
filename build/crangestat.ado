@@ -44,6 +44,11 @@ program define crangestat
     }
 
     * Validate key variable exists and is numeric
+    capture confirm variable `keyvar'
+    if _rc != 0 {
+        di as error "crangestat: variable `keyvar' not found"
+        exit 111
+    }
     capture confirm numeric variable `keyvar'
     if _rc != 0 {
         di as error "crangestat: key variable `keyvar' must be numeric"
@@ -175,6 +180,11 @@ program define crangestat
         }
 
         * Validate source variable
+        capture confirm variable `source_var'
+        if _rc != 0 {
+            di as error "crangestat: variable `source_var' not found"
+            exit 111
+        }
         capture confirm numeric variable `source_var'
         if _rc != 0 {
             di as error "crangestat: source variable `source_var' must be numeric"

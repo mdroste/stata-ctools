@@ -7,10 +7,10 @@
 *!   with optimized fixed effects absorption.
 *!
 *! Syntax:
-*!   creghdfe depvar indepvars [if] [in], Absorb(varlist) [options]
+*!   creghdfe depvar indepvars [if] [in] [, Absorb(varlist) options]
 *!
 *! Options:
-*!   absorb(varlist)     - Fixed effects to absorb (required)
+*!   absorb(varlist)     - Fixed effects to absorb (optional; constant absorbed if omitted)
 *!   vce(cluster varlist) - Clustered standard errors
 *!   verbose             - Display progress information
 
@@ -29,7 +29,7 @@ program define creghdfe, eclass
     timer clear 98
     timer on 98
 
-    syntax varlist(min=2 fv) [aw fw pw] [if] [in], Absorb(string) [VCE(string) Verbose TIMEit ///
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose TIMEit ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
         DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
 
@@ -38,6 +38,15 @@ program define creghdfe, eclass
     * Handle residuals() as alias for resid2()
     if "`residuals'" != "" & "`resid2'" == "" {
         local resid2 "`residuals'"
+    }
+
+    * If absorb is not specified, create a constant FE (absorb the intercept only)
+    local __noabsorb = 0
+    if `"`absorb'"' == "" {
+        local __noabsorb = 1
+        tempvar _cons_fe
+        quietly gen byte `_cons_fe' = 1
+        local absorb "`_cons_fe'"
     }
 
     * Parse absorb option for suboptions (savefe)
@@ -643,7 +652,12 @@ program define creghdfe, eclass
         ereturn local clustvar "`clustervar_orig'"
     }
 
-    ereturn local absorb "`absorb'"
+    if `__noabsorb' {
+        ereturn local absorb ""
+    }
+    else {
+        ereturn local absorb "`absorb'"
+    }
     ereturn local depvar "`depvar'"
     ereturn local indepvars "`indepvars'"
     ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
@@ -681,7 +695,8 @@ program define creghdfe, eclass
     di as text ""
     ereturn display
 
-    * Display absorbed degrees of freedom table
+    * Display absorbed degrees of freedom table (only when absorb was specified)
+    if !`__noabsorb' {
     di as text ""
     di as text "Absorbed degrees of freedom:"
     di as text "{hline 13}{c TT}{hline 39}{c TRC}"
@@ -729,6 +744,7 @@ program define creghdfe, eclass
     if `has_nested' {
         di as text "* = FE nested within cluster; treated as redundant for DoF computation"
     }
+    } /* end if !__noabsorb */
 
     * Clean up scalars
     capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons

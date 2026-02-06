@@ -60,12 +60,14 @@ typedef struct {
     double min_value;
     double max_value;
     int max_decimal_digits;
+    bool column_has_quotes;  /* Aggregated from all chunks: any quotes in this column */
 } CImportColumnInfo;
 
 typedef struct {
     bool seen_string;
     bool seen_non_empty;
     int max_field_len;
+    bool has_quotes;      /* Any quotes seen in this column's fields */
 } CImportColumnParseStats;
 
 typedef struct {

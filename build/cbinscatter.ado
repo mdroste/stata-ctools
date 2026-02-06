@@ -67,6 +67,10 @@ program define cbinscatter, eclass sortpreserve
     capture frame drop _ctools_graph_frame
 
     * Validate nquantiles early
+    if `nquantiles' < 0 {
+        di as error "nquantiles() invalid"
+        exit 3300
+    }
     if `nquantiles' < 2 | `nquantiles' > 1000 {
         di as error "cbinscatter: nquantiles must be between 2 and 1000"
         exit 198
@@ -179,6 +183,18 @@ program define cbinscatter, eclass sortpreserve
     local depvar = trim("`depvar'")
     local xvar = trim("`xvar'")
 
+    * Validate that y and x are numeric (not string) - match binscatter rc=109
+    capture confirm numeric variable `depvar'
+    if _rc {
+        di as error "type mismatch"
+        exit 109
+    }
+    capture confirm numeric variable `xvar'
+    if _rc {
+        di as error "type mismatch"
+        exit 109
+    }
+
     * Count control and absorb variables
     local num_controls = 0
     if "`controls'" != "" {
@@ -197,8 +213,8 @@ program define cbinscatter, eclass sortpreserve
     qui count if `touse'
     local nobs = r(N)
     if `nobs' == 0 {
-        di as error "cbinscatter: no observations"
-        exit 2000
+        di as error "no observations"
+        exit 3301
     }
 
     * Count by-groups if specified (use levelsof instead of tab - faster)

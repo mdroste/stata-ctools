@@ -9,6 +9,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
+#include <stdint.h>
 #include "ctools_parse.h"
 #include "ctools_types.h"  /* For ctools_safe_atof, ctools_safe_atoi, etc. */
 
@@ -113,9 +115,11 @@ double ctools_parse_double_option(const char *args, const char *key,
     /* Move past "key=" */
     p += strlen(pat);
 
-    /* Parse double using safe conversion */
-    double result;
-    if (!ctools_safe_atof(p, &result)) {
+    /* Parse double value (may be followed by other options, so use strtod) */
+    char *endptr;
+    errno = 0;
+    double result = strtod(p, &endptr);
+    if (endptr == p || errno == ERANGE) {
         return default_val;
     }
 
@@ -140,13 +144,15 @@ size_t ctools_parse_size_option(const char *args, const char *key,
     /* Move past "key=" */
     p += strlen(pat);
 
-    /* Parse size_t using safe conversion */
-    size_t result;
-    if (!ctools_safe_atozu(p, &result)) {
+    /* Parse size_t value (may be followed by other options, so use strtoul) */
+    char *endptr;
+    errno = 0;
+    unsigned long val = strtoul(p, &endptr, 10);
+    if (endptr == p || errno == ERANGE || val > SIZE_MAX) {
         return default_val;
     }
 
-    return result;
+    return (size_t)val;
 }
 
 /*

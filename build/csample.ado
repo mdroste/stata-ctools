@@ -59,8 +59,7 @@ program define csample
     quietly count if `touse'
     local nobs_sample = r(N)
     if `nobs_sample' == 0 {
-        di as error "csample: no observations"
-        exit 2000
+        exit 0
     }
 
     * Load plugin

@@ -628,11 +628,11 @@ if _rc == 0 {
         test_pass "header only (no data) - N=0"
     }
     else {
-        test_pass "header only (no data) - imported N=`=_N'"
+        test_fail "header only (no data)" "expected N=0, got N=`=_N'"
     }
 }
 else {
-    test_pass "header only (no data) - handled gracefully (rc=`=_rc')"
+    test_fail "header only (no data)" "unexpected error rc=`=_rc'"
 }
 
 * Single empty row after header
@@ -1431,7 +1431,7 @@ if _rc == 0 {
     test_pass "boundary quotes - imported (N=`=_N')"
 }
 else {
-    test_pass "boundary quotes - handled gracefully (rc=`=_rc')"
+    test_fail "boundary quotes" "unexpected error rc=`=_rc'"
 }
 
 * Newline within quoted field (multiline field)
@@ -1448,7 +1448,7 @@ if _rc == 0 {
     test_pass "multiline quoted field - imported (N=`=_N')"
 }
 else {
-    test_pass "multiline quoted field - handled gracefully (rc=`=_rc')"
+    test_fail "multiline quoted field" "unexpected error rc=`=_rc'"
 }
 
 * CRLF within quoted field
@@ -1463,7 +1463,7 @@ if _rc == 0 {
     test_pass "CRLF in quoted field - imported (N=`=_N')"
 }
 else {
-    test_pass "CRLF in quoted field - handled gracefully (rc=`=_rc')"
+    test_fail "CRLF in quoted field" "unexpected error rc=`=_rc'"
 }
 
 * Triple quotes
@@ -1661,7 +1661,7 @@ if _rc == 0 {
     test_pass "control characters - imported (N=`=_N')"
 }
 else {
-    test_pass "control characters - handled gracefully (rc=`=_rc')"
+    test_fail "control characters" "unexpected error rc=`=_rc'"
 }
 
 * High ASCII characters
@@ -1694,7 +1694,7 @@ if _rc == 0 {
     * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    test_pass "reserved keywords - handled gracefully (rc=`=_rc')"
+    test_fail "reserved keywords as headers" "unexpected error rc=`=_rc'"
 }
 
 * Headers starting with underscore
@@ -1720,7 +1720,7 @@ if _rc == 0 {
     * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    test_pass "number-starting headers - handled gracefully (rc=`=_rc')"
+    test_fail "number-starting headers" "unexpected error rc=`=_rc'"
 }
 
 * Empty header name
@@ -1735,7 +1735,7 @@ if _rc == 0 {
     test_pass "empty header name - imported (N=`=_N', K=`=c(k)')"
 }
 else {
-    test_pass "empty header name - handled gracefully (rc=`=_rc')"
+    test_fail "empty header name" "unexpected error rc=`=_rc'"
 }
 
 * All headers are numbers
@@ -1770,7 +1770,7 @@ if _rc == 0 {
     * (silent) "    Variables: `r(varlist)'"
 }
 else {
-    test_pass "many duplicate headers - handled gracefully (rc=`=_rc')"
+    test_fail "many duplicate headers" "unexpected error rc=`=_rc'"
 }
 
 /*******************************************************************************

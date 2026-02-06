@@ -81,12 +81,6 @@ static size_t sample_row_sizes(size_t nobs)
     size_t step = (nobs > sample_count) ? (nobs / sample_count) : 1;
 
     for (size_t i = 0; i < nobs && rows_sampled < sample_count; i += step) {
-        /* Check if this observation satisfies the if condition */
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i, sample_buf, sizeof(sample_buf));
@@ -146,11 +140,6 @@ static void *format_chunk_thread(void *arg)
     bool all_numeric = g_ctx.all_numeric;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i,
@@ -201,11 +190,6 @@ static void *format_mmap_thread(void *arg)
     bool all_numeric = g_ctx.all_numeric;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i,
@@ -249,11 +233,6 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
     size_t buf_pos = 0;
 
     for (size_t i = 0; i < nobs; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         if (buf_pos > buffer_size - avg_row_size * 2) {
             if (fwrite(buffer, 1, buf_pos, fp) != buf_pos) {
                 free(buffer);
@@ -395,8 +374,14 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
     }
     free(header_buf);
 
-    size_t *chunk_offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
-    if (chunk_offsets == NULL) {
+    /* Arena-allocated metadata */
+    ctools_arena *arena = &g_ctx.chunk_arena;
+    ctools_arena_init(arena, 64 * 1024);
+
+    size_t *chunk_offsets = (size_t *)ctools_arena_alloc(arena, (num_chunks + 1) * sizeof(size_t));
+    format_mmap_args_t *mmap_args = (format_mmap_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_mmap_args_t));
+
+    if (chunk_offsets == NULL || mmap_args == NULL) {
         SF_error("cexport: memory allocation failed\n");
         cexport_io_close(&outfile, 0);
         return 920;
@@ -409,14 +394,6 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
             rows_in_chunk = nobs - c * chunk_size;
         }
         chunk_offsets[c + 1] = chunk_offsets[c] + (rows_in_chunk * avg_row_size * 15 / 10);
-    }
-
-    format_mmap_args_t *mmap_args = (format_mmap_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_mmap_args_t));
-    if (mmap_args == NULL) {
-        SF_error("cexport: memory allocation failed\n");
-        free(chunk_offsets);
-        cexport_io_close(&outfile, 0);
-        return 920;
     }
 
     for (size_t c = 0; c < num_chunks; c++) {
@@ -444,8 +421,6 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
 
     if (format_failed) {
         SF_error("cexport: formatting to mmap failed\n");
-        free(mmap_args);
-        free(chunk_offsets);
         cexport_io_close(&outfile, 0);
         return 920;
     }
@@ -464,13 +439,10 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
 
     if (cexport_io_close(&outfile, actual_total) != 0) {
         SF_error("cexport: failed to close file\n");
-        free(mmap_args);
-        free(chunk_offsets);
         return 693;
     }
 
-    free(mmap_args);
-    free(chunk_offsets);
+    /* Arena freed by cexport_context_cleanup() */
     return 0;
 }
 
@@ -484,13 +456,19 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
 {
     (void)avg_row_size;  /* Used for buffer sizing, computed externally */
     char msg[512];
+    ST_retcode ret = 0;
 
-    format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_chunk_args_t));
-    char **chunk_buffers = (char **)ctools_safe_malloc2(num_chunks, sizeof(char *));
+    /* Initialize arena for small metadata allocations */
+    ctools_arena *arena = &g_ctx.chunk_arena;
+    ctools_arena_init(arena, 64 * 1024);  /* 64KB blocks */
 
-    if (chunk_args == NULL || chunk_buffers == NULL) {
-        free(chunk_args);
-        free(chunk_buffers);
+    /* Arena-allocated metadata (small, fixed-size arrays) */
+    format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_chunk_args_t));
+    char **chunk_buffers = (char **)ctools_arena_alloc(arena, num_chunks * sizeof(char *));
+    size_t *offsets = (size_t *)ctools_arena_alloc(arena, (num_chunks + 1) * sizeof(size_t));
+    write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(write_chunk_args_t));
+
+    if (chunk_args == NULL || chunk_buffers == NULL || offsets == NULL || write_args == NULL) {
         free(header_buf);
         SF_error("cexport: memory allocation failed\n");
         return 920;
@@ -500,14 +478,13 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         chunk_buffers[c] = NULL;
     }
 
+    /* Large per-chunk data buffers: keep as malloc (multi-MB each) */
     for (size_t c = 0; c < num_chunks; c++) {
         chunk_buffers[c] = (char *)malloc(chunk_buffer_size);
         if (chunk_buffers[c] == NULL) {
             for (size_t u = 0; u < num_chunks; u++) {
                 if (chunk_buffers[u]) free(chunk_buffers[u]);
             }
-            free(chunk_args);
-            free(chunk_buffers);
             free(header_buf);
             SF_error("cexport: memory allocation failed for chunk buffers\n");
             return 920;
@@ -534,8 +511,6 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
             for (size_t u = 0; u < num_chunks; u++) {
                 if (chunk_buffers[u]) free(chunk_buffers[u]);
             }
-            free(chunk_args);
-            free(chunk_buffers);
             free(header_buf);
             SF_error("cexport: formatting failed\n");
             return 920;
@@ -543,18 +518,6 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     }
 
     /* Compute file offsets */
-    size_t *offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
-    if (offsets == NULL) {
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
-        }
-        free(chunk_args);
-        free(chunk_buffers);
-        free(header_buf);
-        SF_error("cexport: memory allocation failed for offsets\n");
-        return 920;
-    }
-
     offsets[0] = header_len;
     for (size_t c = 0; c < num_chunks; c++) {
         offsets[c + 1] = offsets[c] + chunk_args[c].bytes_written;
@@ -569,12 +532,9 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
                 g_ctx.filename, outfile.error_message);
         SF_error(msg);
-        free(offsets);
         for (size_t u = 0; u < num_chunks; u++) {
             if (chunk_buffers[u]) free(chunk_buffers[u]);
         }
-        free(chunk_args);
-        free(chunk_buffers);
         free(header_buf);
         return 603;
     }
@@ -584,12 +544,9 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                 outfile.error_message);
         SF_error(msg);
         cexport_io_close(&outfile, 0);
-        free(offsets);
         for (size_t u = 0; u < num_chunks; u++) {
             if (chunk_buffers[u]) free(chunk_buffers[u]);
         }
-        free(chunk_args);
-        free(chunk_buffers);
         free(header_buf);
         return 693;
     }
@@ -602,12 +559,9 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                     outfile.error_message);
             SF_error(msg);
             cexport_io_close(&outfile, 0);
-            free(offsets);
             for (size_t u = 0; u < num_chunks; u++) {
                 if (chunk_buffers[u]) free(chunk_buffers[u]);
             }
-            free(chunk_args);
-            free(chunk_buffers);
             free(header_buf);
             return 693;
         }
@@ -615,19 +569,6 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     free(header_buf);
 
     /* Parallel offset writes */
-    write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(write_chunk_args_t));
-    if (write_args == NULL) {
-        SF_error("cexport: memory allocation failed for write args\n");
-        cexport_io_close(&outfile, 0);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
-        }
-        free(chunk_args);
-        free(chunk_buffers);
-        return 920;
-    }
-
     for (size_t c = 0; c < num_chunks; c++) {
         write_args[c].file = &outfile;
         write_args[c].buffer = chunk_buffers[c];
@@ -651,24 +592,14 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
 
     if (cexport_io_close(&outfile, total_file_size) != 0 || write_failed) {
         SF_error("cexport: write error during parallel I/O\n");
-        free(write_args);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
-        }
-        free(chunk_args);
-        free(chunk_buffers);
-        return 693;
+        ret = 693;
     }
 
-    free(write_args);
-    free(offsets);
+    /* Free large data buffers (arena handles metadata) */
     for (size_t c = 0; c < num_chunks; c++) {
         if (chunk_buffers[c]) free(chunk_buffers[c]);
     }
-    free(chunk_args);
-    free(chunk_buffers);
-    return 0;
+    return ret;
 }
 
 /* ========================================================================
@@ -722,13 +653,17 @@ ST_retcode cexport_main(const char *args)
     }
 
     ctools_filtered_data_init(&g_ctx.filtered);
-    rc = ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
+    rc = ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF);
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
         SF_error(msg);
         cexport_context_cleanup(&g_ctx);
         return 920;
     }
+
+    /* Use filtered count: only rows that passed SF_ifobs */
+    nobs = g_ctx.filtered.data.nobs;
+    g_ctx.nobs_loaded = nobs;
 
     g_ctx.time_load = ctools_timer_seconds() - t_phase;
 

@@ -36,13 +36,19 @@ program define cpsmatch, rclass sortpreserve
         exit 920
     }
 
-    syntax varlist(min=1 numeric) [if] [in], ///
+    capture noisily syntax varlist(min=1 numeric) [if] [in], ///
         [OUTcome(varname numeric) Pscore(varname numeric) ///
          Logit Probit ///
          Neighbor(integer 1) Caliper(real 0) Radius Kernel ///
          Kerneltype(string) Bwidth(real 0.06) ///
          Common NOREPlacement Ties Descending ///
          Verbose THReads(integer 0)]
+    if _rc == 109 {
+        exit 2000
+    }
+    else if _rc != 0 {
+        exit _rc
+    }
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -57,7 +63,7 @@ program define cpsmatch, rclass sortpreserve
     quietly tab `depvar' `if' `in'
     if r(r) != 2 {
         di as error "cpsmatch: treatment variable must be binary (0/1)"
-        exit 198
+        exit 2000
     }
 
     * Determine matching method

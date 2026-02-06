@@ -26,7 +26,7 @@ program define cdestring
     }
 
     * Parse syntax - note varlist is optional (defaults to all string vars)
-    syntax [varlist(string)] [if] [in], [Generate(string) replace ///
+    syntax [varlist] [if] [in], [Generate(string) replace ///
         IGnore(string) force float percent dpcomma Verbose THReads(integer 0)]
 
     * =========================================================================
@@ -82,13 +82,43 @@ program define cdestring
         }
     }
 
-    * Verify all source variables are string
+    * Handle already-numeric variables (match destring behavior: skip gracefully)
+    local string_vars ""
+    local string_gen ""
+    local _var_idx = 0
     foreach v of local varlist {
+        local ++_var_idx
         capture confirm string variable `v'
         if _rc != 0 {
-            di as error "cdestring: `v' is not a string variable"
-            exit 198
+            * Variable is already numeric - match destring behavior
+            if "`replace'" != "" {
+                local vtype : type `v'
+                di as text "`v': already " as result "`vtype'"
+            }
+            else if "`generate'" != "" {
+                local vtype : type `v'
+                di as text "`v': already " as result "`vtype'"
+            }
         }
+        else {
+            local string_vars "`string_vars' `v'"
+            if "`generate'" != "" {
+                local gv : word `_var_idx' of `generate'
+                local string_gen "`string_gen' `gv'"
+            }
+        }
+    }
+
+    * Update varlist and generate to only include string variables
+    local varlist "`string_vars'"
+    if "`generate'" != "" {
+        local generate "`string_gen'"
+    }
+    local nvars : word count `varlist'
+
+    * If no string variables remain, exit successfully (like destring)
+    if `nvars' == 0 {
+        exit 0
     }
 
     * =========================================================================

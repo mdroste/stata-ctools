@@ -16,6 +16,7 @@
 #include <stdio.h>
 
 #include "ctools_types.h"
+#include "ctools_arena.h"
 #include "cexport_io.h"
 
 /* ========================================================================
@@ -77,6 +78,9 @@ typedef struct {
 
     /* Optimization flags */
     bool all_numeric;    /* True if all variables are numeric (fast path) */
+
+    /* Arena for chunk metadata (format/write args, offsets) */
+    ctools_arena chunk_arena;
 
     /* Timing */
     double time_load;

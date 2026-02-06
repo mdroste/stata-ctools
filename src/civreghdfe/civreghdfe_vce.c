@@ -13,6 +13,7 @@
 
 #include "civreghdfe_vce.h"
 #include "../ctools_config.h"
+#include "../ctools_matrix.h"
 #include "civreghdfe_matrix.h"
 
 /* Shared OLS functions */
@@ -442,22 +443,22 @@ void ivvce_compute_twoway(
     /* V1 = XkX_inv * meat1 * XkX_inv * dof_adj1 */
     ST_double G1 = (ST_double)num_clusters1;
     ST_double dof_adj1 = ((ST_double)(N - 1) / (ST_double)df_r) * (G1 / (G1 - 1.0));
-    civreghdfe_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
-    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V1);
+    ctools_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
+    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V1);
     for (i = 0; i < K_total * K_total; i++) V1[i] *= dof_adj1;
 
     /* V2 = XkX_inv * meat2 * XkX_inv * dof_adj2 */
     ST_double G2 = (ST_double)num_clusters2;
     ST_double dof_adj2 = ((ST_double)(N - 1) / (ST_double)df_r) * (G2 / (G2 - 1.0));
-    civreghdfe_matmul_ab(XkX_inv, meat2, K_total, K_total, K_total, temp_v);
-    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V2);
+    ctools_matmul_ab(XkX_inv, meat2, K_total, K_total, K_total, temp_v);
+    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V2);
     for (i = 0; i < K_total * K_total; i++) V2[i] *= dof_adj2;
 
     /* V_int = XkX_inv * meat_int * XkX_inv * dof_adj_int */
     ST_double G_int = (ST_double)num_intersection;
     ST_double dof_adj_int = ((ST_double)(N - 1) / (ST_double)df_r) * (G_int / (G_int - 1.0));
-    civreghdfe_matmul_ab(XkX_inv, meat_int, K_total, K_total, K_total, temp_v);
-    civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V_int);
+    ctools_matmul_ab(XkX_inv, meat_int, K_total, K_total, K_total, temp_v);
+    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V_int);
     for (i = 0; i < K_total * K_total; i++) V_int[i] *= dof_adj_int;
 
     /* V = V1 + V2 - V_int */
@@ -644,8 +645,8 @@ void ivvce_compute_kiefer(
         return;
     }
 
-    civreghdfe_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
-    civreghdfe_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
+    ctools_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
+    ctools_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
 
     free(shat_ZZ);
     free(temp_kk);
@@ -656,8 +657,8 @@ void ivvce_compute_kiefer(
     /* V = XkX_inv * meat * XkX_inv * dof_adj */
     ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     if (temp_v) {
-        civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-        civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+        ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+        ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
         for (i = 0; i < K_total * K_total; i++) {
             V[i] *= dof_adj;
         }
@@ -832,8 +833,8 @@ void ivvce_compute_full(
         /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
-            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
             for (i = 0; i < K_total * K_total; i++) {
                 V[i] *= dof_adj;
             }
@@ -883,8 +884,8 @@ void ivvce_compute_full(
         /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
-            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
             for (i = 0; i < K_total * K_total; i++) {
                 V[i] *= dof_adj;
             }
@@ -1028,9 +1029,9 @@ void ivvce_compute_full(
         ST_double *temp_kk = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
         if (temp_kk) {
             /* temp_kk = shat_ZZ * A  (K_iv x K_total) */
-            civreghdfe_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
+            ctools_matmul_ab(shat_ZZ, temp_kiv_ktotal, K_iv, K_iv, K_total, temp_kk);
             /* meat = A' * temp_kk  (K_total x K_total) */
-            civreghdfe_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
+            ctools_matmul_atb(temp_kiv_ktotal, temp_kk, K_iv, K_total, K_total, meat);
             free(temp_kk);
         }
         free(shat_ZZ);
@@ -1044,8 +1045,8 @@ void ivvce_compute_full(
 
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
-            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
             /* Small-sample adjustment */
             for (i = 0; i < K_total * K_total; i++) {
                 V[i] *= dof_adj;
@@ -1073,8 +1074,8 @@ void ivvce_compute_full(
         /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
-            civreghdfe_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            civreghdfe_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
+            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
             for (i = 0; i < K_total * K_total; i++) {
                 V[i] *= dof_adj;
             }

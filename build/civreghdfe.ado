@@ -1609,7 +1609,8 @@ program define civreghdfe, eclass
     di as text "                          variables in regressor count K"
     di as text "{hline 78}"
 
-    * Display absorbed degrees of freedom table
+    * Display absorbed degrees of freedom table (only when absorb was specified)
+    if `G' > 0 {
     di as text ""
     di as text "Absorbed degrees of freedom:"
     di as text "{hline 13}{c TT}{hline 39}{c TRC}"
@@ -1662,6 +1663,7 @@ program define civreghdfe, eclass
         di as text "* = FE nested within cluster; treated as redundant for DoF computation"
     }
     di as text ""
+    } /* end if G > 0 */
 
     } /* End of if "`footer'" == "" */
 

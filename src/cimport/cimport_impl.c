@@ -302,6 +302,19 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         }
     }
 
+    /* Aggregate per-chunk quote flags into per-column flags */
+    for (int col = 0; col < ctx->num_columns; col++) {
+        ctx->columns[col].column_has_quotes = false;
+        for (int c = 0; c < ctx->num_chunks; c++) {
+            if (ctx->chunks[c].col_stats && col < ctx->chunks[c].num_col_stats) {
+                if (ctx->chunks[c].col_stats[col].has_quotes) {
+                    ctx->columns[col].column_has_quotes = true;
+                    break;
+                }
+            }
+        }
+    }
+
     size_t total_data_rows = 0;
     for (int c = 0; c < ctx->num_chunks; c++) {
         size_t start_row = (c == 0 && ctx->has_header) ? 1 : 0;
@@ -428,7 +441,9 @@ static void cimport_clear_cached_context(void) {
 static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                           CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
-                                          CImportEncoding requested_encoding);
+                                          CImportEncoding requested_encoding,
+                                          int *force_numeric_cols, int num_force_numeric,
+                                          int *force_string_cols, int num_force_string);
 static void cimport_build_column_cache(CImportContext *ctx);
 
 /* ============================================================================
@@ -539,11 +554,20 @@ static void *cimport_parse_chunk_parallel(void *arg) {
                     stats->max_field_len = field->length;
                 }
 
-                if (!stats->seen_string && field->length > 0) {
-                    stats->seen_non_empty = true;
+                if (field->length > 0) {
                     const char *src = ctx->file_data + field->offset;
-                    if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
-                        stats->seen_string = true;
+
+                    /* Track quotes for cache optimization */
+                    if (!stats->has_quotes) {
+                        if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                            stats->has_quotes = true;
+                    }
+
+                    if (!stats->seen_string) {
+                        stats->seen_non_empty = true;
+                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
+                            stats->seen_string = true;
+                        }
                     }
                 }
             }
@@ -601,7 +625,9 @@ static void *cimport_parse_chunk_parallel(void *arg) {
 static CImportContext *cimport_parse_csv(const char *filename, char delimiter, bool has_header, int skip_rows, bool verbose, CImportBindQuotesMode bindquotes,
                                           CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                           CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
-                                          CImportEncoding requested_encoding) {
+                                          CImportEncoding requested_encoding,
+                                          int *force_numeric_cols, int num_force_numeric,
+                                          int *force_string_cols, int num_force_string) {
     CImportContext *ctx = calloc(1, sizeof(CImportContext));
     if (!ctx) return NULL;
 
@@ -626,10 +652,10 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->group_separator = group_sep;
     ctx->emptylines_mode = emptylines_mode;
     ctx->max_quoted_rows = max_quoted_rows;
-    ctx->force_numeric_cols = NULL;
-    ctx->num_force_numeric = 0;
-    ctx->force_string_cols = NULL;
-    ctx->num_force_string = 0;
+    ctx->force_numeric_cols = force_numeric_cols;
+    ctx->num_force_numeric = num_force_numeric;
+    ctx->force_string_cols = force_string_cols;
+    ctx->num_force_string = num_force_string;
 
     /* Initialize encoding */
     ctx->requested_encoding = requested_encoding;
@@ -807,11 +833,20 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                         stats->max_field_len = field->length;
                     }
 
-                    if (!stats->seen_string && field->length > 0) {
-                        stats->seen_non_empty = true;
+                    if (field->length > 0) {
                         const char *src = ctx->file_data + field->offset;
-                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
-                            stats->seen_string = true;
+
+                        /* Track quotes for cache optimization */
+                        if (!stats->has_quotes) {
+                            if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                                stats->has_quotes = true;
+                        }
+
+                        if (!stats->seen_string) {
+                            stats->seen_non_empty = true;
+                            if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
+                                stats->seen_string = true;
+                            }
                         }
                     }
                 }
@@ -987,7 +1022,10 @@ static void *cimport_build_cache_worker(void *arg) {
                         const char *src = ctx->file_data + field->offset;
 
                         int len;
-                        if (!cimport_field_contains_quote(src, field->length, ctx->quote_char)) {
+                        if (!col->column_has_quotes) {
+                            /* Fast path: entire column is quote-free */
+                            len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN);
+                        } else if (!cimport_field_contains_quote(src, field->length, ctx->quote_char)) {
                             len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN);
                         } else {
                             len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN, ctx->quote_char);
@@ -1183,22 +1221,23 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
 
     cimport_clear_cached_context();
 
+    /* Parse column type overrides BEFORE parsing CSV so inference runs once with overrides */
+    int num_force_num = 0, num_force_str = 0;
+    int *force_num = cimport_parse_col_list("CIMPORT_NUMCOLS", &num_force_num);
+    int *force_str = cimport_parse_col_list("CIMPORT_STRCOLS", &num_force_str);
+
     g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                        numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
-                                       requested_encoding);
+                                       requested_encoding,
+                                       force_num, num_force_num, force_str, num_force_str);
 
     if (!g_cimport_ctx) {
+        free(force_num);
+        free(force_str);
         return 601;
     }
 
     CImportContext *ctx = g_cimport_ctx;
-
-    /* Parse column type overrides from global macros and re-run type inference */
-    ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &ctx->num_force_numeric);
-    ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &ctx->num_force_string);
-    if (ctx->num_force_numeric > 0 || ctx->num_force_string > 0) {
-        cimport_infer_column_types(ctx);
-    }
 
     snprintf(macro_val, sizeof(macro_val), "%zu", ctx->total_rows);
     SF_macro_save("_cimport_nobs", macro_val);
@@ -1281,21 +1320,25 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
 
     if (!used_cache) {
         cimport_clear_cached_context();
+
+        /* Parse column type overrides BEFORE parsing CSV so inference runs once */
+        int num_force_num = 0, num_force_str = 0;
+        int *force_num = cimport_parse_col_list("CIMPORT_NUMCOLS", &num_force_num);
+        int *force_str = cimport_parse_col_list("CIMPORT_STRCOLS", &num_force_str);
+
         g_cimport_ctx = cimport_parse_csv(filename, delimiter, has_header, skip_rows, verbose, bindquotes,
                                            numeric_type_mode, decimal_sep, group_sep, emptylines_mode, max_quoted_rows,
-                                           requested_encoding);
+                                           requested_encoding,
+                                           force_num, num_force_num, force_str, num_force_str);
         ctx = g_cimport_ctx;
         if (!ctx) {
+            free(force_num);
+            free(force_str);
             return 601;
-        }
-        /* Parse column type overrides and re-run type inference if needed */
-        ctx->force_numeric_cols = cimport_parse_col_list("CIMPORT_NUMCOLS", &ctx->num_force_numeric);
-        ctx->force_string_cols = cimport_parse_col_list("CIMPORT_STRCOLS", &ctx->num_force_string);
-        if (ctx->num_force_numeric > 0 || ctx->num_force_string > 0) {
-            cimport_infer_column_types(ctx);
         }
         cimport_display_warnings(ctx);
     }
+    /* else: used_cache — force lists already set during scan, reuse them */
 
     if (!ctx->cache_ready) {
         cimport_build_column_cache(ctx);

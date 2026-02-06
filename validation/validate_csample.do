@@ -458,10 +458,17 @@ else {
 }
 
 * By variable doesn't exist
+* Note: Stata's sample doesn't support by(), so we test csample independently
 clear
 set obs 100
 gen id = _n
-test_error_match, stata_cmd(sample 50, by(nonexistent_var)) ctools_cmd(csample 50, by(nonexistent_var)) testname("nonexistent by variable")
+capture csample 50, by(nonexistent_var)
+if _rc != 0 {
+    test_pass "[error] nonexistent by variable (rc=`=_rc')"
+}
+else {
+    test_fail "[error] nonexistent by variable" "should have errored"
+}
 
 * End of csample validation
 noi print_summary "csample"

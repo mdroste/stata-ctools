@@ -54,7 +54,45 @@ static void apply_permutation(double *data, const size_t *perm, size_t n, double
    Uses shared ctools_quickselect_double from ctools_select.h
    =========================================================================== */
 
-/* Compute two percentiles from a single extraction */
+/* Compute a single percentile using Stata's _pctile method.
+ *
+ * For n sorted values x[1]..x[n] (1-based) and percentile p:
+ *   h = n * p / 100,  j = floor(h),  g = h - j
+ *   if g > 0:              percentile = x[j+1]         = sorted[j]   (0-based)
+ *   if g == 0 and j > 0:   percentile = (x[j]+x[j+1])/2 = avg(sorted[j-1], sorted[j])
+ *   if g == 0 and j == 0:  percentile = x[1]            = sorted[0]
+ *   if j >= n:              percentile = x[n]            = sorted[n-1]
+ */
+static double compute_pctile_stata(double *work, size_t n, double pctl)
+{
+    double h = (double)n * pctl / 100.0;
+    size_t j = (size_t)floor(h);
+    double g = h - (double)j;
+
+    if (j >= n) {
+        return ctools_quickselect_double(work, n, n - 1);
+    }
+
+    if (g > 0.0) {
+        return ctools_quickselect_double(work, n, j);
+    }
+
+    if (j == 0) {
+        return ctools_quickselect_double(work, n, 0);
+    }
+
+    /* Exact integer position, j > 0: average of sorted[j-1] and sorted[j] */
+    double v1 = ctools_quickselect_double(work, n, j - 1);
+    /* After quickselect for j-1, work[j..n-1] are all >= v1.
+       The minimum of that range is sorted[j]. */
+    double v2 = work[j];
+    for (size_t i = j + 1; i < n; i++) {
+        if (work[i] < v2) v2 = work[i];
+    }
+    return (v1 + v2) / 2.0;
+}
+
+/* Compute two percentiles from a work array of non-missing values */
 static void compute_two_percentiles(double *work, size_t n,
                                     double pctl_lo, double pctl_hi,
                                     double *result_lo, double *result_hi)
@@ -70,38 +108,8 @@ static void compute_two_percentiles(double *work, size_t n,
         return;
     }
 
-    double pos_lo = (pctl_lo / 100.0) * (double)(n - 1);
-    double pos_hi = (pctl_hi / 100.0) * (double)(n - 1);
-
-    size_t k_lo = (size_t)floor(pos_lo);
-    if (k_lo >= n) k_lo = n - 1;
-
-    double val_lo = ctools_quickselect_double(work, n, k_lo);
-
-    double frac_lo = pos_lo - (double)k_lo;
-    if (frac_lo > 0.0 && k_lo + 1 < n) {
-        double next_val = work[k_lo + 1];
-        for (size_t i = k_lo + 2; i < n; i++) {
-            if (work[i] < next_val) next_val = work[i];
-        }
-        val_lo = val_lo + frac_lo * (next_val - val_lo);
-    }
-    *result_lo = val_lo;
-
-    size_t k_hi_floor = (size_t)floor(pos_hi);
-    if (k_hi_floor >= n) k_hi_floor = n - 1;
-
-    double val_hi_floor = ctools_quickselect_double(work, n, k_hi_floor);
-
-    double frac_hi = pos_hi - (double)k_hi_floor;
-    if (frac_hi > 0.0 && k_hi_floor + 1 < n) {
-        double next_val = work[k_hi_floor + 1];
-        for (size_t i = k_hi_floor + 2; i < n; i++) {
-            if (work[i] < next_val) next_val = work[i];
-        }
-        val_hi_floor = val_hi_floor + frac_hi * (next_val - val_hi_floor);
-    }
-    *result_hi = val_hi_floor;
+    *result_lo = compute_pctile_stata(work, n, pctl_lo);
+    *result_hi = compute_pctile_stata(work, n, pctl_hi);
 }
 
 /* ===========================================================================
@@ -199,8 +207,9 @@ static void detect_groups(double **by_data, size_t nobs, size_t nby,
 ST_retcode cwinsor_main(const char *args)
 {
     double t_start, t_load, t_sort, t_groups, t_winsor, t_store;
-    int *var_indices = NULL;
-    int *by_indices = NULL;
+    int *store_indices = NULL;   /* Global dataset positions for SF_vstore */
+    int *load_indices = NULL;    /* Sequential plugin-local indices for SF_vdata */
+    int *by_load_indices = NULL; /* Sequential plugin-local indices for by-vars */
     double **var_data = NULL;
     double **by_data = NULL;
     double **work_arrays = NULL;
@@ -236,7 +245,7 @@ ST_retcode cwinsor_main(const char *args)
         return 198;
     }
 
-    /* Parse: nvars nby var_indices... by_indices... */
+    /* Parse: nvars nby store_indices... options... */
     const char *p = args;
     while (*p == ' ' || *p == '\t') p++;
 
@@ -256,29 +265,41 @@ ST_retcode cwinsor_main(const char *args)
     }
     p = end;
 
-    var_indices = (int *)malloc(nvars * sizeof(int));
-    if (!var_indices) {
+    /* Parse global store indices (for SF_vstore which uses global dataset positions) */
+    store_indices = (int *)malloc(nvars * sizeof(int));
+    if (!store_indices) {
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
-    if (ctools_parse_int_array(var_indices, nvars, &p) != 0) {
-        free(var_indices);
-        ctools_error(CWINSOR_MODULE, "failed to parse var indices");
+    if (ctools_parse_int_array(store_indices, nvars, &p) != 0) {
+        free(store_indices);
+        ctools_error(CWINSOR_MODULE, "failed to parse store indices");
         return 198;
     }
 
+    /* Generate sequential plugin-local load indices.
+     * Plugin call receives: target_var1 target_var2 ... by_var1 by_var2 ...
+     * So plugin-local positions are: targets = 1..nvars, by-vars = nvars+1..nvars+nby */
+    load_indices = (int *)malloc(nvars * sizeof(int));
+    if (!load_indices) {
+        free(store_indices);
+        ctools_error_alloc(CWINSOR_MODULE);
+        return 920;
+    }
+    for (size_t i = 0; i < nvars; i++) {
+        load_indices[i] = (int)(i + 1);
+    }
+
     if (nby > 0) {
-        by_indices = (int *)malloc(nby * sizeof(int));
-        if (!by_indices) {
-            free(var_indices);
+        by_load_indices = (int *)malloc(nby * sizeof(int));
+        if (!by_load_indices) {
+            free(store_indices);
+            free(load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
-        if (ctools_parse_int_array(by_indices, nby, &p) != 0) {
-            free(var_indices);
-            free(by_indices);
-            ctools_error(CWINSOR_MODULE, "failed to parse by indices");
-            return 198;
+        for (size_t i = 0; i < nby; i++) {
+            by_load_indices[i] = (int)(nvars + i + 1);
         }
     }
 
@@ -289,14 +310,15 @@ ST_retcode cwinsor_main(const char *args)
     /* === Load Phase using ctools_data_load() === */
     double load_start = ctools_timer_seconds();
 
-    /* Load target variables using filtered loading (handles if/in at load time) */
+    /* Load target variables using plugin-local indices (handles if/in at load time) */
     ctools_filtered_data target_filtered;
     ctools_filtered_data_init(&target_filtered);
-    stata_retcode load_rc = ctools_data_load(&target_filtered, var_indices,
+    stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
                                                        nvars, 0, 0, 0);
     if (load_rc != STATA_OK) {
-        free(var_indices);
-        if (by_indices) free(by_indices);
+        free(store_indices);
+        free(load_indices);
+        if (by_load_indices) free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
@@ -307,8 +329,9 @@ ST_retcode cwinsor_main(const char *args)
 
     if (nobs == 0) {
         ctools_filtered_data_free(&target_filtered);
-        free(var_indices);
-        if (by_indices) free(by_indices);
+        free(store_indices);
+        free(load_indices);
+        if (by_load_indices) free(by_load_indices);
         ctools_error(CWINSOR_MODULE, "no observations");
         return 2000;
     }
@@ -317,8 +340,9 @@ ST_retcode cwinsor_main(const char *args)
     var_data = (double **)malloc(nvars * sizeof(double *));
     if (!var_data) {
         ctools_filtered_data_free(&target_filtered);
-        free(var_indices);
-        if (by_indices) free(by_indices);
+        free(store_indices);
+        free(load_indices);
+        if (by_load_indices) free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
@@ -331,13 +355,14 @@ ST_retcode cwinsor_main(const char *args)
     ctools_filtered_data_init(&by_filtered);
 
     if (nby > 0) {
-        load_rc = ctools_data_load(&by_filtered, by_indices,
+        load_rc = ctools_data_load(&by_filtered, by_load_indices,
                                              nby, 0, 0, 0);
         if (load_rc != STATA_OK) {
             ctools_filtered_data_free(&target_filtered);
             free(var_data);
-            free(var_indices);
-            free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
@@ -348,8 +373,9 @@ ST_retcode cwinsor_main(const char *args)
             ctools_filtered_data_free(&by_filtered);
             ctools_filtered_data_free(&target_filtered);
             free(var_data);
-            free(var_indices);
-            free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
@@ -371,8 +397,9 @@ ST_retcode cwinsor_main(const char *args)
             ctools_filtered_data_free(&by_filtered);
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
-            free(var_indices);
-            free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
@@ -389,8 +416,9 @@ ST_retcode cwinsor_main(const char *args)
             ctools_filtered_data_free(&by_filtered);
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
-            free(var_indices);
-            free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
             ctools_error(CWINSOR_MODULE, "sort failed");
             return 920;
         }
@@ -408,8 +436,9 @@ ST_retcode cwinsor_main(const char *args)
             ctools_filtered_data_free(&by_filtered);
             free(var_data);
             ctools_filtered_data_free(&target_filtered);
-            free(var_indices);
-            free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
@@ -450,8 +479,9 @@ ST_retcode cwinsor_main(const char *args)
         free(var_data);
         ctools_filtered_data_free(&by_filtered);
         ctools_filtered_data_free(&target_filtered);
-        free(var_indices);
-        if (by_indices) free(by_indices);
+        free(store_indices);
+        free(load_indices);
+        if (by_load_indices) free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
@@ -485,8 +515,9 @@ ST_retcode cwinsor_main(const char *args)
         free(var_data);
         ctools_filtered_data_free(&by_filtered);
         ctools_filtered_data_free(&target_filtered);
-        free(var_indices);
-        if (by_indices) free(by_indices);
+        free(store_indices);
+        free(load_indices);
+        if (by_load_indices) free(by_load_indices);
         ctools_error_alloc(CWINSOR_MODULE);
         return 920;
     }
@@ -504,8 +535,9 @@ ST_retcode cwinsor_main(const char *args)
             free(var_data);
             ctools_filtered_data_free(&by_filtered);
             ctools_filtered_data_free(&target_filtered);
-            free(var_indices);
-            if (by_indices) free(by_indices);
+            free(store_indices);
+            free(load_indices);
+            if (by_load_indices) free(by_load_indices);
             ctools_error_alloc(CWINSOR_MODULE);
             return 920;
         }
@@ -597,15 +629,15 @@ ST_retcode cwinsor_main(const char *args)
     double store_start = ctools_timer_seconds();
 
     if (nby > 0 && inv_perm != NULL) {
-        /* Store in original order using inverse permutation and obs_map */
+        /* Store in original order using inverse permutation and obs_map.
+         * store_indices are GLOBAL dataset positions (for SF_vstore in SD_FASTMODE). */
         #ifdef _OPENMP
         #pragma omp parallel for schedule(static)
         #endif
         for (size_t v = 0; v < nvars; v++) {
-            int idx = var_indices[v];
+            int idx = store_indices[v];
             double *data = var_data[v];
             for (size_t i = 0; i < nobs; i++) {
-                /* inv_perm[i] gives the position in sorted array for original obs i */
                 SF_vstore(idx, (ST_int)obs_map[i], data[inv_perm[i]]);
             }
         }
@@ -614,7 +646,7 @@ ST_retcode cwinsor_main(const char *args)
         #pragma omp parallel for schedule(static)
         #endif
         for (size_t v = 0; v < nvars; v++) {
-            int idx = var_indices[v];
+            int idx = store_indices[v];
             double *data = var_data[v];
             for (size_t i = 0; i < nobs; i++) {
                 SF_vstore(idx, (ST_int)obs_map[i], data[i]);
@@ -639,8 +671,9 @@ ST_retcode cwinsor_main(const char *args)
     /* Free stata_data structures (which own the actual data arrays) */
     ctools_filtered_data_free(&by_filtered);
     ctools_filtered_data_free(&target_filtered);
-    free(var_indices);
-    if (by_indices) free(by_indices);
+    free(store_indices);
+    free(load_indices);
+    if (by_load_indices) free(by_load_indices);
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;

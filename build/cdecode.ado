@@ -127,7 +127,7 @@ program define cdecode, rclass
         exit 920
     }
 
-    syntax varlist(numeric) [if] [in], [Generate(string) replace MAXLength(integer 0) Verbose THReads(integer 0)]
+    syntax varlist [if] [in], [Generate(string) replace MAXLength(integer 0) Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -173,8 +173,8 @@ program define cdecode, rclass
     foreach v of local varlist {
         capture confirm numeric variable `v'
         if _rc != 0 {
-            di as error "cdecode: `v' must be a numeric variable"
-            exit 198
+            di as error "`v' is not a numeric variable"
+            exit 108
         }
         local lblname : value label `v'
         if "`lblname'" == "" {

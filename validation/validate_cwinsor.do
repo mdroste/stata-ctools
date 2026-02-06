@@ -401,10 +401,10 @@ drop price_w mpg_w
  ******************************************************************************/
 print_section "Replace Option"
 
-* Test 7.1: Basic replace
+* Test 7.1: Basic replace (use cuts(5 95) so values actually get winsorized)
 sysuse auto, clear
 gen price_orig = price
-cwinsor price, replace
+cwinsor price, replace cuts(5 95)
 quietly count if price != price_orig
 if r(N) > 0 {
     test_pass "replace modifies original variable"
@@ -416,8 +416,8 @@ else {
 * Test 7.2: Replace matches suffix result
 sysuse auto, clear
 gen price_orig = price
-cwinsor price, suffix(_w)
-cwinsor price_orig, replace
+cwinsor price, suffix(_w) cuts(5 95)
+cwinsor price_orig, replace cuts(5 95)
 quietly count if price_w != price_orig
 if r(N) == 0 {
     test_pass "replace matches suffix result"

@@ -1431,16 +1431,16 @@ else {
     test_fail "var exists" "expected rc=110, got `=_rc'"
 }
 
-* Test 12.2: Source is numeric (not string)
+* Test 12.2: Source is numeric (match destring behavior - succeed gracefully)
 clear
 set obs 10
 gen x = _n
 capture cdestring x, generate(x_num)
-if _rc != 0 {
-    test_pass "error: numeric source"
+if _rc == 0 {
+    test_pass "numeric source handled (matches destring)"
 }
 else {
-    test_fail "numeric source" "should error"
+    test_fail "numeric source" "rc=`=_rc' (should match destring rc=0)"
 }
 
 * Test 12.3: Missing generate and replace

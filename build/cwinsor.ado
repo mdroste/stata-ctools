@@ -161,22 +161,13 @@ program define cwinsor
         }
     }
 
-    * Build variable indices based on plugin call order
-    * Plugin call passes: target_varlist by
-    * So indices are: 1..nvars for target vars, (nvars+1)..(nvars+nby) for by-vars
-    local var_indices ""
-    local idx = 1
+    * Build global store indices for SF_vstore (which uses global dataset positions)
+    * Only target variables need store indices; by-variables are read-only.
+    unab __allvars : _all
+    local store_indices ""
     foreach v of local target_varlist {
-        local var_indices "`var_indices' `idx'"
-        local ++idx
-    }
-
-    local by_indices ""
-    if "`by'" != "" {
-        foreach v of local by {
-            local by_indices "`by_indices' `idx'"
-            local ++idx
-        }
+        local __pos : list posof "`v'" in __allvars
+        local store_indices "`store_indices' `__pos'"
     }
 
     * Build options
@@ -195,11 +186,12 @@ program define cwinsor
     local __time_preplugin = r(t90)
     timer on 90
 
-    * Call plugin: "cwinsor nvars nby var_indices... by_indices... [options]"
+    * Call plugin with only needed variables (target + by)
+    * C uses sequential plugin-local indices for loading, global store_indices for writing
     local nvars_target : word count `target_varlist'
 
     plugin call ctools_plugin `target_varlist' `by' if `touse', ///
-        "cwinsor `threads_opt' `nvars_target' `nby' `var_indices' `by_indices' `opts'"
+        "cwinsor `threads_opt' `nvars_target' `nby' `store_indices' `opts'"
 
     * Record post-plugin time
     timer on 92

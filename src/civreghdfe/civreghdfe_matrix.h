@@ -45,15 +45,6 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
                             ST_double * restrict C);
 
 /*
-    Solve linear system Ax = b using Cholesky decomposition
-    A is K x K symmetric positive definite (modified in place)
-    b is K x 1
-    x is K x 1 (output, can be same as b for in-place)
-    Returns 0 on success, -1 if not positive definite
-*/
-ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x);
-
-/*
     HAC Kernel weight functions for Newey-West style standard errors.
 
     Kernel types:
