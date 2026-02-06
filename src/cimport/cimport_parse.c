@@ -8,13 +8,16 @@
 #include "../ctools_types.h"
 #include "stplugin.h"
 
-/* SIMD headers */
-#if defined(__ARM_NEON) || defined(__ARM_NEON__)
-    #include <arm_neon.h>
-    #define CIMPORT_USE_NEON 1
+/* SIMD headers - prefer AVX2 > SSE2 > NEON */
+#if defined(__AVX2__)
+    #include <immintrin.h>
+    #define CIMPORT_USE_AVX2 1
 #elif defined(__SSE2__)
     #include <emmintrin.h>
     #define CIMPORT_USE_SSE2 1
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+    #include <arm_neon.h>
+    #define CIMPORT_USE_NEON 1
 #endif
 
 /* ============================================================================
@@ -39,30 +42,50 @@ bool cimport_row_has_unmatched_quote(const char *start, const char *end, char qu
  * SIMD-Accelerated Scanning
  * ============================================================================ */
 
-#if CIMPORT_USE_NEON
+#if CIMPORT_USE_AVX2
 const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
-    const uint8x16_t v_newline = vdupq_n_u8('\n');
-    const uint8x16_t v_delim = vdupq_n_u8(delim);
-    const uint8x16_t v_quote = vdupq_n_u8('"');
+    const __m256i v_newline = _mm256_set1_epi8('\n');
+    const __m256i v_delim = _mm256_set1_epi8(delim);
+    const __m256i v_quote = _mm256_set1_epi8('"');
 
-    while (ptr + 16 <= end) {
-        uint8x16_t chunk = vld1q_u8((const uint8_t *)ptr);
-        uint8x16_t cmp_nl = vceqq_u8(chunk, v_newline);
-        uint8x16_t cmp_delim = vceqq_u8(chunk, v_delim);
-        uint8x16_t cmp_quote = vceqq_u8(chunk, v_quote);
-        uint8x16_t cmp = vorrq_u8(vorrq_u8(cmp_nl, cmp_delim), cmp_quote);
+    /* AVX2: Process 32 bytes at a time */
+    while (ptr + 32 <= end) {
+        __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
+        __m256i cmp_nl = _mm256_cmpeq_epi8(chunk, v_newline);
+        __m256i cmp_delim = _mm256_cmpeq_epi8(chunk, v_delim);
+        __m256i cmp_quote = _mm256_cmpeq_epi8(chunk, v_quote);
+        __m256i cmp = _mm256_or_si256(_mm256_or_si256(cmp_nl, cmp_delim), cmp_quote);
+        int mask = _mm256_movemask_epi8(cmp);
 
-        uint64x2_t cmp64 = vreinterpretq_u64_u8(cmp);
-        if (vgetq_lane_u64(cmp64, 0) || vgetq_lane_u64(cmp64, 1)) {
-            for (int i = 0; i < 16 && ptr + i < end; i++) {
-                char c = ptr[i];
-                if (c == '\n' || c == delim || c == '"') return ptr + i;
-            }
+        if (mask) {
+            int pos = __builtin_ctz(mask);
+            return ptr + pos;
+        }
+        ptr += 32;
+    }
+
+    /* SSE2: Handle 16-31 byte remainder */
+    if (ptr + 16 <= end) {
+        __m128i v_newline_128 = _mm_set1_epi8('\n');
+        __m128i v_delim_128 = _mm_set1_epi8(delim);
+        __m128i v_quote_128 = _mm_set1_epi8('"');
+
+        __m128i chunk = _mm_loadu_si128((const __m128i *)ptr);
+        __m128i cmp_nl = _mm_cmpeq_epi8(chunk, v_newline_128);
+        __m128i cmp_delim = _mm_cmpeq_epi8(chunk, v_delim_128);
+        __m128i cmp_quote = _mm_cmpeq_epi8(chunk, v_quote_128);
+        __m128i cmp = _mm_or_si128(_mm_or_si128(cmp_nl, cmp_delim), cmp_quote);
+        int mask = _mm_movemask_epi8(cmp);
+
+        if (mask) {
+            int pos = __builtin_ctz(mask);
+            return ptr + pos;
         }
         ptr += 16;
     }
 
+    /* Scalar tail for <16 bytes */
     while (ptr < end) {
         char c = *ptr;
         if (c == '\n' || c == delim || c == '"') return ptr;
@@ -89,6 +112,38 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
         if (mask) {
             int pos = __builtin_ctz(mask);
             return ptr + pos;
+        }
+        ptr += 16;
+    }
+
+    while (ptr < end) {
+        char c = *ptr;
+        if (c == '\n' || c == delim || c == '"') return ptr;
+        ptr++;
+    }
+    return end;
+}
+
+#elif CIMPORT_USE_NEON
+const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
+{
+    const uint8x16_t v_newline = vdupq_n_u8('\n');
+    const uint8x16_t v_delim = vdupq_n_u8(delim);
+    const uint8x16_t v_quote = vdupq_n_u8('"');
+
+    while (ptr + 16 <= end) {
+        uint8x16_t chunk = vld1q_u8((const uint8_t *)ptr);
+        uint8x16_t cmp_nl = vceqq_u8(chunk, v_newline);
+        uint8x16_t cmp_delim = vceqq_u8(chunk, v_delim);
+        uint8x16_t cmp_quote = vceqq_u8(chunk, v_quote);
+        uint8x16_t cmp = vorrq_u8(vorrq_u8(cmp_nl, cmp_delim), cmp_quote);
+
+        uint64x2_t cmp64 = vreinterpretq_u64_u8(cmp);
+        if (vgetq_lane_u64(cmp64, 0) || vgetq_lane_u64(cmp64, 1)) {
+            for (int i = 0; i < 16 && ptr + i < end; i++) {
+                char c = ptr[i];
+                if (c == '\n' || c == delim || c == '"') return ptr + i;
+            }
         }
         ptr += 16;
     }
@@ -223,7 +278,60 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
 
 bool cimport_field_contains_quote(const char *src, int len, char quote)
 {
-    /* Unrolled 8-byte check for performance */
+#if CIMPORT_USE_AVX2
+    /* AVX2: Scan 32 bytes at a time */
+    const __m256i v_quote = _mm256_set1_epi8(quote);
+
+    while (len >= 32) {
+        __m256i chunk = _mm256_loadu_si256((const __m256i *)src);
+        __m256i cmp = _mm256_cmpeq_epi8(chunk, v_quote);
+        if (_mm256_movemask_epi8(cmp)) {
+            return true;
+        }
+        src += 32;
+        len -= 32;
+    }
+
+    /* SSE2: Handle 16-31 byte remainder */
+    if (len >= 16) {
+        __m128i v_quote_128 = _mm_set1_epi8(quote);
+        __m128i chunk = _mm_loadu_si128((const __m128i *)src);
+        __m128i cmp = _mm_cmpeq_epi8(chunk, v_quote_128);
+        if (_mm_movemask_epi8(cmp)) {
+            return true;
+        }
+        src += 16;
+        len -= 16;
+    }
+#elif CIMPORT_USE_SSE2
+    /* SSE2: Scan 16 bytes at a time */
+    const __m128i v_quote = _mm_set1_epi8(quote);
+
+    while (len >= 16) {
+        __m128i chunk = _mm_loadu_si128((const __m128i *)src);
+        __m128i cmp = _mm_cmpeq_epi8(chunk, v_quote);
+        if (_mm_movemask_epi8(cmp)) {
+            return true;
+        }
+        src += 16;
+        len -= 16;
+    }
+#elif CIMPORT_USE_NEON
+    /* NEON: Scan 16 bytes at a time */
+    const uint8x16_t v_quote = vdupq_n_u8(quote);
+
+    while (len >= 16) {
+        uint8x16_t chunk = vld1q_u8((const uint8_t *)src);
+        uint8x16_t cmp = vceqq_u8(chunk, v_quote);
+        uint64x2_t cmp64 = vreinterpretq_u64_u8(cmp);
+        if (vgetq_lane_u64(cmp64, 0) || vgetq_lane_u64(cmp64, 1)) {
+            return true;
+        }
+        src += 16;
+        len -= 16;
+    }
+#else
+    /* Scalar: Unrolled 8-byte check for performance */
     while (len >= 8) {
         if (src[0] == quote || src[1] == quote || src[2] == quote || src[3] == quote ||
             src[4] == quote || src[5] == quote || src[6] == quote || src[7] == quote) {
@@ -232,6 +340,9 @@ bool cimport_field_contains_quote(const char *src, int len, char quote)
         src += 8;
         len -= 8;
     }
+#endif
+
+    /* Scalar tail */
     while (len > 0) {
         if (*src == quote) return true;
         src++;

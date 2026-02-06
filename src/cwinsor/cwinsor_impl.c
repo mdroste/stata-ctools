@@ -28,6 +28,7 @@
 #include "ctools_error.h"
 #include "ctools_select.h"
 #include "ctools_parse.h"
+#include "ctools_simd.h"
 #include "cwinsor_impl.h"
 
 #define CWINSOR_MODULE "cwinsor"
@@ -133,25 +134,12 @@ static size_t extract_nonmissing(const double *data, size_t nobs, double *work)
 
 static void apply_winsor_bounds(double *data, size_t nobs, double lower, double upper)
 {
-    const double miss = SV_missval;
-    for (size_t i = 0; i < nobs; i++) {
-        double val = data[i];
-        if (val < miss) {
-            if (val < lower) data[i] = lower;
-            else if (val > upper) data[i] = upper;
-        }
-    }
+    ctools_simd_clamp(data, nobs, lower, upper, SV_missval);
 }
 
 static void apply_trim_bounds(double *data, size_t nobs, double lower, double upper)
 {
-    const double miss = SV_missval;
-    for (size_t i = 0; i < nobs; i++) {
-        double val = data[i];
-        if (val < miss) {
-            if (val < lower || val > upper) data[i] = miss;
-        }
-    }
+    ctools_simd_replace_oob(data, nobs, lower, upper, SV_missval);
 }
 
 /* ===========================================================================

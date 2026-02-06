@@ -16,6 +16,7 @@
 #include "civreghdfe_matrix.h"
 #include "../ctools_config.h"
 #include "../ctools_unroll.h"
+#include "../ctools_simd.h"
 #include "../ctools_ols.h"
 
 /* Use shared Cholesky functions from ctools_ols */
@@ -88,7 +89,8 @@ void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restri
 /*
     Weighted matrix multiply C = A' * diag(w) * B
 
-    OPTIMIZED: Uses K-way unrolled weighted dot products and OpenMP parallelization
+    OPTIMIZED: Uses SIMD-accelerated weighted dot products (AVX2/NEON with FMA)
+    and OpenMP parallelization
 */
 void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
                             const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
@@ -99,58 +101,25 @@ void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * rest
     memset(C, 0, K1 * K2 * sizeof(ST_double));
 
     if (w) {
-        /* Weighted case: use unrolled weighted dot product */
+        /* Weighted case: use SIMD-accelerated weighted dot product */
         #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
             ST_int i;  /* Private to each thread */
             const ST_double *b_col = B + j * N;
             for (i = 0; i < K1; i++) {
                 const ST_double *a_col = A + i * N;
-                /* K-way unrolled weighted dot product */
-                ST_int k;
-                CTOOLS_DECLARE_ACCUM(sum);
-                ST_int N_main = N - (N % CTOOLS_UNROLL_K);
-
-                for (k = 0; k < N_main; k += CTOOLS_UNROLL_K) {
-                    #if CTOOLS_UNROLL_K >= 4
-                    sum0 += a_col[k]     * w[k]     * b_col[k];
-                    sum1 += a_col[k + 1] * w[k + 1] * b_col[k + 1];
-                    sum2 += a_col[k + 2] * w[k + 2] * b_col[k + 2];
-                    sum3 += a_col[k + 3] * w[k + 3] * b_col[k + 3];
-                    #endif
-                    #if CTOOLS_UNROLL_K >= 8
-                    sum4 += a_col[k + 4] * w[k + 4] * b_col[k + 4];
-                    sum5 += a_col[k + 5] * w[k + 5] * b_col[k + 5];
-                    sum6 += a_col[k + 6] * w[k + 6] * b_col[k + 6];
-                    sum7 += a_col[k + 7] * w[k + 7] * b_col[k + 7];
-                    #endif
-                    #if CTOOLS_UNROLL_K >= 16
-                    sum8  += a_col[k + 8]  * w[k + 8]  * b_col[k + 8];
-                    sum9  += a_col[k + 9]  * w[k + 9]  * b_col[k + 9];
-                    sum10 += a_col[k + 10] * w[k + 10] * b_col[k + 10];
-                    sum11 += a_col[k + 11] * w[k + 11] * b_col[k + 11];
-                    sum12 += a_col[k + 12] * w[k + 12] * b_col[k + 12];
-                    sum13 += a_col[k + 13] * w[k + 13] * b_col[k + 13];
-                    sum14 += a_col[k + 14] * w[k + 14] * b_col[k + 14];
-                    sum15 += a_col[k + 15] * w[k + 15] * b_col[k + 15];
-                    #endif
-                }
-                /* Handle remainder */
-                for (; k < N; k++) {
-                    sum0 += a_col[k] * w[k] * b_col[k];
-                }
-                C[j * K1 + i] = CTOOLS_TREE_REDUCE(sum);
+                C[j * K1 + i] = ctools_simd_dot_weighted(w, a_col, b_col, (size_t)N);
             }
         }
     } else {
-        /* Unweighted case: use standard unrolled dot product */
+        /* Unweighted case: use SIMD-accelerated dot product */
         #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
         for (j = 0; j < K2; j++) {
             ST_int i;  /* Private to each thread */
             const ST_double *b_col = B + j * N;
             for (i = 0; i < K1; i++) {
                 const ST_double *a_col = A + i * N;
-                C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
+                C[j * K1 + i] = ctools_simd_dot(a_col, b_col, (size_t)N);
             }
         }
     }

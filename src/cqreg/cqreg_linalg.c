@@ -8,6 +8,7 @@
 #include "cqreg_linalg.h"
 #include "../ctools_unroll.h"
 #include "../ctools_select.h"
+#include "../ctools_simd.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -50,28 +51,8 @@ ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
                              const ST_double * CQREG_RESTRICT w,
                              ST_int N)
 {
-    ST_int i;
-    ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
-    ST_double sum4 = 0.0, sum5 = 0.0, sum6 = 0.0, sum7 = 0.0;
-    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
-
-    /* 8-way unrolled loop for better instruction-level parallelism */
-    for (i = 0; i < N8; i += 8) {
-        sum0 += w[i]     * x[i]     * y[i];
-        sum1 += w[i + 1] * x[i + 1] * y[i + 1];
-        sum2 += w[i + 2] * x[i + 2] * y[i + 2];
-        sum3 += w[i + 3] * x[i + 3] * y[i + 3];
-        sum4 += w[i + 4] * x[i + 4] * y[i + 4];
-        sum5 += w[i + 5] * x[i + 5] * y[i + 5];
-        sum6 += w[i + 6] * x[i + 6] * y[i + 6];
-        sum7 += w[i + 7] * x[i + 7] * y[i + 7];
-    }
-
-    for (; i < N; i++) {
-        sum0 += w[i] * x[i] * y[i];
-    }
-
-    return ((sum0 + sum4) + (sum1 + sum5)) + ((sum2 + sum6) + (sum3 + sum7));
+    /* Use SIMD-accelerated weighted dot product (AVX2/NEON with FMA) */
+    return ctools_simd_dot_weighted(w, x, y, (size_t)N);
 }
 
 ST_double cqreg_dot_self(const ST_double * CQREG_RESTRICT x, ST_int N)
@@ -113,26 +94,8 @@ void cqreg_vaxpy(ST_double *y,
                  const ST_double *x,
                  ST_int N)
 {
-    ST_int i;
-    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
-
-    /* 8x unrolled loop for better vectorization and ILP */
-    #pragma omp simd
-    for (i = 0; i < N8; i += 8) {
-        y[i]     += alpha * x[i];
-        y[i + 1] += alpha * x[i + 1];
-        y[i + 2] += alpha * x[i + 2];
-        y[i + 3] += alpha * x[i + 3];
-        y[i + 4] += alpha * x[i + 4];
-        y[i + 5] += alpha * x[i + 5];
-        y[i + 6] += alpha * x[i + 6];
-        y[i + 7] += alpha * x[i + 7];
-    }
-
-    /* Remainder */
-    for (; i < N; i++) {
-        y[i] += alpha * x[i];
-    }
+    /* Use SIMD-accelerated AXPY (AVX2/NEON with FMA) */
+    ctools_simd_axpy(y, x, alpha, (size_t)N);
 }
 
 void cqreg_vmul(ST_double * CQREG_RESTRICT z,
@@ -318,16 +281,15 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
                 const ST_double * CQREG_RESTRICT D,
                 ST_int N, ST_int K)
 {
-    ST_int j, k, i;
-    ST_int N8 = N - (N & 7);  /* N rounded down to multiple of 8 */
+    ST_int j, k;
 
     /* Initialize to zero */
     memset(XDX, 0, K * K * sizeof(ST_double));
 
-    /* Compute X' * D * X
+    /* Compute X' * D * X using SIMD-accelerated weighted dot products
      * XDX[j,k] = sum_i X[i,j] * D[i] * X[i,k]
      *          = sum_i D[i] * X[j*N + i] * X[k*N + i]
-     * OPTIMIZED: 8x loop unrolling with OpenMP parallelization
+     * = ctools_simd_dot_weighted(D, Xj, Xk, N)
      */
 
     #ifdef _OPENMP
@@ -336,43 +298,13 @@ void cqreg_xtdx(ST_double * CQREG_RESTRICT XDX,
     for (j = 0; j < K; j++) {
         const ST_double *Xj = &X[j * N];
 
-        /* Diagonal element with 8x unrolling */
-        ST_double d0 = 0.0, d1 = 0.0, d2 = 0.0, d3 = 0.0;
-        ST_double d4 = 0.0, d5 = 0.0, d6 = 0.0, d7 = 0.0;
-        for (i = 0; i < N8; i += 8) {
-            d0 += D[i]     * Xj[i]     * Xj[i];
-            d1 += D[i + 1] * Xj[i + 1] * Xj[i + 1];
-            d2 += D[i + 2] * Xj[i + 2] * Xj[i + 2];
-            d3 += D[i + 3] * Xj[i + 3] * Xj[i + 3];
-            d4 += D[i + 4] * Xj[i + 4] * Xj[i + 4];
-            d5 += D[i + 5] * Xj[i + 5] * Xj[i + 5];
-            d6 += D[i + 6] * Xj[i + 6] * Xj[i + 6];
-            d7 += D[i + 7] * Xj[i + 7] * Xj[i + 7];
-        }
-        for (; i < N; i++) {
-            d0 += D[i] * Xj[i] * Xj[i];
-        }
-        XDX[j * K + j] = ((d0 + d4) + (d1 + d5)) + ((d2 + d6) + (d3 + d7));
+        /* Diagonal element: XDX[j,j] = X[:,j]' * D * X[:,j] */
+        XDX[j * K + j] = ctools_simd_dot_weighted(D, Xj, Xj, (size_t)N);
 
-        /* Off-diagonal elements (upper triangle) with 8x unrolling */
+        /* Off-diagonal elements (upper triangle) */
         for (k = j + 1; k < K; k++) {
             const ST_double *Xk = &X[k * N];
-            ST_double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
-            ST_double s4 = 0.0, s5 = 0.0, s6 = 0.0, s7 = 0.0;
-            for (i = 0; i < N8; i += 8) {
-                s0 += D[i]     * Xj[i]     * Xk[i];
-                s1 += D[i + 1] * Xj[i + 1] * Xk[i + 1];
-                s2 += D[i + 2] * Xj[i + 2] * Xk[i + 2];
-                s3 += D[i + 3] * Xj[i + 3] * Xk[i + 3];
-                s4 += D[i + 4] * Xj[i + 4] * Xk[i + 4];
-                s5 += D[i + 5] * Xj[i + 5] * Xk[i + 5];
-                s6 += D[i + 6] * Xj[i + 6] * Xk[i + 6];
-                s7 += D[i + 7] * Xj[i + 7] * Xk[i + 7];
-            }
-            for (; i < N; i++) {
-                s0 += D[i] * Xj[i] * Xk[i];
-            }
-            ST_double total = ((s0 + s4) + (s1 + s5)) + ((s2 + s6) + (s3 + s7));
+            ST_double total = ctools_simd_dot_weighted(D, Xj, Xk, (size_t)N);
             XDX[j * K + k] = total;
             XDX[k * K + j] = total;  /* Symmetric */
         }

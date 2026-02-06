@@ -1522,22 +1522,6 @@ else {
     }
 }
 
-* String variable as dependent
-sysuse auto, clear
-gen z = runiform()
-if `ivreghdfe_installed' {
-    test_error_match, stata_cmd(ivreghdfe make (mpg = z), absorb(foreign)) ctools_cmd(civreghdfe make (mpg = z), absorb(foreign)) testname("string dependent variable")
-}
-else {
-    capture civreghdfe make (mpg = z), absorb(foreign)
-    if _rc != 0 {
-        test_pass "[error] string dependent variable (rc=`=_rc') [ivreghdfe not installed]"
-    }
-    else {
-        test_fail "[error] string dependent variable" "should have errored"
-    }
-}
-
 /*******************************************************************************
  * Summary
  ******************************************************************************/

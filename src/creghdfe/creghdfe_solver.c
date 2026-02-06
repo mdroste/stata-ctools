@@ -8,6 +8,7 @@
 
 #include "creghdfe_solver.h"
 #include "../ctools_unroll.h"
+#include "../ctools_simd.h"
 
 /* ========================================================================
  * Dot product - uses ctools K-way unrolling abstraction
@@ -110,6 +111,8 @@ void free_sorted_indices(FE_Factor *f)
 
 /* ========================================================================
  * Weighted dot product: sum(w[i] * x[i] * y[i])
+ * Uses explicit AVX2/NEON FMA when available, otherwise falls back to
+ * compiler-vectorized scalar loop.
  * ======================================================================== */
 
 ST_double weighted_dot_product(const ST_double * RESTRICT x,
@@ -117,14 +120,7 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
                                const ST_double * RESTRICT w,
                                ST_int N)
 {
-    ST_double sum = 0.0;
-    ST_int i;
-
-    #pragma omp simd reduction(+:sum)
-    for (i = 0; i < N; i++) {
-        sum += w[i] * x[i] * y[i];
-    }
-    return sum;
+    return ctools_simd_dot_weighted(w, x, y, (size_t)N);
 }
 
 /* ========================================================================
@@ -219,7 +215,7 @@ void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
 
 ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
 {
-    ST_int iter, i;
+    ST_int iter;
     ST_double * RESTRICT r = S->thread_cg_r[thread_id];
     ST_double * RESTRICT u = S->thread_cg_u[thread_id];
     ST_double * RESTRICT v = S->thread_cg_v[thread_id];
@@ -245,20 +241,16 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            #pragma omp simd
-            for (i = 0; i < N; i++) {
-                y[i] -= alpha * u[i];
-                r[i] -= alpha * v[i];
-            }
+            /* CG update: y -= alpha*u, r -= alpha*v (SIMD-accelerated) */
+            ctools_simd_axpy(y, u, -alpha, (size_t)N);
+            ctools_simd_axpy(r, v, -alpha, (size_t)N);
 
             ssr_old = ssr;
             ssr = weighted_dot_product(r, r, weights, N);
             beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
-            #pragma omp simd
-            for (i = 0; i < N; i++) {
-                u[i] = r[i] + beta * u[i];
-            }
+            /* CG update: u = r + beta*u (SIMD-accelerated) */
+            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
 
             update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
             if (update_error <= S->tolerance) {
@@ -281,20 +273,16 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            #pragma omp simd
-            for (i = 0; i < N; i++) {
-                y[i] -= alpha * u[i];
-                r[i] -= alpha * v[i];
-            }
+            /* CG update: y -= alpha*u, r -= alpha*v (SIMD-accelerated) */
+            ctools_simd_axpy(y, u, -alpha, (size_t)N);
+            ctools_simd_axpy(r, v, -alpha, (size_t)N);
 
             ssr_old = ssr;
             ssr = dot_product(r, r, N);
             beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
-            #pragma omp simd
-            for (i = 0; i < N; i++) {
-                u[i] = r[i] + beta * u[i];
-            }
+            /* CG update: u = r + beta*u (SIMD-accelerated) */
+            ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
 
             update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
             if (update_error <= S->tolerance) {

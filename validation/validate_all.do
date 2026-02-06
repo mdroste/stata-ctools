@@ -27,8 +27,6 @@ capture mkdir "temp"
 * Define list of validation scripts and their names
 local scripts "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch"
 local script_names "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch"
-local scripts "civreghdfe cdecode"
-local script_names "civreghdfe cdecode"
 local num_scripts : word count `scripts'
 
 * Count total validations (number of scripts)
