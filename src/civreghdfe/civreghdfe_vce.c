@@ -842,36 +842,16 @@ void ivvce_compute_full(
         }
 
     } else if (vce_type == CIVREGHDFE_VCE_CLUSTER && cluster_ids && num_clusters > 0) {
-        /* Clustered VCE */
-        ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
-        if (!cluster_sums) {
+        /* Clustered VCE — delegate to shared VCE engine */
+        /* Convert 1-based cluster IDs to 0-based for shared function */
+        ST_int *cluster_ids_0 = (ST_int *)malloc(N * sizeof(ST_int));
+        if (!cluster_ids_0) {
             free(PzX); free(meat);
             return;
         }
-
-        /* Sum (PzX_i * e_i) within each cluster */
         for (i = 0; i < N; i++) {
-            ST_int c = cluster_ids[i] - 1;
-            if (c < 0 || c >= num_clusters) continue;
-            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-            ST_double we = w * resid[i];
-            for (j = 0; j < K_total; j++) {
-                cluster_sums[c * K_total + j] += PzX[j * N + i] * we;
-            }
+            cluster_ids_0[i] = cluster_ids[i] - 1;
         }
-
-        /* Compute meat: sum over clusters of outer products */
-        for (ST_int c = 0; c < num_clusters; c++) {
-            for (j = 0; j < K_total; j++) {
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = cluster_sums[c * K_total + j] * cluster_sums[c * K_total + k];
-                    meat[j * K_total + k] += contrib;
-                    if (k != j) meat[k * K_total + j] += contrib;
-                }
-            }
-        }
-
-        free(cluster_sums);
 
         /* DOF adjustment */
         ST_int effective_df_a = df_a;
@@ -881,16 +861,18 @@ void ivvce_compute_full(
         ST_double G = (ST_double)num_clusters;
         ST_double dof_adj = ((ST_double)(N - 1) / denom) * (G / (G - 1.0));
 
-        /* V = XkX_inv * meat * XkX_inv * dof_adj */
-        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        if (temp_v) {
-            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
-            for (i = 0; i < K_total * K_total; i++) {
-                V[i] *= dof_adj;
-            }
-            free(temp_v);
-        }
+        ctools_vce_data d;
+        d.X_eff = PzX;
+        d.D = XkX_inv;
+        d.resid = resid;
+        d.weights = weights;
+        d.weight_type = weight_type;
+        d.N = N;
+        d.K = K_total;
+        d.normalize_weights = 0;  /* IV: use raw weights */
+
+        ctools_vce_cluster(&d, cluster_ids_0, num_clusters, dof_adj, V);
+        free(cluster_ids_0);
 
     } else if (kernel_type > 0 && bw > 0) {
         /* HAC VCE - Compute in Z-space like ivreg2, then transform to X-space
@@ -1055,32 +1037,20 @@ void ivvce_compute_full(
         }
 
     } else {
-        /* Standard HC robust */
-        for (i = 0; i < N; i++) {
-            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-            ST_double we = w * resid[i];
-            for (j = 0; j < K_total; j++) {
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = PzX[j * N + i] * we * PzX[k * N + i] * resid[i];
-                    meat[j * K_total + k] += contrib;
-                    if (k != j) meat[k * K_total + j] += contrib;
-                }
-            }
-        }
-
-        /* HC1 adjustment */
+        /* Standard HC robust — delegate to shared VCE engine */
         ST_double dof_adj = (ST_double)N / (ST_double)df_r;
 
-        /* V = XkX_inv * meat * XkX_inv * dof_adj */
-        ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
-        if (temp_v) {
-            ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
-            ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
-            for (i = 0; i < K_total * K_total; i++) {
-                V[i] *= dof_adj;
-            }
-            free(temp_v);
-        }
+        ctools_vce_data d;
+        d.X_eff = PzX;
+        d.D = XkX_inv;
+        d.resid = resid;
+        d.weights = weights;
+        d.weight_type = weight_type;
+        d.N = N;
+        d.K = K_total;
+        d.normalize_weights = 0;  /* IV: use raw weights */
+
+        ctools_vce_robust(&d, dof_adj, V);
     }
 
     free(PzX);

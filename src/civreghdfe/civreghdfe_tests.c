@@ -122,6 +122,7 @@ void civreghdfe_compute_underid_test(
 
     /* ZtZ_inv reserved for potential robust formula implementation */
     (void)ZtZ_inv;
+    (void)temp1;
 
     *underid_stat = 0.0;
     *underid_df = L;
@@ -1136,8 +1137,8 @@ void civreghdfe_compute_underid_test(
                                 ST_double *M = (ST_double *)calloc(K_endog * K_endog, sizeof(ST_double));
 
                                 if (temp3_mat && M) {
-                                    civreghdfe_matmul_ab(temp2_mat, YtY_inv_half, K_endog, K_endog, K_endog, temp3_mat);
-                                    civreghdfe_matmul_ab(YtY_inv_half, temp3_mat, K_endog, K_endog, K_endog, M);
+                                    ctools_matmul_ab(temp2_mat, YtY_inv_half, K_endog, K_endog, K_endog, temp3_mat);
+                                    ctools_matmul_ab(YtY_inv_half, temp3_mat, K_endog, K_endog, K_endog, M);
 
                                     /* Find minimum eigenvalue */
                                     ST_double *eigenvalues = (ST_double *)calloc(K_endog, sizeof(ST_double));
@@ -1579,7 +1580,7 @@ void civreghdfe_compute_dwh_test(
     }
 
     /* Compute X_aug'X_aug */
-    civreghdfe_matmul_atb(X_aug, X_aug, N, K_aug, K_aug, XaXa);
+    ctools_matmul_atb(X_aug, X_aug, N, K_aug, K_aug, XaXa);
 
     /* Compute X_aug'y */
     for (j = 0; j < K_aug; j++) {
@@ -1675,7 +1676,9 @@ void civreghdfe_compute_dwh_test(
     where M_{Z_rest} = I - Z_rest(Z_rest'Z_rest)^{-1}Z_rest'
 */
 void civreghdfe_compute_cstat(
-    const ST_double *resid,
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
     const ST_double *Z,
     ST_int N,
     ST_int K_exog,
@@ -1689,6 +1692,7 @@ void civreghdfe_compute_cstat(
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_double sargan_full,
+    ST_double rss_full,
     ST_double *cstat,
     ST_int *cstat_df
 )
@@ -1697,8 +1701,6 @@ void civreghdfe_compute_cstat(
     ST_int K_total = K_exog + K_endog;
     ST_int K_rest = K_iv - n_orthog;  /* Instruments not being tested */
 
-    /* Suppress unused parameter warnings - these are reserved for future
-       heteroskedasticity/cluster-robust C-stat implementation */
     (void)vce_type;
     (void)cluster_ids;
     (void)num_clusters;
@@ -1713,102 +1715,171 @@ void civreghdfe_compute_cstat(
     if (!test_mask) return;
 
     for (i = 0; i < n_orthog; i++) {
-        ST_int idx = orthog_indices[i] - 1;  /* Convert 1-based to 0-based */
-        /* Excluded instruments start at position K_exog in Z */
+        ST_int idx = orthog_indices[i] - 1;
         if (idx >= 0 && idx < K_iv - K_exog) {
             test_mask[K_exog + idx] = 1;
         }
     }
 
-    /* Build Z_rest (instruments not being tested) - cast to size_t to prevent 32-bit overflow */
+    /* Build Z_rest (instruments not being tested) */
     ST_double *Z_rest = (ST_double *)malloc((size_t)N * K_rest * sizeof(ST_double));
-    ST_double *Z_test = (ST_double *)malloc((size_t)N * n_orthog * sizeof(ST_double));
-    if (!Z_rest || !Z_test) {
-        free(test_mask);
-        if (Z_rest) free(Z_rest);
-        if (Z_test) free(Z_test);
-        return;
-    }
+    if (!Z_rest) { free(test_mask); return; }
 
-    ST_int rest_idx = 0, test_idx = 0;
+    ST_int rest_idx = 0;
     for (k = 0; k < K_iv; k++) {
         if (test_mask[k] == 0) {
             for (i = 0; i < N; i++) {
                 Z_rest[rest_idx * N + i] = Z[k * N + i];
             }
             rest_idx++;
-        } else {
-            for (i = 0; i < N; i++) {
-                Z_test[test_idx * N + i] = Z[k * N + i];
-            }
-            test_idx++;
         }
     }
+    free(test_mask);
 
-    /* Compute Z_rest'Z_rest and its inverse */
+    /* Build X_all = [X_exog, X_endog] (column-major) */
+    ST_double *X_all = (ST_double *)malloc((size_t)N * K_total * sizeof(ST_double));
+    if (!X_all) { free(Z_rest); return; }
+
+    if (X_exog && K_exog > 0) {
+        memcpy(X_all, X_exog, (size_t)N * K_exog * sizeof(ST_double));
+    }
+    if (X_endog && K_endog > 0) {
+        memcpy(X_all + (size_t)N * K_exog, X_endog, (size_t)N * K_endog * sizeof(ST_double));
+    }
+
+    /* Re-estimate 2SLS with restricted instruments Z_rest.
+       C-stat = J_full - J_restricted where J_restricted uses re-estimated
+       coefficients and residuals from the restricted instrument set. */
+
+    /* Step 1: Z_rest'Z_rest and its inverse */
     ST_double *ZrZr = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
     ST_double *ZrZr_inv = (ST_double *)calloc(K_rest * K_rest, sizeof(ST_double));
     if (!ZrZr || !ZrZr_inv) goto cleanup;
 
-    civreghdfe_matmul_atb(Z_rest, Z_rest, N, K_rest, K_rest, ZrZr);
-
+    ctools_matmul_atb(Z_rest, Z_rest, N, K_rest, K_rest, ZrZr);
     memcpy(ZrZr_inv, ZrZr, K_rest * K_rest * sizeof(ST_double));
     if (cholesky(ZrZr_inv, K_rest) != 0) goto cleanup;
     if (invert_from_cholesky(ZrZr_inv, K_rest, ZrZr_inv) != 0) goto cleanup;
 
-    /* Compute Z_rest'e */
-    ST_double *Zr_e = (ST_double *)calloc(K_rest, sizeof(ST_double));
-    if (!Zr_e) goto cleanup;
+    /* Step 2: Z_rest'X and Z_rest'y */
+    ST_double *ZrX = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double));
+    ST_double *Zry = (ST_double *)calloc(K_rest, sizeof(ST_double));
+    if (!ZrX || !Zry) goto cleanup;
+
+    ctools_matmul_atb(Z_rest, X_all, N, K_rest, K_total, ZrX);
+    for (k = 0; k < K_rest; k++) {
+        ST_double sum = 0.0;
+        for (i = 0; i < N; i++) sum += Z_rest[k * N + i] * y[i];
+        Zry[k] = sum;
+    }
+
+    /* Step 3: 2SLS with Z_rest
+       X_hat = Z_rest (Z_rest'Z_rest)^{-1} Z_rest'X
+       beta_rest = (X_hat'X_hat)^{-1} X_hat'y
+       which simplifies to: beta_rest = (X'P_Zr X)^{-1} X'P_Zr y
+       where P_Zr = Z_rest (Z_rest'Z_rest)^{-1} Z_rest'
+       i.e., beta_rest = (ZrX' ZrZr_inv ZrX)^{-1} ZrX' ZrZr_inv Zry */
+    ST_double *PZrX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));  /* X'P_Zr X */
+    ST_double *PZry = (ST_double *)calloc(K_total, sizeof(ST_double));           /* X'P_Zr y */
+    ST_double *temp_rv = (ST_double *)calloc(K_rest * K_total, sizeof(ST_double)); /* ZrZr_inv * ZrX */
+    if (!PZrX || !PZry || !temp_rv) goto cleanup;
+
+    /* temp_rv = ZrZr_inv * ZrX  (K_rest x K_total) */
+    ctools_matmul_ab(ZrZr_inv, ZrX, K_rest, K_rest, K_total, temp_rv);
+
+    /* PZrX = ZrX' * temp_rv  (K_total x K_total) */
+    ctools_matmul_atb(ZrX, temp_rv, K_rest, K_total, K_total, PZrX);
+
+    /* PZry = ZrX' * ZrZr_inv * Zry  (K_total x 1) */
+    ST_double *temp_ry = (ST_double *)calloc(K_rest, sizeof(ST_double));
+    if (!temp_ry) goto cleanup;
 
     for (k = 0; k < K_rest; k++) {
         ST_double sum = 0.0;
-        for (i = 0; i < N; i++) {
-            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-            sum += w * Z_rest[k * N + i] * resid[i];
+        for (j = 0; j < K_rest; j++) sum += ZrZr_inv[j * K_rest + k] * Zry[j];
+        temp_ry[k] = sum;
+    }
+    /* PZry = ZrX' * temp_ry where ZrX is K_rest x K_total (col-major) */
+    for (k = 0; k < K_total; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_rest; j++) sum += ZrX[k * K_rest + j] * temp_ry[j];
+        PZry[k] = sum;
+    }
+    free(temp_ry);
+
+    /* Solve beta_rest = PZrX^{-1} * PZry */
+    ST_double *PZrX_L = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *PZrX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *beta_rest = (ST_double *)calloc(K_total, sizeof(ST_double));
+    if (!PZrX_L || !PZrX_inv || !beta_rest) goto cleanup;
+
+    memcpy(PZrX_L, PZrX, K_total * K_total * sizeof(ST_double));
+    if (cholesky(PZrX_L, K_total) != 0) goto cleanup;
+    if (invert_from_cholesky(PZrX_L, K_total, PZrX_inv) != 0) goto cleanup;
+
+    for (k = 0; k < K_total; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_total; j++) sum += PZrX_inv[j * K_total + k] * PZry[j];
+        beta_rest[k] = sum;
+    }
+
+    /* Step 4: Compute restricted residuals: e_rest = y - X_all * beta_rest */
+    ST_double *resid_rest = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    if (!resid_rest) goto cleanup;
+
+    for (i = 0; i < N; i++) {
+        ST_double fitted = 0.0;
+        for (k = 0; k < K_total; k++) {
+            fitted += X_all[k * N + i] * beta_rest[k];
         }
+        resid_rest[i] = y[i] - fitted;
+    }
+
+    /* Step 5: Compute restricted Sargan = N * e_rest' P_Zr e_rest / rss_rest */
+    ST_double *Zr_e = (ST_double *)calloc(K_rest, sizeof(ST_double));
+    if (!Zr_e) { free(resid_rest); goto cleanup; }
+
+    for (k = 0; k < K_rest; k++) {
+        ST_double sum = 0.0;
+        for (i = 0; i < N; i++) sum += Z_rest[k * N + i] * resid_rest[i];
         Zr_e[k] = sum;
     }
 
-    /* Compute restricted Sargan: e'Z_rest (Z_rest'Z_rest)^{-1} Z_rest'e */
     ST_double *temp_r = (ST_double *)calloc(K_rest, sizeof(ST_double));
-    if (!temp_r) { free(Zr_e); goto cleanup; }
+    if (!temp_r) { free(resid_rest); free(Zr_e); goto cleanup; }
 
     for (k = 0; k < K_rest; k++) {
         ST_double sum = 0.0;
-        for (j = 0; j < K_rest; j++) {
-            sum += ZrZr_inv[j * K_rest + k] * Zr_e[j];
-        }
+        for (j = 0; j < K_rest; j++) sum += ZrZr_inv[j * K_rest + k] * Zr_e[j];
         temp_r[k] = sum;
     }
 
     ST_double quad_rest = 0.0;
-    for (k = 0; k < K_rest; k++) {
-        quad_rest += Zr_e[k] * temp_r[k];
-    }
+    for (k = 0; k < K_rest; k++) quad_rest += Zr_e[k] * temp_r[k];
 
-    /* Compute RSS for scaling */
-    ST_double rss = 0.0;
-    for (i = 0; i < N; i++) {
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        rss += w * resid[i] * resid[i];
-    }
-
-    /* For homoskedastic case: restricted Sargan = N * quad / rss */
-    ST_double sargan_rest = (ST_double)N * quad_rest / rss;
+    ST_double sargan_rest = (rss_full > 0) ? (ST_double)N * quad_rest / rss_full : 0.0;
 
     /* C = J_full - J_restricted */
     *cstat = sargan_full - sargan_rest;
-    if (*cstat < 0) *cstat = 0;  /* Can happen due to numerical issues */
+    if (*cstat < 0) *cstat = 0;
 
+    free(resid_rest);
     free(Zr_e);
     free(temp_r);
 
 cleanup:
-    free(test_mask);
     free(Z_rest);
-    free(Z_test);
+    free(X_all);
     if (ZrZr) free(ZrZr);
     if (ZrZr_inv) free(ZrZr_inv);
+    if (ZrX) free(ZrX);
+    if (Zry) free(Zry);
+    if (PZrX) free(PZrX);
+    if (PZry) free(PZry);
+    if (temp_rv) free(temp_rv);
+    if (PZrX_L) free(PZrX_L);
+    if (PZrX_inv) free(PZrX_inv);
+    if (beta_rest) free(beta_rest);
 }
 
 /*
@@ -1820,19 +1891,28 @@ void civreghdfe_compute_endogtest_subset(
     const ST_double *X_exog,
     const ST_double *X_endog,
     const ST_double *Z,
-    const ST_double *temp1,
+    const ST_double *resid,
+    const ST_double *ZtZ_inv,
     ST_int N,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
-    ST_int df_a,
     const ST_int *endogtest_indices,
     ST_int n_endogtest,
     ST_double *endogtest_stat,
     ST_int *endogtest_df
 )
 {
+    /*
+        Difference-in-Sargan C-statistic approach (matches ivreg2):
+        1. Build Z_aug = [Z, tested_endogenous_vars] (add tested vars to instruments)
+        2. Run 2SLS with Z_aug: beta_exog, residuals, rss_exog
+        3. Compute J_exog = N * e_exog'P_{Z_aug}e_exog / rss_exog
+        4. Compute J_orig = N * e_orig'P_Z e_orig / rss_exog  (uses rss_exog!)
+        5. C = J_exog - J_orig
+    */
     ST_int K_total = K_exog + K_endog;
+    ST_int K_iv_aug = K_iv + n_endogtest;
     ST_int i, j, k;
 
     *endogtest_stat = 0.0;
@@ -1840,143 +1920,182 @@ void civreghdfe_compute_endogtest_subset(
 
     if (n_endogtest <= 0 || n_endogtest > K_endog) return;
 
-    /* Compute first-stage residuals only for tested endogenous variables */
-    ST_double *v_resid = (ST_double *)calloc(N * n_endogtest, sizeof(ST_double));
-    if (!v_resid) return;
+    /* Allocate all working memory */
+    ST_double *Z_aug = NULL, *X_all = NULL;
+    ST_double *ZaZa = NULL, *ZaZa_inv = NULL;
+    ST_double *ZaX = NULL, *Zay = NULL;
+    ST_double *temp_rv = NULL, *PZaX = NULL, *PZay = NULL, *temp_ry = NULL;
+    ST_double *PZaX_L = NULL, *PZaX_inv = NULL, *beta_exog = NULL;
+    ST_double *resid_exog = NULL, *Za_e = NULL, *temp_a = NULL;
+    ST_double *Z_e_orig = NULL, *temp_o = NULL;
 
+    /* Step 1: Build Z_aug = [Z, tested_endogenous_vars] */
+    Z_aug = (ST_double *)malloc((size_t)N * K_iv_aug * sizeof(ST_double));
+    if (!Z_aug) return;
+
+    /* Copy original Z */
+    memcpy(Z_aug, Z, (size_t)N * K_iv * sizeof(ST_double));
+
+    /* Append tested endogenous variables */
     for (ST_int t = 0; t < n_endogtest; t++) {
-        ST_int e = endogtest_indices[t] - 1;  /* Convert 1-based to 0-based */
-        if (e < 0 || e >= K_endog) {
-            free(v_resid);
-            return;
-        }
-
-        const ST_double *x_endog_col = X_endog + e * N;
-        ST_double *v_col = v_resid + t * N;
-        const ST_double *pi_col = temp1 + (K_exog + e) * K_iv;
-
-        for (i = 0; i < N; i++) {
-            ST_double pred = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                pred += Z[k * N + i] * pi_col[k];
-            }
-            v_col[i] = x_endog_col[i] - pred;
-        }
+        ST_int idx = endogtest_indices[t] - 1;
+        if (idx < 0 || idx >= K_endog) goto endogtest_cleanup;
+        memcpy(Z_aug + (size_t)(K_iv + t) * N, X_endog + (size_t)idx * N,
+               (size_t)N * sizeof(ST_double));
     }
 
-    /* Build augmented design matrix: [X_exog, X_endog, v_test] */
-    ST_int K_aug = K_total + n_endogtest;
-    ST_double *X_aug = (ST_double *)calloc(N * K_aug, sizeof(ST_double));
-    ST_double *XaXa = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
-    ST_double *Xay = (ST_double *)calloc(K_aug, sizeof(ST_double));
+    /* Build X_all = [X_exog, X_endog] */
+    X_all = (ST_double *)malloc((size_t)N * K_total * sizeof(ST_double));
+    if (!X_all) goto endogtest_cleanup;
 
-    if (!X_aug || !XaXa || !Xay) {
-        free(v_resid);
-        free(X_aug); free(XaXa); free(Xay);
-        return;
-    }
+    if (X_exog && K_exog > 0)
+        memcpy(X_all, X_exog, (size_t)N * K_exog * sizeof(ST_double));
+    if (X_endog && K_endog > 0)
+        memcpy(X_all + (size_t)N * K_exog, X_endog, (size_t)N * K_endog * sizeof(ST_double));
 
-    /* Copy X_exog, X_endog, v_resid */
-    if (X_exog) {
-        for (j = 0; j < K_exog; j++) {
-            for (i = 0; i < N; i++) {
-                X_aug[j * N + i] = X_exog[j * N + i];
-            }
-        }
-    }
-    for (j = 0; j < K_endog; j++) {
-        for (i = 0; i < N; i++) {
-            X_aug[(K_exog + j) * N + i] = X_endog[j * N + i];
-        }
-    }
-    for (j = 0; j < n_endogtest; j++) {
-        for (i = 0; i < N; i++) {
-            X_aug[(K_total + j) * N + i] = v_resid[j * N + i];
-        }
-    }
+    /* Step 2: 2SLS with Z_aug */
+    /* Z_aug'Z_aug and its inverse */
+    ZaZa = (ST_double *)calloc(K_iv_aug * K_iv_aug, sizeof(ST_double));
+    ZaZa_inv = (ST_double *)calloc(K_iv_aug * K_iv_aug, sizeof(ST_double));
+    if (!ZaZa || !ZaZa_inv) goto endogtest_cleanup;
 
-    /* Compute X_aug'X_aug */
-    civreghdfe_matmul_atb(X_aug, X_aug, N, K_aug, K_aug, XaXa);
+    ctools_matmul_atb(Z_aug, Z_aug, N, K_iv_aug, K_iv_aug, ZaZa);
+    memcpy(ZaZa_inv, ZaZa, (size_t)K_iv_aug * K_iv_aug * sizeof(ST_double));
+    if (cholesky(ZaZa_inv, K_iv_aug) != 0) goto endogtest_cleanup;
+    if (invert_from_cholesky(ZaZa_inv, K_iv_aug, ZaZa_inv) != 0) goto endogtest_cleanup;
 
-    /* Compute X_aug'y */
-    for (j = 0; j < K_aug; j++) {
+    /* Z_aug'X and Z_aug'y */
+    ZaX = (ST_double *)calloc(K_iv_aug * K_total, sizeof(ST_double));
+    Zay = (ST_double *)calloc(K_iv_aug, sizeof(ST_double));
+    if (!ZaX || !Zay) goto endogtest_cleanup;
+
+    ctools_matmul_atb(Z_aug, X_all, N, K_iv_aug, K_total, ZaX);
+    for (k = 0; k < K_iv_aug; k++) {
         ST_double sum = 0.0;
-        const ST_double *xa_col = X_aug + j * N;
-        for (i = 0; i < N; i++) {
-            sum += xa_col[i] * y[i];
-        }
-        Xay[j] = sum;
+        for (i = 0; i < N; i++) sum += Z_aug[(size_t)k * N + i] * y[i];
+        Zay[k] = sum;
     }
 
-    /* Solve for augmented OLS coefficients */
-    ST_double *XaXa_L = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
-    ST_double *XaXa_inv = (ST_double *)calloc(K_aug * K_aug, sizeof(ST_double));
-    ST_double *beta_aug = (ST_double *)calloc(K_aug, sizeof(ST_double));
+    /* beta_exog = (X'P_{Z_aug}X)^{-1} X'P_{Z_aug}y */
+    /* temp_rv = ZaZa_inv * ZaX  (K_iv_aug x K_total) */
+    temp_rv = (ST_double *)calloc(K_iv_aug * K_total, sizeof(ST_double));
+    PZaX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!temp_rv || !PZaX) goto endogtest_cleanup;
 
-    if (XaXa_L && XaXa_inv && beta_aug) {
-        memcpy(XaXa_L, XaXa, K_aug * K_aug * sizeof(ST_double));
-        if (cholesky(XaXa_L, K_aug) == 0) {
-            invert_from_cholesky(XaXa_L, K_aug, XaXa_inv);
+    ctools_matmul_ab(ZaZa_inv, ZaX, K_iv_aug, K_iv_aug, K_total, temp_rv);
+    ctools_matmul_atb(ZaX, temp_rv, K_iv_aug, K_total, K_total, PZaX);
 
-            /* beta_aug = XaXa_inv * Xay */
-            for (i = 0; i < K_aug; i++) {
-                ST_double sum = 0.0;
-                for (k = 0; k < K_aug; k++) {
-                    sum += XaXa_inv[k * K_aug + i] * Xay[k];
-                }
-                beta_aug[i] = sum;
-            }
+    /* PZay = ZaX' * ZaZa_inv * Zay */
+    temp_ry = (ST_double *)calloc(K_iv_aug, sizeof(ST_double));
+    PZay = (ST_double *)calloc(K_total, sizeof(ST_double));
+    if (!temp_ry || !PZay) goto endogtest_cleanup;
 
-            /* Compute residuals and sigma^2 */
-            ST_double sse_aug = 0.0;
-            for (i = 0; i < N; i++) {
-                ST_double fitted = 0.0;
-                for (j = 0; j < K_aug; j++) {
-                    fitted += X_aug[j * N + i] * beta_aug[j];
-                }
-                ST_double r = y[i] - fitted;
-                sse_aug += r * r;
-            }
-
-            ST_int df_aug = N - K_aug - df_a;
-            if (df_aug <= 0) df_aug = 1;
-            ST_double sigma2_aug = sse_aug / df_aug;
-
-            /* gamma = beta_aug[K_total:K_aug-1] */
-            ST_double *gamma = beta_aug + K_total;
-
-            /* Extract v'v block from XaXa */
-            ST_double *XaXa_vv = (ST_double *)calloc(n_endogtest * n_endogtest, sizeof(ST_double));
-            if (XaXa_vv) {
-                for (j = 0; j < n_endogtest; j++) {
-                    for (i = 0; i < n_endogtest; i++) {
-                        XaXa_vv[j * n_endogtest + i] = XaXa[(K_total + j) * K_aug + (K_total + i)];
-                    }
-                }
-
-                /* chi2 = gamma' * XaXa_vv * gamma / sigma2_aug */
-                ST_double quad = 0.0;
-                for (j = 0; j < n_endogtest; j++) {
-                    ST_double sum = 0.0;
-                    for (i = 0; i < n_endogtest; i++) {
-                        sum += XaXa_vv[j * n_endogtest + i] * gamma[i];
-                    }
-                    quad += gamma[j] * sum;
-                }
-
-                *endogtest_stat = quad / sigma2_aug;
-                free(XaXa_vv);
-            }
-        }
+    for (k = 0; k < K_iv_aug; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_iv_aug; j++) sum += ZaZa_inv[(size_t)j * K_iv_aug + k] * Zay[j];
+        temp_ry[k] = sum;
+    }
+    for (k = 0; k < K_total; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_iv_aug; j++) sum += ZaX[(size_t)k * K_iv_aug + j] * temp_ry[j];
+        PZay[k] = sum;
     }
 
-    free(v_resid);
-    free(X_aug);
-    free(XaXa);
-    free(Xay);
-    free(XaXa_L);
-    free(XaXa_inv);
-    free(beta_aug);
+    /* Solve beta_exog = PZaX^{-1} * PZay */
+    PZaX_L = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    PZaX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    beta_exog = (ST_double *)calloc(K_total, sizeof(ST_double));
+    if (!PZaX_L || !PZaX_inv || !beta_exog) goto endogtest_cleanup;
+
+    memcpy(PZaX_L, PZaX, (size_t)K_total * K_total * sizeof(ST_double));
+    if (cholesky(PZaX_L, K_total) != 0) goto endogtest_cleanup;
+    if (invert_from_cholesky(PZaX_L, K_total, PZaX_inv) != 0) goto endogtest_cleanup;
+
+    for (k = 0; k < K_total; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_total; j++) sum += PZaX_inv[(size_t)j * K_total + k] * PZay[j];
+        beta_exog[k] = sum;
+    }
+
+    /* Step 3: Compute exogenous model residuals and RSS */
+    resid_exog = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    if (!resid_exog) goto endogtest_cleanup;
+
+    ST_double rss_exog = 0.0;
+    for (i = 0; i < N; i++) {
+        ST_double fitted = 0.0;
+        for (k = 0; k < K_total; k++)
+            fitted += X_all[(size_t)k * N + i] * beta_exog[k];
+        resid_exog[i] = y[i] - fitted;
+        rss_exog += resid_exog[i] * resid_exog[i];
+    }
+
+    if (rss_exog <= 0.0) goto endogtest_cleanup;
+
+    /* Step 4: Compute J_exog = N * e_exog' Z_aug (Z_aug'Z_aug)^{-1} Z_aug' e_exog / rss_exog */
+    Za_e = (ST_double *)calloc(K_iv_aug, sizeof(ST_double));
+    temp_a = (ST_double *)calloc(K_iv_aug, sizeof(ST_double));
+    if (!Za_e || !temp_a) goto endogtest_cleanup;
+
+    for (k = 0; k < K_iv_aug; k++) {
+        ST_double sum = 0.0;
+        for (i = 0; i < N; i++) sum += Z_aug[(size_t)k * N + i] * resid_exog[i];
+        Za_e[k] = sum;
+    }
+    for (k = 0; k < K_iv_aug; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_iv_aug; j++) sum += ZaZa_inv[(size_t)j * K_iv_aug + k] * Za_e[j];
+        temp_a[k] = sum;
+    }
+    ST_double quad_exog = 0.0;
+    for (k = 0; k < K_iv_aug; k++) quad_exog += Za_e[k] * temp_a[k];
+
+    ST_double J_exog = (ST_double)N * quad_exog / rss_exog;
+
+    /* Step 5: Compute J_orig = N * e_orig' Z (Z'Z)^{-1} Z' e_orig / rss_exog
+       (uses rss_exog, NOT rss_orig — this matches ivreg2's smatrix approach) */
+    Z_e_orig = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    temp_o = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    if (!Z_e_orig || !temp_o) goto endogtest_cleanup;
+
+    for (k = 0; k < K_iv; k++) {
+        ST_double sum = 0.0;
+        for (i = 0; i < N; i++) sum += Z[(size_t)k * N + i] * resid[i];
+        Z_e_orig[k] = sum;
+    }
+    for (k = 0; k < K_iv; k++) {
+        ST_double sum = 0.0;
+        for (j = 0; j < K_iv; j++) sum += ZtZ_inv[(size_t)j * K_iv + k] * Z_e_orig[j];
+        temp_o[k] = sum;
+    }
+    ST_double quad_orig = 0.0;
+    for (k = 0; k < K_iv; k++) quad_orig += Z_e_orig[k] * temp_o[k];
+
+    ST_double J_orig = (ST_double)N * quad_orig / rss_exog;
+
+    /* C = J_exog - J_orig */
+    *endogtest_stat = J_exog - J_orig;
+    if (*endogtest_stat < 0) *endogtest_stat = 0;
+
+endogtest_cleanup:
+    free(Z_aug);
+    free(X_all);
+    free(ZaZa);
+    free(ZaZa_inv);
+    free(ZaX);
+    free(Zay);
+    free(temp_rv);
+    free(PZaX);
+    free(PZay);
+    free(temp_ry);
+    free(PZaX_L);
+    free(PZaX_inv);
+    free(beta_exog);
+    free(resid_exog);
+    free(Za_e);
+    free(temp_a);
+    free(Z_e_orig);
+    free(temp_o);
 }
 
 /*
@@ -2053,7 +2172,7 @@ void civreghdfe_compute_redundant(
         return;
     }
 
-    civreghdfe_matmul_atb(Z_rest, Z_rest, N, K_rest, K_rest, ZrZr);
+    ctools_matmul_atb(Z_rest, Z_rest, N, K_rest, K_rest, ZrZr);
     memcpy(ZrZr_inv, ZrZr, K_rest * K_rest * sizeof(ST_double));
 
     if (cholesky(ZrZr_inv, K_rest) != 0 || invert_from_cholesky(ZrZr_inv, K_rest, ZrZr_inv) != 0) {
@@ -2067,8 +2186,8 @@ void civreghdfe_compute_redundant(
     ST_double *ZrZt = (ST_double *)calloc(K_rest * n_redund, sizeof(ST_double));
 
     if (ZrX && ZrZt) {
-        civreghdfe_matmul_atb(Z_rest, X_endog, N, K_rest, K_endog, ZrX);
-        civreghdfe_matmul_atb(Z_rest, Z_test, N, K_rest, n_redund, ZrZt);
+        ctools_matmul_atb(Z_rest, X_endog, N, K_rest, K_endog, ZrX);
+        ctools_matmul_atb(Z_rest, Z_test, N, K_rest, n_redund, ZrZt);
 
         /* Residualize X_endog on Z_rest: M_r * X_endog */
         ST_double *X_resid = (ST_double *)calloc(N * K_endog, sizeof(ST_double));
@@ -2129,9 +2248,9 @@ void civreghdfe_compute_redundant(
                 ST_double *ZtZt = (ST_double *)calloc(n_redund * n_redund, sizeof(ST_double));
 
                 if (ZtX && XtX && ZtZt) {
-                    civreghdfe_matmul_atb(Zt_resid, X_resid, N, n_redund, K_endog, ZtX);
-                    civreghdfe_matmul_atb(X_resid, X_resid, N, K_endog, K_endog, XtX);
-                    civreghdfe_matmul_atb(Zt_resid, Zt_resid, N, n_redund, n_redund, ZtZt);
+                    ctools_matmul_atb(Zt_resid, X_resid, N, n_redund, K_endog, ZtX);
+                    ctools_matmul_atb(X_resid, X_resid, N, K_endog, K_endog, XtX);
+                    ctools_matmul_atb(Zt_resid, Zt_resid, N, n_redund, n_redund, ZtZt);
 
                     /* LM = N * tr((ZtX' * inv(ZtZt) * ZtX) * inv(XtX)) */
                     ST_double *ZtZt_inv = (ST_double *)calloc(n_redund * n_redund, sizeof(ST_double));

@@ -12,6 +12,10 @@ program define civreghdfe, eclass
         exit 920
     }
 
+    * Start wall clock timer immediately
+    timer clear 97
+    timer on 97
+
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
     * absorb() is optional - without it, runs as regular IV (no FE absorption)
@@ -901,6 +905,11 @@ program define civreghdfe, eclass
         local threads_code "threads(`threads')"
     }
 
+    * Record Stata pre-processing time
+    timer off 97
+    qui timer list 97
+    local t_stata_pre = r(t97)
+
     * Call the C plugin
     timer clear 99
     timer on 99
@@ -980,9 +989,16 @@ program define civreghdfe, eclass
     * Build variable names in [endog, exog] order (matching C output)
     * Use coefficient names which have proper factor variable notation
     * Exclude partialled variables from varnames
+    * Also build full names list (including base/omitted levels) for ivreghdfe compatibility
     local varnames ""
+    local varnames_full ""
     foreach v of local endogvars_coef {
         local varnames `varnames' `v'
+    }
+    if "`endogvars'" != "" {
+        foreach v of local endogvars_names_all {
+            local varnames_full `varnames_full' `v'
+        }
     }
     foreach v of local exogvars_coef {
         * Check if this variable was partialled out
@@ -997,6 +1013,19 @@ program define civreghdfe, eclass
             local varnames `varnames' `v'
         }
     }
+    if "`exogvars'" != "" {
+        foreach v of local exogvars_names_all {
+            local is_partial = 0
+            foreach pv of local partial_vars {
+                if "`v'" == "`pv'" {
+                    local is_partial = 1
+                }
+            }
+            if `is_partial' == 0 {
+                local varnames_full `varnames_full' `v'
+            }
+        }
+    }
 
     * Update K_exog to reflect partialled variables removed
     local K_exog = `K_exog' - `n_partial'
@@ -1006,6 +1035,48 @@ program define civreghdfe, eclass
     tempname V_sym
     matrix `V_sym' = (`V_temp' + `V_temp'') / 2
     matrix `V_temp' = `V_sym'
+
+    * Insert base/omitted factor variable levels (coefficient=0, variance=0)
+    * to match ivreghdfe's e(b) format
+    local K_active : word count `varnames'
+    local K_full : word count `varnames_full'
+    if `K_full' > `K_active' {
+        * Build expanded b and V with zeros for base/omitted levels
+        tempname b_full V_full
+        matrix `b_full' = J(1, `K_full', 0)
+        matrix `V_full' = J(`K_full', `K_full', 0)
+
+        local active_idx = 1
+        forvalues j = 1/`K_full' {
+            local vname : word `j' of `varnames_full'
+            * Check if this is a base or omitted level
+            local is_base = 0
+            if regexm("`vname'", "^[0-9]+b\.") | regexm("`vname'", "^o\.") {
+                local is_base = 1
+            }
+            if `is_base' == 0 {
+                * Copy coefficient from active vector
+                matrix `b_full'[1, `j'] = `b_temp'[1, `active_idx']
+                * Copy row and column of V
+                local active_idx2 = 1
+                forvalues jj = 1/`K_full' {
+                    local vname2 : word `jj' of `varnames_full'
+                    local is_base2 = 0
+                    if regexm("`vname2'", "^[0-9]+b\.") | regexm("`vname2'", "^o\.") {
+                        local is_base2 = 1
+                    }
+                    if `is_base2' == 0 {
+                        matrix `V_full'[`j', `jj'] = `V_temp'[`active_idx', `active_idx2']
+                        local active_idx2 = `active_idx2' + 1
+                    }
+                }
+                local active_idx = `active_idx' + 1
+            }
+        }
+        matrix `b_temp' = `b_full'
+        matrix `V_temp' = `V_full'
+        local varnames `varnames_full'
+    }
 
     * Add column/row names to matrices
     matrix colnames `b_temp' = `varnames'
@@ -1693,28 +1764,35 @@ program define civreghdfe, eclass
 
     * Display timing breakdown if verbose or timeit specified
     if "`verbose'" != "" | "`timeit'" != "" {
-        local t_total_wall = `t_plugin' + `t_stata_post'
+        local t_total_wall = `t_stata_pre' + `t_plugin' + `t_stata_post'
         di as text ""
         di as text "{hline 55}"
         di as text "civreghdfe timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Data load:              " as result %8.4f _civreghdfe_time_load " sec"
+        di as text "    Data load (SPI):        " as result %8.4f _civreghdfe_time_load " sec"
+        di as text "    Data extraction:        " as result %8.4f _civreghdfe_time_extract " sec"
+        di as text "    Missing check+compact:  " as result %8.4f _civreghdfe_time_missing " sec"
         di as text "    Singleton removal:      " as result %8.4f _civreghdfe_time_singleton " sec"
-        di as text "    HDFE setup:             " as result %8.4f _civreghdfe_time_setup " sec"
+        di as text "    FE remap + counts:      " as result %8.4f _civreghdfe_time_remap " sec"
         di as text "    FWL partialling:        " as result %8.4f _civreghdfe_time_fwl " sec"
         di as text "    HDFE partial out:       " as result %8.4f _civreghdfe_time_partial " sec"
-        di as text "    Post-processing:        " as result %8.4f _civreghdfe_time_postproc " sec"
+        di as text "    DOF + post-processing:  " as result %8.4f _civreghdfe_time_dof " sec"
         di as text "    IV estimation + VCE:    " as result %8.4f _civreghdfe_time_estimate " sec"
         di as text "    Stats computation:      " as result %8.4f _civreghdfe_time_stats " sec"
         di as text "    Store results:          " as result %8.4f _civreghdfe_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _civreghdfe_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Setup (parsing, etc):   " as result %8.4f `t_stata_pre' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f (`t_plugin' - _civreghdfe_time_total) " sec"
+        di as text "    Post-processing:        " as result %8.4f `t_stata_post' " sec"
         di as text "  {hline 53}"
-        di as text "  Plugin call (wall clock): " as result %8.4f `t_plugin' " sec"
-        di as text "  Stata post-processing:    " as result %8.4f `t_stata_post' " sec"
-        di as text "  {hline 53}"
-        di as text "  Total wall clock:         " as result %8.4f `t_total_wall' " sec"
+        local __stata_overhead = `t_stata_pre' + (`t_plugin' - _civreghdfe_time_total) + `t_stata_post'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `t_total_wall' " sec"
         di as text "{hline 55}"
 
         * Display thread diagnostics
@@ -1830,17 +1908,18 @@ program define civreghdfe, eclass
     }
 
     * Clean up timing scalars
-    capture scalar drop _civreghdfe_time_load
+    capture scalar drop _civreghdfe_time_load _civreghdfe_time_extract _civreghdfe_time_missing
     capture scalar drop _civreghdfe_time_singleton
-    capture scalar drop _civreghdfe_time_setup
+    capture scalar drop _civreghdfe_time_remap
     capture scalar drop _civreghdfe_time_fwl
     capture scalar drop _civreghdfe_time_partial
-    capture scalar drop _civreghdfe_time_postproc
+    capture scalar drop _civreghdfe_time_dof
     capture scalar drop _civreghdfe_time_estimate
     capture scalar drop _civreghdfe_time_stats
     capture scalar drop _civreghdfe_time_store
     capture scalar drop _civreghdfe_time_total
     capture scalar drop _civreghdfe_threads_max
     capture scalar drop _civreghdfe_openmp_enabled
+    timer clear 97
 
 end

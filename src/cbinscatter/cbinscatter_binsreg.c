@@ -20,6 +20,7 @@
 #include "cbinscatter_binsreg.h"
 #include "cbinscatter_resid.h"
 #include "../ctools_config.h"
+#include "../ctools_ols.h"
 
 /* ========================================================================
  * Helper: Compute within-bin means
@@ -157,19 +158,10 @@ ST_retcode adjust_bins_binsreg(
         }
     }
 
-    /* Solve (X'X) * gamma = X'y using Cholesky */
-    memcpy(gamma, Xty, K * sizeof(ST_double));
-    rc = cholesky_decompose(XtX, K);
-    if (rc != CBINSCATTER_OK) {
+    /* Solve (X'X) * gamma = X'y using shared Cholesky */
+    if (ctools_solve_cholesky(XtX, Xty, K, gamma) != 0) {
         /* If singular, gamma remains zero - bin means are just raw Y means */
-        rc = CBINSCATTER_OK;
         memset(gamma, 0, K * sizeof(ST_double));
-    } else {
-        rc = cholesky_solve(XtX, K, gamma);
-        if (rc != CBINSCATTER_OK) {
-            memset(gamma, 0, K * sizeof(ST_double));
-            rc = CBINSCATTER_OK;
-        }
     }
 
     /* Step 5: Compute overall mean of each control (for "at mean" evaluation) */
@@ -415,25 +407,8 @@ ST_retcode adjust_bins_binsreg_hdfe(
         XtX_full[j * num_regressors + j] += ridge;
     }
 
-    memcpy(coef, Xty_full, num_regressors * sizeof(ST_double));
-    rc = cholesky_decompose(XtX_full, num_regressors);
-    if (rc != CBINSCATTER_OK) {
+    if (ctools_solve_cholesky(XtX_full, Xty_full, num_regressors, coef) != 0) {
         /* Fallback: use simple bin means adjusted by y_mean */
-        rc = compute_bin_means(y_hdfe, bin_ids, weights, N, num_bins, beta);
-        if (rc == CBINSCATTER_OK) {
-            for (ST_int b = 0; b < num_bins; b++) {
-                result->bins[b].y_mean = beta[b] + y_mean;
-            }
-        }
-        free(XtX_full);
-        free(Xty_full);
-        free(coef);
-        goto cleanup;
-    }
-
-    rc = cholesky_solve(XtX_full, num_regressors, coef);
-    if (rc != CBINSCATTER_OK) {
-        /* Fallback */
         rc = compute_bin_means(y_hdfe, bin_ids, weights, N, num_bins, beta);
         if (rc == CBINSCATTER_OK) {
             for (ST_int b = 0; b < num_bins; b++) {

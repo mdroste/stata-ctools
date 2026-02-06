@@ -6,7 +6,7 @@
  */
 
 #include "creghdfe_utils.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "../ctools_hdfe_utils.h"
 
 /* ========================================================================

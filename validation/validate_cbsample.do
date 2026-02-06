@@ -42,11 +42,11 @@ cbsample
 local N_after = _N
 
 * With bootstrap expand/drop, N should be approximately N_before
-if `N_after' > 0 {
+if `N_after' > 0 & `N_after' <= 2 * `N_before' {
     test_pass "basic bootstrap sample (N=`N_after' from `N_before')"
 }
 else {
-    test_fail "basic bootstrap sample" "unexpected N=`N_after'"
+    test_fail "basic bootstrap sample" "N=`N_after' from `N_before' (unexpected size)"
 }
 
 * Explicit n (positional argument, like bsample)
@@ -55,11 +55,73 @@ set obs 100
 gen id = _n
 set seed 12345
 cbsample 50
-if _N > 0 {
+if _N == 50 {
     test_pass "bootstrap with n=50 (N=`=_N')"
 }
 else {
-    test_fail "bootstrap with n=50" "N=`=_N'"
+    test_fail "bootstrap with n=50" "N=`=_N', expected 50"
+}
+
+/*******************************************************************************
+ * SECTION 2b: Deterministic comparison with bsample
+ ******************************************************************************/
+print_section "Deterministic Comparison with bsample"
+
+* Compare cbsample to Stata's bsample using the same seed
+clear
+set obs 100
+gen id = _n
+
+set seed 12345
+preserve
+bsample
+local stata_N = _N
+restore
+
+clear
+set obs 100
+gen id = _n
+
+set seed 12345
+preserve
+cbsample
+local ctools_N = _N
+restore
+
+* Both should produce same N with same seed
+if `stata_N' == `ctools_N' {
+    test_pass "cbsample matches bsample with same seed (N=`ctools_N')"
+}
+else {
+    test_fail "cbsample vs bsample" "N differ: bsample=`stata_N' cbsample=`ctools_N'"
+}
+
+* Compare with explicit n argument
+clear
+set obs 100
+gen id = _n
+
+set seed 54321
+preserve
+bsample 50
+local stata_N = _N
+restore
+
+clear
+set obs 100
+gen id = _n
+
+set seed 54321
+preserve
+cbsample 50
+local ctools_N = _N
+restore
+
+if `stata_N' == `ctools_N' {
+    test_pass "cbsample 50 matches bsample 50 with same seed (N=`ctools_N')"
+}
+else {
+    test_fail "cbsample 50 vs bsample 50" "N differ: bsample=`stata_N' cbsample=`ctools_N'"
 }
 
 /*******************************************************************************
@@ -94,7 +156,7 @@ else {
 * Check total weight sums to ~100
 summarize bsweight, meanonly
 local total_weight = r(sum)
-if abs(`total_weight' - 100) < 10 {
+if abs(`total_weight' - 100) < 5 {
     test_pass "total weight ~100 (got `total_weight')"
 }
 else {
@@ -180,9 +242,9 @@ gen w2 = .
 set seed 99999
 cbsample, weight(w2)
 
-* Merge and compare
+* Merge and compare (deterministic: same seed must produce exact same weights)
 merge 1:1 id using `sample1'
-count if abs(w1 - w2) > 0.001
+count if w1 != w2
 local n_diff = r(N)
 
 if `n_diff' == 0 {
@@ -206,7 +268,8 @@ set seed 12345
 cbsample, weight(bsweight)
 summarize bsweight, meanonly
 local total = r(sum)
-if abs(`total' - 10) < 3 {
+* Small N means more variance; use 2-unit tolerance (~20% for N=10)
+if abs(`total' - 10) < 2 {
     test_pass "small dataset bootstrap (total weight ~10)"
 }
 else {
@@ -222,7 +285,7 @@ set seed 12345
 cbsample 200, weight(bsweight)
 summarize bsweight, meanonly
 local total = r(sum)
-if abs(`total' - 200) < 20 {
+if abs(`total' - 200) < 10 {
     test_pass "n > nobs bootstrap (total weight ~200)"
 }
 else {
@@ -424,11 +487,11 @@ cbsample
 * Without weight(), data should be expanded/contracted via expand
 * Total obs should be approximately equal to N_before (may differ due to sampling)
 local N_after = _N
-if `N_after' > 0 {
+if `N_after' > 0 & `N_after' <= 2 * `N_before' {
     test_pass "without weight(): data modified (N went from `N_before' to `N_after')"
 }
 else {
-    test_fail "without weight(): data modified" "N_after=`N_after'"
+    test_fail "without weight(): data modified" "N=`N_after' from `N_before' (unexpected size)"
 }
 
 * With explicit n, expanded data should sum to approximately n
@@ -467,15 +530,15 @@ cbsample, strata(stratum) weight(bsweight)
 * Total weight per stratum should be close to stratum size
 local all_ok = 1
 summarize bsweight if stratum == 0, meanonly
-if abs(r(sum) - 200) > 30 {
+if abs(r(sum) - 200) > 20 {
     local all_ok = 0
 }
 summarize bsweight if stratum == 1, meanonly
-if abs(r(sum) - 400) > 50 {
+if abs(r(sum) - 400) > 30 {
     local all_ok = 0
 }
 summarize bsweight if stratum == 2, meanonly
-if abs(r(sum) - 400) > 50 {
+if abs(r(sum) - 400) > 30 {
     local all_ok = 0
 }
 

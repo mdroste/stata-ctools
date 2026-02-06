@@ -16,7 +16,7 @@
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_config.h"
-#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
 /* OpenMP for parallel residual computation */
 #ifdef _OPENMP
@@ -24,9 +24,9 @@
 #endif
 
 /* Convenience aliases for the matrix functions */
-#define matmul_atb  civreghdfe_matmul_atb
-#define matmul_ab   civreghdfe_matmul_ab
-#define matmul_atdb civreghdfe_matmul_atdb
+#define matmul_atb  ctools_matmul_atb
+#define matmul_ab   ctools_matmul_ab
+#define matmul_atdb ctools_matmul_atdb
 #define compute_liml_lambda civreghdfe_compute_liml_lambda
 
 /* Shared OLS functions */
@@ -123,9 +123,9 @@ ST_retcode ivest_init_context(
 
     /* Compute Z'Z (weighted if needed) */
     if (weights && weight_type != 0) {
-        civreghdfe_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ctx->ZtZ);
+        ctools_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ctx->ZtZ);
     } else {
-        civreghdfe_matmul_atb(Z, Z, N, K_iv, K_iv, ctx->ZtZ);
+        ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ctx->ZtZ);
     }
 
     /* Invert Z'Z */
@@ -143,7 +143,7 @@ ST_retcode ivest_init_context(
 
     /* Compute Z'X and Z'y */
     if (weights && weight_type != 0) {
-        civreghdfe_matmul_atdb(Z, ctx->X_all, weights, N, K_iv, K_total, ctx->ZtX);
+        ctools_matmul_atdb(Z, ctx->X_all, weights, N, K_iv, K_total, ctx->ZtX);
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
             ST_double sum = 0.0;
@@ -154,7 +154,7 @@ ST_retcode ivest_init_context(
             ctx->Zty[i] = sum;
         }
     } else {
-        civreghdfe_matmul_atb(Z, ctx->X_all, N, K_iv, K_total, ctx->ZtX);
+        ctools_matmul_atb(Z, ctx->X_all, N, K_iv, K_total, ctx->ZtX);
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
             ST_double sum = 0.0;
@@ -167,7 +167,7 @@ ST_retcode ivest_init_context(
     }
 
     /* Compute (Z'Z)^-1 * Z'X -> temp_kiv_ktotal */
-    civreghdfe_matmul_ab(ctx->ZtZ_inv, ctx->ZtX, K_iv, K_iv, K_total, ctx->temp_kiv_ktotal);
+    ctools_matmul_ab(ctx->ZtZ_inv, ctx->ZtX, K_iv, K_iv, K_total, ctx->temp_kiv_ktotal);
 
     /* Compute X'P_Z X = (Z'X)' * (Z'Z)^-1 * Z'X */
     for (j = 0; j < K_total; j++) {
@@ -250,7 +250,7 @@ ST_retcode ivest_compute_kclass(
         ST_double *Xty = (ST_double *)calloc(K_total, sizeof(ST_double));
 
         if (ctx->weights && ctx->weight_type != 0) {
-            civreghdfe_matmul_atdb(ctx->X_all, ctx->X_all, ctx->weights, N, K_total, K_total, XtX);
+            ctools_matmul_atdb(ctx->X_all, ctx->X_all, ctx->weights, N, K_total, K_total, XtX);
             for (i = 0; i < K_total; i++) {
                 ST_double sum = 0.0;
                 const ST_double *x_col = ctx->X_all + i * N;
@@ -260,7 +260,7 @@ ST_retcode ivest_compute_kclass(
                 Xty[i] = sum;
             }
         } else {
-            civreghdfe_matmul_atb(ctx->X_all, ctx->X_all, N, K_total, K_total, XtX);
+            ctools_matmul_atb(ctx->X_all, ctx->X_all, N, K_total, K_total, XtX);
             for (i = 0; i < K_total; i++) {
                 ST_double sum = 0.0;
                 const ST_double *x_col = ctx->X_all + i * N;
@@ -430,7 +430,7 @@ ST_retcode ivest_compute_gmm2s(
     /* Compute GMM estimator: β = (X'ZWZ'X)^-1 X'ZWZ'y */
     /* 1. WZtX = W * Z'X */
     ST_double *WZtX = (ST_double *)calloc(K_iv * K_total, sizeof(ST_double));
-    civreghdfe_matmul_ab(ZOmegaZ_inv, ctx->ZtX, K_iv, K_iv, K_total, WZtX);
+    ctools_matmul_ab(ZOmegaZ_inv, ctx->ZtX, K_iv, K_iv, K_total, WZtX);
 
     /* 2. XZW = (Z'X)' * W (K_total x K_iv) */
     ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
@@ -1904,10 +1904,10 @@ ST_retcode ivest_compute_2sls(
             ST_int cstat_df = n_orthog;
 
             civreghdfe_compute_cstat(
-                resid, Z, N, K_exog, K_endog, K_iv,
+                y, X_exog, X_endog, Z, N, K_exog, K_endog, K_iv,
                 orthog_indices, n_orthog,
                 vce_type, weights, weight_type, cluster_ids, num_clusters,
-                sargan_stat, &cstat, &cstat_df
+                sargan_stat, rss, &cstat, &cstat_df
             );
 
             if (!g_civreghdfe_noreturn) {
@@ -1940,8 +1940,8 @@ ST_retcode ivest_compute_2sls(
             ST_int endogtest_df_out = n_endogtest;
 
             civreghdfe_compute_endogtest_subset(
-                y, X_exog, X_endog, Z, temp1,
-                N, K_exog, K_endog, K_iv, df_a_full,
+                y, X_exog, X_endog, Z, resid, ZtZ_inv,
+                N, K_exog, K_endog, K_iv,
                 endogtest_indices, n_endogtest,
                 &endogtest_stat, &endogtest_df_out
             );

@@ -24,8 +24,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
-#include "ctools_error.h"
+#include "ctools_runtime.h"
 #include "ctools_select.h"
 #include "ctools_parse.h"
 #include "ctools_simd.h"
@@ -54,37 +53,30 @@ static void apply_permutation(double *data, const size_t *perm, size_t n, double
    Uses shared ctools_quickselect_double from ctools_select.h
    =========================================================================== */
 
-/* Compute a single percentile using Stata's _pctile method.
- *
- * For n sorted values x[1]..x[n] (1-based) and percentile p:
+/* Percentile via O(n) quickselect.
  *   h = n * p / 100,  j = floor(h),  g = h - j
- *   if g > 0:              percentile = x[j+1]         = sorted[j]   (0-based)
- *   if g == 0 and j > 0:   percentile = (x[j]+x[j+1])/2 = avg(sorted[j-1], sorted[j])
- *   if g == 0 and j == 0:  percentile = x[1]            = sorted[0]
- *   if j >= n:              percentile = x[n]            = sorted[n-1]
+ *   g > 0          → sorted[j]
+ *   g == 0, j > 0  → (sorted[j-1] + sorted[j]) / 2
+ *   g == 0, j == 0 → sorted[0]
  */
-static double compute_pctile_stata(double *work, size_t n, double pctl)
+static double compute_percentile(double *work, size_t n, double pctl)
 {
     double h = (double)n * pctl / 100.0;
     size_t j = (size_t)floor(h);
     double g = h - (double)j;
 
-    if (j >= n) {
+    if (j >= n)
         return ctools_quickselect_double(work, n, n - 1);
-    }
 
-    if (g > 0.0) {
+    if (g > 0.0)
         return ctools_quickselect_double(work, n, j);
-    }
 
-    if (j == 0) {
+    if (j == 0)
         return ctools_quickselect_double(work, n, 0);
-    }
 
-    /* Exact integer position, j > 0: average of sorted[j-1] and sorted[j] */
+    /* Exact integer position: average sorted[j-1] and sorted[j] */
     double v1 = ctools_quickselect_double(work, n, j - 1);
-    /* After quickselect for j-1, work[j..n-1] are all >= v1.
-       The minimum of that range is sorted[j]. */
+    /* After quickselect for j-1, work[j..n-1] >= v1; min of that range is sorted[j] */
     double v2 = work[j];
     for (size_t i = j + 1; i < n; i++) {
         if (work[i] < v2) v2 = work[i];
@@ -108,8 +100,8 @@ static void compute_two_percentiles(double *work, size_t n,
         return;
     }
 
-    *result_lo = compute_pctile_stata(work, n, pctl_lo);
-    *result_hi = compute_pctile_stata(work, n, pctl_hi);
+    *result_lo = compute_percentile(work, n, pctl_lo);
+    *result_hi = compute_percentile(work, n, pctl_hi);
 }
 
 /* ===========================================================================

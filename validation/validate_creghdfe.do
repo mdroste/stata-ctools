@@ -533,7 +533,7 @@ if _rc == 0 {
     test_pass "collinear regressors handled (dropped)"
 }
 else {
-    test_pass "collinear regressors - error gracefully (rc=`=_rc')"
+    test_fail "collinear regressors" "should drop collinear vars but returned error rc=`=_rc'"
 }
 
 * Variable collinear with FE
@@ -550,7 +550,7 @@ if _rc == 0 {
     test_pass "regressor collinear with FE handled"
 }
 else {
-    test_pass "regressor collinear with FE - error gracefully (rc=`=_rc')"
+    test_fail "regressor collinear with FE" "should drop collinear var but returned error rc=`=_rc'"
 }
 
 /*******************************************************************************
@@ -571,12 +571,15 @@ benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster cluster_var) tes
 * Single cluster (extreme case)
 sysuse auto, clear
 gen single_cluster = 1
+capture reghdfe price mpg weight, absorb(foreign) vce(cluster single_cluster)
+local stata_rc = _rc
 capture creghdfe price mpg weight, absorb(foreign) vce(cluster single_cluster)
-if _rc != 0 {
-    test_pass "single cluster - fails gracefully (rc=`=_rc')"
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "single cluster (both rc=`stata_rc')"
 }
 else {
-    test_pass "single cluster - runs (may have warnings)"
+    test_fail "single cluster" "rc differ: reghdfe=`stata_rc' creghdfe=`ctools_rc'"
 }
 
 * Two clusters
@@ -835,10 +838,10 @@ if _rc != 0 {
     test_pass "all zeros in X - fails gracefully (rc=`=_rc')"
 }
 else {
-    test_pass "all zeros in X - handled"
+    test_fail "all zeros in X" "should error on all-zero regressor (collinearity) but succeeded"
 }
 
-* Constant Y
+* Constant Y (reghdfe succeeds with constant depvar, so creghdfe should too)
 clear
 set seed 214
 set obs 1000
@@ -847,11 +850,11 @@ gen x = runiform()
 gen y = 100  // Constant
 
 capture creghdfe y x, absorb(id)
-if _rc != 0 {
-    test_pass "constant Y - fails gracefully (rc=`=_rc')"
+if _rc == 0 {
+    test_pass "constant Y - succeeds like reghdfe"
 }
 else {
-    test_pass "constant Y - handled"
+    test_fail "constant Y" "should succeed like reghdfe but got rc=`=_rc'"
 }
 
 /*******************************************************************************
@@ -1064,11 +1067,33 @@ if _rc == 0 {
     capture local creghdfe_coef_foreign = _b[1.foreign]
     if _rc != 0 local creghdfe_coef_foreign = _b[foreign]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef_foreign' - `creghdfe_coef_foreign') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_coef_foreign' `creghdfe_coef_foreign'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "coef sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.foreign (2 levels)"
     }
     else {
-        test_fail "i.foreign (2 levels)" "N or r2 or coef differs"
+        test_fail "i.foreign (2 levels)" "`fail_reason'"
     }
 }
 else {
@@ -1086,11 +1111,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.rep78 (5 levels)"
     }
     else {
-        test_fail "i.rep78 (5 levels)" "N=`reghdfe_N'/`creghdfe_N' r2=`reghdfe_r2'/`creghdfe_r2'"
+        test_fail "i.rep78 (5 levels)" "`fail_reason'"
     }
 }
 else {
@@ -1108,11 +1147,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.foreign + robust"
     }
     else {
-        test_fail "i.foreign + robust" "N or r2 differs"
+        test_fail "i.foreign + robust" "`fail_reason'"
     }
 }
 else {
@@ -1130,11 +1183,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.rep78 + cluster"
     }
     else {
-        test_fail "i.rep78 + cluster" "N or r2 differs"
+        test_fail "i.rep78 + cluster" "`fail_reason'"
     }
 }
 else {
@@ -1153,11 +1220,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.race panel"
     }
     else {
-        test_fail "i.race panel" "N or r2 differs"
+        test_fail "i.race panel" "`fail_reason'"
     }
 }
 else {
@@ -1176,11 +1257,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.race two-way FE"
     }
     else {
-        test_fail "i.race two-way FE" "N or r2 differs"
+        test_fail "i.race two-way FE" "`fail_reason'"
     }
 }
 else {
@@ -1198,11 +1293,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "c.mpg#i.foreign interaction"
     }
     else {
-        test_fail "c.mpg#i.foreign" "N or r2 differs"
+        test_fail "c.mpg#i.foreign" "`fail_reason'"
     }
 }
 else {
@@ -1220,11 +1329,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.race#i.married interaction"
     }
     else {
-        test_fail "i.race#i.married" "N or r2 differs"
+        test_fail "i.race#i.married" "`fail_reason'"
     }
 }
 else {
@@ -1242,11 +1365,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "ib3.rep78 (custom base level)"
     }
     else {
-        test_fail "ib3.rep78" "N or r2 differs"
+        test_fail "ib3.rep78" "`fail_reason'"
     }
 }
 else {
@@ -1264,11 +1401,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.foreign##c.mpg full factorial"
     }
     else {
-        test_fail "i.foreign##c.mpg" "N or r2 differs"
+        test_fail "i.foreign##c.mpg" "`fail_reason'"
     }
 }
 else {
@@ -1287,11 +1438,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.race i.union (multiple factors)"
     }
     else {
-        test_fail "multiple factors" "N or r2 differs"
+        test_fail "multiple factors" "`fail_reason'"
     }
 }
 else {
@@ -1327,11 +1492,33 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[L_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_coef' `creghdfe_coef'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "coef sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lag (L.mvalue equivalent)"
     }
     else {
-        test_fail "manual lag" "N or r2 or coef differs"
+        test_fail "manual lag" "`fail_reason'"
     }
 }
 else {
@@ -1353,11 +1540,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual multiple lags (L. L2. equivalent)"
     }
     else {
-        test_fail "manual multiple lags" "N or r2 differs"
+        test_fail "manual multiple lags" "`fail_reason'"
     }
 }
 else {
@@ -1380,11 +1581,33 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[D_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_coef' `creghdfe_coef'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "coef sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual difference (D.mvalue equivalent)"
     }
     else {
-        test_fail "manual difference" "N or r2 or coef differs"
+        test_fail "manual difference" "`fail_reason'"
     }
 }
 else {
@@ -1407,11 +1630,33 @@ if _rc == 0 {
     local creghdfe_r2 = e(r2)
     local creghdfe_coef = _b[F_mvalue]
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL & abs(`reghdfe_coef' - `creghdfe_coef') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_coef' `creghdfe_coef'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "coef sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lead (F.mvalue equivalent)"
     }
     else {
-        test_fail "manual lead" "N or r2 or coef differs"
+        test_fail "manual lead" "`fail_reason'"
     }
 }
 else {
@@ -1432,11 +1677,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lag + two-way FE"
     }
     else {
-        test_fail "manual lag + two-way FE" "N or r2 differs"
+        test_fail "manual lag + two-way FE" "`fail_reason'"
     }
 }
 else {
@@ -1457,11 +1716,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lag + robust"
     }
     else {
-        test_fail "manual lag + robust" "N or r2 differs"
+        test_fail "manual lag + robust" "`fail_reason'"
     }
 }
 else {
@@ -1482,11 +1755,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lag + cluster"
     }
     else {
-        test_fail "manual lag + cluster" "N or r2 differs"
+        test_fail "manual lag + cluster" "`fail_reason'"
     }
 }
 else {
@@ -1508,11 +1795,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "nlswork manual lag"
     }
     else {
-        test_fail "nlswork manual lag" "N or r2 differs"
+        test_fail "nlswork manual lag" "`fail_reason'"
     }
 }
 else {
@@ -1534,49 +1835,71 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "nlswork manual difference"
     }
     else {
-        test_fail "nlswork manual difference" "N or r2 differs"
+        test_fail "nlswork manual difference" "`fail_reason'"
     }
 }
 else {
     test_fail "nlswork manual difference" "creghdfe returned error `=_rc'"
 }
 
-* Direct L. operator error handling - verify appropriate error or handling
+* Direct L. operator error handling - verify behavior matches reghdfe
 webuse grunfeld, clear
 xtset company year
+capture reghdfe invest L.mvalue kstock, absorb(company)
+local stata_rc = _rc
 capture creghdfe invest L.mvalue kstock, absorb(company)
-if _rc != 0 {
-    test_pass "direct L.var error handling (rc=`=_rc')"
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "direct L.var (both rc=`stata_rc')"
 }
 else {
-    * If it succeeds, verify results make sense (creghdfe may support direct TS operators)
-    test_pass "direct L.var accepted (N=`=e(N)')"
+    test_fail "direct L.var" "rc differ: reghdfe=`stata_rc' creghdfe=`ctools_rc'"
 }
 
-* Direct D. operator error handling
+* Direct D. operator error handling - verify behavior matches reghdfe
 webuse grunfeld, clear
 xtset company year
+capture reghdfe invest D.mvalue kstock, absorb(company)
+local stata_rc = _rc
 capture creghdfe invest D.mvalue kstock, absorb(company)
-if _rc != 0 {
-    test_pass "direct D.var error handling (rc=`=_rc')"
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "direct D.var (both rc=`stata_rc')"
 }
 else {
-    test_pass "direct D.var accepted (N=`=e(N)')"
+    test_fail "direct D.var" "rc differ: reghdfe=`stata_rc' creghdfe=`ctools_rc'"
 }
 
-* Direct F. operator error handling
+* Direct F. operator error handling - verify behavior matches reghdfe
 webuse grunfeld, clear
 xtset company year
+capture reghdfe invest F.mvalue kstock, absorb(company)
+local stata_rc = _rc
 capture creghdfe invest F.mvalue kstock, absorb(company)
-if _rc != 0 {
-    test_pass "direct F.var error handling (rc=`=_rc')"
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    test_pass "direct F.var (both rc=`stata_rc')"
 }
 else {
-    test_pass "direct F.var accepted (N=`=e(N)')"
+    test_fail "direct F.var" "rc differ: reghdfe=`stata_rc' creghdfe=`ctools_rc'"
 }
 
 * Lead and lag together
@@ -1594,11 +1917,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "lead and lag together"
     }
     else {
-        test_fail "lead and lag together" "N or r2 differs"
+        test_fail "lead and lag together" "`fail_reason'"
     }
 }
 else {
@@ -1619,11 +1956,25 @@ if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
 
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "manual lag + i.company factor"
     }
     else {
-        test_fail "lag + factor" "N or r2 differs"
+        test_fail "lag + factor" "`fail_reason'"
     }
 }
 else {
@@ -2639,11 +2990,25 @@ capture creghdfe price mpg i.foreign [aw=weight], absorb(rep78)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.foreign + aweight"
     }
     else {
-        test_fail "i.foreign + aweight" "N or r2 differs"
+        test_fail "i.foreign + aweight" "`fail_reason'"
     }
 }
 else {
@@ -2661,11 +3026,25 @@ capture creghdfe price mpg i.rep78 [fw=fw], absorb(foreign)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.rep78 + fweight"
     }
     else {
-        test_fail "i.rep78 + fweight" "N or r2 differs"
+        test_fail "i.rep78 + fweight" "`fail_reason'"
     }
 }
 else {
@@ -2683,11 +3062,25 @@ capture creghdfe price c.mpg#i.foreign weight [pw=pw_var], absorb(rep78) vce(rob
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "interaction + pweight + robust"
     }
     else {
-        test_fail "interaction + pweight + robust" "N or r2 differs"
+        test_fail "interaction + pweight + robust" "`fail_reason'"
     }
 }
 else {
@@ -2711,11 +3104,25 @@ capture creghdfe price mpg weight i.foreign if price > 5000, absorb(rep78)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.foreign + if condition"
     }
     else {
-        test_fail "i.foreign + if" "N or r2 differs"
+        test_fail "i.foreign + if" "`fail_reason'"
     }
 }
 else {
@@ -2732,11 +3139,25 @@ capture creghdfe price mpg i.rep78 in 1/50, absorb(foreign)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.rep78 + in condition"
     }
     else {
-        test_fail "i.rep78 + in" "N or r2 differs"
+        test_fail "i.rep78 + in" "`fail_reason'"
     }
 }
 else {
@@ -2753,11 +3174,25 @@ capture creghdfe price mpg i.rep78 if foreign == 0, absorb(turn) vce(cluster tur
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "factor + if + cluster"
     }
     else {
-        test_fail "factor + if + cluster" "N or r2 differs"
+        test_fail "factor + if + cluster" "`fail_reason'"
     }
 }
 else {
@@ -2782,11 +3217,25 @@ capture creghdfe wage i.race##i.married, absorb(industry)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "i.race##i.married full factorial"
     }
     else {
-        test_fail "i.race##i.married" "N or r2 differs"
+        test_fail "i.race##i.married" "`fail_reason'"
     }
 }
 else {
@@ -2803,11 +3252,25 @@ capture creghdfe price c.weight##i.foreign, absorb(rep78)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "c.weight##i.foreign"
     }
     else {
-        test_fail "c.weight##i.foreign" "N or r2 differs"
+        test_fail "c.weight##i.foreign" "`fail_reason'"
     }
 }
 else {
@@ -2824,11 +3287,25 @@ capture creghdfe price mpg ibn.foreign, absorb(rep78)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "ibn.foreign (no base)"
     }
     else {
-        test_fail "ibn.foreign" "N or r2 differs"
+        test_fail "ibn.foreign" "`fail_reason'"
     }
 }
 else {
@@ -2845,11 +3322,25 @@ capture creghdfe price c.mpg#i.foreign c.weight#i.foreign, absorb(rep78)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "multiple c.var#i.var interactions"
     }
     else {
-        test_fail "multiple interactions" "N or r2 differs"
+        test_fail "multiple interactions" "`fail_reason'"
     }
 }
 else {
@@ -2868,11 +3359,25 @@ capture creghdfe ln_wage age i.union c.tenure#i.union, absorb(idcode year)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "factor + interaction + two-way FE panel"
     }
     else {
-        test_fail "factor + interaction + panel" "N or r2 differs"
+        test_fail "factor + interaction + panel" "`fail_reason'"
     }
 }
 else {
@@ -3556,11 +4061,25 @@ capture creghdfe wage tenure i.race age [pw=pw_var], absorb(industry occupation)
 if _rc == 0 {
     local creghdfe_N = e(N)
     local creghdfe_r2 = e(r2)
-    if `reghdfe_N' == `creghdfe_N' & abs(`reghdfe_r2' - `creghdfe_r2') < $DEFAULT_TOL {
+    local all_ok = 1
+    local fail_reason ""
+    if `reghdfe_N' != `creghdfe_N' {
+        local all_ok = 0
+        local fail_reason "N differs: `reghdfe_N' vs `creghdfe_N'"
+    }
+    if `all_ok' {
+        sigfigs `reghdfe_r2' `creghdfe_r2'
+        if r(sigfigs) < $DEFAULT_SIGFIGS {
+            local all_ok = 0
+            local sf_got : display %5.1f r(sigfigs)
+            local fail_reason "r2 sigfigs=`sf_got'"
+        }
+    }
+    if `all_ok' {
         test_pass "factor + pweight + cluster + two-way FE"
     }
     else {
-        test_fail "factor + pweight + cluster" "N or r2 differs"
+        test_fail "factor + pweight + cluster" "`fail_reason'"
     }
 }
 else {
@@ -3894,34 +4413,15 @@ else {
 * Non-integer fweight
 sysuse auto, clear
 gen float_fw = 1.5
-capture creghdfe price mpg [fw=float_fw], absorb(foreign)
-if _rc != 0 {
-    test_pass "non-integer fweight: error (rc=`=_rc')"
-}
-else {
-    test_pass "non-integer fweight: accepted (may round)"
-}
+test_error_match, stata_cmd(reghdfe price mpg [fw=float_fw], absorb(foreign)) ctools_cmd(creghdfe price mpg [fw=float_fw], absorb(foreign)) testname("non-integer fweight")
 
 * Invalid vce specification
 sysuse auto, clear
-capture creghdfe price mpg, absorb(foreign) vce(bootstrap)
-if _rc != 0 {
-    test_pass "invalid vce(bootstrap): error (rc=`=_rc')"
-}
-else {
-    test_pass "vce(bootstrap): accepted (unexpected)"
-}
+test_error_match, stata_cmd(reghdfe price mpg, absorb(foreign) vce(bootstrap)) ctools_cmd(creghdfe price mpg, absorb(foreign) vce(bootstrap)) testname("invalid vce(bootstrap)")
 
 * Absorb with continuous variable
 sysuse auto, clear
-capture creghdfe price mpg, absorb(weight)
-if _rc == 0 {
-    * This is technically valid - Stata treats continuous vars as FE groups
-    test_pass "absorb continuous var: accepted (N=`=e(N)')"
-}
-else {
-    test_pass "absorb continuous var: error (rc=`=_rc')"
-}
+test_error_match, stata_cmd(reghdfe price mpg, absorb(weight)) ctools_cmd(creghdfe price mpg, absorb(weight)) testname("absorb continuous var")
 
 /*******************************************************************************
  * SECTION 58: e(b) and e(V) coefficient name matching

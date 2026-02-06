@@ -87,13 +87,17 @@ int ctools_parse_int_option(const char *args, const char *key, int *value)
     /* Move past "key=" */
     p += keylen + 1;
 
-    /* Parse integer using safe conversion */
-    int result;
-    if (!ctools_safe_atoi(p, &result)) {
+    /* Parse integer value (stops at first non-digit character).
+     * We use strtol directly instead of ctools_safe_atoi because the value
+     * may be followed by other options (e.g., "nvars=1 force"). */
+    char *endptr;
+    errno = 0;
+    long result = strtol(p, &endptr, 10);
+    if (endptr == p || errno == ERANGE || result > INT_MAX || result < INT_MIN) {
         return 0;
     }
 
-    *value = result;
+    *value = (int)result;
     return 1;
 }
 

@@ -168,6 +168,91 @@ program define cimport_test
 end
 
 /*******************************************************************************
+ * Helper: benchmark_import_errtol - Error-tolerant import comparison
+ * Like benchmark_import but handles expected errors: if both commands error
+ * with the same rc, that counts as a pass. When both succeed, does full
+ * data comparison via cf _all (with positional variable renaming).
+ *
+ * Required: using/ - path to CSV file
+ *           testname() - the test name
+ ******************************************************************************/
+capture program drop benchmark_import_errtol
+program define benchmark_import_errtol
+    syntax using/, testname(string)
+
+    * Run Stata import delimited (with varnames(1) and encoding(utf-8))
+    preserve
+    capture import delimited `using', varnames(1) encoding(utf-8) clear
+    local stata_rc = _rc
+    if `stata_rc' == 0 {
+        tempfile stata_data
+        quietly save `stata_data', replace
+        local stata_N = _N
+        local stata_k = c(k)
+    }
+    restore
+
+    * Run cimport
+    capture cimport delimited `using', clear
+    local cimport_rc = _rc
+
+    * Both errored
+    if `cimport_rc' != 0 & `stata_rc' != 0 {
+        if `cimport_rc' == `stata_rc' {
+            test_pass "`testname' (both error rc=`cimport_rc')"
+        }
+        else {
+            test_fail "`testname'" "error codes differ: stata=`stata_rc' cimport=`cimport_rc'"
+        }
+        exit
+    }
+
+    * One errored, other didn't
+    if `cimport_rc' != 0 | `stata_rc' != 0 {
+        test_fail "`testname'" "one errored: stata rc=`stata_rc', cimport rc=`cimport_rc'"
+        exit
+    }
+
+    * Both succeeded - check dimensions
+    if _N != `stata_N' | c(k) != `stata_k' {
+        test_fail "`testname'" "dimensions differ: N=`=_N' vs `stata_N', K=`=c(k)' vs `stata_k'"
+        exit
+    }
+
+    * Dimensions match - compare data content with positional variable renaming
+    tempfile cimport_data
+    quietly save `cimport_data', replace
+
+    use `stata_data', clear
+    quietly ds
+    local stata_vars `r(varlist)'
+    local i = 1
+    foreach v of local stata_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+    tempfile stata_renamed
+    quietly save `stata_renamed', replace
+
+    use `cimport_data', clear
+    quietly ds
+    local cimport_vars `r(varlist)'
+    local i = 1
+    foreach v of local cimport_vars {
+        quietly rename `v' __cmp_v`i'
+        local i = `i' + 1
+    }
+
+    capture cf _all using `stata_renamed'
+    if _rc == 0 {
+        test_pass "`testname'"
+    }
+    else {
+        test_fail "`testname'" "cf _all comparison failed - data not identical"
+    }
+end
+
+/*******************************************************************************
  * Create Test Data Files (call helper script)
  ******************************************************************************/
 capture do "validation/validate_cimport_helper.do"
@@ -795,11 +880,11 @@ print_section "Pathological Data - Type Inference"
 benchmark_import using "temp/boolean_like.csv", testname("boolean-like values")
 benchmark_import using "temp/date_formats.csv", testname("date-like values")
 
-* Time formats - column parsing may differ from Stata
-cimport_test using "temp/time_formats.csv", testname("time-like values") expectn(3)
+* Time formats - compare with Stata's behavior (error-tolerant)
+benchmark_import_errtol using "temp/time_formats.csv", testname("time-like values")
 
-* Currency values - quoting/parsing may differ from Stata
-cimport_test using "temp/currency_values.csv", testname("currency values") expectn(2)
+* Currency values - compare with Stata's behavior (error-tolerant)
+benchmark_import_errtol using "temp/currency_values.csv", testname("currency values")
 
 benchmark_import using "temp/percentage_values.csv", testname("percentage values")
 benchmark_import using "temp/ambiguous_types.csv", testname("ambiguous types")
@@ -1426,13 +1511,7 @@ file write fh `"1,"start,100"' _n
 file write fh `"2,end",200"' _n
 file close fh
 
-capture cimport delimited using "temp/boundary_quotes.csv", clear
-if _rc == 0 {
-    test_pass "boundary quotes - imported (N=`=_N')"
-}
-else {
-    test_fail "boundary quotes" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/boundary_quotes.csv", testname("boundary quotes")
 
 * Newline within quoted field (multiline field)
 file open fh using "temp/multiline_field.csv", write replace
@@ -1443,13 +1522,7 @@ file write fh `"Line three",100"' _n
 file write fh "2,Single line,200" _n
 file close fh
 
-capture cimport delimited using "temp/multiline_field.csv", clear
-if _rc == 0 {
-    test_pass "multiline quoted field - imported (N=`=_N')"
-}
-else {
-    test_fail "multiline quoted field" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/multiline_field.csv", testname("multiline quoted field")
 
 * CRLF within quoted field
 file open fh using "temp/crlf_in_quoted.csv", write replace
@@ -1458,13 +1531,7 @@ file write fh `"1,"Line1"' _char(13) _n `"Line2",100"' _n
 file write fh "2,normal,200" _n
 file close fh
 
-capture cimport delimited using "temp/crlf_in_quoted.csv", clear
-if _rc == 0 {
-    test_pass "CRLF in quoted field - imported (N=`=_N')"
-}
-else {
-    test_fail "CRLF in quoted field" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/crlf_in_quoted.csv", testname("CRLF in quoted field")
 
 * Triple quotes
 file open fh using "temp/triple_quotes.csv", write replace
@@ -1656,13 +1723,7 @@ file write fh "2,c" _char(8) "d" _n
 file write fh "3,e" _char(27) "f" _n
 file close fh
 
-capture cimport delimited using "temp/control_chars.csv", clear
-if _rc == 0 {
-    test_pass "control characters - imported (N=`=_N')"
-}
-else {
-    test_fail "control characters" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/control_chars.csv", testname("control characters")
 
 * High ASCII characters
 file open fh using "temp/high_ascii.csv", write replace
@@ -1672,8 +1733,7 @@ file write fh "2," _char(200) _char(210) _char(220) _n
 file write fh "3," _char(250) _char(251) _char(252) _n
 file close fh
 
-* High ASCII - encoding interpretation may differ from Stata
-cimport_test using "temp/high_ascii.csv", testname("high ASCII characters") expectn(3)
+benchmark_import_errtol using "temp/high_ascii.csv", testname("high ASCII characters")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Header Edge Cases
@@ -1687,15 +1747,7 @@ file write fh "1,2,3,4,5,6,7,8" _n
 file write fh "9,10,11,12,13,14,15,16" _n
 file close fh
 
-capture cimport delimited using "temp/reserved_keywords.csv", clear
-if _rc == 0 {
-    test_pass "reserved keywords as headers - imported (N=`=_N')"
-    ds
-    * (silent) "    Variables: `r(varlist)'"
-}
-else {
-    test_fail "reserved keywords as headers" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/reserved_keywords.csv", testname("reserved keywords as headers")
 
 * Headers starting with underscore
 file open fh using "temp/underscore_headers.csv", write replace
@@ -1713,15 +1765,7 @@ file write fh "1,Alpha,100,X" _n
 file write fh "2,Beta,200,Y" _n
 file close fh
 
-capture cimport delimited using "temp/number_start_headers.csv", clear
-if _rc == 0 {
-    test_pass "number-starting headers - imported (N=`=_N')"
-    ds
-    * (silent) "    Variables: `r(varlist)'"
-}
-else {
-    test_fail "number-starting headers" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/number_start_headers.csv", testname("number-starting headers")
 
 * Empty header name
 file open fh using "temp/empty_header_name.csv", write replace
@@ -1730,13 +1774,7 @@ file write fh "1,Alpha,100" _n
 file write fh "2,Beta,200" _n
 file close fh
 
-capture cimport delimited using "temp/empty_header_name.csv", clear
-if _rc == 0 {
-    test_pass "empty header name - imported (N=`=_N', K=`=c(k)')"
-}
-else {
-    test_fail "empty header name" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/empty_header_name.csv", testname("empty header name")
 
 * All headers are numbers
 file open fh using "temp/all_numeric_headers.csv", write replace
@@ -1763,15 +1801,7 @@ file write fh "1,2,3,4,5,6,7,8,9,10" _n
 file write fh "11,12,13,14,15,16,17,18,19,20" _n
 file close fh
 
-capture cimport delimited using "temp/many_duplicate_headers.csv", clear
-if _rc == 0 {
-    test_pass "many duplicate headers - imported (K=`=c(k)')"
-    ds
-    * (silent) "    Variables: `r(varlist)'"
-}
-else {
-    test_fail "many duplicate headers" "unexpected error rc=`=_rc'"
-}
+benchmark_import_errtol using "temp/many_duplicate_headers.csv", testname("many duplicate headers")
 
 /*******************************************************************************
  * SECTION: Additional Pathological - Row/Structure Edge Cases
@@ -1805,11 +1835,17 @@ file write fh "2,200" _n
 file close fh
 
 capture cimport delimited using "temp/many_blank_lines.csv", clear
-if _rc == 0 {
-    test_pass "many blank lines - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/many_blank_lines.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "many blank lines"
 }
 else {
-    test_pass "many blank lines - handled gracefully (rc=`=_rc')"
+    test_fail "many blank lines" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * First data row is empty
@@ -1843,11 +1879,17 @@ file write fh "3,300" _n
 file close fh
 
 capture cimport delimited using "temp/whitespace_rows.csv", clear
-if _rc == 0 {
-    test_pass "whitespace-only rows - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/whitespace_rows.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "whitespace-only rows"
 }
 else {
-    test_pass "whitespace-only rows - handled gracefully (rc=`=_rc')"
+    test_fail "whitespace-only rows" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * Very unbalanced data (first row has most cols)
@@ -1859,11 +1901,17 @@ file write fh "1" _n
 file close fh
 
 capture cimport delimited using "temp/unbalanced_first_wide.csv", clear
-if _rc == 0 {
-    test_pass "unbalanced (first wide) - imported (N=`=_N', K=`=c(k)')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/unbalanced_first_wide.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "unbalanced (first wide)"
 }
 else {
-    test_pass "unbalanced (first wide) - handled gracefully (rc=`=_rc')"
+    test_fail "unbalanced (first wide)" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * Very unbalanced data (last row has most cols)
@@ -1875,11 +1923,17 @@ file write fh "7,8,9,10,11,12,13,14,15" _n
 file close fh
 
 capture cimport delimited using "temp/unbalanced_last_wide.csv", clear
-if _rc == 0 {
-    test_pass "unbalanced (last wide) - imported (N=`=_N', K=`=c(k)')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/unbalanced_last_wide.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "unbalanced (last wide)"
 }
 else {
-    test_pass "unbalanced (last wide) - handled gracefully (rc=`=_rc')"
+    test_fail "unbalanced (last wide)" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 /*******************************************************************************
@@ -1893,11 +1947,17 @@ file write fh "id,name,value"
 file close fh
 
 capture cimport delimited using "temp/header_no_newline.csv", clear
-if _rc == 0 {
-    test_pass "header only no newline - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/header_no_newline.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "header only no newline"
 }
 else {
-    test_pass "header only no newline - handled gracefully (rc=`=_rc')"
+    test_fail "header only no newline" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * Single value file (no delimiters)
@@ -1916,11 +1976,17 @@ file write fh "2,Beta" _n
 file close fh
 
 capture cimport delimited using "temp/bom_wrong_position.csv", clear
-if _rc == 0 {
-    test_pass "BOM in data row - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/bom_wrong_position.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "BOM in data row"
 }
 else {
-    test_pass "BOM in data row - handled gracefully (rc=`=_rc')"
+    test_fail "BOM in data row" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * UTF-16BE BOM
@@ -1931,11 +1997,17 @@ file write fh _char(0) _char(49) _char(0) _char(10)
 file close fh
 
 capture cimport delimited using "temp/utf16be_bom.csv", clear
-if _rc == 0 {
-    test_pass "UTF-16BE BOM - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/utf16be_bom.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "UTF-16BE BOM"
 }
 else {
-    test_pass "UTF-16BE BOM - handled gracefully (rc=`=_rc')"
+    test_fail "UTF-16BE BOM" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * File with only whitespace
@@ -1946,11 +2018,17 @@ file write fh "  	  " _n
 file close fh
 
 capture cimport delimited using "temp/only_whitespace.csv", clear
-if _rc == 0 {
-    test_pass "only whitespace file - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/only_whitespace.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "only whitespace file"
 }
 else {
-    test_pass "only whitespace file - handled gracefully (rc=`=_rc')"
+    test_fail "only whitespace file" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * File with only newlines
@@ -1962,11 +2040,17 @@ file write fh "" _n
 file close fh
 
 capture cimport delimited using "temp/only_newlines.csv", clear
-if _rc == 0 {
-    test_pass "only newlines file - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/only_newlines.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "only newlines file"
 }
 else {
-    test_pass "only newlines file - handled gracefully (rc=`=_rc')"
+    test_fail "only newlines file" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * Mixed CR and LF (old Mac + Unix style)
@@ -1975,11 +2059,17 @@ file write fh "id,value" _char(13) "1,100" _n "2,200" _char(13) "3,300" _n
 file close fh
 
 capture cimport delimited using "temp/mixed_cr_lf.csv", clear
-if _rc == 0 {
-    test_pass "mixed CR and LF - imported (N=`=_N')"
+local cimport_rc = _rc
+local cimport_N = _N
+preserve
+capture import delimited using "temp/mixed_cr_lf.csv", clear
+local stata_rc = _rc
+restore
+if `cimport_rc' == `stata_rc' {
+    test_pass "mixed CR and LF"
 }
 else {
-    test_pass "mixed CR and LF - handled gracefully (rc=`=_rc')"
+    test_fail "mixed CR and LF" "rc differ: stata=`stata_rc' cimport=`cimport_rc'"
 }
 
 * File ending with multiple newlines

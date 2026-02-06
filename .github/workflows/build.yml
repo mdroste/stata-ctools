@@ -175,9 +175,9 @@ jobs:
           # Build manually since Makefile detection might not work in MSYS2
           mkdir -p build
 
-          # Get all source files
+          # Auto-discover all source files and include directories
           SOURCES=$(find src -name "*.c" | tr '\n' ' ')
-          INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cimport/miniz -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe -Isrc/cencode -Isrc/cwinsor -Isrc/cdestring -Isrc/cdecode -Isrc/csample -Isrc/cbsample -Isrc/crangestat -Isrc/cpsmatch"
+          INCLUDES=$(find src -type d | sed 's/^/-I/' | tr '\n' ' ')
 
           echo "Compiling with OpenMP support (statically linked)..."
           echo "CFLAGS: $CFLAGS"

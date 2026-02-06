@@ -831,22 +831,39 @@ program define benchmark_export
     local stata_n = _N
     local stata_k = c(k)
 
+    quietly ds
+    local allvars `r(varlist)'
+    quietly sort `allvars'
+    tempfile stata_data
+    quietly save `stata_data'
+
     quietly import delimited using "`cexport_csv'", clear
     local cexport_n = _N
     local cexport_k = c(k)
 
-    * Cleanup temp files
+    * Cleanup temp CSV files
     capture erase "`stata_csv'"
     capture erase "`cexport_csv'"
 
+    * Compare dimensions
+    if `stata_n' != `cexport_n' | `stata_k' != `cexport_k' {
+        restore
+        test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`stata_k') vs cexport(N=`cexport_n',K=`cexport_k')"
+        exit
+    }
+
+    * Compare data content
+    quietly sort `allvars'
+    capture quietly cf _all using `stata_data'
+    local cf_rc = _rc
+
     restore
 
-    * Compare dimensions
-    if `stata_n' == `cexport_n' & `stata_k' == `cexport_k' {
+    if `cf_rc' == 0 {
         test_pass "`testname'"
     }
     else {
-        test_fail "`testname'" "dimensions differ: stata(N=`stata_n',K=`stata_k') vs cexport(N=`cexport_n',K=`cexport_k')"
+        test_fail "`testname'" "data content differs between export delimited and cexport"
     }
 end
 

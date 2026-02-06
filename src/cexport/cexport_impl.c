@@ -41,7 +41,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "cexport_impl.h"
 #include "cexport_io.h"
 #include "cexport_context.h"

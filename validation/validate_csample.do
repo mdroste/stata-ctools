@@ -68,6 +68,46 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 2b: Deterministic comparison with Stata's sample
+ ******************************************************************************/
+print_section "Deterministic Comparison with sample"
+
+* Deterministic comparison with same seed
+clear
+set obs 1000
+gen id = _n
+gen x = runiform()
+
+set seed 54321
+preserve
+sample 50
+local stata_N = _N
+tempfile stata_result
+save `stata_result'
+restore
+
+set seed 54321
+preserve
+csample 50
+local ctools_N = _N
+
+if `stata_N' == `ctools_N' {
+    * Same N - check if same observations kept
+    merge 1:1 id using `stata_result'
+    quietly count if _merge != 3
+    if r(N) == 0 {
+        test_pass "csample matches sample with seed (50%)"
+    }
+    else {
+        test_fail "csample vs sample" "`=r(N)' observations differ"
+    }
+}
+else {
+    test_fail "csample vs sample" "N differ: sample=`stata_N' csample=`ctools_N'"
+}
+restore
+
+/*******************************************************************************
  * SECTION 3: Fixed count sampling
  ******************************************************************************/
 print_section "Fixed Count Sampling"
@@ -96,6 +136,34 @@ else {
     test_fail "count(50) yields exactly 50 obs" "got `=_N'"
 }
 
+* Deterministic comparison: count(100) csample vs sample, count
+clear
+set obs 1000
+gen id = _n
+
+set seed 99999
+preserve
+sample 100, count
+sort id
+tempfile stata_result
+save `stata_result'
+restore
+
+set seed 99999
+preserve
+csample, count(100)
+sort id
+
+merge 1:1 id using `stata_result'
+quietly count if _merge != 3
+if r(N) == 0 {
+    test_pass "count(100) matches sample"
+}
+else {
+    test_fail "count(100)" "`=r(N)' observations differ"
+}
+restore
+
 /*******************************************************************************
  * SECTION 4: By-group sampling
  ******************************************************************************/
@@ -109,11 +177,13 @@ gen id = _n
 set seed 12345
 csample 50, by(group)
 
+* Note: Stata's sample doesn't support by(), so exact comparison isn't possible.
+* Use tighter range check with 20% tolerance around expected 50 per group.
 local all_ok = 1
 forvalues g = 0/9 {
     count if group == `g'
     local n_g = r(N)
-    if `n_g' < 35 | `n_g' > 65 {
+    if `n_g' < 40 | `n_g' > 60 {
         local all_ok = 0
     }
 }
@@ -121,7 +191,7 @@ if `all_ok' {
     test_pass "50% by-group sample (~50 per group)"
 }
 else {
-    test_fail "50% by-group sample" "some groups outside [35,65] range"
+    test_fail "50% by-group sample" "some groups outside [40,60] range"
 }
 
 * By-group fixed count

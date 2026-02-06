@@ -29,7 +29,7 @@ program define creghdfe, eclass
     timer clear 98
     timer on 98
 
-    syntax varlist(min=2 fv) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose TIMEit ///
+    syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose TIMEit ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
         DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
 
@@ -126,6 +126,13 @@ program define creghdfe, eclass
     * Parse variable list
     gettoken depvar indepvars : varlist
 
+    * Save original depvar name for labeling (before ts expansion)
+    local depvar_orig "`depvar'"
+
+    * Expand time-series operators on depvar (creates temp var if needed)
+    tsrevar `depvar'
+    local depvar "`r(varlist)'"
+
     * Expand factor variables to temporary numeric variables
     if "`indepvars'" != "" {
         * Step 1: Expand factor variables to temp numeric vars
@@ -220,7 +227,7 @@ program define creghdfe, eclass
         }
         else {
             di as error "creghdfe: unrecognized vce() option"
-            exit 198
+            exit 9
         }
     }
 
@@ -624,7 +631,7 @@ program define creghdfe, eclass
     timer on 98
 
     * Post results
-    ereturn post `b' `V', esample(`touse') depname(`depvar') obs(`N_final')
+    ereturn post `b' `V', esample(`touse') depname(`depvar_orig') obs(`N_final')
 
     * Store additional e() results
     ereturn scalar N = `N_final'
@@ -658,7 +665,7 @@ program define creghdfe, eclass
     else {
         ereturn local absorb "`absorb'"
     }
-    ereturn local depvar "`depvar'"
+    ereturn local depvar "`depvar_orig'"
     ereturn local indepvars "`indepvars'"
     ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
     if "`resid_varname'" != "" {
@@ -788,7 +795,9 @@ program define creghdfe, eclass
         di as text "creghdfe timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Data load:              " as result %8.4f _creghdfe_time_read " sec"
+        di as text "    Data load (SPI):        " as result %8.4f _creghdfe_time_load " sec"
+        di as text "    Data copy + sums:       " as result %8.4f _creghdfe_time_copy " sec"
+        di as text "    FE remap + counts:      " as result %8.4f _creghdfe_time_remap " sec"
         di as text "    Singleton removal:      " as result %8.4f _creghdfe_time_singleton " sec"
         di as text "    DOF computation:        " as result %8.4f _creghdfe_time_dof " sec"
         di as text "    HDFE partial out:       " as result %8.4f _creghdfe_time_partial " sec"
@@ -824,7 +833,7 @@ program define creghdfe, eclass
         }
 
         * Clean up timing scalars
-        capture scalar drop _creghdfe_time_read _creghdfe_time_singleton
+        capture scalar drop _creghdfe_time_load _creghdfe_time_copy _creghdfe_time_remap _creghdfe_time_singleton
         capture scalar drop _creghdfe_time_dof _creghdfe_time_partial
         capture scalar drop _creghdfe_time_ols _creghdfe_time_vce _creghdfe_time_total
         capture scalar drop _creghdfe_threads_max _creghdfe_openmp_enabled

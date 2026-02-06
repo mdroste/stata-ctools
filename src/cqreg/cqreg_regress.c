@@ -13,8 +13,7 @@
 #include "cqreg_vce.h"
 #include "cqreg_hdfe.h"
 #include "cqreg_linalg.h"
-#include "../ctools_error.h"
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
 
@@ -138,7 +137,7 @@ static ST_int load_data_filtered(cqreg_state *state,
         ctools_error("cqreg", "Overflow computing y array size");
         return -1;
     }
-    state->y = (ST_double *)cqreg_aligned_alloc(y_size, CQREG_CACHE_LINE);
+    state->y = (ST_double *)ctools_cacheline_alloc(y_size);
     if (state->y == NULL) {
         ctools_error("cqreg", "Failed to allocate y array");
         return -1;
@@ -150,7 +149,7 @@ static ST_int load_data_filtered(cqreg_state *state,
         ctools_error("cqreg", "Overflow computing X matrix size");
         return -1;
     }
-    state->X = (ST_double *)cqreg_aligned_alloc(x_size, CQREG_CACHE_LINE);
+    state->X = (ST_double *)ctools_cacheline_alloc(x_size);
     if (state->X == NULL) {
         ctools_error("cqreg", "Failed to allocate X matrix");
         return -1;
@@ -188,8 +187,8 @@ static ST_int load_clusters(cqreg_state *state,
 {
     ST_int idx;
 
-    /* Use cqreg_aligned_alloc to match cqreg_aligned_free in cqreg_state_free */
-    state->cluster_ids = (ST_int *)cqreg_aligned_alloc(N * sizeof(ST_int), CQREG_CACHE_LINE);
+    /* Use ctools_cacheline_alloc to match ctools_aligned_free in cqreg_state_free */
+    state->cluster_ids = (ST_int *)ctools_cacheline_alloc(N * sizeof(ST_int));
     if (state->cluster_ids == NULL) {
         return -1;
     }

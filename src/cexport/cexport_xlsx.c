@@ -9,7 +9,7 @@
 #include "cexport_xlsx.h"
 #include "../cimport/miniz/miniz.h"
 #include "../ctools_threads.h"
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 #include "../ctools_arena.h"
 
 #include <stdio.h>

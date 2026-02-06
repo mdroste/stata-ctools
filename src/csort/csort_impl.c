@@ -16,7 +16,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "csort_impl.h"
 #include "csort_stream.h"
 

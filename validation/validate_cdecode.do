@@ -856,12 +856,15 @@ label define cat_lbl 1 "This is a fairly long label for category one" ///
     4 "Medium length label" ///
     5 "The fifth and final category with long text"
 label values category cat_lbl
-capture cdecode category, generate(cat_str)
-if _rc == 0 {
-    test_pass "large with long labels"
+capture cdecode category, generate(cat_str_c)
+local rc_c = _rc
+capture decode category, generate(cat_str_s)
+local rc_s = _rc
+if `rc_c' != 0 | `rc_s' != 0 {
+    test_fail "large with long labels" "cdecode rc=`rc_c', decode rc=`rc_s'"
 }
 else {
-    test_fail "long labels" "rc=`=_rc'"
+    assert_strvar_equal cat_str_c cat_str_s "large with long labels"
 }
 
 * Test 7.6: Large with threads(4)
@@ -870,12 +873,15 @@ set obs 500000
 gen byte category = mod(_n, 5) + 1
 label define cat_lbl 1 "A" 2 "B" 3 "C" 4 "D" 5 "E"
 label values category cat_lbl
-capture cdecode category, generate(cat_str) threads(4)
-if _rc == 0 {
-    test_pass "large with threads(4)"
+capture cdecode category, generate(cat_str_c) threads(4)
+local rc_c = _rc
+capture decode category, generate(cat_str_s)
+local rc_s = _rc
+if `rc_c' != 0 | `rc_s' != 0 {
+    test_fail "large with threads(4)" "cdecode rc=`rc_c', decode rc=`rc_s'"
 }
 else {
-    test_fail "threads(4)" "rc=`=_rc'"
+    assert_strvar_equal cat_str_c cat_str_s "large with threads(4)"
 }
 
 * Test 7.7: Large with many missing
@@ -972,7 +978,7 @@ label define x_lbl 1 "  leading" 2 "trailing  " 3 "  both  "
 label values x x_lbl
 cdecode x, generate(x_str)
 * Note: Stata's decode may trim spaces
-capture benchmark_decode x, testname("vs decode: leading/trailing spaces")
+benchmark_decode x, testname("vs decode: leading/trailing spaces")
 
 * Test 8.3: Commas in labels
 clear
@@ -1509,7 +1515,7 @@ set obs 3
 gen byte x = _n
 label define x_lbl 1 `"He said "hello""' 2 `"She's here"' 3 `"It's "fine""'
 label values x x_lbl
-capture benchmark_decode x, testname("labels with quotes")
+benchmark_decode x, testname("labels with quotes")
 
 * Labels with commas
 clear
@@ -1525,7 +1531,7 @@ set obs 3
 gen byte x = _n
 label define x_lbl 1 "col1	col2" 2 "tab	here" 3 "no tab"
 label values x x_lbl
-capture benchmark_decode x, testname("labels with tabs")
+benchmark_decode x, testname("labels with tabs")
 
 * Labels with semicolons and colons
 clear
@@ -1610,7 +1616,7 @@ set obs 3
 gen byte x = _n
 label define x_lbl 1 " " 2 "  " 3 "   "
 label values x x_lbl
-capture benchmark_decode x, testname("labels with only whitespace")
+benchmark_decode x, testname("labels with only whitespace")
 
 /*******************************************************************************
  * SECTION 16: Pathological labels - Long labels
@@ -1650,7 +1656,7 @@ gen byte x = _n
 local mixed_long = "a,b c:d;e" * 7
 label define x_lbl 1 "`mixed_long'" 2 "short"
 label values x x_lbl
-capture benchmark_decode x, testname("long labels with special chars")
+benchmark_decode x, testname("long labels with special chars")
 
 /*******************************************************************************
  * SECTION 17: Pathological labels - Empty and unusual labels
@@ -1706,7 +1712,7 @@ set obs 3
 gen byte x = _n
 label define x_lbl 1 "Munchen" 2 "Dusseldorf" 3 "Strasse"
 label values x x_lbl
-capture benchmark_decode x, testname("German characters")
+benchmark_decode x, testname("German characters")
 
 * Mixed ASCII and extended
 clear
@@ -1714,7 +1720,7 @@ set obs 3
 gen byte x = _n
 label define x_lbl 1 "Mix: A-Z and cafe" 2 "123 strasse" 3 "Jose #1"
 label values x x_lbl
-capture benchmark_decode x, testname("mixed ASCII and extended")
+benchmark_decode x, testname("mixed ASCII and extended")
 
 /*******************************************************************************
  * SECTION 19: Pathological labels - Gap values (non-consecutive)

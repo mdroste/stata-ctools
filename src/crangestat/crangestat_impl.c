@@ -37,8 +37,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
-#include "ctools_error.h"
+#include "ctools_runtime.h"
 #include "crangestat_impl.h"
 
 #define CRANGESTAT_MODULE "crangestat"

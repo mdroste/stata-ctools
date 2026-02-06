@@ -214,20 +214,16 @@ clear
 set obs 50
 gen x = .
 capture cwinsor x, suffix(_w)
-if _rc != 0 {
-    test_pass "all missing values handled (error expected)"
+local ctools_rc = _rc
+capture gstats winsor x, suffix(_g) cuts(1 99)
+local gstats_rc = _rc
+if `ctools_rc' == `gstats_rc' {
+    test_pass "all missing values handled (both rc=`ctools_rc')"
 }
 else {
-    * Check result is all missing
-    quietly count if !missing(x_w)
-    if r(N) == 0 {
-        test_pass "all missing values handled"
-    }
-    else {
-        test_fail "all missing values" "expected all missing output"
-    }
-    capture drop x_w
+    test_fail "all missing values" "rc differ: gstats=`gstats_rc' cwinsor=`ctools_rc'"
 }
+capture drop x_w x_g
 
 /*******************************************************************************
  * SECTION 3: Percentile options
@@ -250,14 +246,8 @@ benchmark_winsor price, testname("cuts(0.5 99.5)") cuts(0.5 99.5)
 sysuse auto, clear
 cwinsor price, p(5) q(95) suffix(_c)
 gstats winsor price, cuts(5 95) suffix(_g)
-quietly count if price_c != price_g & !missing(price_c) & !missing(price_g)
-if r(N) == 0 {
-    test_pass "p(5) q(95) syntax"
-}
-else {
-    test_fail "p(5) q(95) syntax" "`=r(N)' values differ"
-}
-drop price_c price_g
+assert_var_equal price_c price_g $DEFAULT_SIGFIGS "p(5) q(95) syntax"
+capture drop price_c price_g
 
 * Test 3.5: Asymmetric percentiles
 sysuse auto, clear
@@ -402,16 +392,14 @@ drop price_w mpg_w
 print_section "Replace Option"
 
 * Test 7.1: Basic replace (use cuts(5 95) so values actually get winsorized)
+* Compare against gstats winsor
 sysuse auto, clear
 gen price_orig = price
+gstats winsor price, replace cuts(5 95)
+rename price price_gstats
+gen price = price_orig
 cwinsor price, replace cuts(5 95)
-quietly count if price != price_orig
-if r(N) > 0 {
-    test_pass "replace modifies original variable"
-}
-else {
-    test_fail "replace option" "variable not modified"
-}
+assert_var_equal price price_gstats $DEFAULT_SIGFIGS "replace matches gstats winsor"
 
 * Test 7.2: Replace matches suffix result
 sysuse auto, clear
@@ -488,40 +476,22 @@ print_section "If/In Conditions"
 sysuse auto, clear
 cwinsor price if foreign == 1, suffix(_c)
 gstats winsor price if foreign == 1, suffix(_g)
-quietly count if price_c != price_g & !missing(price_c) & !missing(price_g) & foreign == 1
-if r(N) == 0 {
-    test_pass "if condition"
-}
-else {
-    test_fail "if condition" "`=r(N)' values differ"
-}
-drop price_c price_g
+assert_var_equal price_c price_g $DEFAULT_SIGFIGS "if condition"
+capture drop price_c price_g
 
 * Test 9.2: in range
 sysuse auto, clear
 cwinsor price in 1/50, suffix(_c)
 gstats winsor price in 1/50, suffix(_g)
-quietly count if price_c != price_g & !missing(price_c) & !missing(price_g) in 1/50
-if r(N) == 0 {
-    test_pass "in range"
-}
-else {
-    test_fail "in range" "`=r(N)' values differ"
-}
-drop price_c price_g
+assert_var_equal price_c price_g $DEFAULT_SIGFIGS "in range"
+capture drop price_c price_g
 
 * Test 9.3: if and in combined
 sysuse auto, clear
 cwinsor price if mpg > 20 in 1/50, suffix(_c)
 gstats winsor price if mpg > 20 in 1/50, suffix(_g)
-quietly count if price_c != price_g & !missing(price_c) & !missing(price_g)
-if r(N) == 0 {
-    test_pass "if and in combined"
-}
-else {
-    test_fail "if and in combined" "`=r(N)' values differ"
-}
-drop price_c price_g
+assert_var_equal price_c price_g $DEFAULT_SIGFIGS "if and in combined"
+capture drop price_c price_g
 
 /*******************************************************************************
  * SECTION 10: Error handling

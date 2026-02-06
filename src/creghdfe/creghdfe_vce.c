@@ -6,8 +6,9 @@
  * Part of the ctools Stata plugin suite
  */
 
+#include <string.h>
 #include "creghdfe_vce.h"
-#include "../ctools_vce.h"
+#include "../ctools_matrix.h"
 
 /* ========================================================================
  * Compute unadjusted VCE: V = sigma^2 * (X'X)^(-1)
@@ -63,6 +64,7 @@ void compute_vce_robust(
     d.weight_type = weight_type;
     d.N = N;
     d.K = K_with_cons;
+    d.normalize_weights = 1;
 
     ctools_vce_robust(&d, dof_adj, V);
 }
@@ -93,6 +95,12 @@ void compute_vce_cluster(
     ST_int df_a_nested          /* Degrees of freedom nested within cluster (for adjustment) */
 )
 {
+    /* Handle degenerate case: single cluster (VCE undefined, like reghdfe) */
+    if (num_clusters <= 1) {
+        memset(V, 0, K_with_cons * K_with_cons * sizeof(ST_double));
+        return;
+    }
+
     /* reghdfe's DOF adjustment: (N-1)/(N - nested_adj - df_m - S.df_a) * M/(M-1)
      * Use N_eff for fweight (sum of weights) */
     ST_int df_a_adjusted = df_a - df_a_nested;
@@ -108,6 +116,7 @@ void compute_vce_cluster(
     d.weight_type = weight_type;
     d.N = N;
     d.K = K_with_cons;
+    d.normalize_weights = 1;
 
     ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V);
 }

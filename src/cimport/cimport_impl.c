@@ -39,7 +39,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "cimport_impl.h"
 
 /* Helper modules (cimport_context.h includes arena, parse, and mmap headers) */
@@ -619,6 +619,103 @@ static void *cimport_parse_chunk_parallel(void *arg) {
 }
 
 /* ============================================================================
+ * Delimiter Auto-Detection (matches Stata's import delimited behavior)
+ * ============================================================================ */
+
+/* Count fields in a single line using the given delimiter.
+ * Handles quoted fields (double-quote). Returns 0 for empty/null lines. */
+static int cimport_count_fields(const char *line_start, const char *line_end, char delim) {
+    if (!line_start || line_start >= line_end) return 0;
+    int count = 1;
+    bool in_quotes = false;
+    for (const char *p = line_start; p < line_end; p++) {
+        if (*p == '"') {
+            in_quotes = !in_quotes;
+        } else if (*p == delim && !in_quotes) {
+            count++;
+        }
+    }
+    return count;
+}
+
+/* Auto-detect delimiter by trying candidates and picking the one that gives
+ * the highest consistent field count across data rows.
+ * Matches Stata's import delimited auto-detection behavior. */
+static char cimport_auto_detect_delimiter(const char *data, size_t size,
+                                           bool has_header, int skip_rows) {
+    static const char candidates[] = {'\t', ',', ';', ':', '|', ' '};
+    static const int num_candidates = 6;
+
+    /* Find line boundaries for first N rows (header + data rows) */
+    #define MAX_DETECT_ROWS 32
+    const char *line_starts[MAX_DETECT_ROWS + 1];
+    const char *line_ends[MAX_DETECT_ROWS + 1];
+    int num_lines = 0;
+
+    const char *p = data;
+    const char *end = data + size;
+    while (p < end && num_lines < MAX_DETECT_ROWS + 1) {
+        line_starts[num_lines] = p;
+        /* Find end of line */
+        const char *eol = p;
+        while (eol < end && *eol != '\n' && *eol != '\r') eol++;
+        line_ends[num_lines] = eol;
+        num_lines++;
+        /* Skip newline characters */
+        if (eol < end && *eol == '\r') eol++;
+        if (eol < end && *eol == '\n') eol++;
+        p = eol;
+    }
+
+    /* Determine which lines are data rows (skip header + skip_rows) */
+    int data_start = skip_rows + (has_header ? 1 : 0);
+    int num_data_lines = num_lines - data_start;
+    if (num_data_lines <= 0) {
+        /* No data rows to analyze - fall back to comma */
+        return ',';
+    }
+
+    /* For each candidate delimiter, check consistency and field count */
+    char best_delim = ',';
+    int best_field_count = 0;
+    bool best_consistent = false;
+
+    for (int c = 0; c < num_candidates; c++) {
+        char delim = candidates[c];
+        int first_count = 0;
+        bool consistent = true;
+
+        for (int r = data_start; r < num_lines; r++) {
+            int count = cimport_count_fields(line_starts[r], line_ends[r], delim);
+            if (r == data_start) {
+                first_count = count;
+            } else if (count != first_count) {
+                consistent = false;
+                break;
+            }
+        }
+
+        /* Skip candidates that give only 1 field (no splitting) */
+        if (first_count <= 1) continue;
+
+        /* Prefer consistent candidates with higher field count */
+        if (consistent && first_count > best_field_count) {
+            best_delim = delim;
+            best_field_count = first_count;
+            best_consistent = true;
+        }
+        /* If no consistent candidate found yet, track the first inconsistent one */
+        if (!best_consistent && !consistent && first_count > best_field_count) {
+            best_delim = delim;
+            best_field_count = first_count;
+        }
+    }
+
+    return best_delim;
+    #undef MAX_DETECT_ROWS
+}
+
+/* ============================================================================
  * Main Parse Function
  * ============================================================================ */
 
@@ -742,9 +839,43 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             ctx->file_data += bom_skip;
             ctx->file_size -= bom_skip;
         }
+
+        /* Strip invalid UTF-8 sequences (matches Stata's behavior of ignoring
+         * invalid bytes when encoding is UTF-8) */
+        if (!cimport_encoding_needs_conversion(ctx->encoding) &&
+            cimport_has_invalid_utf8(ctx->file_data, ctx->file_size)) {
+            char *cleaned = (char *)malloc(ctx->file_size);
+            if (cleaned) {
+                size_t cleaned_size = cimport_strip_invalid_utf8(
+                    ctx->file_data, ctx->file_size, cleaned);
+                /* Free any previous converted data */
+                if (ctx->converted_data && ctx->converted_data != cleaned) {
+                    free(ctx->converted_data);
+                }
+                ctx->converted_data = cleaned;
+                ctx->converted_size = cleaned_size;
+                ctx->file_data = ctx->converted_data;
+                ctx->file_size = ctx->converted_size;
+            }
+        }
     }
     t_end = ctools_timer_ms();
     ctx->time_encoding = t_end - t_start;
+
+    /* Auto-detect delimiter if not specified (delimiter == '\0') */
+    if (ctx->delimiter == '\0') {
+        ctx->delimiter = cimport_auto_detect_delimiter(
+            ctx->file_data, ctx->file_size,
+            ctx->has_header, ctx->skip_rows);
+        if (verbose) {
+            char delim_name[16];
+            if (ctx->delimiter == '\t') snprintf(delim_name, sizeof(delim_name), "tab");
+            else if (ctx->delimiter == ' ') snprintf(delim_name, sizeof(delim_name), "space");
+            else snprintf(delim_name, sizeof(delim_name), "'%c'", ctx->delimiter);
+            snprintf(msg, sizeof(msg), "(delimiter not specified, auto-detected: %s)\n", delim_name);
+            cimport_display_msg(msg);
+        }
+    }
 
     if (cimport_parse_header(ctx) != 0) {
         cimport_display_error("Failed to parse header");
@@ -967,6 +1098,56 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
 
         ctx->num_columns = new_num;
+
+        /* Expand chunk col_stats arrays and collect type stats for expanded columns.
+         * Since chunks were parsed with the old column count, stats for expanded
+         * columns were not collected. Re-scan each chunk's rows for the new columns. */
+        for (int c = 0; c < ctx->num_chunks; c++) {
+            CImportParsedChunk *chunk = &ctx->chunks[c];
+            if (chunk->num_col_stats < new_num) {
+                CImportColumnParseStats *new_stats = realloc(chunk->col_stats,
+                    new_num * sizeof(CImportColumnParseStats));
+                if (!new_stats) {
+                    cimport_free_context(ctx);
+                    return NULL;
+                }
+                for (int i = chunk->num_col_stats; i < new_num; i++) {
+                    memset(&new_stats[i], 0, sizeof(CImportColumnParseStats));
+                }
+                chunk->col_stats = new_stats;
+
+                /* Re-scan rows in this chunk for expanded column stats */
+                size_t start_row = (c == 0 && ctx->has_header) ? 1 : 0;
+                for (size_t r = start_row; r < chunk->num_rows; r++) {
+                    CImportParsedRow *row = chunk->rows[r];
+                    for (int f = chunk->num_col_stats; f < row->num_fields && f < new_num; f++) {
+                        CImportColumnParseStats *stats = &new_stats[f];
+                        CImportFieldRef *field = &row->fields[f];
+
+                        if ((int)field->length > stats->max_field_len) {
+                            stats->max_field_len = field->length;
+                        }
+
+                        if (field->length > 0) {
+                            const char *src = ctx->file_data + field->offset;
+                            if (!stats->has_quotes) {
+                                if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                                    stats->has_quotes = true;
+                            }
+                            if (!stats->seen_string) {
+                                stats->seen_non_empty = true;
+                                if (!cimport_field_looks_numeric_sep(src, field->length,
+                                        ctx->decimal_separator, ctx->group_separator)) {
+                                    stats->seen_string = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                chunk->num_col_stats = new_num;
+            }
+        }
     }
 
     t_start = ctools_timer_ms();
@@ -1505,7 +1686,7 @@ ST_retcode cimport_main(const char *args) {
     CImportOptions opts = {
         .mode = NULL,
         .filename = NULL,
-        .delimiter = ',',
+        .delimiter = '\0',  /* '\0' = auto-detect */
         .has_header = true,
         .header_row = 1,      /* Default: first row is header */
         .verbose = false,
@@ -1542,6 +1723,8 @@ ST_retcode cimport_main(const char *args) {
                 opts.delimiter = '\t';
             } else if (strcmp(token, "space") == 0) {
                 opts.delimiter = ' ';
+            } else if (strcmp(token, "auto") == 0) {
+                opts.delimiter = '\0';  /* auto-detect */
             } else if (strcmp(token, "bindquotes=strict") == 0) {
                 opts.bindquotes = CIMPORT_BINDQUOTES_STRICT;
             } else if (strcmp(token, "bindquotes=loose") == 0) {

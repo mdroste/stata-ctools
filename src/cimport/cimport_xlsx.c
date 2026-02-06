@@ -9,7 +9,7 @@
 #include "cimport_xlsx.h"
 #include "cimport_xlsx_zip.h"
 #include "cimport_xlsx_xml.h"
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 #include "../ctools_arena.h"
 
 #include <stdio.h>

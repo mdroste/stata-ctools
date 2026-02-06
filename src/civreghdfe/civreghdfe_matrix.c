@@ -16,33 +16,10 @@
 #include "civreghdfe_matrix.h"
 #include "../ctools_config.h"
 #include "../ctools_ols.h"
-#include "../ctools_matrix.h"
 
 /* Use shared Cholesky functions from ctools_ols */
 #define cholesky ctools_cholesky
 #define invert_from_cholesky ctools_invert_from_cholesky
-
-/* Delegate to shared matrix operations */
-void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
-                           ST_int N, ST_int K1, ST_int K2,
-                           ST_double * restrict C)
-{
-    ctools_matmul_atb(A, B, N, K1, K2, C);
-}
-
-void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restrict B,
-                          ST_int K1, ST_int K2, ST_int K3,
-                          ST_double * restrict C)
-{
-    ctools_matmul_ab(A, B, K1, K2, K3, C);
-}
-
-void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
-                            const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
-                            ST_double * restrict C)
-{
-    ctools_matmul_atdb(A, B, w, N, K1, K2, C);
-}
 
 /*
     HAC Kernel weight functions
@@ -353,7 +330,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+    ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
 
     /* Invert Z'Z using Cholesky */
     ZtZ_L = (ST_double *)malloc((size_t)K_iv * K_iv * sizeof(ST_double));
@@ -376,7 +353,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
+    ctools_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
 
     /* Compute Y'Y */
     YtY = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -384,7 +361,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
+    ctools_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
 
     /* Compute (Z'Z)^-1 * Z'Y */
     ZtZ_inv_ZtY = (ST_double *)calloc((size_t)K_iv * K_Y, sizeof(ST_double));
@@ -392,7 +369,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
         return 1.0;
     }
-    civreghdfe_matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
+    ctools_matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
 
     /* Compute QWW = Y'Y - (Z'Y)'(Z'Z)^-1(Z'Y) = Y'M_Z Y */
     QWW = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -435,7 +412,7 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
             return 1.0;
         }
-        civreghdfe_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
+        ctools_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
 
         memcpy(Z2tZ2_L, Z2tZ2, (size_t)K_exog * K_exog * sizeof(ST_double));
         if (cholesky(Z2tZ2_L, K_exog) != 0) {
@@ -457,8 +434,8 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tY); free(Z2tZ2_inv_Z2tY); free(Z2tY_t_Z2tZ2_inv_Z2tY);
             return 1.0;
         }
-        civreghdfe_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
-        civreghdfe_matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
+        ctools_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
+        ctools_matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
 
         for (i = 0; i < K_Y; i++) {
             for (j = 0; j < K_Y; j++) {
@@ -499,8 +476,8 @@ ST_double civreghdfe_compute_liml_lambda(
         return 1.0;
     }
 
-    civreghdfe_matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
-    civreghdfe_matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
+    ctools_matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
+    ctools_matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
 
     ST_double lambda = civreghdfe_jacobi_min_eigenvalue(M_for_eigen, K_Y);
 

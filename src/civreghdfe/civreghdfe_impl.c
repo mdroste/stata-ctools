@@ -22,17 +22,16 @@
 
 #include "civreghdfe_impl.h"
 #include "../ctools_config.h"
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 #include "../ctools_ols.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
-#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_unroll.h"
-#include "../creghdfe/creghdfe_utils.h"  /* For count_connected_components */
 
 /* Shared OLS functions */
 #define cholesky ctools_cholesky
@@ -61,7 +60,7 @@ static ST_retcode do_iv_regression(void)
 {
     /* Start total timing */
     double t_total_start = ctools_timer_seconds();
-    double t_load = 0, t_singleton = 0, t_hdfe_setup = 0, t_fwl = 0, t_partial_out = 0;
+    double t_load = 0, t_extract = 0, t_singleton = 0, t_hdfe_setup = 0, t_fwl = 0, t_partial_out = 0;
     double t_postproc = 0, t_estimate = 0, t_store = 0;
 
     ST_int in1 = SF_in1();
@@ -166,11 +165,17 @@ static ST_retcode do_iv_regression(void)
     stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
     free(var_indices);
 
+    /* Capture pure SPI data load time */
+    t_load = ctools_timer_seconds() - t_load_start;
+
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);
         SF_error("civreghdfe: Parallel data load failed\n");
         return 920;
     }
+
+    /* Start extraction timer */
+    double t_extract_start = ctools_timer_seconds();
 
     /* Get filtered observation count - data is already filtered */
     N_total = (ST_int)filtered.data.nobs;
@@ -260,8 +265,8 @@ static ST_retcode do_iv_regression(void)
     /* Free filtered data - we've extracted what we need */
     ctools_filtered_data_free(&filtered);
 
-    /* End data load, start missing value check timing */
-    t_load = ctools_timer_seconds() - t_load_start;
+    /* End extraction, start missing value check timing */
+    t_extract = ctools_timer_seconds() - t_extract_start;
     double t_missing_start = ctools_timer_seconds();
 
     /* Drop observations with missing values */
@@ -511,19 +516,14 @@ static ST_retcode do_iv_regression(void)
         ST_int *remap = (ST_int *)calloc(max_level + 1, sizeof(ST_int));
         if (!remap) {
             SF_error("civreghdfe: Memory allocation failed for level remap\n");
-            /* Clean up previously allocated factors */
-            for (ST_int fg = 0; fg < g; fg++) {
-                free(state->factors[fg].counts);
-                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
-                free(state->factors[fg].means);
-            }
-            free(state->factors);
+            /* Clean up the g factors already initialized; free remaining fe_levels */
+            state->G = g;  /* Only cleanup factors 0..g-1 */
+            ctools_hdfe_state_cleanup(state);
             free(state);
             free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-            for (ST_int fg = 0; fg < G; fg++) free(fe_levels_c[fg]);
+            for (ST_int fg = g; fg < G; fg++) free(fe_levels_c[fg]);
             free(fe_levels_c);
-            /* Note: singleton_mask already freed after singleton removal */
             return 920;
         }
 
@@ -561,54 +561,24 @@ static ST_retcode do_iv_regression(void)
 
         free(remap);
 
-        /* Compute inverse counts for fast division in projection */
-        state->factors[g].inv_counts = (ST_double *)malloc(num_levels * sizeof(ST_double));
-        if (state->factors[g].inv_counts) {
-            for (ST_int lev = 0; lev < num_levels; lev++) {
-                state->factors[g].inv_counts[lev] =
-                    (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
-            }
-        }
-        if (has_weights && state->factors[g].weighted_counts) {
-            state->factors[g].inv_weighted_counts = (ST_double *)malloc(num_levels * sizeof(ST_double));
-            if (state->factors[g].inv_weighted_counts) {
-                for (ST_int lev = 0; lev < num_levels; lev++) {
-                    state->factors[g].inv_weighted_counts[lev] =
-                        (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
-                }
-            }
-        } else {
-            state->factors[g].inv_weighted_counts = NULL;
-        }
     }
 
-    /* Allocate CG solver buffers */
+    /* Allocate inv_counts, inv_weighted_counts, and CG solver buffers */
     ST_int num_threads = omp_get_max_threads();
     if (num_threads > 8) num_threads = 8;
+    state->num_threads = num_threads;
 
-    state->thread_cg_r = (ST_double **)malloc(num_threads * sizeof(ST_double *));
-    state->thread_cg_u = (ST_double **)malloc(num_threads * sizeof(ST_double *));
-    state->thread_cg_v = (ST_double **)malloc(num_threads * sizeof(ST_double *));
-    state->thread_proj = (ST_double **)malloc(num_threads * sizeof(ST_double *));
-
-    /* thread_fe_means needs num_threads * G arrays, one per (thread, factor) combination */
-    state->thread_fe_means = (ST_double **)calloc(num_threads * G, sizeof(ST_double *));
-
-    for (ST_int t = 0; t < num_threads; t++) {
-        state->thread_cg_r[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        state->thread_cg_u[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        state->thread_cg_v[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        state->thread_proj[t] = (ST_double *)malloc(N * sizeof(ST_double));
-
-        /* Allocate mean arrays for each factor - use num_levels (contiguous after remapping) */
-        for (ST_int g = 0; g < G; g++) {
-            state->thread_fe_means[t * G + g] = (ST_double *)malloc(
-                state->factors[g].num_levels * sizeof(ST_double));
-        }
+    if (ctools_hdfe_alloc_buffers(state, 1) != 0) {
+        SF_error("civreghdfe: Memory allocation failed for HDFE buffers\n");
+        ctools_hdfe_state_cleanup(state);
+        free(state);
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        free(fe_levels_c);
+        return 920;
     }
 
     state->factors_initialized = 1;
-    state->num_threads = num_threads;  /* Required for partial_out_columns */
 
     /* Set global state for creghdfe solver functions */
     g_state = state;
@@ -668,28 +638,8 @@ static ST_retcode do_iv_regression(void)
         SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
         free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-        free(fe_levels_c);
-        /* Cleanup state */
-        for (ST_int t = 0; t < num_threads; t++) {
-            free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-            free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-            for (ST_int fg = 0; fg < G; fg++) {
-                if (state->thread_fe_means[t * G + fg])
-                    free(state->thread_fe_means[t * G + fg]);
-            }
-        }
-        free(state->thread_cg_r); free(state->thread_cg_u);
-        free(state->thread_cg_v); free(state->thread_proj);
-        free(state->thread_fe_means);
-        for (ST_int fg = 0; fg < G; fg++) {
-            free(state->factors[fg].counts);
-            if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
-            if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
-            if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
-            free(state->factors[fg].means);
-        }
-        free(state->factors);
+        free(fe_levels_c);  /* levels freed by state cleanup */
+        ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
         return 920;
@@ -749,7 +699,7 @@ static ST_retcode do_iv_regression(void)
 
             /* Compute P'P */
             memset(PtP, 0, n_partial * n_partial * sizeof(ST_double));
-            civreghdfe_matmul_atb(P_cur, P_cur, N, n_partial, n_partial, PtP);
+            ctools_matmul_atb(P_cur, P_cur, N, n_partial, n_partial, PtP);
 
             /* Invert P'P */
             memcpy(PtP_inv, PtP, n_partial * n_partial * sizeof(ST_double));
@@ -912,18 +862,14 @@ static ST_retcode do_iv_regression(void)
         is_partial = NULL;
     }
 
-    /* Compute df_a (absorbed degrees of freedom) using connected components
-       This matches creghdfe's algorithm:
-       1. Sum all FE levels
-       2. For G >= 2, count connected components (mobility groups)
-       3. Subtract mobility groups from df_a
-       4. For G > 2, subtract (G-2) for additional FE dimensions */
+    /* Compute df_a (absorbed degrees of freedom) and mobility groups */
     ST_int df_a = 0;
     ST_int df_a_nested = 0;  /* Levels from FE nested within cluster */
     ST_int mobility_groups = 0;
 
+    ctools_compute_hdfe_dof(state->factors, G, N, &df_a, &mobility_groups);
+
     for (ST_int g = 0; g < G; g++) {
-        df_a += state->factors[g].num_levels;
         /* Check if this FE is nested in cluster (1-indexed) */
         if (nested_fe_index > 0 && g == (nested_fe_index - 1)) {
             df_a_nested = state->factors[g].num_levels;
@@ -934,33 +880,11 @@ static ST_retcode do_iv_regression(void)
         ctools_scal_save(scalar_name, (ST_double)state->factors[g].num_levels);
     }
 
-    /* Compute connected components for multi-way FEs (same algorithm as creghdfe) */
-    if (G >= 2) {
-        /* Count connected components between first two FEs */
-        mobility_groups = count_connected_components(
-            state->factors[0].levels,
-            state->factors[1].levels,
-            N,
-            state->factors[0].num_levels,
-            state->factors[1].num_levels
-        );
-
-        if (mobility_groups < 0) mobility_groups = 1;  /* Fallback on error */
-        df_a -= mobility_groups;
-
-        /* For G > 2, add (G-2) for additional FE dimensions */
-        if (G > 2) {
-            ST_int extra_mobility = G - 2;
-            df_a -= extra_mobility;
-            mobility_groups += extra_mobility;
-        }
-
-        if (verbose) {
-            char buf[256];
-            snprintf(buf, sizeof(buf), "civreghdfe: mobility_groups=%d (connected components)\n",
-                     (int)mobility_groups);
-            SF_display(buf);
-        }
+    if (verbose && G >= 2) {
+        char buf[256];
+        snprintf(buf, sizeof(buf), "civreghdfe: mobility_groups=%d (connected components)\n",
+                 (int)mobility_groups);
+        SF_display(buf);
     }
 
     /* Save mobility groups for absorbed DOF table display */
@@ -987,28 +911,8 @@ static ST_retcode do_iv_regression(void)
             SF_error("civreghdfe: Failed to remap cluster IDs (memory allocation error)\n");
             free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-            free(fe_levels_c);
-            /* Cleanup state (singleton_mask already freed after singleton removal) */
-            for (ST_int t = 0; t < num_threads; t++) {
-                free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-                free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-                for (ST_int fg = 0; fg < G; fg++) {
-                    if (state->thread_fe_means[t * G + fg])
-                        free(state->thread_fe_means[t * G + fg]);
-                }
-            }
-            free(state->thread_cg_r); free(state->thread_cg_u);
-            free(state->thread_cg_v); free(state->thread_proj);
-            free(state->thread_fe_means);
-            for (ST_int fg = 0; fg < G; fg++) {
-                free(state->factors[fg].counts);
-                if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
-                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
-                if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
-                free(state->factors[fg].means);
-            }
-            free(state->factors);
+            free(fe_levels_c);  /* levels freed by state cleanup */
+            ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
             return 920;
@@ -1022,69 +926,24 @@ static ST_retcode do_iv_regression(void)
             SF_error("civreghdfe: Failed to remap cluster2 IDs (memory allocation error)\n");
             free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-            free(fe_levels_c);
-            /* Cleanup state (singleton_mask already freed after singleton removal) */
-            for (ST_int t = 0; t < num_threads; t++) {
-                free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-                free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-                for (ST_int fg = 0; fg < G; fg++) {
-                    if (state->thread_fe_means[t * G + fg])
-                        free(state->thread_fe_means[t * G + fg]);
-                }
-            }
-            free(state->thread_cg_r); free(state->thread_cg_u);
-            free(state->thread_cg_v); free(state->thread_proj);
-            free(state->thread_fe_means);
-            for (ST_int fg = 0; fg < G; fg++) {
-                free(state->factors[fg].counts);
-                if (state->factors[fg].inv_counts) free(state->factors[fg].inv_counts);
-                if (state->factors[fg].weighted_counts) free(state->factors[fg].weighted_counts);
-                if (state->factors[fg].inv_weighted_counts) free(state->factors[fg].inv_weighted_counts);
-                free(state->factors[fg].means);
-            }
-            free(state->factors);
+            free(fe_levels_c);  /* levels freed by state cleanup */
+            ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
             return 920;
         }
     }
 
-    /* Detect FEs nested within cluster variable
-       An FE is nested if every FE level maps to exactly one cluster.
-       This is done by checking if for each FE level, all observations have the same cluster_id.
-       We use a simple approach: for each FE, track first seen cluster_id per level. */
-    ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));  /* 1 if nested, 0 otherwise */
+    /* Detect FEs nested within cluster variable */
+    ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));
     if (has_cluster && fe_nested) {
         for (ST_int g = 0; g < G; g++) {
-            ST_int num_levels = state->factors[g].num_levels;
-            /* Allocate array to store first-seen cluster for each level */
-            ST_int *level_cluster = (ST_int *)malloc(num_levels * sizeof(ST_int));
-            if (!level_cluster) continue;
-
-            /* Initialize to -1 (not yet seen) */
-            for (ST_int lev = 0; lev < num_levels; lev++) {
-                level_cluster[lev] = -1;
-            }
-
-            /* Check each observation */
-            int is_nested = 1;
-            for (ST_int i = 0; i < N && is_nested; i++) {
-                ST_int lev = fe_levels_c[g][i] - 1;  /* 0-based level index */
-                ST_int clust = cluster_ids_c[i];
-                if (level_cluster[lev] == -1) {
-                    /* First time seeing this level */
-                    level_cluster[lev] = clust;
-                } else if (level_cluster[lev] != clust) {
-                    /* This level maps to multiple clusters - not nested */
-                    is_nested = 0;
-                }
-            }
-
+            ST_int is_nested = ctools_fe_nested_in_cluster(
+                state->factors[g].levels, state->factors[g].num_levels,
+                cluster_ids_c, N);
+            if (is_nested < 0) is_nested = 0;
             fe_nested[g] = is_nested;
-            free(level_cluster);
 
-            /* Store nested status to Stata scalar */
             char scalar_name[64];
             snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
             ctools_scal_save(scalar_name, (ST_double)is_nested);
@@ -1117,27 +976,7 @@ static ST_retcode do_iv_regression(void)
         free(beta); free(V); free(first_stage_F);
         free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-        /* Cleanup state */
-        for (ST_int t = 0; t < num_threads; t++) {
-            free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-            free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-            for (ST_int g = 0; g < G; g++) {
-                if (state->thread_fe_means[t * G + g])
-                    free(state->thread_fe_means[t * G + g]);
-            }
-        }
-        free(state->thread_cg_r); free(state->thread_cg_u);
-        free(state->thread_cg_v); free(state->thread_proj);
-        free(state->thread_fe_means);
-        for (ST_int g = 0; g < G; g++) {
-            free(state->factors[g].levels);
-            free(state->factors[g].counts);
-            if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
-            if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
-            if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
-            free(state->factors[g].means);
-        }
-        free(state->factors);
+        ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
         return 920;  /* Memory allocation error */
@@ -1178,27 +1017,7 @@ static ST_retcode do_iv_regression(void)
         free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         free(beta); free(V); free(first_stage_F);
-        /* Cleanup state */
-        for (ST_int t = 0; t < num_threads; t++) {
-            free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-            free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-            for (ST_int g = 0; g < G; g++) {
-                if (state->thread_fe_means[t * G + g])
-                    free(state->thread_fe_means[t * G + g]);
-            }
-        }
-        free(state->thread_cg_r); free(state->thread_cg_u);
-        free(state->thread_cg_v); free(state->thread_proj);
-        free(state->thread_fe_means);
-        for (ST_int g = 0; g < G; g++) {
-            free(state->factors[g].levels);  /* Same as fe_levels_c[g] */
-            free(state->factors[g].counts);
-            if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
-            if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
-            if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
-            free(state->factors[g].means);
-        }
-        free(state->factors);
+        ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
         return rc;
@@ -1344,12 +1163,14 @@ static ST_retcode do_iv_regression(void)
     double t_total = ctools_timer_seconds() - t_total_start;
 
     /* Save timing scalars - less critical but still use checked wrappers */
-    ctools_scal_save("_civreghdfe_time_load", t_load + t_missing);  /* Combine load and missing check */
+    ctools_scal_save("_civreghdfe_time_load", t_load);
+    ctools_scal_save("_civreghdfe_time_extract", t_extract);
+    ctools_scal_save("_civreghdfe_time_missing", t_missing);
     ctools_scal_save("_civreghdfe_time_singleton", t_singleton);
-    ctools_scal_save("_civreghdfe_time_setup", t_hdfe_setup);
+    ctools_scal_save("_civreghdfe_time_remap", t_hdfe_setup);
     ctools_scal_save("_civreghdfe_time_fwl", t_fwl);
     ctools_scal_save("_civreghdfe_time_partial", t_partial_out);
-    ctools_scal_save("_civreghdfe_time_postproc", t_postproc);
+    ctools_scal_save("_civreghdfe_time_dof", t_postproc);
     ctools_scal_save("_civreghdfe_time_estimate", t_estimate);
     ctools_scal_save("_civreghdfe_time_stats", t_stats);
     ctools_scal_save("_civreghdfe_time_store", t_store);
@@ -1362,27 +1183,8 @@ static ST_retcode do_iv_regression(void)
     free(beta); free(V); free(first_stage_F);
 
     /* Cleanup state */
-    for (ST_int t = 0; t < num_threads; t++) {
-        free(state->thread_cg_r[t]); free(state->thread_cg_u[t]);
-        free(state->thread_cg_v[t]); free(state->thread_proj[t]);
-        for (ST_int g = 0; g < G; g++) {
-            if (state->thread_fe_means[t * G + g])
-                free(state->thread_fe_means[t * G + g]);
-        }
-    }
-    free(state->thread_cg_r); free(state->thread_cg_u);
-    free(state->thread_cg_v); free(state->thread_proj);
-    free(state->thread_fe_means);
-    for (ST_int g = 0; g < G; g++) {
-        free(state->factors[g].levels);  /* Same as fe_levels_c[g] */
-        free(state->factors[g].counts);
-        if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
-        if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
-        if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
-        free(state->factors[g].means);
-    }
-    free(state->factors);
-    free(fe_levels_c);  /* Free the pointer array */
+    ctools_hdfe_state_cleanup(state);
+    free(fe_levels_c);
     free(state);
     g_state = NULL;
 

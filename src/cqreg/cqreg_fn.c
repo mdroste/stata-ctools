@@ -44,7 +44,7 @@
 #define FN_TIMING 0
 
 #if FN_TIMING
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 static double fn_time_init = 0.0;
 static double fn_time_scaling = 0.0;
 static double fn_time_xtdx = 0.0;

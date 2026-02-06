@@ -9,7 +9,7 @@
 #include "creghdfe_utils.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
-#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
@@ -19,52 +19,14 @@ HDFE_State *g_state = NULL;
  */
 void cleanup_state(void)
 {
-    ST_int g, t;
-
     if (g_state == NULL) return;
 
-    if (g_state->factors != NULL) {
-        for (g = 0; g < g_state->G; g++) {
-            if (g_state->factors[g].levels != NULL) free(g_state->factors[g].levels);
-            if (g_state->factors[g].counts != NULL) free(g_state->factors[g].counts);
-            if (g_state->factors[g].inv_counts != NULL) free(g_state->factors[g].inv_counts);
-            if (g_state->factors[g].weighted_counts != NULL) free(g_state->factors[g].weighted_counts);
-            if (g_state->factors[g].inv_weighted_counts != NULL) free(g_state->factors[g].inv_weighted_counts);
-            if (g_state->factors[g].means != NULL) free(g_state->factors[g].means);
-            /* Free sorted indices */
-            if (g_state->factors[g].sorted_indices != NULL) free(g_state->factors[g].sorted_indices);
-            if (g_state->factors[g].sorted_levels != NULL) free(g_state->factors[g].sorted_levels);
-        }
-        free(g_state->factors);
-    }
-
+    /* Free weights (ctools_hdfe_state_cleanup does not free weights) */
     if (g_state->weights != NULL) free(g_state->weights);
+    g_state->weights = NULL;
 
-    /* Free per-thread buffers */
-    if (g_state->thread_cg_r != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_r[t]) free(g_state->thread_cg_r[t]);
-        }
-        free(g_state->thread_cg_r);
-    }
-    if (g_state->thread_cg_u != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_u[t]) free(g_state->thread_cg_u[t]);
-        }
-        free(g_state->thread_cg_u);
-    }
-    if (g_state->thread_cg_v != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_v[t]) free(g_state->thread_cg_v[t]);
-        }
-        free(g_state->thread_cg_v);
-    }
-    if (g_state->thread_fe_means != NULL) {
-        for (t = 0; t < g_state->num_threads * g_state->G; t++) {
-            if (g_state->thread_fe_means[t]) free(g_state->thread_fe_means[t]);
-        }
-        free(g_state->thread_fe_means);
-    }
+    /* Free factors, thread buffers, etc. */
+    ctools_hdfe_state_cleanup(g_state);
 
     free(g_state);
     g_state = NULL;

@@ -12,67 +12,126 @@
 #include "stplugin.h"
 #include "cbinscatter_resid.h"
 #include "../ctools_config.h"
+#include "../ctools_ols.h"
 
 /* Use SF_is_missing() from stplugin.h for missing value checks */
 
 /* ========================================================================
- * Cholesky Decomposition and Solve
+ * Helper: Solve linear system with collinearity handling
+ * Uses modified Cholesky to detect collinear columns, drops them,
+ * solves reduced system. beta entries for collinear columns are set to 0.
+ * Returns 0 on success, non-zero on failure.
  * ======================================================================== */
 
-ST_retcode cholesky_decompose(ST_double *A, ST_int K) {
-    ST_int i, j, k;
-    ST_double sum;
+static ST_int solve_with_collinearity(
+    const ST_double *XtX,
+    const ST_double *rhs,
+    ST_int K,
+    ST_double *beta
+) {
+    ST_int i, j, k, a, b;
+    ST_int *is_collinear = NULL;
+    ST_int *keep = NULL;
+    ST_double *L = NULL;
+    ST_double *XtX_r = NULL, *rhs_r = NULL, *beta_r = NULL;
+    ST_int rc = 0;
+    ST_int num_collinear = 0;
+    const ST_double tol = 1e-10;  /* Tolerance for collinearity detection */
 
-    for (i = 0; i < K; i++) {
-        for (j = 0; j <= i; j++) {
-            sum = A[i * K + j];
-            for (k = 0; k < j; k++) {
-                sum -= A[i * K + k] * A[j * K + k];
+    is_collinear = (ST_int *)calloc(K, sizeof(ST_int));
+    L = (ST_double *)malloc(K * K * sizeof(ST_double));
+    if (!is_collinear || !L) {
+        free(is_collinear);
+        free(L);
+        return -1;
+    }
+
+    /* Inline modified Cholesky to detect collinear columns */
+    memcpy(L, XtX, K * K * sizeof(ST_double));
+
+    for (k = 0; k < K; k++) {
+        ST_double sum = L[k * K + k];
+        for (j = 0; j < k; j++) {
+            sum -= L[k * K + j] * L[k * K + j];
+        }
+
+        if (sum < tol) {
+            /* Column k is collinear */
+            is_collinear[k] = 1;
+            num_collinear++;
+            L[k * K + k] = 0.0;
+            for (i = k + 1; i < K; i++) {
+                L[i * K + k] = 0.0;
             }
-            if (i == j) {
-                if (sum <= 0.0) {
-                    return CBINSCATTER_ERR_SINGULAR;
-                }
-                A[i * K + i] = sqrt(sum);
-            } else {
-                A[i * K + j] = sum / A[j * K + j];
+            continue;
+        }
+
+        ST_double diag = sqrt(sum);
+        L[k * K + k] = diag;
+
+        for (i = k + 1; i < K; i++) {
+            sum = L[i * K + k];
+            for (j = 0; j < k; j++) {
+                sum -= L[i * K + j] * L[k * K + j];
             }
+            L[i * K + k] = sum / diag;
         }
     }
 
-    /* Zero out upper triangle */
-    for (i = 0; i < K; i++) {
-        for (j = i + 1; j < K; j++) {
-            A[i * K + j] = 0.0;
+    free(L);
+
+    ST_int K_r = K - num_collinear;
+    if (K_r == 0) {
+        memset(beta, 0, K * sizeof(ST_double));
+        free(is_collinear);
+        return 0;
+    }
+
+    /* If no collinearity detected, solve directly */
+    if (num_collinear == 0) {
+        free(is_collinear);
+        return ctools_solve_cholesky(XtX, rhs, K, beta);
+    }
+
+    /* Build reduced system excluding collinear columns */
+    keep = (ST_int *)malloc(K_r * sizeof(ST_int));
+    XtX_r = (ST_double *)malloc((size_t)K_r * K_r * sizeof(ST_double));
+    rhs_r = (ST_double *)malloc(K_r * sizeof(ST_double));
+    beta_r = (ST_double *)malloc(K_r * sizeof(ST_double));
+
+    if (!keep || !XtX_r || !rhs_r || !beta_r) {
+        rc = -1;
+        goto done;
+    }
+
+    ST_int idx = 0;
+    for (j = 0; j < K; j++) {
+        if (!is_collinear[j]) keep[idx++] = j;
+    }
+
+    for (a = 0; a < K_r; a++) {
+        rhs_r[a] = rhs[keep[a]];
+        for (b = 0; b < K_r; b++) {
+            XtX_r[a * K_r + b] = XtX[keep[a] * K + keep[b]];
         }
     }
 
-    return CBINSCATTER_OK;
-}
+    rc = ctools_solve_cholesky(XtX_r, rhs_r, K_r, beta_r);
 
-ST_retcode cholesky_solve(const ST_double *L, ST_int K, ST_double *b) {
-    ST_int i, j;
-    ST_double sum;
-
-    /* Forward substitution: L * y = b */
-    for (i = 0; i < K; i++) {
-        sum = b[i];
-        for (j = 0; j < i; j++) {
-            sum -= L[i * K + j] * b[j];
+    if (rc == 0) {
+        memset(beta, 0, K * sizeof(ST_double));
+        for (a = 0; a < K_r; a++) {
+            beta[keep[a]] = beta_r[a];
         }
-        b[i] = sum / L[i * K + i];
     }
 
-    /* Backward substitution: L' * x = y */
-    for (i = K - 1; i >= 0; i--) {
-        sum = b[i];
-        for (j = i + 1; j < K; j++) {
-            sum -= L[j * K + i] * b[j];
-        }
-        b[i] = sum / L[i * K + i];
-    }
-
-    return CBINSCATTER_OK;
+done:
+    free(is_collinear);
+    free(keep);
+    free(XtX_r);
+    free(rhs_r);
+    free(beta_r);
+    return rc;
 }
 
 /* ========================================================================
@@ -182,19 +241,18 @@ ST_retcode ols_residualize(
         }
     }
 
-    /* Cholesky decomposition of X'X */
-    rc = cholesky_decompose(XtX, K_full);
-    if (rc != CBINSCATTER_OK) goto cleanup;
-
-    /* Solve for beta_y: (X'X) * beta_y = X'y */
-    memcpy(beta_y, Xty, K_full * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K_full, beta_y);
-    if (rc != CBINSCATTER_OK) goto cleanup;
-
-    /* Solve for beta_x: (X'X) * beta_x = X'x */
-    memcpy(beta_x, Xtx, K_full * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K_full, beta_x);
-    if (rc != CBINSCATTER_OK) goto cleanup;
+    /* Solve for beta_y and beta_x, handling collinear controls */
+    if (ctools_solve_cholesky(XtX, Xty, K_full, beta_y) != 0) {
+        /* Singular matrix - detect and drop collinear columns */
+        if (solve_with_collinearity(XtX, Xty, K_full, beta_y) != 0 ||
+            solve_with_collinearity(XtX, Xtx, K_full, beta_x) != 0) {
+            rc = CBINSCATTER_ERR_SINGULAR;
+            goto cleanup;
+        }
+    } else if (ctools_solve_cholesky(XtX, Xtx, K_full, beta_x) != 0) {
+        rc = CBINSCATTER_ERR_SINGULAR;
+        goto cleanup;
+    }
 
     /* Compute residuals: y - X*beta_y, x - X*beta_x */
     for (i = 0; i < N; i++) {
@@ -501,14 +559,14 @@ ST_retcode ols_residualize_y_only(
         }
     }
 
-    /* Cholesky decomposition of X'X */
-    rc = cholesky_decompose(XtX, K);
-    if (rc != CBINSCATTER_OK) goto cleanup;
-
-    /* Solve for beta_y: (X'X) * beta_y = X'y */
-    memcpy(beta_y, Xty, K * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K, beta_y);
-    if (rc != CBINSCATTER_OK) goto cleanup;
+    /* Solve for beta_y: (X'X) * beta_y = X'y, handling collinear controls */
+    if (ctools_solve_cholesky(XtX, Xty, K, beta_y) != 0) {
+        /* Singular matrix - detect and drop collinear columns */
+        if (solve_with_collinearity(XtX, Xty, K, beta_y) != 0) {
+            rc = CBINSCATTER_ERR_SINGULAR;
+            goto cleanup;
+        }
+    }
 
     /* Compute residuals: y - X*beta_y */
     for (i = 0; i < N; i++) {

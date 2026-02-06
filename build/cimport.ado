@@ -82,15 +82,15 @@ program define cimport, rclass
         exit 4
     }
 
-    * Set default delimiter
-    if `"`delimiters'"' == "" {
-        local delimiters ","
+    * Set default delimiter (auto-detect if not specified, matching Stata behavior)
+    local plugin_delim "auto"
+    if `"`delimiters'"' != "" {
+        local plugin_delim `"`delimiters'"'
     }
 
     * Validate delimiter - for now only single character supported
     * For plugin: pass "tab" or "space" keyword instead of actual characters
-    local plugin_delim `"`delimiters'"'
-    if length(`"`delimiters'"') != 1 {
+    if `"`delimiters'"' != "" & length(`"`delimiters'"') != 1 {
         * Handle special cases like tab
         if `"`delimiters'"' == "tab" | `"`delimiters'"' == "\t" {
             local delimiters "	"
@@ -575,35 +575,94 @@ program define cimport, rclass
             }
         }
 
+        * Try to create the variable; if name is reserved, fall back to v<i>
+        local orig_vname "`vname'"
+        local gen_ok = 1
         if `vtype' == 1 {
             * String variable
             if `vlen' < 1 local vlen = 1
             if `vlen' > 2045 local vlen = 2045
-            quietly gen str`vlen' `vname' = ""
+            capture quietly gen str`vlen' `vname' = ""
+            if _rc != 0 {
+                local gen_ok = 0
+            }
         }
         else {
             * Numeric variable - use optimal storage type unless asfloat/asdouble specified
             if "`asfloat'" != "" {
-                quietly gen float `vname' = .
+                capture quietly gen float `vname' = .
             }
             else if "`asdouble'" != "" {
-                quietly gen double `vname' = .
+                capture quietly gen double `vname' = .
             }
             else if `ntype' == 4 {
-                quietly gen byte `vname' = .
+                capture quietly gen byte `vname' = .
             }
             else if `ntype' == 3 {
-                quietly gen int `vname' = .
+                capture quietly gen int `vname' = .
             }
             else if `ntype' == 2 {
-                quietly gen long `vname' = .
+                capture quietly gen long `vname' = .
             }
             else if `ntype' == 1 {
-                quietly gen float `vname' = .
+                capture quietly gen float `vname' = .
             }
             else {
-                quietly gen double `vname' = .
+                capture quietly gen double `vname' = .
             }
+            if _rc != 0 {
+                local gen_ok = 0
+            }
+        }
+
+        * If gen failed (reserved keyword, etc.), use fallback name v<i>
+        if `gen_ok' == 0 {
+            local vname "v`i'"
+            * Ensure fallback name is unique
+            capture confirm variable `vname'
+            if !_rc {
+                local suffix = 1
+                local newname `vname'_`suffix'
+                while (1) {
+                    capture confirm variable `newname'
+                    if _rc {
+                        local vname `newname'
+                        continue, break
+                    }
+                    local suffix = `suffix' + 1
+                    local newname `vname'_`suffix'
+                }
+            }
+
+            if `vtype' == 1 {
+                quietly gen str`vlen' `vname' = ""
+            }
+            else {
+                if "`asfloat'" != "" {
+                    quietly gen float `vname' = .
+                }
+                else if "`asdouble'" != "" {
+                    quietly gen double `vname' = .
+                }
+                else if `ntype' == 4 {
+                    quietly gen byte `vname' = .
+                }
+                else if `ntype' == 3 {
+                    quietly gen int `vname' = .
+                }
+                else if `ntype' == 2 {
+                    quietly gen long `vname' = .
+                }
+                else if `ntype' == 1 {
+                    quietly gen float `vname' = .
+                }
+                else {
+                    quietly gen double `vname' = .
+                }
+            }
+
+            * Add variable label with original CSV header name
+            label variable `vname' "`orig_vname'"
         }
 
         local i = `i' + 1

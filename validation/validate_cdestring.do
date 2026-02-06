@@ -99,10 +99,18 @@ program define benchmark_destring
             exit
         }
 
-        * Compare results (use tolerance for floating-point comparison)
+        * Compare results (use sigfigs-based comparison)
         local ndiff_total = 0
         foreach v of local varlist {
-            quietly count if abs(`v'_c - `v'_s) > $DEFAULT_TOL & !missing(`v'_c) & !missing(`v'_s)
+            tempvar _sf_`v'
+            quietly {
+                gen double `_sf_`v'' = 15 if `v'_c == `v'_s
+                replace `_sf_`v'' = 0 if (`_sf_`v'' == .) & ((`v'_c == 0) | (`v'_s == 0))
+                replace `_sf_`v'' = -log10(abs(`v'_c - `v'_s) / max(abs(`v'_c), abs(`v'_s))) if `_sf_`v'' == .
+                replace `_sf_`v'' = 0 if `_sf_`v'' < 0
+                replace `_sf_`v'' = 15 if `_sf_`v'' > 15
+            }
+            quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`v'_c) & !missing(`v'_s)
             local ndiff_total = `ndiff_total' + r(N)
             * Also check missing patterns match
             quietly count if missing(`v'_c) != missing(`v'_s)
@@ -164,8 +172,16 @@ program define benchmark_destring
         foreach v of local generate {
             local vc = "`v'_c"
             local vs = "`v'_s"
-            * Compare non-missing values with tolerance
-            quietly count if abs(`vc' - `vs') > $DEFAULT_TOL & !missing(`vc') & !missing(`vs')
+            * Compare non-missing values with sigfigs
+            tempvar _sf_`v'
+            quietly {
+                gen double `_sf_`v'' = 15 if `vc' == `vs'
+                replace `_sf_`v'' = 0 if (`_sf_`v'' == .) & ((`vc' == 0) | (`vs' == 0))
+                replace `_sf_`v'' = -log10(abs(`vc' - `vs') / max(abs(`vc'), abs(`vs'))) if `_sf_`v'' == .
+                replace `_sf_`v'' = 0 if `_sf_`v'' < 0
+                replace `_sf_`v'' = 15 if `_sf_`v'' > 15
+            }
+            quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`vc') & !missing(`vs')
             local ndiff_total = `ndiff_total' + r(N)
             * Check missing patterns match
             quietly count if missing(`vc') != missing(`vs')
@@ -267,24 +283,30 @@ else {
 clear
 set obs 10
 gen str10 x = string(_n)
-capture cdestring x, generate(x_num) verbose
-if _rc == 0 {
-    test_pass "verbose option"
+capture cdestring x, generate(x_num_c) verbose
+local rc_c = _rc
+capture destring x, generate(x_num_s)
+local rc_s = _rc
+if `rc_c' != 0 | `rc_s' != 0 {
+    test_fail "verbose option" "cdestring rc=`rc_c', destring rc=`rc_s'"
 }
 else {
-    test_fail "verbose option" "rc=`=_rc'"
+    assert_var_equal x_num_c x_num_s $DEFAULT_SIGFIGS "verbose option"
 }
 
 * Test 2.6: threads option
 clear
 set obs 100
 gen str10 x = string(_n)
-capture cdestring x, generate(x_num) threads(2)
-if _rc == 0 {
-    test_pass "threads(2) option"
+capture cdestring x, generate(x_num_c) threads(2)
+local rc_c = _rc
+capture destring x, generate(x_num_s)
+local rc_s = _rc
+if `rc_c' != 0 | `rc_s' != 0 {
+    test_fail "threads(2) option" "cdestring rc=`rc_c', destring rc=`rc_s'"
 }
 else {
-    test_fail "threads option" "rc=`=_rc'"
+    assert_var_equal x_num_c x_num_s $DEFAULT_SIGFIGS "threads(2) option"
 }
 
 * Test 2.7: Negative numbers
@@ -1435,12 +1457,41 @@ else {
 clear
 set obs 10
 gen x = _n
-capture cdestring x, generate(x_num)
-if _rc == 0 {
-    test_pass "numeric source handled (matches destring)"
+capture destring x, generate(x_stata)
+local stata_rc = _rc
+capture cdestring x, generate(x_ctools)
+local ctools_rc = _rc
+if `stata_rc' == `ctools_rc' {
+    if `ctools_rc' == 0 {
+        * destring on numeric input may succeed without creating the variable;
+        * check whether both variables exist before comparing values
+        capture confirm variable x_stata
+        local has_stata = (_rc == 0)
+        capture confirm variable x_ctools
+        local has_ctools = (_rc == 0)
+        if `has_stata' & `has_ctools' {
+            quietly count if x_stata != x_ctools & !missing(x_stata) & !missing(x_ctools)
+            if r(N) == 0 {
+                test_pass "numeric source handled (matches destring)"
+            }
+            else {
+                test_fail "numeric source" "`=r(N)' values differ"
+            }
+        }
+        else if `has_stata' == `has_ctools' {
+            test_pass "numeric source handled (matches destring, no var created)"
+        }
+        else {
+            test_fail "numeric source" "var creation mismatch: destring=`has_stata' cdestring=`has_ctools'"
+        }
+        capture drop x_stata x_ctools
+    }
+    else {
+        test_pass "numeric source (both error rc=`ctools_rc')"
+    }
 }
 else {
-    test_fail "numeric source" "rc=`=_rc' (should match destring rc=0)"
+    test_fail "numeric source" "rc differ: destring=`stata_rc' cdestring=`ctools_rc'"
 }
 
 * Test 12.3: Missing generate and replace

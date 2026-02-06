@@ -390,3 +390,197 @@ ST_int ctools_count_connected_components(
 
     return num_components;
 }
+
+/*
+    Check if a fixed effect is nested within a cluster variable.
+*/
+ST_int ctools_fe_nested_in_cluster(
+    const ST_int *fe_levels,
+    ST_int num_fe_levels,
+    const ST_int *cluster_ids,
+    ST_int N)
+{
+    ST_int *fe_to_cluster = (ST_int *)malloc((size_t)num_fe_levels * sizeof(ST_int));
+    if (!fe_to_cluster) return -1;
+
+    for (ST_int i = 0; i < num_fe_levels; i++)
+        fe_to_cluster[i] = -1;
+
+    ST_int is_nested = 1;
+    for (ST_int i = 0; i < N && is_nested; i++) {
+        ST_int fe_level = fe_levels[i] - 1;  /* Convert 1-based to 0-based */
+        ST_int clust_id = cluster_ids[i];
+        if (fe_to_cluster[fe_level] == -1) {
+            fe_to_cluster[fe_level] = clust_id;
+        } else if (fe_to_cluster[fe_level] != clust_id) {
+            is_nested = 0;
+        }
+    }
+
+    free(fe_to_cluster);
+    return is_nested;
+}
+
+/*
+    Compute degrees of freedom absorbed by fixed effects and mobility groups.
+*/
+ST_int ctools_compute_hdfe_dof(
+    const FE_Factor *factors,
+    ST_int G,
+    ST_int N,
+    ST_int *df_a,
+    ST_int *mobility_groups)
+{
+    ST_int dfa = 0;
+    ST_int mg = 0;
+
+    for (ST_int g = 0; g < G; g++)
+        dfa += factors[g].num_levels;
+
+    if (G >= 2) {
+        mg = ctools_count_connected_components(
+            factors[0].levels, factors[1].levels,
+            N, factors[0].num_levels, factors[1].num_levels);
+
+        if (mg < 0) mg = 1;  /* Fallback on error */
+        dfa -= mg;
+
+        if (G > 2) {
+            ST_int extra = G - 2;
+            dfa -= extra;
+            mg += extra;
+        }
+    }
+
+    *df_a = dfa;
+    *mobility_groups = mg;
+    return 0;
+}
+
+/*
+    Allocate per-thread CG solver buffers and compute inv_counts/inv_weighted_counts.
+    Caller must set state->num_threads, state->N, state->G, state->has_weights,
+    and state->factors[g].{num_levels, counts, weighted_counts} before calling.
+*/
+ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj)
+{
+    ST_int G = state->G;
+    ST_int N = state->N;
+    ST_int num_threads = state->num_threads;
+
+    /* Compute inv_counts and inv_weighted_counts for each factor */
+    for (ST_int g = 0; g < G; g++) {
+        ST_int num_lev = state->factors[g].num_levels;
+
+        state->factors[g].inv_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
+        if (state->factors[g].inv_counts) {
+            for (ST_int lev = 0; lev < num_lev; lev++) {
+                state->factors[g].inv_counts[lev] =
+                    (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
+            }
+        }
+
+        if (state->has_weights && state->factors[g].weighted_counts) {
+            state->factors[g].inv_weighted_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
+            if (state->factors[g].inv_weighted_counts) {
+                for (ST_int lev = 0; lev < num_lev; lev++) {
+                    state->factors[g].inv_weighted_counts[lev] =
+                        (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
+                }
+            }
+        } else {
+            state->factors[g].inv_weighted_counts = NULL;
+        }
+    }
+
+    /* Allocate thread buffer arrays */
+    state->thread_cg_r = (ST_double **)calloc((size_t)num_threads, sizeof(ST_double *));
+    state->thread_cg_u = (ST_double **)calloc((size_t)num_threads, sizeof(ST_double *));
+    state->thread_cg_v = (ST_double **)calloc((size_t)num_threads, sizeof(ST_double *));
+    state->thread_proj = alloc_proj ? (ST_double **)calloc((size_t)num_threads, sizeof(ST_double *)) : NULL;
+    state->thread_fe_means = (ST_double **)calloc((size_t)num_threads * G, sizeof(ST_double *));
+
+    if (!state->thread_cg_r || !state->thread_cg_u || !state->thread_cg_v ||
+        !state->thread_fe_means || (alloc_proj && !state->thread_proj)) {
+        return -1;
+    }
+
+    /* Allocate per-thread buffers */
+    for (ST_int t = 0; t < num_threads; t++) {
+        state->thread_cg_r[t] = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        state->thread_cg_u[t] = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        state->thread_cg_v[t] = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+        if (!state->thread_cg_r[t] || !state->thread_cg_u[t] || !state->thread_cg_v[t])
+            return -1;
+
+        if (alloc_proj) {
+            state->thread_proj[t] = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+            if (!state->thread_proj[t]) return -1;
+        }
+
+        for (ST_int g = 0; g < G; g++) {
+            state->thread_fe_means[t * G + g] = (ST_double *)malloc(
+                (size_t)state->factors[g].num_levels * sizeof(ST_double));
+            if (!state->thread_fe_means[t * G + g]) return -1;
+        }
+    }
+
+    return 0;
+}
+
+/*
+    Free all dynamically allocated memory inside an HDFE_State.
+    Does NOT free the HDFE_State struct itself.
+    Does NOT free state->weights (caller manages weight ownership).
+*/
+void ctools_hdfe_state_cleanup(HDFE_State *state)
+{
+    if (!state) return;
+
+    if (state->factors) {
+        for (ST_int g = 0; g < state->G; g++) {
+            if (state->factors[g].levels) free(state->factors[g].levels);
+            if (state->factors[g].counts) free(state->factors[g].counts);
+            if (state->factors[g].inv_counts) free(state->factors[g].inv_counts);
+            if (state->factors[g].weighted_counts) free(state->factors[g].weighted_counts);
+            if (state->factors[g].inv_weighted_counts) free(state->factors[g].inv_weighted_counts);
+            if (state->factors[g].means) free(state->factors[g].means);
+            if (state->factors[g].sorted_indices) free(state->factors[g].sorted_indices);
+            if (state->factors[g].sorted_levels) free(state->factors[g].sorted_levels);
+        }
+        free(state->factors);
+        state->factors = NULL;
+    }
+
+    /* Free per-thread CG buffers */
+    if (state->thread_cg_r) {
+        for (ST_int t = 0; t < state->num_threads; t++)
+            if (state->thread_cg_r[t]) free(state->thread_cg_r[t]);
+        free(state->thread_cg_r);
+        state->thread_cg_r = NULL;
+    }
+    if (state->thread_cg_u) {
+        for (ST_int t = 0; t < state->num_threads; t++)
+            if (state->thread_cg_u[t]) free(state->thread_cg_u[t]);
+        free(state->thread_cg_u);
+        state->thread_cg_u = NULL;
+    }
+    if (state->thread_cg_v) {
+        for (ST_int t = 0; t < state->num_threads; t++)
+            if (state->thread_cg_v[t]) free(state->thread_cg_v[t]);
+        free(state->thread_cg_v);
+        state->thread_cg_v = NULL;
+    }
+    if (state->thread_proj) {
+        for (ST_int t = 0; t < state->num_threads; t++)
+            if (state->thread_proj[t]) free(state->thread_proj[t]);
+        free(state->thread_proj);
+        state->thread_proj = NULL;
+    }
+    if (state->thread_fe_means) {
+        for (ST_int t = 0; t < state->num_threads * state->G; t++)
+            if (state->thread_fe_means[t]) free(state->thread_fe_means[t]);
+        free(state->thread_fe_means);
+        state->thread_fe_means = NULL;
+    }
+}

@@ -11,7 +11,7 @@
 #include "../creghdfe/creghdfe_types.h"
 #include "../creghdfe/creghdfe_solver.h"
 #include "../creghdfe/creghdfe_hdfe.h"
-#include "../ctools_error.h"
+#include "../ctools_runtime.h"
 #include "../ctools_config.h"
 
 #include <stdlib.h>
@@ -311,10 +311,10 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
     }
 
     for (t = 0; t < hdfe->num_threads; t++) {
-        hdfe->thread_cg_r[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_cg_u[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_cg_v[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
-        hdfe->thread_proj[t] = (ST_double *)cqreg_aligned_alloc(N_filtered * sizeof(ST_double), CQREG_CACHE_LINE);
+        hdfe->thread_cg_r[t] = (ST_double *)ctools_cacheline_alloc(N_filtered * sizeof(ST_double));
+        hdfe->thread_cg_u[t] = (ST_double *)ctools_cacheline_alloc(N_filtered * sizeof(ST_double));
+        hdfe->thread_cg_v[t] = (ST_double *)ctools_cacheline_alloc(N_filtered * sizeof(ST_double));
+        hdfe->thread_proj[t] = (ST_double *)ctools_cacheline_alloc(N_filtered * sizeof(ST_double));
 
         if (hdfe->thread_cg_r[t] == NULL || hdfe->thread_cg_u[t] == NULL ||
             hdfe->thread_cg_v[t] == NULL || hdfe->thread_proj[t] == NULL) {
@@ -361,25 +361,25 @@ cleanup:
 
         if (hdfe->thread_cg_r != NULL) {
             for (t = 0; t < hdfe->num_threads; t++) {
-                cqreg_aligned_free(hdfe->thread_cg_r[t]);
+                ctools_aligned_free(hdfe->thread_cg_r[t]);
             }
             free(hdfe->thread_cg_r);
         }
         if (hdfe->thread_cg_u != NULL) {
             for (t = 0; t < hdfe->num_threads; t++) {
-                cqreg_aligned_free(hdfe->thread_cg_u[t]);
+                ctools_aligned_free(hdfe->thread_cg_u[t]);
             }
             free(hdfe->thread_cg_u);
         }
         if (hdfe->thread_cg_v != NULL) {
             for (t = 0; t < hdfe->num_threads; t++) {
-                cqreg_aligned_free(hdfe->thread_cg_v[t]);
+                ctools_aligned_free(hdfe->thread_cg_v[t]);
             }
             free(hdfe->thread_cg_v);
         }
         if (hdfe->thread_proj != NULL) {
             for (t = 0; t < hdfe->num_threads; t++) {
-                cqreg_aligned_free(hdfe->thread_proj[t]);
+                ctools_aligned_free(hdfe->thread_proj[t]);
             }
             free(hdfe->thread_proj);
         }
@@ -524,7 +524,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
     if (hdfe->thread_cg_r != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
             if (hdfe->thread_cg_r[t] != NULL) {
-                cqreg_aligned_free(hdfe->thread_cg_r[t]);
+                ctools_aligned_free(hdfe->thread_cg_r[t]);
                 hdfe->thread_cg_r[t] = NULL;
             }
         }
@@ -534,7 +534,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
     if (hdfe->thread_cg_u != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
             if (hdfe->thread_cg_u[t] != NULL) {
-                cqreg_aligned_free(hdfe->thread_cg_u[t]);
+                ctools_aligned_free(hdfe->thread_cg_u[t]);
                 hdfe->thread_cg_u[t] = NULL;
             }
         }
@@ -544,7 +544,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
     if (hdfe->thread_cg_v != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
             if (hdfe->thread_cg_v[t] != NULL) {
-                cqreg_aligned_free(hdfe->thread_cg_v[t]);
+                ctools_aligned_free(hdfe->thread_cg_v[t]);
                 hdfe->thread_cg_v[t] = NULL;
             }
         }
@@ -554,7 +554,7 @@ void cqreg_hdfe_cleanup(cqreg_state *state)
     if (hdfe->thread_proj != NULL) {
         for (t = 0; t < hdfe->num_threads; t++) {
             if (hdfe->thread_proj[t] != NULL) {
-                cqreg_aligned_free(hdfe->thread_proj[t]);
+                ctools_aligned_free(hdfe->thread_proj[t]);
                 hdfe->thread_proj[t] = NULL;
             }
         }

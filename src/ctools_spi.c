@@ -1,5 +1,5 @@
 /*
- * ctools_spi_checked.c - Error-checking wrappers for Stata Plugin Interface
+ * ctools_spi.c - Error-checking wrappers for Stata Plugin Interface
  *
  * Provides wrappers around SF_* functions that check return codes and
  * report errors. This helps prevent silent failures that can lead to
@@ -8,7 +8,7 @@
  * Part of the ctools suite for Stata.
  */
 
-#include "ctools_spi_checked.h"
+#include "ctools_spi.h"
 #include <stdio.h>
 
 /*

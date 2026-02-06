@@ -23,9 +23,8 @@
 #define CQREG_DEFAULT_TOL         1e-8
 #define CQREG_DEFAULT_MU_INIT     0.1
 #define CQREG_DEFAULT_SIGMA       0.1
-#define CQREG_CACHE_LINE          64
-
 /* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
+/* Aligned allocation uses ctools_cacheline_alloc / ctools_aligned_free from ctools_config.h */
 
 /* Compiler hints */
 #if defined(__GNUC__) || defined(__clang__)
@@ -266,11 +265,5 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K);
 
 /* Free main cqreg state */
 void cqreg_state_free(cqreg_state *state);
-
-/* Aligned memory allocation */
-void *cqreg_aligned_alloc(size_t size, size_t alignment);
-
-/* Aligned memory free */
-void cqreg_aligned_free(void *ptr);
 
 #endif /* CQREG_TYPES_H */
