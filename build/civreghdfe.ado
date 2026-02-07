@@ -370,11 +370,23 @@ program define civreghdfe, eclass
         }
     }
 
+    * When no absorb specified and noconstant not requested, add explicit constant
+    * (With absorb, the constant is implicitly absorbed by the FE)
+    local has_cons = 0
+    local G : word count `absorb'
+    if `G' == 0 & "`noconstant'" == "" {
+        tempvar _cons_var
+        gen byte `_cons_var' = 1
+        local exogvars_expanded `exogvars_expanded' `_cons_var'
+        local exogvars_coef `exogvars_coef' _cons
+        local exogvars_names_all `exogvars_names_all' _cons
+        local has_cons = 1
+    }
+
     * Count variables (using expanded counts)
     local K_endog : word count `endogvars_expanded'
     local K_exog : word count `exogvars_expanded'
     local K_inst_excl : word count `instruments_expanded'
-    local G : word count `absorb'
 
     * Build full instrument list (exogenous + excluded instruments) - use expanded
     local all_instruments `exogvars_expanded' `instruments_expanded'
@@ -1061,7 +1073,7 @@ program define civreghdfe, eclass
             local varnames `varnames' `v'
         }
     }
-    if "`exogvars'" != "" {
+    if "`exogvars'" != "" | `has_cons' {
         foreach v of local exogvars_names_all {
             local is_partial = 0
             foreach pv of local partial_vars {
@@ -1307,8 +1319,14 @@ program define civreghdfe, eclass
     * sdofminus = absorb_ct = max(1, HDFE.df_a)
     *   - HDFE.df_a = df_a_for_vce (0 if nested, df_a otherwise)
     *   - ivreghdfe line 670: if HDFE.df_a=0 (nested), force absorb_ct to 1
+    * Without absorb: constant is already in K_total, so sdofminus = 0
     * Formula: r2_a = 1 - (1 - r2) * N / (N - K - sdofminus)  (ivreghdfe line 1304)
-    local sdofminus = max(1, `df_a_for_vce')
+    if `G' > 0 {
+        local sdofminus = max(1, `df_a_for_vce')
+    }
+    else {
+        local sdofminus = 0
+    }
     local adj_denom = `N_used' - `K_total' - `sdofminus'
     if `adj_denom' > 0 {
         * With absorb, constant is partialled out, so use N not N-1

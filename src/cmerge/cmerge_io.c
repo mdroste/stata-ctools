@@ -23,7 +23,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
     if (src->type == STATA_TYPE_DOUBLE) {
         /* Numeric keepusing variable */
         for (size_t i = 0; i < output_nobs; i++) {
-            int64_t using_row = specs[i].using_sorted_row;
+            int32_t using_row = specs[i].using_sorted_row;
             int8_t merge_result = specs[i].merge_result;
 
             /* Determine if we should write using value */
@@ -52,7 +52,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                 /* else: shared var without update/replace - don't overwrite master */
             }
 
-            if (should_write && using_row >= 0) {
+            if (should_write && using_row >= 0 && using_row < (int32_t)src->nobs) {
                 SF_vstore(dest_idx, (ST_int)(i + 1), src->data.dbl[using_row]);
             }
         }
@@ -60,7 +60,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
         /* String keepusing variable */
         char str_buf[2049];
         for (size_t i = 0; i < output_nobs; i++) {
-            int64_t using_row = specs[i].using_sorted_row;
+            int32_t using_row = specs[i].using_sorted_row;
             int8_t merge_result = specs[i].merge_result;
 
             /* Determine if we should write using value */
@@ -88,7 +88,7 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                 /* else: shared var without update/replace - don't overwrite master */
             }
 
-            if (should_write && using_row >= 0) {
+            if (should_write && using_row >= 0 && using_row < (int32_t)src->nobs) {
                 const char *val = src->data.str[using_row] ? src->data.str[using_row] : "";
                 SF_sstore(dest_idx, (ST_int)(i + 1), (char *)val);
             }

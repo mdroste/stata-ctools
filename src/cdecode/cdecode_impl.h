@@ -14,17 +14,25 @@
 #include "stplugin.h"
 
 /*
+ * Scan a Stata label save file and return the max label length.
+ * Used for pre-flight detection so the .ado can create the
+ * destination string variable with the correct width.
+ *
+ * Stores _cdecode_maxlen scalar in Stata.
+ *
+ * @param args  "labelsfile=/path/to/file"
+ * @return      0 on success, Stata error code on failure
+ */
+ST_retcode cdecode_scan_main(const char *args);
+
+/*
  * Main entry point for cdecode command.
  *
  * Called from ctools_plugin.c dispatcher.
+ * Parses a Stata `label save` format file directly (no Mata needed).
+ * Uses flat array lookup for dense label values, hash table for sparse.
  *
- * Arguments format (space-separated):
- *   src_idx: 1-based index of source numeric variable
- *   dst_idx: 1-based index of destination string variable
- *   maxlen: maximum string length (0 = auto)
- *   labels=<encoded>: value-label pairs in format "value|label||value|label||..."
- *
- * @param args  Command arguments as space-separated string
+ * @param args  "maxlen=N labelsfile=/path/to/file"
  * @return      0 on success, Stata error code on failure
  */
 ST_retcode cdecode_main(const char *args);

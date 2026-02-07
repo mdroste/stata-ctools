@@ -558,7 +558,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                     outfile.error_message);
             SF_error(msg);
             cexport_io_close(&outfile, 0);
-            for (size_t u = 0; u < wave_size; u++) {
+            for (size_t u = 0; u < total_buffers; u++) {
                 if (wave_buffers[u]) free(wave_buffers[u]);
             }
             free(header_buf);

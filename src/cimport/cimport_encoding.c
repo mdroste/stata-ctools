@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctype.h>
 #include "cimport_encoding.h"
+#include "../ctools_simd.h"
 
 /* ============================================================================
  * Windows-1252 to Unicode mapping for bytes 0x80-0x9F
@@ -648,4 +649,93 @@ size_t cimport_strip_invalid_utf8(const char *src, size_t src_size, char *dst)
         }
     }
     return j;
+}
+
+/* ============================================================================
+ * SIMD-Accelerated ASCII Check
+ * ============================================================================ */
+
+bool cimport_is_ascii_simd(const char *data, size_t size)
+{
+    const unsigned char *ptr = (const unsigned char *)data;
+    size_t i = 0;
+
+#if CTOOLS_HAS_AVX2
+    {
+        __m256i vor = _mm256_setzero_si256();
+        const __m256i v_high_bit = _mm256_set1_epi8((char)0x80);
+
+        /* Process 128 bytes per iteration (4x unroll) for throughput */
+        for (; i + 128 <= size; i += 128) {
+            __m256i v0 = _mm256_loadu_si256((const __m256i *)(ptr + i));
+            __m256i v1 = _mm256_loadu_si256((const __m256i *)(ptr + i + 32));
+            __m256i v2 = _mm256_loadu_si256((const __m256i *)(ptr + i + 64));
+            __m256i v3 = _mm256_loadu_si256((const __m256i *)(ptr + i + 96));
+            vor = _mm256_or_si256(vor, _mm256_or_si256(_mm256_or_si256(v0, v1),
+                                                        _mm256_or_si256(v2, v3)));
+            /* Early termination check every 128 bytes */
+            if (_mm256_movemask_epi8(_mm256_and_si256(vor, v_high_bit)))
+                return false;
+        }
+
+        /* Process remaining 32-byte chunks */
+        for (; i + 32 <= size; i += 32) {
+            __m256i v = _mm256_loadu_si256((const __m256i *)(ptr + i));
+            if (_mm256_movemask_epi8(v))
+                return false;
+        }
+    }
+#elif CTOOLS_HAS_SSE2
+    {
+        /* Process 64 bytes per iteration (4x unroll) */
+        for (; i + 64 <= size; i += 64) {
+            __m128i v0 = _mm_loadu_si128((const __m128i *)(ptr + i));
+            __m128i v1 = _mm_loadu_si128((const __m128i *)(ptr + i + 16));
+            __m128i v2 = _mm_loadu_si128((const __m128i *)(ptr + i + 32));
+            __m128i v3 = _mm_loadu_si128((const __m128i *)(ptr + i + 48));
+            __m128i vor = _mm_or_si128(_mm_or_si128(v0, v1), _mm_or_si128(v2, v3));
+            if (_mm_movemask_epi8(vor))
+                return false;
+        }
+
+        for (; i + 16 <= size; i += 16) {
+            __m128i v = _mm_loadu_si128((const __m128i *)(ptr + i));
+            if (_mm_movemask_epi8(v))
+                return false;
+        }
+    }
+#elif CTOOLS_HAS_NEON
+    {
+        /* Process 64 bytes per iteration (4x unroll) */
+        for (; i + 64 <= size; i += 64) {
+            uint8x16_t v0 = vld1q_u8(ptr + i);
+            uint8x16_t v1 = vld1q_u8(ptr + i + 16);
+            uint8x16_t v2 = vld1q_u8(ptr + i + 32);
+            uint8x16_t v3 = vld1q_u8(ptr + i + 48);
+            uint8x16_t vor = vorrq_u8(vorrq_u8(v0, v1), vorrq_u8(v2, v3));
+            /* Check if any byte has high bit set */
+            uint64x2_t vor64 = vreinterpretq_u64_u8(vor);
+            uint64_t lo = vgetq_lane_u64(vor64, 0);
+            uint64_t hi = vgetq_lane_u64(vor64, 1);
+            if ((lo | hi) & 0x8080808080808080ULL)
+                return false;
+        }
+
+        for (; i + 16 <= size; i += 16) {
+            uint8x16_t v = vld1q_u8(ptr + i);
+            uint64x2_t v64 = vreinterpretq_u64_u8(v);
+            uint64_t lo = vgetq_lane_u64(v64, 0);
+            uint64_t hi = vgetq_lane_u64(v64, 1);
+            if ((lo | hi) & 0x8080808080808080ULL)
+                return false;
+        }
+    }
+#endif
+
+    /* Scalar tail */
+    for (; i < size; i++) {
+        if (ptr[i] >= 0x80)
+            return false;
+    }
+    return true;
 }

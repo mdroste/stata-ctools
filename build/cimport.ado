@@ -418,20 +418,6 @@ program define cimport, rclass
         }
     }
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "cimport delimited: High-Performance CSV Import"
-        di as text "{hline 60}"
-        di as text "File:       " as result `"`using'"'
-        di as text "Delimiter:  " as result cond(`"`delimiters'"' == "	", "tab", cond(`"`delimiters'"' == " ", "space", `"`delimiters'"'))
-        di as text "Header row: " as result cond(`noheader' == 1, "no", "row `headerrow'")
-        di as text "Case:       " as result "`case'"
-        di as text "{hline 60}"
-        di ""
-    }
-
     * Build plugin arguments
     local opt_noheader = cond(`noheader' == 1, "noheader", "")
     local opt_headerrow = cond(`headerrow' > 1, "headerrow=`headerrow'", "")
@@ -478,10 +464,6 @@ program define cimport, rclass
 
     timer on 11
 
-    if "`verbose'" != "" {
-        di as text "Phase 1: Scanning CSV file..."
-    }
-
     capture noisily plugin call ctools_plugin, ///
         "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
@@ -503,10 +485,6 @@ program define cimport, rclass
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
     capture macro drop CIMPORT_NUMCOLS CIMPORT_STRCOLS
-
-    if "`verbose'" != "" {
-        di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
-    }
 
     * Handle empty file or file with header only - match Stata's behavior (rc=0, N=0, k=0)
     if `nvar' == 0 | `nobs' == 0 {
@@ -536,9 +514,6 @@ program define cimport, rclass
     * =========================================================================
 
     timer on 12
-    if "`verbose'" != "" {
-        di as text "Phase 2: Creating variables..."
-    }
 
     * Set number of observations as 1 to create empty variables, change after
     quietly set obs 1
@@ -678,10 +653,6 @@ program define cimport, rclass
     * =========================================================================
 
     timer on 13
-
-    if "`verbose'" != "" {
-        di as text "Phase 3: Loading data..."
-    }
 
     * Get list of all variables we just created (in order)
     unab allvars : *
@@ -937,25 +908,6 @@ program define cimport_excel, rclass
         }
     }
 
-    * Display info if verbose
-    if "`verbose'" != "" {
-        di as text ""
-        di as text "{hline 60}"
-        di as text "cimport excel: High-Performance Excel Import"
-        di as text "{hline 60}"
-        di as text "File:       " as result `"`using'"'
-        if "`sheet'" != "" {
-            di as text "Sheet:      " as result "`sheet'"
-        }
-        if "`cellrange'" != "" {
-            di as text "Cell range: " as result "`cellrange'"
-        }
-        di as text "First row:  " as result cond("`firstrow'" != "", "variable names", "data")
-        di as text "Case:       " as result "`case'"
-        di as text "{hline 60}"
-        di ""
-    }
-
     * Build plugin arguments
     local opt_sheet = cond("`sheet'" != "", "sheet=`sheet'", "")
     local opt_cellrange = cond("`cellrange'" != "", "cellrange=`cellrange'", "")
@@ -973,10 +925,6 @@ program define cimport_excel, rclass
     * =========================================================================
 
     timer on 11
-
-    if "`verbose'" != "" {
-        di as text "Phase 1: Scanning XLSX file..."
-    }
 
     capture noisily plugin call ctools_plugin, ///
         "cimport scan `using' `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
@@ -998,10 +946,6 @@ program define cimport_excel, rclass
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
-
-    if "`verbose'" != "" {
-        di as text "  Found " as result `nobs' as text " rows, " as result `nvar' as text " columns"
-    }
 
     * Handle empty file
     if `nvar' == 0 | `nobs' == 0 {
@@ -1030,9 +974,6 @@ program define cimport_excel, rclass
     * =========================================================================
 
     timer on 12
-    if "`verbose'" != "" {
-        di as text "Phase 2: Creating variables..."
-    }
 
     quietly set obs 1
 
@@ -1104,10 +1045,6 @@ program define cimport_excel, rclass
     * =========================================================================
 
     timer on 13
-
-    if "`verbose'" != "" {
-        di as text "Phase 3: Loading data..."
-    }
 
     unab allvars : *
 

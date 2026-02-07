@@ -622,6 +622,12 @@ stata_retcode csort_stream_apply_permutation(
     double *num_buf = NULL;
     if (n_numeric > 0) {
         num_buf = (double *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
+        if (!num_buf) {
+            free(numeric_vars);
+            free(string_vars);
+            ctools_aligned_free(inv_perm);
+            return STATA_ERR_MEMORY;
+        }
     }
     if (num_buf) {
         for (v = 0; v < n_numeric; v++) {
@@ -964,6 +970,10 @@ stata_retcode csort_stream_sort(
     }
     #endif
 
+    /* Take ownership of obs_map before freeing key_filtered, since
+     * ctools_filtered_data_free would free it but we still need it for
+     * stream-permuting non-key variables. */
+    key_filtered.obs_map = NULL;  /* Prevent free */
     ctools_filtered_data_free(&key_filtered);
     stata_data_init(&key_filtered.data);
 
@@ -1012,6 +1022,7 @@ cleanup:
     free(local_sort_vars);
     free(nonkey_var_indices);
     ctools_aligned_free(saved_perm);
+    if (obs_map) ctools_aligned_free(obs_map);  /* We took ownership from key_filtered */
     ctools_filtered_data_free(&key_filtered);
 
     local_timings.total_time = ctools_timer_seconds() - t_start;

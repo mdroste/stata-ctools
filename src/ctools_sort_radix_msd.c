@@ -926,7 +926,7 @@ static stata_retcode msd_sort_by_string_var(stata_data *data, int var_idx)
     #pragma omp parallel for if(data->nobs >= MSD_PARALLEL_HIST_THRESHOLD)
     #endif
     for (i = 0; i < data->nobs; i++) {
-        str_lengths[i] = strlen(str_data[i]);
+        str_lengths[i] = (str_data[i] != NULL) ? strlen(str_data[i]) : 0;
     }
 
     /* Allocate temporary order array (uses perm_idx_t for 50% memory savings) */

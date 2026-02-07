@@ -106,8 +106,10 @@ ST_int cqreg_hdfe_create_factor(ST_int var_idx,
 {
     ST_int idx, obs;
 
-    /* Create hash table with room for all unique values */
-    ST_int capacity = (ST_int)(N_filtered / CQREG_HASH_LOAD) + 1;
+    /* Create hash table with room for all unique values.
+     * Clamp to avoid ST_int overflow for very large N. */
+    double capacity_d = (double)N_filtered / CQREG_HASH_LOAD + 1.0;
+    ST_int capacity = (capacity_d > (double)INT_MAX) ? INT_MAX : (ST_int)capacity_d;
     cqreg_hash_table *ht = hash_create(capacity);
     if (ht == NULL) return -1;
 

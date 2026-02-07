@@ -1,4 +1,4 @@
-*! version 0.9.1 06Feb2026
+*! version 0.9.2 07Feb2026
 *! cencode: C-accelerated string encoding for Stata
 *! Part of the ctools suite
 *!
@@ -28,7 +28,7 @@ program define cencode, rclass
         exit 920
     }
 
-    syntax varlist [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
+    syntax varlist [if] [in], [Generate(string) replace Label(name) NOExtend Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -180,6 +180,8 @@ program define cencode, rclass
             exit 601
         }
     }
+    * Reset _rc (plugin load may leave _rc=110 for already-loaded plugin)
+    capture confirm number 0
 
     * Build threads option
     local threads_code ""
@@ -213,152 +215,78 @@ program define cencode, rclass
             local this_label "`__final_name'"
         }
 
-        * Get variable index for source
+        * Create the destination variable (numeric, long type for sufficient range)
+        quietly generate long `destvar' = .
+
+        * Get variable indices with a single unab + loop
+        * (gen_idx is always the last variable since we just created it)
         unab allvars : *
         local var_idx = 0
         local idx = 1
         foreach v of local allvars {
             if ("`v'" == "`srcvar'") {
                 local var_idx = `idx'
-                continue, break
             }
             local ++idx
         }
+        local gen_idx : word count `allvars'
 
         if `var_idx' == 0 {
             di as error "cencode: could not find variable `srcvar'"
             exit 111
         }
 
-        * Create the destination variable (numeric, long type for sufficient range)
-        quietly generate long `destvar' = .
-
-        * Get index of new variable
-        unab allvars : *
-        local gen_idx = 0
-        local idx = 1
-        foreach v of local allvars {
-            if ("`v'" == "`destvar'") {
-                local gen_idx = `idx'
-                continue, break
-            }
-            local ++idx
-        }
-
         * Build label option
         local label_code "label=`this_label'"
 
-        * Build noextend option and extract existing label mappings if needed
+        * Build noextend option: save existing label to file for C plugin
         local noextend_code ""
-        local existing_code ""
+        local existfile_code ""
         if "`noextend'" != "" {
             local noextend_code "noextend"
-            * Check if the label already exists and extract its mappings
+            * Check if the label already exists
             capture label list `this_label'
             if _rc == 0 {
-                * Label exists - extract value->string mappings
-                local existing_mappings ""
-
-                * Iterate through reasonable range of label values
-                forvalues v = 1/1000 {
-                    local lbl : label `this_label' `v', strict
-                    if `"`lbl'"' != "" {
-                        * This value has a label - escape special characters
-                        local lbl_escaped = subinstr(`"`lbl'"', "\", "\\", .)
-                        local lbl_escaped = subinstr(`"`lbl_escaped'"', "|", "\|", .)
-                        if "`existing_mappings'" == "" {
-                            local existing_mappings "`v'|`lbl_escaped'"
-                        }
-                        else {
-                            local existing_mappings "`existing_mappings'||`v'|`lbl_escaped'"
-                        }
-                    }
-                }
-
-                if "`existing_mappings'" != "" {
-                    local existing_code "existing=`existing_mappings'"
-                }
+                * Label exists - save to temp file for C plugin to parse
+                tempfile __existlblfile
+                quietly label save `this_label' using `__existlblfile', replace
+                local existfile_code "existfile=`__existlblfile'"
             }
         }
 
+        * Temp file for C plugin to write label definitions
+        tempfile __labelfile
+        local labelfile_code "labelfile=`__labelfile'"
+
         * Call the C plugin with ALL variables
-        unab allvars : *
         if `__do_timing' {
             timer off 91
             timer on 92
         }
-        plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code' `existing_code'"
+        plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code' `existfile_code' `labelfile_code'"
         if `__do_timing' {
             timer off 92
             timer on 93
         }
 
         * =====================================================================
-        * Create value labels from plugin output
+        * Create value labels from .do file written by C plugin
         * =====================================================================
 
         local n_unique = _cencode_n_unique
-        local n_chunks = _cencode_n_chunks
 
         if `n_unique' > 0 {
-            * Check if label already exists
-            local label_exists = 0
-            if "`noextend'" != "" {
-                capture label list `this_label'
-                if _rc == 0 {
-                    local label_exists = 1
-                }
-            }
+            * Drop any pre-existing label with this name for a clean slate
+            capture label drop `this_label'
+            * Run the .do file written by C plugin (label define commands)
+            run `__labelfile'
+        }
 
-            if `label_exists' == 0 {
-                * Create new label definition from plugin output
-                forvalues chunk = 0/`=`n_chunks'-1' {
-                    local labels_chunk "${_cencode_labels_`chunk'}"
-
-                    * Parse the label chunk: format is "value|label||value|label||..."
-                    while "`labels_chunk'" != "" {
-                        * Find next pair delimiter ||
-                        local delim_pos = strpos("`labels_chunk'", "||")
-                        if `delim_pos' > 0 {
-                            local pair = substr("`labels_chunk'", 1, `delim_pos' - 1)
-                            local labels_chunk = substr("`labels_chunk'", `delim_pos' + 2, .)
-                        }
-                        else {
-                            local pair = "`labels_chunk'"
-                            local labels_chunk = ""
-                        }
-
-                        * Parse pair: value|label
-                        local pipe_pos = strpos("`pair'", "|")
-                        if `pipe_pos' > 0 {
-                            local value = substr("`pair'", 1, `pipe_pos' - 1)
-                            local labeltext = substr("`pair'", `pipe_pos' + 1, .)
-
-                            * Unescape special characters
-                            local labeltext = subinstr("`labeltext'", "\|", "|", .)
-                            local labeltext = subinstr("`labeltext'", "\\", "\", .)
-                            local labeltext = subinstr(`"`labeltext'"', `"\""', `"""', .)
-
-                            * Add to label definition
-                            capture label define `this_label' `value' `"`labeltext'"', add
-                            if _rc != 0 & _rc != 110 {
-                                * Try modify if label value already exists
-                                capture label define `this_label' `value' `"`labeltext'"', modify
-                            }
-                        }
-                    }
-                }
-            }
-
-            * Apply label to the new variable
+        * Apply label to variable if it exists
+        capture label list `this_label'
+        if _rc == 0 {
             label values `destvar' `this_label'
         }
-
-        * Clean up macros
-        forvalues chunk = 0/`=`n_chunks'-1' {
-            capture macro drop _cencode_labels_`chunk'
-        }
-        capture macro drop _cencode_label_name
 
         * Handle replace option: drop original var and rename temp var
         if `__do_replace' {
@@ -449,5 +377,4 @@ program define cencode, rclass
 
     * Clean up any remaining scalars
     capture scalar drop _cencode_n_unique
-    capture scalar drop _cencode_n_chunks
 end

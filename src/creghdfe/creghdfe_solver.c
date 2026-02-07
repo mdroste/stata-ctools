@@ -256,6 +256,11 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
     (void)N;  /* N is stored in S->N */
     (void)num_threads;  /* Use S->num_threads or OpenMP default */
 
+    /* G=0 short-circuit: no FE factors, nothing to partial out */
+    if (S->G == 0) {
+        return 0;
+    }
+
     /* G=1 short-circuit: direct demean, no CG iteration */
     if (S->G == 1) {
         #pragma omp parallel for num_threads(S->num_threads) schedule(dynamic)

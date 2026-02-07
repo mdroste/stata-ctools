@@ -154,4 +154,15 @@ size_t cimport_strip_invalid_utf8(const char *src, size_t src_size, char *dst);
  */
 bool cimport_has_invalid_utf8(const char *data, size_t size);
 
+/*
+ * SIMD-accelerated check if all bytes in data are ASCII (< 0x80).
+ * Uses OR-reduction with SIMD vectors for high throughput.
+ * Returns early on first non-ASCII byte found.
+ *
+ * @param data      Data buffer
+ * @param size      Size of data buffer
+ * @return          true if all bytes are ASCII, false otherwise
+ */
+bool cimport_is_ascii_simd(const char *data, size_t size);
+
 #endif /* CIMPORT_ENCODING_H */

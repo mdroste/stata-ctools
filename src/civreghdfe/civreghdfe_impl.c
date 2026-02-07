@@ -260,6 +260,14 @@ static ST_retcode do_iv_regression(void)
 
     /* Drop observations with missing values */
     ST_int *valid_mask = (ST_int *)calloc(N_total, sizeof(ST_int));
+    if (!valid_mask) {
+        SF_error("civreghdfe: Memory allocation failed for valid_mask\n");
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids); free(cluster2_ids);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 920;
+    }
     ST_int N_valid = 0;
 
     for (i = 0; i < N_total; i++) {
@@ -319,7 +327,7 @@ static ST_retcode do_iv_regression(void)
      * This avoids two separate O(N×K) data compaction passes. */
 
     /* Step 1: Compact only FE levels for singleton detection */
-    ST_int **fe_levels_c = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
+    ST_int **fe_levels_c = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
     int fe_c_alloc_failed = 0;
     if (fe_levels_c) {
         for (ST_int g = 0; g < G; g++) {
@@ -463,6 +471,14 @@ static ST_retcode do_iv_regression(void)
     /* Initialize HDFE state (reuse creghdfe infrastructure) */
     /* This requires setting up FE_Factor structures */
     HDFE_State *state = (HDFE_State *)calloc(1, sizeof(HDFE_State));
+    if (!state) {
+        SF_error("civreghdfe: Memory allocation failed for HDFE state\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 920;
+    }
     state->G = G;
     state->N = N;
     state->K = 1 + K_endog + K_exog + K_iv;  /* Total columns to demean */
@@ -477,6 +493,15 @@ static ST_retcode do_iv_regression(void)
 
     /* Set up factors */
     state->factors = (FE_Factor *)calloc(G, sizeof(FE_Factor));
+    if (!state->factors) {
+        SF_error("civreghdfe: Memory allocation failed for FE factors\n");
+        free(state);
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 920;
+    }
     for (ST_int g = 0; g < G; g++) {
         /* Find max level value for remapping */
         ST_int max_level = 0;
@@ -645,6 +670,20 @@ static ST_retcode do_iv_regression(void)
 
         /* Get column offsets for partial variables in all_data */
         ST_int *partial_col_offsets = (ST_int *)malloc(n_partial * sizeof(ST_int));
+
+        if (!P_cur || !PtP || !PtP_inv || !Ptx || !coef || !old_data || !partial_col_offsets) {
+            SF_error("civreghdfe: Memory allocation failed for FWL workspace\n");
+            free(P_cur); free(PtP); free(PtP_inv); free(Ptx);
+            free(coef); free(old_data); free(partial_col_offsets);
+            free(all_data); free(partial_indices); free(is_partial);
+            free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            free(fe_levels_c);
+            ctools_hdfe_state_cleanup(state);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
         for (ST_int pi = 0; pi < n_partial; pi++) {
             ST_int exog_idx = partial_indices[pi] - 1;  /* 0-based index in X_exog */
             partial_col_offsets[pi] = 1 + K_endog + exog_idx;  /* Column in all_data */

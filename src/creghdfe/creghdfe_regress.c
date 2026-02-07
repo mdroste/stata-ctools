@@ -1495,6 +1495,9 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Compute residuals (needed for robust/cluster VCE and optionally stored) */
     ST_double *resid = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!resid) {
+        SF_error("creghdfe: Warning: memory allocation failed for residuals; VCE will be zero\n");
+    }
     if (resid) {
         for (idx = 0; idx < N; idx++) {
             ST_double y_hat = 0.0;

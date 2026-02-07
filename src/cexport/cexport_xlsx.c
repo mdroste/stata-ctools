@@ -470,13 +470,21 @@ static bool strbuf_init(StringBuffer *sb, size_t initial_cap) {
 }
 
 static void strbuf_append(StringBuffer *sb, const char *str) {
-    if (!sb->data) return;
+    if (!sb->data) return;  /* Already in error state */
     size_t slen = strlen(str);
     if (sb->len + slen + 1 > sb->capacity) {
         size_t new_cap = sb->capacity * 2;
         if (new_cap < sb->len + slen + 1) new_cap = sb->len + slen + 1024;
         char *new_data = realloc(sb->data, new_cap);
-        if (!new_data) return;
+        if (!new_data) {
+            /* Mark buffer as failed: free data and set to NULL.
+             * Subsequent calls will early-return via the !sb->data check. */
+            free(sb->data);
+            sb->data = NULL;
+            sb->capacity = 0;
+            sb->len = 0;
+            return;
+        }
         sb->data = new_data;
         sb->capacity = new_cap;
     }

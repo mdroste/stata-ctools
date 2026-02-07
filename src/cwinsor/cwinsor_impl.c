@@ -438,14 +438,27 @@ ST_retcode cwinsor_main(const char *args)
     double sort_start = ctools_timer_seconds();
 
     if (nby > 0) {
-        /* Build 1-based sort key indices for by-variables (stack-allocated) */
-        int sort_keys[nby];
+        /* Build 1-based sort key indices for by-variables (heap-allocated to avoid VLA) */
+        int *sort_keys = (int *)malloc(nby * sizeof(int));
+        if (!sort_keys) {
+            if (by_data) free(by_data);
+            ctools_filtered_data_free(&by_filtered);
+            free(var_data);
+            ctools_filtered_data_free(&target_filtered);
+            free(store_indices);
+            free(load_indices);
+            free(by_load_indices);
+            ctools_error_alloc(CWINSOR_MODULE);
+            return 920;
+        }
         for (size_t b = 0; b < nby; b++) {
             sort_keys[b] = (int)(b + 1);  /* 1-based indices into by_filtered.data */
         }
 
         /* Sort by-variables using ctools infrastructure (order only) */
         stata_retcode sort_rc = ctools_sort_dispatch(&by_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
+
+        free(sort_keys);
 
         if (sort_rc != STATA_OK) {
             if (by_data) free(by_data);
@@ -454,7 +467,7 @@ ST_retcode cwinsor_main(const char *args)
             ctools_filtered_data_free(&target_filtered);
             free(store_indices);
             free(load_indices);
-        free(by_load_indices);
+            free(by_load_indices);
             ctools_error(CWINSOR_MODULE, "sort failed");
             return 920;
         }

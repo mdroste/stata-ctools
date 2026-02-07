@@ -157,7 +157,7 @@ program define crangestat
 
         if `stat_code' == -1 {
             di as error "crangestat: unknown statistic '`stat_name''"
-            exit 198
+            exit 3499
         }
 
         * Parse variable specification: [newvar=]varname

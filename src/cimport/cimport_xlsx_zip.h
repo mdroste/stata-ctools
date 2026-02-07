@@ -114,6 +114,18 @@ size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer
 void xlsx_zip_stream_close(xlsx_zip_stream *stream);
 
 /* ============================================================================
+ * Fast Extraction (libdeflate-accelerated)
+ * ============================================================================ */
+
+/*
+ * Extract a file to a newly allocated buffer using libdeflate for inflate.
+ * 2-4x faster than miniz for large files. Falls back to miniz on error.
+ * Same interface as xlsx_zip_extract_to_heap().
+ */
+void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
+                            size_t *out_size);
+
+/* ============================================================================
  * Common XLSX Archive Paths
  * ============================================================================ */
 

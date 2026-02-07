@@ -171,6 +171,7 @@ static ctools_command_t get_command_type(const char *cmd_name)
     if (strcmp(cmd_name, "cbinscatter") == 0) return CTOOLS_CMD_CBINSCATTER;
     if (strcmp(cmd_name, "cencode") == 0) return CTOOLS_CMD_CENCODE;
     if (strcmp(cmd_name, "cdecode") == 0) return CTOOLS_CMD_CDECODE;
+    if (strcmp(cmd_name, "cdecode_scan") == 0) return CTOOLS_CMD_CDECODE;
     if (strcmp(cmd_name, "cwinsor") == 0) return CTOOLS_CMD_CWINSOR;
     if (strcmp(cmd_name, "cdestring") == 0) return CTOOLS_CMD_CDESTRING;
     if (strcmp(cmd_name, "csample") == 0) return CTOOLS_CMD_CSAMPLE;
@@ -289,6 +290,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cdecode") == 0) {
         rc = cdecode_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cdecode_scan") == 0) {
+        rc = cdecode_scan_main(cmd_args);
     }
     else if (strcmp(cmd_name, "csample") == 0) {
         rc = csample_main(cmd_args);

@@ -553,9 +553,10 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
         thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
-    /* Check allocation success */
+    /* Check allocation success - with dynamic scheduling any thread can process
+     * any bucket, so all thread_temps must be valid */
     for (int t = 0; t < num_threads; t++) {
-        if (thread_temps[t] == NULL && bucket_sizes[t] > 0) {
+        if (thread_temps[t] == NULL) {
             rc = STATA_ERR_MEMORY;
             goto cleanup;
         }

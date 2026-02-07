@@ -144,7 +144,9 @@ static int vce_sort_by_cluster(const ST_int *cluster_ids, ST_int N, ST_int num_c
     if (!counts) return -1;
 
     for (i = 0; i < N; i++) {
-        counts[cluster_ids[i]]++;
+        ST_int c = cluster_ids[i];
+        if (c < 0 || c >= num_clusters) { free(counts); return -1; }
+        counts[c]++;
     }
 
     /* Compute prefix sums to get starting positions */
@@ -176,6 +178,9 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
     ST_int idx, j, k;
     ST_int N = d->N;
     ST_int K = d->K;
+
+    /* Zero V on entry so any early return leaves a known state (zero SE) */
+    memset(V, 0, K * K * sizeof(ST_double));
 
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;
@@ -260,6 +265,9 @@ void ctools_vce_cluster(const ctools_vce_data *d,
     ST_int i, k, idx;
     ST_int N = d->N;
     ST_int K = d->K;
+
+    /* Zero V on entry so any early return leaves a known state (zero SE) */
+    memset(V, 0, K * K * sizeof(ST_double));
 
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;

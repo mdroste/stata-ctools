@@ -67,7 +67,11 @@ ST_int ctools_remove_singletons(
     ST_int num_singletons_iter;
     ST_int iter = 0;
 
-    if (G == 0) return 0;
+    if (G == 0) {
+        /* No FE factors means no singletons, but still initialize mask */
+        for (i = 0; i < N; i++) mask[i] = 1;
+        return 0;
+    }
 
     /* Find max level for each factor */
     ST_int *max_levels = (ST_int *)malloc(G * sizeof(ST_int));
@@ -538,20 +542,22 @@ ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int ma
         ST_int num_lev = state->factors[g].num_levels;
 
         state->factors[g].inv_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
-        if (state->factors[g].inv_counts) {
-            for (ST_int lev = 0; lev < num_lev; lev++) {
-                state->factors[g].inv_counts[lev] =
-                    (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
-            }
+        if (!state->factors[g].inv_counts) {
+            return -1;  /* Allocation failed — caller must clean up */
+        }
+        for (ST_int lev = 0; lev < num_lev; lev++) {
+            state->factors[g].inv_counts[lev] =
+                (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
         }
 
         if (state->has_weights && state->factors[g].weighted_counts) {
             state->factors[g].inv_weighted_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
-            if (state->factors[g].inv_weighted_counts) {
-                for (ST_int lev = 0; lev < num_lev; lev++) {
-                    state->factors[g].inv_weighted_counts[lev] =
-                        (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
-                }
+            if (!state->factors[g].inv_weighted_counts) {
+                return -1;  /* Allocation failed — caller must clean up */
+            }
+            for (ST_int lev = 0; lev < num_lev; lev++) {
+                state->factors[g].inv_weighted_counts[lev] =
+                    (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
             }
         } else {
             state->factors[g].inv_weighted_counts = NULL;
