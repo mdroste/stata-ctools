@@ -1,4 +1,4 @@
-*! version 0.9.1 06Feb2026
+*! version 1.0.1 07Feb2026
 *! cimport: C-accelerated CSV import for Stata
 *! Part of the ctools suite
 *!

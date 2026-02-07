@@ -1,4 +1,4 @@
-*! version 0.9.2 07Feb2026
+*! version 1.0.1 07Feb2026
 *! cencode: C-accelerated string encoding for Stata
 *! Part of the ctools suite
 *!
