@@ -267,10 +267,10 @@ void compute_xtx_xty(
     memset(xtx, 0, K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
-    /* Always use Kahan-compensated summation for OLS dot products.
+    /* Kahan-compensated dot products for numerical stability.
      * reghdfe uses Mata's quadcross() (quad-precision), so we need
-     * compensated summation to match its numerical precision. */
-    int use_kahan = 1;
+     * compensated summation to match after FE partialling out.
+     * BLAS dsyrk would be faster but lacks the precision needed here. */
 
 #ifdef _OPENMP
     /* Parallel computation of X'y and diagonal of X'X */
@@ -278,33 +278,19 @@ void compute_xtx_xty(
 #endif
     for (j = 0; j < K_x; j++) {
         const ST_double *xj = &data[(j + 1) * N];
-
-        /* X'y: j-th element */
-        if (use_kahan) {
-            xty[j] = kahan_dot(xj, y, N);
-        } else {
-            xty[j] = fast_dot(xj, y, N);
-        }
-
-        /* Diagonal of X'X */
-        if (use_kahan) {
-            xtx[j * K_x + j] = kahan_dot(xj, xj, N);
-        } else {
-            xtx[j * K_x + j] = fast_dot(xj, xj, N);
-        }
+        xty[j] = kahan_dot(xj, y, N);
+        xtx[j * K_x + j] = kahan_dot(xj, xj, N);
     }
 
-    /* Off-diagonal elements (symmetric) */
+    /* Off-diagonal elements (symmetric, trivially parallelizable) */
+#ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic) if(K_x > 4) private(k)
+#endif
     for (j = 0; j < K_x; j++) {
         const ST_double *xj = &data[(j + 1) * N];
         for (k = j + 1; k < K_x; k++) {
             const ST_double *xk = &data[(k + 1) * N];
-            ST_double val;
-            if (use_kahan) {
-                val = kahan_dot(xj, xk, N);
-            } else {
-                val = fast_dot(xj, xk, N);
-            }
+            ST_double val = kahan_dot(xj, xk, N);
             xtx[j * K_x + k] = val;
             xtx[k * K_x + j] = val;  /* Symmetric */
         }
@@ -343,34 +329,52 @@ void compute_xtx_xty_weighted(
     memset(xtx, 0, K_x * K_x * sizeof(ST_double));
     memset(xty, 0, K_x * sizeof(ST_double));
 
-    /* Compute X'WX and X'Wy where W = diag(weights) */
-    for (i = 0; i < N; i++) {
-        ST_double w = weights[i];
-        /* Normalize for aweight/pweight */
-        if (weight_type == 1 || weight_type == 3) {
-            w = w * weight_scale;
+    /* Pre-normalize weights if needed to avoid branch per observation */
+    ST_double *w_scaled = NULL;
+    if (weight_type == 1 || weight_type == 3) {
+        w_scaled = (ST_double *)malloc(N * sizeof(ST_double));
+        if (w_scaled) {
+            for (i = 0; i < N; i++) w_scaled[i] = weights[i] * weight_scale;
         }
-        ST_double yi = y[i];
+    }
+    const ST_double *w_eff = w_scaled ? w_scaled : weights;
 
-        for (j = 0; j < K_x; j++) {
-            ST_double xj = data[(j + 1) * N + i];
-            ST_double wxj = w * xj;
+    /* Cache-blocked scalar path: process observations in blocks to keep
+     * partial X'WX contributions in L1 cache for large K. */
+    #define WXTX_BLOCK_SIZE 256
 
-            /* X'Wy: accumulate w * x_j * y */
-            xty[j] += wxj * yi;
+    for (ST_int b0 = 0; b0 < N; b0 += WXTX_BLOCK_SIZE) {
+        ST_int b1 = b0 + WXTX_BLOCK_SIZE;
+        if (b1 > N) b1 = N;
 
-            /* Diagonal of X'WX */
-            xtx[j * K_x + j] += wxj * xj;
+        for (i = b0; i < b1; i++) {
+            ST_double w = w_eff[i];
+            ST_double yi = y[i];
 
-            /* Off-diagonal (upper triangle, then copy to lower) */
-            for (k = j + 1; k < K_x; k++) {
-                ST_double xk = data[(k + 1) * N + i];
-                ST_double val = wxj * xk;
-                xtx[j * K_x + k] += val;
-                xtx[k * K_x + j] += val;  /* Symmetric */
+            for (j = 0; j < K_x; j++) {
+                ST_double xj = data[(j + 1) * N + i];
+                ST_double wxj = w * xj;
+
+                xty[j] += wxj * yi;
+                xtx[j * K_x + j] += wxj * xj;
+
+                for (k = j + 1; k < K_x; k++) {
+                    xtx[j * K_x + k] += wxj * data[(k + 1) * N + i];
+                }
             }
         }
     }
+
+    #undef WXTX_BLOCK_SIZE
+
+    /* Mirror upper triangle to lower */
+    for (j = 0; j < K_x; j++) {
+        for (k = j + 1; k < K_x; k++) {
+            xtx[k * K_x + j] = xtx[j * K_x + k];
+        }
+    }
+
+    if (w_scaled) free(w_scaled);
 }
 
 /* ========================================================================

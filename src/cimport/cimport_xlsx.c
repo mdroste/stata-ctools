@@ -12,6 +12,7 @@
 #include "../ctools_runtime.h"
 #include "../ctools_arena.h"
 #include "../ctools_threads.h"
+#include "../ctools_types.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,19 @@
 #include <ctype.h>
 #include <math.h>
 #include <float.h>
+
+/* Fast inline parser for non-negative integers (XLSX shared string indices, row numbers, etc.)
+ * Returns -1 on empty/invalid input. */
+static inline int xlsx_fast_atoi(const char *s)
+{
+    if (!s || !*s) return -1;
+    int val = 0;
+    while (*s >= '0' && *s <= '9') {
+        val = val * 10 + (*s - '0');
+        s++;
+    }
+    return val;
+}
 
 /* ============================================================================
  * Forward Declarations
@@ -30,6 +44,18 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data);
 static bool styles_callback(const xlsx_xml_event *event, void *user_data);
 static void generate_varname(char *buf, int col, const char *header_value, int case_mode);
 static double excel_date_to_stata(double excel_date);
+
+/* Global cached context (survives between scan and load calls) */
+static XLSXContext *g_xlsx_ctx = NULL;
+
+void xlsx_clear_cached_context(void)
+{
+    if (g_xlsx_ctx) {
+        xlsx_context_free(g_xlsx_ctx);
+        free(g_xlsx_ctx);
+        g_xlsx_ctx = NULL;
+    }
+}
 
 /* Parser state structures */
 typedef struct {
@@ -85,6 +111,7 @@ void xlsx_context_init(XLSXContext *ctx)
     ctx->cell_range.end_row = -1;
     ctx->selected_sheet = 0;
     ctx->min_row = INT32_MAX;
+    ctools_arena_init(&ctx->parse_arena, 0);
 }
 
 void xlsx_context_free(XLSXContext *ctx)
@@ -102,6 +129,10 @@ void xlsx_context_free(XLSXContext *ctx)
         free(ctx->shared_strings);
         ctx->shared_strings = NULL;
     }
+    if (ctx->shared_string_lengths) {
+        free(ctx->shared_string_lengths);
+        ctx->shared_string_lengths = NULL;
+    }
     if (ctx->shared_strings_pool) {
         free(ctx->shared_strings_pool);
         ctx->shared_strings_pool = NULL;
@@ -113,22 +144,24 @@ void xlsx_context_free(XLSXContext *ctx)
         ctx->date_styles = NULL;
     }
 
-    /* Free parsed rows */
+    /* Free parsed rows (inline strings freed via parse_arena below) */
     if (ctx->rows) {
         for (int i = 0; i < ctx->num_rows; i++) {
             if (ctx->rows[i].cells) {
-                /* Free any inline strings within cells */
-                for (int j = 0; j < ctx->rows[i].num_cells; j++) {
-                    if (ctx->rows[i].cells[j].type == XLSX_CELL_STRING &&
-                        ctx->rows[i].cells[j].value.inline_string != NULL) {
-                        free((void *)ctx->rows[i].cells[j].value.inline_string);
-                    }
-                }
                 free(ctx->rows[i].cells);
             }
         }
         free(ctx->rows);
         ctx->rows = NULL;
+    }
+
+    /* Free parse arena (covers all inline strings) */
+    ctools_arena_free(&ctx->parse_arena);
+
+    /* Free col_stats */
+    if (ctx->col_stats) {
+        free(ctx->col_stats);
+        ctx->col_stats = NULL;
     }
 
     /* Free columns */
@@ -287,7 +320,27 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
     XLSXContext *ctx = state->ctx;
 
     if (event->type == XLSX_XML_START_ELEMENT) {
-        if (strcmp(event->tag_name, "si") == 0) {
+        if (strcmp(event->tag_name, "sst") == 0) {
+            /* Pre-allocate from uniqueCount if available */
+            const char *unique_count = xlsx_xml_get_attr(event, "uniqueCount");
+            if (unique_count) {
+                uint32_t count = (uint32_t)strtoul(unique_count, NULL, 10);
+                if (count > 0 && count <= XLSX_MAX_SHARED_STRINGS) {
+                    ctx->shared_strings = (char **)malloc(count * sizeof(char *));
+                    if (ctx->shared_strings) {
+                        ctx->shared_strings_capacity = count;
+                    }
+                    ctx->shared_string_lengths = (uint32_t *)malloc(count * sizeof(uint32_t));
+                    /* Pre-allocate pool: estimate 32 bytes per string */
+                    size_t pool_est = (size_t)count * 32;
+                    ctx->shared_strings_pool = (char *)malloc(pool_est);
+                    if (ctx->shared_strings_pool) {
+                        ctx->shared_strings_pool_size = pool_est;
+                    }
+                }
+            }
+        }
+        else if (strcmp(event->tag_name, "si") == 0) {
             state->in_si = true;
             state->current_len = 0;
             state->current_string[0] = '\0';
@@ -326,6 +379,10 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
                                                        new_cap * sizeof(char *));
                 if (!new_strings) return false;
                 ctx->shared_strings = new_strings;
+                uint32_t *new_lengths = (uint32_t *)realloc(ctx->shared_string_lengths,
+                                                             new_cap * sizeof(uint32_t));
+                if (!new_lengths) return false;
+                ctx->shared_string_lengths = new_lengths;
                 ctx->shared_strings_capacity = (uint32_t)new_cap;
             }
 
@@ -360,12 +417,36 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
 
             char *dest = ctx->shared_strings_pool + ctx->shared_strings_pool_used;
             memcpy(dest, state->current_string, decoded_len + 1);
-            ctx->shared_strings[ctx->num_shared_strings++] = dest;
+            ctx->shared_strings[ctx->num_shared_strings] = dest;
+            if (ctx->shared_string_lengths) {
+                ctx->shared_string_lengths[ctx->num_shared_strings] = (uint32_t)decoded_len;
+            }
+            ctx->num_shared_strings++;
             ctx->shared_strings_pool_used += need;
         }
     }
 
     return true;
+}
+
+/* Inner: parse shared strings from pre-extracted buffer (does not free data) */
+static ST_retcode xlsx_parse_shared_strings_buf(XLSXContext *ctx, const void *data, size_t size)
+{
+    SharedStringsParseState state = {0};
+    state.ctx = ctx;
+
+    xlsx_xml_parser *parser = xlsx_xml_parser_create(shared_strings_callback, &state);
+    if (!parser) return 920;
+
+    bool success = xlsx_xml_parse(parser, (const char *)data, size, true);
+    xlsx_xml_parser_destroy(parser);
+
+    if (!success) {
+        snprintf(ctx->error_message, sizeof(ctx->error_message),
+                 "Failed to parse sharedStrings.xml");
+        return 610;
+    }
+    return 0;
 }
 
 ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
@@ -389,29 +470,11 @@ ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
         return 610;
     }
 
-    SharedStringsParseState state = {0};
-    state.ctx = ctx;
-
-    xlsx_xml_parser *parser = xlsx_xml_parser_create(shared_strings_callback, &state);
-    if (!parser) {
-        free(data);
-        return 920;
-    }
-
-    bool success = xlsx_xml_parse(parser, (const char *)data, size, true);
-
-    xlsx_xml_parser_destroy(parser);
+    ST_retcode rc = xlsx_parse_shared_strings_buf(ctx, data, size);
     free(data);
 
     ctx->time_shared_strings = ctools_timer_seconds() - t_start;
-
-    if (!success) {
-        snprintf(ctx->error_message, sizeof(ctx->error_message),
-                 "Failed to parse sharedStrings.xml");
-        return 610;
-    }
-
-    return 0;
+    return rc;
 }
 
 /* ============================================================================
@@ -510,6 +573,21 @@ static bool styles_callback(const xlsx_xml_event *event, void *user_data)
     return true;
 }
 
+/* Inner: parse styles from pre-extracted buffer (does not free data) */
+static ST_retcode xlsx_parse_styles_buf(XLSXContext *ctx, const void *data, size_t size)
+{
+    StylesParseState state = {0};
+    state.ctx = ctx;
+
+    xlsx_xml_parser *parser = xlsx_xml_parser_create(styles_callback, &state);
+    if (!parser) return 0;
+
+    xlsx_xml_parse(parser, (const char *)data, size, true);
+    xlsx_xml_parser_destroy(parser);
+
+    return 0;
+}
+
 ST_retcode xlsx_parse_styles(XLSXContext *ctx)
 {
     xlsx_zip_archive *zip = (xlsx_zip_archive *)ctx->zip_archive;
@@ -525,26 +603,40 @@ ST_retcode xlsx_parse_styles(XLSXContext *ctx)
         return 0;  /* Non-fatal */
     }
 
-    StylesParseState state = {0};
-    state.ctx = ctx;
-
-    xlsx_xml_parser *parser = xlsx_xml_parser_create(styles_callback, &state);
-    if (!parser) {
-        free(data);
-        return 0;
-    }
-
-    xlsx_xml_parse(parser, (const char *)data, size, true);
-
-    xlsx_xml_parser_destroy(parser);
+    ST_retcode rc = xlsx_parse_styles_buf(ctx, data, size);
     free(data);
 
-    return 0;
+    return rc;
 }
 
 /* ============================================================================
  * Worksheet Parsing
  * ============================================================================ */
+
+/* Ensure col_stats covers at least col_idx+1 entries */
+static CImportColumnInfo *ensure_col_stat(XLSXContext *ctx, int col_idx)
+{
+    if (col_idx < ctx->col_stats_capacity) {
+        return &ctx->col_stats[col_idx];
+    }
+    int new_cap = ctx->col_stats_capacity == 0 ? 64 : ctx->col_stats_capacity;
+    while (new_cap <= col_idx) new_cap *= 2;
+    CImportColumnInfo *new_stats = (CImportColumnInfo *)realloc(
+        ctx->col_stats, new_cap * sizeof(CImportColumnInfo));
+    if (!new_stats) return NULL;
+    /* Initialize new entries */
+    for (int i = ctx->col_stats_capacity; i < new_cap; i++) {
+        memset(&new_stats[i], 0, sizeof(CImportColumnInfo));
+        new_stats[i].type = CIMPORT_COL_UNKNOWN;
+        new_stats[i].num_subtype = CIMPORT_NUM_BYTE;
+        new_stats[i].is_integer = true;
+        new_stats[i].min_value = DBL_MAX;
+        new_stats[i].max_value = -DBL_MAX;
+    }
+    ctx->col_stats = new_stats;
+    ctx->col_stats_capacity = new_cap;
+    return &ctx->col_stats[col_idx];
+}
 
 static XLSXParsedRow *ensure_row(XLSXContext *ctx, int row_num)
 {
@@ -601,86 +693,126 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
 {
     WorksheetParseState *state = (WorksheetParseState *)user_data;
     XLSXContext *ctx = state->ctx;
+    const char *tag = event->tag_name;
 
     if (event->type == XLSX_XML_START_ELEMENT) {
-        if (strcmp(event->tag_name, "sheetData") == 0) {
-            state->in_sheetdata = true;
-        }
-        else if (state->in_sheetdata && strcmp(event->tag_name, "row") == 0) {
-            state->in_row = true;
-            const char *r = xlsx_xml_get_attr(event, "r");
-            state->current_row = r ? atoi(r) : (state->current_row + 1);
+        /* Tag dispatch via first character for common XLSX worksheet tags.
+         * The worksheet tag set is small and fixed — this eliminates most
+         * strcmp overhead on the ~40M events for a 10M cell dataset. */
+        switch (tag[0]) {
+        case 'c':
+            if (tag[1] == '\0' && state->in_row) {
+                /* <c> cell element */
+                state->in_cell = true;
+                state->value_len = 0;
 
-            /* Check cell range */
-            XLSXCellRange *range = &ctx->cell_range;
-            if (range->start_row > 0 && state->current_row < range->start_row) {
-                state->in_row = false;  /* Skip this row */
-            }
-            if (range->end_row > 0 && state->current_row > range->end_row) {
-                return false;  /* Stop parsing */
-            }
+                const char *r = xlsx_xml_get_attr(event, "r");
+                const char *t = xlsx_xml_get_attr(event, "t");
+                const char *s = xlsx_xml_get_attr(event, "s");
 
-            if (state->in_row) {
-                state->row_ptr = ensure_row(ctx, state->current_row);
-            }
-        }
-        else if (state->in_row && strcmp(event->tag_name, "c") == 0) {
-            state->in_cell = true;
-            state->value_len = 0;
+                if (r) {
+                    int col, row;
+                    if (xlsx_xml_parse_cell_ref(r, &col, &row)) {
+                        state->current_col = col;
+                        state->current_row = row;
+                    }
+                }
 
-            const char *r = xlsx_xml_get_attr(event, "r");
-            const char *t = xlsx_xml_get_attr(event, "t");
-            const char *s = xlsx_xml_get_attr(event, "s");
+                XLSXCellRange *range = &ctx->cell_range;
+                if (range->start_col >= 0 && state->current_col < range->start_col) {
+                    state->in_cell = false;
+                }
+                if (range->end_col >= 0 && state->current_col > range->end_col) {
+                    state->in_cell = false;
+                }
 
-            /* Parse cell reference */
-            if (r) {
-                int col, row;
-                if (xlsx_xml_parse_cell_ref(r, &col, &row)) {
-                    state->current_col = col;
-                    state->current_row = row;
+                state->current_type = XLSX_CELL_NUMBER;
+                if (t) {
+                    switch (t[0]) {
+                    case 's':
+                        state->current_type = (t[1] == '\0') ? XLSX_CELL_SHARED_STRING :
+                            (strcmp(t, "str") == 0) ? XLSX_CELL_STRING : XLSX_CELL_NUMBER;
+                        break;
+                    case 'i':
+                        if (strcmp(t, "inlineStr") == 0) state->current_type = XLSX_CELL_STRING;
+                        break;
+                    case 'b':
+                        if (t[1] == '\0') state->current_type = XLSX_CELL_BOOLEAN;
+                        break;
+                    case 'e':
+                        if (t[1] == '\0') state->current_type = XLSX_CELL_ERROR;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+
+                state->current_style = s ? xlsx_fast_atoi(s) : -1;
+
+                if (state->current_col > ctx->max_col) {
+                    ctx->max_col = state->current_col;
                 }
             }
-
-            /* Check column range */
-            XLSXCellRange *range = &ctx->cell_range;
-            if (range->start_col >= 0 && state->current_col < range->start_col) {
-                state->in_cell = false;  /* Skip */
+            break;
+        case 'v':
+            if (tag[1] == '\0' && state->in_cell) {
+                state->in_value = true;
+                state->value_len = 0;
             }
-            if (range->end_col >= 0 && state->current_col > range->end_col) {
-                state->in_cell = false;  /* Skip */
+            break;
+        case 't':
+            if (tag[1] == '\0' && state->in_inline_str) {
+                state->in_t = true;
+                state->value_len = 0;
             }
+            break;
+        case 'r':
+            if (tag[1] == 'o' && tag[2] == 'w' && tag[3] == '\0' && state->in_sheetdata) {
+                state->in_row = true;
+                const char *r = xlsx_xml_get_attr(event, "r");
+                state->current_row = r ? xlsx_fast_atoi(r) : (state->current_row + 1);
 
-            /* Cell type: s=shared string, str=inline, b=boolean, e=error, n=number (default) */
-            state->current_type = XLSX_CELL_NUMBER;  /* Default */
-            if (t) {
-                if (strcmp(t, "s") == 0) {
-                    state->current_type = XLSX_CELL_SHARED_STRING;
-                } else if (strcmp(t, "str") == 0 || strcmp(t, "inlineStr") == 0) {
-                    state->current_type = XLSX_CELL_STRING;
-                } else if (strcmp(t, "b") == 0) {
-                    state->current_type = XLSX_CELL_BOOLEAN;
-                } else if (strcmp(t, "e") == 0) {
-                    state->current_type = XLSX_CELL_ERROR;
+                XLSXCellRange *range = &ctx->cell_range;
+                if (range->start_row > 0 && state->current_row < range->start_row) {
+                    state->in_row = false;
+                }
+                if (range->end_row > 0 && state->current_row > range->end_row) {
+                    return false;
+                }
+
+                if (state->in_row) {
+                    state->row_ptr = ensure_row(ctx, state->current_row);
                 }
             }
-
-            /* Style index */
-            state->current_style = s ? atoi(s) : -1;
-
-            if (state->current_col > ctx->max_col) {
-                ctx->max_col = state->current_col;
+            break;
+        case 's':
+            if (strcmp(tag, "sheetData") == 0) {
+                state->in_sheetdata = true;
             }
-        }
-        else if (state->in_cell && strcmp(event->tag_name, "v") == 0) {
-            state->in_value = true;
-            state->value_len = 0;
-        }
-        else if (state->in_cell && strcmp(event->tag_name, "is") == 0) {
-            state->in_inline_str = true;
-        }
-        else if (state->in_inline_str && strcmp(event->tag_name, "t") == 0) {
-            state->in_t = true;
-            state->value_len = 0;
+            break;
+        case 'i':
+            if (tag[1] == 's' && tag[2] == '\0' && state->in_cell) {
+                state->in_inline_str = true;
+            }
+            break;
+        case 'd':
+            if (strcmp(tag, "dimension") == 0) {
+                const char *ref = xlsx_xml_get_attr(event, "ref");
+                if (ref) {
+                    /* Parse dimension for pre-allocation hints (e.g. "A1:J1000000") */
+                    const char *colon = strchr(ref, ':');
+                    if (colon) {
+                        int end_col, end_row;
+                        if (xlsx_xml_parse_cell_ref(colon + 1, &end_col, &end_row)) {
+                            ctx->dimension_cols = end_col + 1;
+                            ctx->dimension_rows = end_row;
+                        }
+                    }
+                }
+            }
+            break;
+        default:
+            break;
         }
     }
     else if (event->type == XLSX_XML_TEXT) {
@@ -696,65 +828,138 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
         }
     }
     else if (event->type == XLSX_XML_END_ELEMENT) {
-        if (strcmp(event->tag_name, "sheetData") == 0) {
-            state->in_sheetdata = false;
-        }
-        else if (strcmp(event->tag_name, "row") == 0) {
-            state->in_row = false;
-            state->row_ptr = NULL;
-        }
-        else if (strcmp(event->tag_name, "v") == 0) {
-            state->in_value = false;
-        }
-        else if (strcmp(event->tag_name, "t") == 0) {
-            state->in_t = false;
-        }
-        else if (strcmp(event->tag_name, "is") == 0) {
-            state->in_inline_str = false;
-        }
-        else if (strcmp(event->tag_name, "c") == 0 && state->in_cell) {
-            state->in_cell = false;
-            state->value_buf[state->value_len] = '\0';
+        switch (tag[0]) {
+        case 'c':
+            if (tag[1] == '\0' && state->in_cell) {
+                state->in_cell = false;
+                state->value_buf[state->value_len] = '\0';
 
-            if (state->row_ptr && state->value_len > 0) {
-                XLSXCell *cell = add_cell(state->row_ptr, state->current_col);
-                if (cell) {
-                    cell->col = state->current_col;
-                    cell->row = state->current_row;
-                    cell->type = state->current_type;
-                    cell->style_idx = state->current_style;
+                if (state->row_ptr && state->value_len > 0) {
+                    XLSXCell *cell = add_cell(state->row_ptr, state->current_col);
+                    if (cell) {
+                        cell->col = state->current_col;
+                        cell->row = state->current_row;
+                        cell->type = state->current_type;
+                        cell->style_idx = state->current_style;
 
-                    switch (state->current_type) {
-                    case XLSX_CELL_SHARED_STRING:
-                        cell->value.shared_string_idx = atoi(state->value_buf);
-                        break;
-                    case XLSX_CELL_NUMBER:
-                        cell->value.number = strtod(state->value_buf, NULL);
-                        /* Check if this is a date based on style */
-                        if (state->current_style >= 0 &&
-                            state->current_style < ctx->num_styles &&
-                            ctx->date_styles[state->current_style]) {
-                            cell->type = XLSX_CELL_DATE;
+                        switch (state->current_type) {
+                        case XLSX_CELL_SHARED_STRING:
+                            cell->value.shared_string_idx = xlsx_fast_atoi(state->value_buf);
+                            break;
+                        case XLSX_CELL_NUMBER: {
+                            double parsed_val;
+                            if (ctools_parse_double_fast(state->value_buf, (int)state->value_len, &parsed_val, SV_missval)) {
+                                cell->value.number = parsed_val;
+                            } else {
+                                cell->value.number = strtod(state->value_buf, NULL);
+                            }
+                            if (state->current_style >= 0 &&
+                                state->current_style < ctx->num_styles &&
+                                ctx->date_styles[state->current_style]) {
+                                cell->type = XLSX_CELL_DATE;
+                            }
+                            break;
                         }
-                        break;
-                    case XLSX_CELL_BOOLEAN:
-                        cell->value.boolean = (state->value_buf[0] == '1');
-                        break;
-                    case XLSX_CELL_STRING:
-                        /* Inline string - decode entities */
-                        xlsx_xml_decode_entities(state->value_buf, state->value_len);
-                        /* Store as shared string for uniformity */
-                        cell->type = XLSX_CELL_STRING;
-                        cell->value.inline_string = strdup(state->value_buf);
-                        if (cell->value.inline_string == NULL) {
-                            return false;  /* Memory allocation failed */
+                        case XLSX_CELL_BOOLEAN:
+                            cell->value.boolean = (state->value_buf[0] == '1');
+                            break;
+                        case XLSX_CELL_STRING:
+                            xlsx_xml_decode_entities(state->value_buf, state->value_len);
+                            cell->type = XLSX_CELL_STRING;
+                            cell->value.inline_string = ctools_arena_strdup(
+                                &ctx->parse_arena, state->value_buf);
+                            if (cell->value.inline_string == NULL) {
+                                return false;
+                            }
+                            break;
+                        default:
+                            break;
                         }
-                        break;
-                    default:
-                        break;
+
+                        /* Inline type inference */
+                        if (!ctx->allstring &&
+                            !(ctx->firstrow && cell->row == ctx->min_row)) {
+                            CImportColumnInfo *cs = ensure_col_stat(ctx, cell->col);
+                            if (cs) {
+                                switch (cell->type) {
+                                case XLSX_CELL_SHARED_STRING:
+                                case XLSX_CELL_STRING:
+                                    cs->type = CIMPORT_COL_STRING;
+                                    {
+                                        const char *str = NULL;
+                                        size_t slen = 0;
+                                        if (cell->type == XLSX_CELL_SHARED_STRING &&
+                                            (uint32_t)cell->value.shared_string_idx < ctx->num_shared_strings) {
+                                            str = ctx->shared_strings[cell->value.shared_string_idx];
+                                            if (ctx->shared_string_lengths) {
+                                                slen = ctx->shared_string_lengths[cell->value.shared_string_idx];
+                                            } else if (str) {
+                                                slen = strlen(str);
+                                            }
+                                        } else if (cell->type == XLSX_CELL_STRING) {
+                                            str = cell->value.inline_string;
+                                            if (str) slen = strlen(str);
+                                        }
+                                        if (str && (int)slen > cs->max_strlen) {
+                                            cs->max_strlen = (int)slen;
+                                        }
+                                    }
+                                    break;
+                                case XLSX_CELL_NUMBER:
+                                case XLSX_CELL_DATE:
+                                    if (cs->type == CIMPORT_COL_UNKNOWN) {
+                                        cs->type = CIMPORT_COL_NUMERIC;
+                                    }
+                                    if (cs->type == CIMPORT_COL_NUMERIC) {
+                                        double val = cell->value.number;
+                                        if (cell->type == XLSX_CELL_DATE) {
+                                            val = excel_date_to_stata(val);
+                                        }
+                                        if (val < cs->min_value) cs->min_value = val;
+                                        if (val > cs->max_value) cs->max_value = val;
+                                        if (cs->is_integer && val != floor(val)) {
+                                            cs->is_integer = false;
+                                        }
+                                    }
+                                    break;
+                                case XLSX_CELL_BOOLEAN:
+                                    if (cs->type == CIMPORT_COL_UNKNOWN) {
+                                        cs->type = CIMPORT_COL_NUMERIC;
+                                    }
+                                    break;
+                                default:
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }
+            break;
+        case 'v':
+            if (tag[1] == '\0') state->in_value = false;
+            break;
+        case 't':
+            if (tag[1] == '\0') state->in_t = false;
+            break;
+        case 'r':
+            if (tag[1] == 'o' && tag[2] == 'w' && tag[3] == '\0') {
+                state->in_row = false;
+                state->row_ptr = NULL;
+            }
+            break;
+        case 's':
+            if (strcmp(tag, "sheetData") == 0) {
+                state->in_sheetdata = false;
+            }
+            break;
+        case 'i':
+            if (tag[1] == 's' && tag[2] == '\0') {
+                state->in_inline_str = false;
+            }
+            break;
+        default:
+            break;
         }
     }
 
@@ -772,11 +977,10 @@ ST_retcode xlsx_parse_worksheet(XLSXContext *ctx)
     int sheet_idx = ctx->sheets[ctx->selected_sheet].sheet_index;
     snprintf(worksheet_path, sizeof(worksheet_path), XLSX_WORKSHEET_FMT, sheet_idx);
 
-    size_t size;
-    void *data = xlsx_zip_extract_file(zip, worksheet_path, &size);
-    if (!data) {
+    size_t file_idx = xlsx_zip_locate_file(zip, worksheet_path);
+    if (file_idx == (size_t)-1) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
-                 "Failed to extract worksheet: %s", worksheet_path);
+                 "Failed to find worksheet: %s", worksheet_path);
         return 610;
     }
 
@@ -785,14 +989,50 @@ ST_retcode xlsx_parse_worksheet(XLSXContext *ctx)
 
     xlsx_xml_parser *parser = xlsx_xml_parser_create(worksheet_callback, &state);
     if (!parser) {
-        free(data);
         return 920;
     }
 
-    xlsx_xml_parse(parser, (const char *)data, size, true);
+    /* Stream worksheet XML in 1MB chunks to avoid full decompression to heap */
+    #define XLSX_STREAM_BUF_SIZE (1024 * 1024)
+    xlsx_zip_stream *stream = xlsx_zip_stream_open(zip, file_idx);
+    if (!stream) {
+        /* Fallback to full extraction */
+        size_t size;
+        void *data = xlsx_zip_extract_to_heap(zip, file_idx, &size);
+        if (!data) {
+            xlsx_xml_parser_destroy(parser);
+            snprintf(ctx->error_message, sizeof(ctx->error_message),
+                     "Failed to extract worksheet: %s", worksheet_path);
+            return 610;
+        }
+        xlsx_xml_parse(parser, (const char *)data, size, true);
+        free(data);
+    } else {
+        char *chunk_buf = (char *)malloc(XLSX_STREAM_BUF_SIZE);
+        if (!chunk_buf) {
+            xlsx_zip_stream_close(stream);
+            xlsx_xml_parser_destroy(parser);
+            return 920;
+        }
+
+        bool parse_ok = true;
+        size_t bytes_read;
+        while ((bytes_read = xlsx_zip_stream_read(stream, chunk_buf, XLSX_STREAM_BUF_SIZE)) > 0) {
+            bool is_final = (bytes_read < XLSX_STREAM_BUF_SIZE);
+            parse_ok = xlsx_xml_parse(parser, chunk_buf, bytes_read, is_final);
+            if (!parse_ok || is_final) break;
+        }
+        /* If stream ended exactly at buffer boundary, send final empty chunk */
+        if (parse_ok && bytes_read == XLSX_STREAM_BUF_SIZE) {
+            xlsx_xml_parse(parser, "", 0, true);
+        }
+
+        free(chunk_buf);
+        xlsx_zip_stream_close(stream);
+    }
+    #undef XLSX_STREAM_BUF_SIZE
 
     xlsx_xml_parser_destroy(parser);
-    free(data);
 
     ctx->time_worksheet = ctools_timer_seconds() - t_start;
 
@@ -827,24 +1067,33 @@ ST_retcode xlsx_infer_types(XLSXContext *ctx)
         return 920;
     }
 
-    /* Initialize columns */
+    /* Copy pre-computed stats from col_stats (populated during worksheet parse) */
     for (int c = 0; c < ctx->num_columns; c++) {
-        CImportColumnInfo *col = &ctx->columns[c];
-        col->type = CIMPORT_COL_UNKNOWN;
-        col->num_subtype = CIMPORT_NUM_BYTE;
-        col->is_integer = true;
-        col->min_value = DBL_MAX;
-        col->max_value = -DBL_MAX;
-        col->max_strlen = 0;
+        int src_col = c + start_col;
+        if (ctx->col_stats && src_col < ctx->col_stats_capacity) {
+            ctx->columns[c] = ctx->col_stats[src_col];
+        } else {
+            ctx->columns[c].type = CIMPORT_COL_UNKNOWN;
+            ctx->columns[c].num_subtype = CIMPORT_NUM_BYTE;
+            ctx->columns[c].is_integer = true;
+            ctx->columns[c].min_value = DBL_MAX;
+            ctx->columns[c].max_value = -DBL_MAX;
+            ctx->columns[c].max_strlen = 0;
+        }
+    }
+
+    /* Handle allstring mode */
+    if (ctx->allstring) {
+        for (int c = 0; c < ctx->num_columns; c++) {
+            ctx->columns[c].type = CIMPORT_COL_STRING;
+        }
     }
 
     /* Determine header row */
-    int data_start_row = ctx->min_row;
     int header_row = -1;
 
     if (ctx->firstrow && ctx->num_rows > 0) {
         header_row = ctx->min_row;
-        data_start_row = ctx->min_row + 1;
     }
 
     /* Extract column names from header row */
@@ -879,72 +1128,7 @@ ST_retcode xlsx_infer_types(XLSXContext *ctx)
         }
     }
 
-    /* Scan data rows for type inference */
-    for (int i = 0; i < ctx->num_rows; i++) {
-        XLSXParsedRow *row = &ctx->rows[i];
-        if (row->row_num < data_start_row) continue;
-
-        for (int j = 0; j < row->num_cells; j++) {
-            XLSXCell *cell = &row->cells[j];
-            int col_idx = cell->col - start_col;
-            if (col_idx < 0 || col_idx >= ctx->num_columns) continue;
-
-            CImportColumnInfo *col = &ctx->columns[col_idx];
-
-            if (ctx->allstring) {
-                col->type = CIMPORT_COL_STRING;
-            } else {
-                switch (cell->type) {
-                case XLSX_CELL_SHARED_STRING:
-                case XLSX_CELL_STRING:
-                    col->type = CIMPORT_COL_STRING;
-                    {
-                        const char *str = NULL;
-                        if (cell->type == XLSX_CELL_SHARED_STRING &&
-                            (uint32_t)cell->value.shared_string_idx < ctx->num_shared_strings) {
-                            str = ctx->shared_strings[cell->value.shared_string_idx];
-                        } else if (cell->type == XLSX_CELL_STRING) {
-                            str = cell->value.inline_string;
-                        }
-                        if (str) {
-                            int len = (int)strlen(str);
-                            if (len > col->max_strlen) col->max_strlen = len;
-                        }
-                    }
-                    break;
-
-                case XLSX_CELL_NUMBER:
-                case XLSX_CELL_DATE:
-                    if (col->type == CIMPORT_COL_UNKNOWN) {
-                        col->type = CIMPORT_COL_NUMERIC;
-                    }
-                    if (col->type == CIMPORT_COL_NUMERIC) {
-                        double val = cell->value.number;
-                        if (cell->type == XLSX_CELL_DATE) {
-                            val = excel_date_to_stata(val);
-                        }
-                        if (val < col->min_value) col->min_value = val;
-                        if (val > col->max_value) col->max_value = val;
-                        if (col->is_integer && val != floor(val)) {
-                            col->is_integer = false;
-                        }
-                    }
-                    break;
-
-                case XLSX_CELL_BOOLEAN:
-                    if (col->type == CIMPORT_COL_UNKNOWN) {
-                        col->type = CIMPORT_COL_NUMERIC;
-                    }
-                    break;
-
-                default:
-                    break;
-                }
-            }
-        }
-    }
-
-    /* Finalize numeric subtypes */
+    /* Finalize numeric subtypes (O(num_columns) — no cell iteration) */
     for (int c = 0; c < ctx->num_columns; c++) {
         CImportColumnInfo *col = &ctx->columns[c];
 
@@ -1255,11 +1439,248 @@ static void *xlsx_store_worker(void *arg)
  * Main Entry Point
  * ============================================================================ */
 
+/* Helper: parse arguments into an XLSXContext (options only, not mode/filename) */
+static void xlsx_parse_options(XLSXContext *ctx, const char *args)
+{
+    char args_copy[4096];
+    strncpy(args_copy, args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    /* Skip mode and filename tokens */
+    strtok(args_copy, " \t");
+    strtok(NULL, " \t");
+
+    char *opt;
+    while ((opt = strtok(NULL, " \t")) != NULL) {
+        if (strncmp(opt, "cellrange=", 10) == 0) {
+            xlsx_parse_cellrange(opt + 10, &ctx->cell_range);
+        } else if (strcmp(opt, "firstrow") == 0) {
+            ctx->firstrow = true;
+        } else if (strcmp(opt, "allstring") == 0) {
+            ctx->allstring = true;
+        } else if (strncmp(opt, "case=", 5) == 0) {
+            if (strcmp(opt + 5, "lower") == 0) ctx->case_mode = 1;
+            else if (strcmp(opt + 5, "upper") == 0) ctx->case_mode = 2;
+        } else if (strcmp(opt, "verbose") == 0) {
+            ctx->verbose = true;
+        }
+    }
+}
+
+/* Helper: extract sheet name from args (returns NULL if not specified) */
+static char *xlsx_extract_sheet_name(const char *args, char *buf, size_t buf_size)
+{
+    char args_copy[4096];
+    strncpy(args_copy, args, sizeof(args_copy) - 1);
+    args_copy[sizeof(args_copy) - 1] = '\0';
+
+    char *p = strstr(args_copy, "sheet=");
+    if (!p) return NULL;
+
+    const char *start = p + 6;
+    const char *end = start;
+    while (*end && !isspace((unsigned char)*end)) end++;
+
+    size_t len = (size_t)(end - start);
+    if (len >= buf_size) len = buf_size - 1;
+    memcpy(buf, start, len);
+    buf[len] = '\0';
+    return buf;
+}
+
+/* Worker structs for parallel shared strings + styles parsing */
+typedef struct {
+    XLSXContext *ctx;
+    const void *data;
+    size_t size;
+    ST_retcode rc;
+} xlsx_ss_parse_task;
+
+typedef struct {
+    XLSXContext *ctx;
+    const void *data;
+    size_t size;
+    ST_retcode rc;
+} xlsx_styles_parse_task;
+
+static void *xlsx_ss_parse_worker(void *arg)
+{
+    xlsx_ss_parse_task *task = (xlsx_ss_parse_task *)arg;
+    task->rc = xlsx_parse_shared_strings_buf(task->ctx, task->data, task->size);
+    return NULL;
+}
+
+static void *xlsx_styles_parse_worker(void *arg)
+{
+    xlsx_styles_parse_task *task = (xlsx_styles_parse_task *)arg;
+    task->rc = xlsx_parse_styles_buf(task->ctx, task->data, task->size);
+    return NULL;
+}
+
+/* Helper: full parse pipeline (open, workbook, shared strings, styles, worksheet, infer) */
+static ST_retcode xlsx_full_parse(XLSXContext *ctx, const char *filename,
+                                   const char *sheet_name)
+{
+    ST_retcode rc;
+
+    rc = xlsx_open_file(ctx, filename);
+    if (rc) { SF_error(ctx->error_message); return rc; }
+
+    rc = xlsx_parse_workbook(ctx);
+    if (rc) { SF_error(ctx->error_message); return rc; }
+
+    if (ctx->num_sheets == 0) {
+        SF_error("No sheets found in workbook\n");
+        return 610;
+    }
+
+    if (sheet_name) {
+        int idx = xlsx_select_sheet_by_name(ctx, sheet_name);
+        if (idx < 0) {
+            char err_buf[256];
+            snprintf(err_buf, sizeof(err_buf), "Sheet not found: %s\n", sheet_name);
+            SF_error(err_buf);
+            return 601;
+        }
+    }
+
+    /* Parse shared strings and styles in parallel if both exist.
+     * ZIP extraction is NOT thread-safe, so extract both files to heap
+     * sequentially first, then parse the XML in parallel. */
+    xlsx_zip_archive *zip = (xlsx_zip_archive *)ctx->zip_archive;
+    double t_ss_start = ctools_timer_seconds();
+
+    size_t ss_idx = xlsx_zip_locate_file(zip, XLSX_PATH_SHARED_STRINGS);
+    size_t st_idx = xlsx_zip_locate_file(zip, XLSX_PATH_STYLES);
+
+    void *ss_data = NULL;
+    size_t ss_size = 0;
+    void *st_data = NULL;
+    size_t st_size = 0;
+
+    /* Sequential extraction */
+    if (ss_idx != (size_t)-1) {
+        ss_data = xlsx_zip_extract_to_heap(zip, ss_idx, &ss_size);
+        if (!ss_data) {
+            snprintf(ctx->error_message, sizeof(ctx->error_message),
+                     "Failed to extract sharedStrings.xml");
+            return 610;
+        }
+    }
+    if (st_idx != (size_t)-1) {
+        st_data = xlsx_zip_extract_to_heap(zip, st_idx, &st_size);
+        /* Non-fatal if styles extraction fails */
+    }
+
+    /* Parallel parse if both buffers exist and thread pool available */
+    ctools_persistent_pool *pool = ctools_get_global_pool();
+    if (ss_data && st_data && pool) {
+        xlsx_ss_parse_task ss_task = { .ctx = ctx, .data = ss_data, .size = ss_size, .rc = 0 };
+        xlsx_styles_parse_task st_task = { .ctx = ctx, .data = st_data, .size = st_size, .rc = 0 };
+
+        ctools_persistent_pool_submit(pool, xlsx_ss_parse_worker, &ss_task);
+        ctools_persistent_pool_submit(pool, xlsx_styles_parse_worker, &st_task);
+        ctools_persistent_pool_wait(pool);
+
+        rc = ss_task.rc;
+        free(ss_data);
+        free(st_data);
+
+        ctx->time_shared_strings = ctools_timer_seconds() - t_ss_start;
+
+        if (rc) { SF_error(ctx->error_message); return rc; }
+    } else {
+        /* Sequential fallback */
+        if (ss_data) {
+            rc = xlsx_parse_shared_strings_buf(ctx, ss_data, ss_size);
+            free(ss_data);
+            ctx->time_shared_strings = ctools_timer_seconds() - t_ss_start;
+            if (rc) { SF_error(ctx->error_message); return rc; }
+        } else {
+            ctx->time_shared_strings = ctools_timer_seconds() - t_ss_start;
+        }
+        if (st_data) {
+            xlsx_parse_styles_buf(ctx, st_data, st_size);
+            free(st_data);
+        }
+    }
+
+    rc = xlsx_parse_worksheet(ctx);
+    if (rc) { SF_error(ctx->error_message); return rc; }
+
+    rc = xlsx_infer_types(ctx);
+    if (rc) { SF_error(ctx->error_message); return rc; }
+
+    return 0;
+}
+
+/* Helper: compute nobs from context */
+static size_t xlsx_compute_nobs(XLSXContext *ctx)
+{
+    int data_start = ctx->min_row;
+    if (ctx->firstrow) data_start++;
+    int range_start = ctx->cell_range.start_row > 0 ? ctx->cell_range.start_row : data_start;
+    int range_end = ctx->cell_range.end_row > 0 ? ctx->cell_range.end_row : ctx->max_row;
+    if (range_start < data_start) range_start = data_start;
+
+    if (range_end >= range_start)
+        return (size_t)(range_end - range_start + 1);
+    return 0;
+}
+
+/* Helper: save scan metadata to Stata macros */
+static void xlsx_save_scan_macros(XLSXContext *ctx, size_t nobs)
+{
+    char buf[32];
+
+    snprintf(buf, sizeof(buf), "%zu", nobs);
+    SF_macro_save("_cimport_nobs", buf);
+
+    snprintf(buf, sizeof(buf), "%d", ctx->num_columns);
+    SF_macro_save("_cimport_nvar", buf);
+
+    char varnames[8192] = "";
+    char vartypes[1024] = "";
+    char numtypes[1024] = "";
+    char strlens[1024] = "";
+    size_t varnames_pos = 0, vartypes_pos = 0, numtypes_pos = 0, strlens_pos = 0;
+    int written;
+
+    for (int c = 0; c < ctx->num_columns; c++) {
+        CImportColumnInfo *col = &ctx->columns[c];
+        const char *sep = (c > 0) ? " " : "";
+
+        if (varnames_pos < sizeof(varnames) - 1) {
+            written = snprintf(varnames + varnames_pos, sizeof(varnames) - varnames_pos,
+                               "%s%s", sep, col->name);
+            if (written > 0) varnames_pos += (size_t)written;
+        }
+        if (vartypes_pos < sizeof(vartypes) - 1) {
+            written = snprintf(vartypes + vartypes_pos, sizeof(vartypes) - vartypes_pos,
+                               "%s%d", sep, col->type == CIMPORT_COL_STRING ? 1 : 0);
+            if (written > 0) vartypes_pos += (size_t)written;
+        }
+        if (numtypes_pos < sizeof(numtypes) - 1) {
+            written = snprintf(numtypes + numtypes_pos, sizeof(numtypes) - numtypes_pos,
+                               "%s%d", sep, col->num_subtype);
+            if (written > 0) numtypes_pos += (size_t)written;
+        }
+        if (strlens_pos < sizeof(strlens) - 1) {
+            written = snprintf(strlens + strlens_pos, sizeof(strlens) - strlens_pos,
+                               "%s%d", sep, col->max_strlen);
+            if (written > 0) strlens_pos += (size_t)written;
+        }
+    }
+
+    SF_macro_save("_cimport_varnames", varnames);
+    SF_macro_save("_cimport_vartypes", vartypes);
+    SF_macro_save("_cimport_numtypes", numtypes);
+    SF_macro_save("_cimport_strlens", strlens);
+}
+
 ST_retcode xlsx_import_main(const char *args)
 {
     ST_retcode rc = 0;
-    XLSXContext ctx;
-    xlsx_context_init(&ctx);
 
     /* Parse arguments */
     if (!args || !*args) {
@@ -1294,208 +1715,103 @@ ST_retcode xlsx_import_main(const char *args)
         return 198;
     }
 
-    /* Save filename to separate buffer before we re-parse args_copy */
     char filename_buf[1024];
     strncpy(filename_buf, filename_tok, sizeof(filename_buf) - 1);
     filename_buf[sizeof(filename_buf) - 1] = '\0';
     char *filename = filename_buf;
 
-    /* Parse options */
-    char *opt;
-    while ((opt = strtok(NULL, " \t")) != NULL) {
-        if (strncmp(opt, "sheet=", 6) == 0) {
-            /* Will be used after parsing workbook */
-            /* Store for later */
-        } else if (strncmp(opt, "cellrange=", 10) == 0) {
-            xlsx_parse_cellrange(opt + 10, &ctx.cell_range);
-        } else if (strcmp(opt, "firstrow") == 0) {
-            ctx.firstrow = true;
-        } else if (strcmp(opt, "allstring") == 0) {
-            ctx.allstring = true;
-        } else if (strncmp(opt, "case=", 5) == 0) {
-            if (strcmp(opt + 5, "lower") == 0) ctx.case_mode = 1;
-            else if (strcmp(opt + 5, "upper") == 0) ctx.case_mode = 2;
-        } else if (strcmp(opt, "verbose") == 0) {
-            ctx.verbose = true;
-        }
-    }
-
-    /* Re-parse for sheet option since we need the context */
-    strncpy(args_copy, args, sizeof(args_copy) - 1);
-    char *sheet_name = NULL;
-    char *p = strstr(args_copy, "sheet=");
-    if (p) {
-        sheet_name = p + 6;
-        char *end = sheet_name;
-        while (*end && !isspace((unsigned char)*end)) end++;
-        *end = '\0';
-    }
-
-    /* Open file */
-    rc = xlsx_open_file(&ctx, filename);
-    if (rc) {
-        SF_error(ctx.error_message);
-        xlsx_context_free(&ctx);
-        return rc;
-    }
-
-    /* Parse workbook to get sheet list */
-    rc = xlsx_parse_workbook(&ctx);
-    if (rc) {
-        SF_error(ctx.error_message);
-        xlsx_context_free(&ctx);
-        return rc;
-    }
-
-    if (ctx.num_sheets == 0) {
-        SF_error("No sheets found in workbook\n");
-        xlsx_context_free(&ctx);
-        return 610;
-    }
-
-    /* Select sheet */
-    if (sheet_name) {
-        int idx = xlsx_select_sheet_by_name(&ctx, sheet_name);
-        if (idx < 0) {
-            char err_buf[256];
-            snprintf(err_buf, sizeof(err_buf), "Sheet not found: %s\n", sheet_name);
-            SF_error(err_buf);
-            xlsx_context_free(&ctx);
-            return 601;
-        }
-    }
-
-    /* Parse shared strings */
-    rc = xlsx_parse_shared_strings(&ctx);
-    if (rc) {
-        SF_error(ctx.error_message);
-        xlsx_context_free(&ctx);
-        return rc;
-    }
-
-    /* Parse styles for date detection */
-    xlsx_parse_styles(&ctx);
-
-    /* Parse worksheet */
-    rc = xlsx_parse_worksheet(&ctx);
-    if (rc) {
-        SF_error(ctx.error_message);
-        xlsx_context_free(&ctx);
-        return rc;
-    }
-
-    /* Infer types */
-    rc = xlsx_infer_types(&ctx);
-    if (rc) {
-        SF_error(ctx.error_message);
-        xlsx_context_free(&ctx);
-        return rc;
-    }
-
-    /* Calculate actual row count */
-    int data_start = ctx.min_row;
-    if (ctx.firstrow) data_start++;
-    int range_start = ctx.cell_range.start_row > 0 ? ctx.cell_range.start_row : data_start;
-    int range_end = ctx.cell_range.end_row > 0 ? ctx.cell_range.end_row : ctx.max_row;
-    if (range_start < data_start) range_start = data_start;
-
-    size_t nobs = 0;
-    if (range_end >= range_start) {
-        nobs = range_end - range_start + 1;
-    }
+    /* Extract sheet name */
+    char sheet_name_buf[XLSX_MAX_SHEET_NAME];
+    char *sheet_name = xlsx_extract_sheet_name(args, sheet_name_buf, sizeof(sheet_name_buf));
 
     if (is_scan) {
-        /* Save metadata to Stata macros */
-        char buf[32];
+        /* Clear any previous cached context */
+        xlsx_clear_cached_context();
 
-        snprintf(buf, sizeof(buf), "%zu", nobs);
-        SF_macro_save("_cimport_nobs", buf);
+        /* Allocate new context on heap for caching */
+        g_xlsx_ctx = (XLSXContext *)calloc(1, sizeof(XLSXContext));
+        if (!g_xlsx_ctx) {
+            SF_error("xlsx_import_main: memory allocation failed\n");
+            return 920;
+        }
+        xlsx_context_init(g_xlsx_ctx);
+        xlsx_parse_options(g_xlsx_ctx, args);
 
-        snprintf(buf, sizeof(buf), "%d", ctx.num_columns);
-        SF_macro_save("_cimport_nvar", buf);
-
-        /* Build varnames string with bounds checking */
-        char varnames[8192] = "";
-        char vartypes[1024] = "";
-        char numtypes[1024] = "";
-        char strlens[1024] = "";
-        size_t varnames_pos = 0, vartypes_pos = 0, numtypes_pos = 0, strlens_pos = 0;
-        int written;
-
-        for (int c = 0; c < ctx.num_columns; c++) {
-            CImportColumnInfo *col = &ctx.columns[c];
-            const char *sep = (c > 0) ? " " : "";
-
-            /* Append to varnames with bounds check */
-            if (varnames_pos < sizeof(varnames) - 1) {
-                written = snprintf(varnames + varnames_pos, sizeof(varnames) - varnames_pos,
-                                   "%s%s", sep, col->name);
-                if (written > 0) varnames_pos += (size_t)written;
-            }
-
-            /* Append to vartypes */
-            if (vartypes_pos < sizeof(vartypes) - 1) {
-                written = snprintf(vartypes + vartypes_pos, sizeof(vartypes) - vartypes_pos,
-                                   "%s%d", sep, col->type == CIMPORT_COL_STRING ? 1 : 0);
-                if (written > 0) vartypes_pos += (size_t)written;
-            }
-
-            /* Append to numtypes */
-            if (numtypes_pos < sizeof(numtypes) - 1) {
-                written = snprintf(numtypes + numtypes_pos, sizeof(numtypes) - numtypes_pos,
-                                   "%s%d", sep, col->num_subtype);
-                if (written > 0) numtypes_pos += (size_t)written;
-            }
-
-            /* Append to strlens */
-            if (strlens_pos < sizeof(strlens) - 1) {
-                written = snprintf(strlens + strlens_pos, sizeof(strlens) - strlens_pos,
-                                   "%s%d", sep, col->max_strlen);
-                if (written > 0) strlens_pos += (size_t)written;
-            }
+        /* Full parse pipeline */
+        rc = xlsx_full_parse(g_xlsx_ctx, filename, sheet_name);
+        if (rc) {
+            xlsx_clear_cached_context();
+            return rc;
         }
 
-        SF_macro_save("_cimport_varnames", varnames);
-        SF_macro_save("_cimport_vartypes", vartypes);
-        SF_macro_save("_cimport_numtypes", numtypes);
-        SF_macro_save("_cimport_strlens", strlens);
+        size_t nobs = xlsx_compute_nobs(g_xlsx_ctx);
+        xlsx_save_scan_macros(g_xlsx_ctx, nobs);
 
-        if (ctx.verbose) {
+        if (g_xlsx_ctx->verbose) {
             char msg[256];
             snprintf(msg, sizeof(msg), "XLSX scan: %d sheets, selected '%s'\n",
-                     ctx.num_sheets, ctx.sheets[ctx.selected_sheet].name);
+                     g_xlsx_ctx->num_sheets, g_xlsx_ctx->sheets[g_xlsx_ctx->selected_sheet].name);
             SF_display(msg);
-            snprintf(msg, sizeof(msg), "  Shared strings: %u\n", ctx.num_shared_strings);
+            snprintf(msg, sizeof(msg), "  Shared strings: %u\n", g_xlsx_ctx->num_shared_strings);
             SF_display(msg);
             snprintf(msg, sizeof(msg), "  Rows: %d-%d, Columns: %d\n",
-                     ctx.min_row, ctx.max_row, ctx.num_columns);
+                     g_xlsx_ctx->min_row, g_xlsx_ctx->max_row, g_xlsx_ctx->num_columns);
             SF_display(msg);
             snprintf(msg, sizeof(msg), "  Data rows (after range/firstrow): %zu\n", nobs);
             SF_display(msg);
         }
+
+        /* Context remains cached for the subsequent load call */
     }
     else if (is_load) {
+        XLSXContext *ctx;
+        bool used_cache = false;
+
+        /* Try to reuse cached context from scan */
+        if (g_xlsx_ctx && g_xlsx_ctx->filename &&
+            strcmp(g_xlsx_ctx->filename, filename) == 0) {
+            ctx = g_xlsx_ctx;
+            used_cache = true;
+        } else {
+            /* Cache miss — parse fresh */
+            xlsx_clear_cached_context();
+
+            g_xlsx_ctx = (XLSXContext *)calloc(1, sizeof(XLSXContext));
+            if (!g_xlsx_ctx) {
+                SF_error("xlsx_import_main: memory allocation failed\n");
+                return 920;
+            }
+            xlsx_context_init(g_xlsx_ctx);
+            xlsx_parse_options(g_xlsx_ctx, args);
+
+            rc = xlsx_full_parse(g_xlsx_ctx, filename, sheet_name);
+            if (rc) {
+                xlsx_clear_cached_context();
+                return rc;
+            }
+            ctx = g_xlsx_ctx;
+        }
+
         /* Build cache */
-        rc = xlsx_build_cache(&ctx);
+        rc = xlsx_build_cache(ctx);
         if (rc) {
-            SF_error(ctx.error_message);
-            xlsx_context_free(&ctx);
+            SF_error(ctx->error_message);
+            xlsx_clear_cached_context();
             return rc;
         }
 
         /* Store data to Stata (parallel by column) */
         ST_int nvar = SF_nvar();
         ST_int stata_nobs = SF_nobs();
-        int store_cols = ctx.num_columns < nvar ? ctx.num_columns : nvar;
+        int store_cols = ctx->num_columns < nvar ? ctx->num_columns : nvar;
 
         ctools_persistent_pool *pool = ctools_get_global_pool();
         if (pool && store_cols > 1) {
-            /* Parallel store: one task per column */
             xlsx_store_task *tasks = (xlsx_store_task *)malloc(store_cols * sizeof(xlsx_store_task));
             if (tasks) {
                 for (int c = 0; c < store_cols; c++) {
-                    tasks[c].col = &ctx.columns[c];
-                    tasks[c].cache = &ctx.col_cache[c];
+                    tasks[c].col = &ctx->columns[c];
+                    tasks[c].cache = &ctx->col_cache[c];
                     tasks[c].var = c + 1;
                     tasks[c].stata_nobs = stata_nobs;
                 }
@@ -1504,15 +1820,13 @@ ST_retcode xlsx_import_main(const char *args)
                 ctools_persistent_pool_wait(pool);
                 free(tasks);
             } else {
-                /* Fallback to sequential on allocation failure */
                 goto xlsx_store_sequential;
             }
         } else {
 xlsx_store_sequential:;
-            /* Sequential fallback */
             for (int c = 0; c < store_cols; c++) {
-                CImportColumnInfo *col = &ctx.columns[c];
-                CImportColumnCache *cache = &ctx.col_cache[c];
+                CImportColumnInfo *col = &ctx->columns[c];
+                CImportColumnCache *cache = &ctx->col_cache[c];
                 ST_int var = c + 1;
 
                 if (col->type == CIMPORT_COL_STRING) {
@@ -1528,22 +1842,26 @@ xlsx_store_sequential:;
             }
         }
 
-        if (ctx.verbose) {
+        if (ctx->verbose) {
             char msg[256];
-            SF_display("XLSX load complete\n");
-            snprintf(msg, sizeof(msg), "  Time ZIP: %.3f s\n", ctx.time_zip);
+            SF_display("XLSX load complete");
+            if (used_cache) SF_display(" (cached from scan)");
+            SF_display("\n");
+            snprintf(msg, sizeof(msg), "  Time ZIP: %.3f s\n", ctx->time_zip);
             SF_display(msg);
-            snprintf(msg, sizeof(msg), "  Time shared strings: %.3f s\n", ctx.time_shared_strings);
+            snprintf(msg, sizeof(msg), "  Time shared strings: %.3f s\n", ctx->time_shared_strings);
             SF_display(msg);
-            snprintf(msg, sizeof(msg), "  Time worksheet: %.3f s\n", ctx.time_worksheet);
+            snprintf(msg, sizeof(msg), "  Time worksheet: %.3f s\n", ctx->time_worksheet);
             SF_display(msg);
-            snprintf(msg, sizeof(msg), "  Time type inference: %.3f s\n", ctx.time_type_infer);
+            snprintf(msg, sizeof(msg), "  Time type inference: %.3f s\n", ctx->time_type_infer);
             SF_display(msg);
-            snprintf(msg, sizeof(msg), "  Time cache: %.3f s\n", ctx.time_cache);
+            snprintf(msg, sizeof(msg), "  Time cache: %.3f s\n", ctx->time_cache);
             SF_display(msg);
         }
+
+        /* Free cached context after load is complete */
+        xlsx_clear_cached_context();
     }
 
-    xlsx_context_free(&ctx);
     return 0;
 }

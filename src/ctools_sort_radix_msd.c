@@ -349,7 +349,7 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
         ctx->hist_args[t].shift = shift;
         ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
 
-        if (pthread_create(&ctx->threads[t], NULL, msd_histogram_thread, &ctx->hist_args[t]) == 0) {
+        if (pthread_create(&ctx->threads[threads_created], NULL, msd_histogram_thread, &ctx->hist_args[t]) == 0) {
             threads_created++;
         } else {
             /* Run in current thread as fallback */
@@ -424,7 +424,7 @@ static int msd_sort_pass_numeric_parallel(perm_idx_t *order, perm_idx_t *temp_or
         ctx->scatter_args[t].shift = shift;
         ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
 
-        if (pthread_create(&ctx->threads[t], NULL, msd_scatter_thread, &ctx->scatter_args[t]) == 0) {
+        if (pthread_create(&ctx->threads[threads_created], NULL, msd_scatter_thread, &ctx->scatter_args[t]) == 0) {
             threads_created++;
         } else {
             /* Run in current thread as fallback */

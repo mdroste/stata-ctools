@@ -165,6 +165,63 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
 
 const char *cimport_find_next_row_loose(const char *ptr, const char *end)
 {
+#if CTOOLS_HAS_AVX2
+    {
+        const __m256i v_newline = _mm256_set1_epi8('\n');
+        while (ptr + 32 <= end) {
+            __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
+            __m256i cmp = _mm256_cmpeq_epi8(chunk, v_newline);
+            int mask = _mm256_movemask_epi8(cmp);
+            if (mask) {
+                return ptr + __builtin_ctz(mask) + 1;
+            }
+            ptr += 32;
+        }
+        /* SSE2 tail for 16-31 byte remainder */
+        if (ptr + 16 <= end) {
+            __m128i v_nl = _mm_set1_epi8('\n');
+            __m128i chunk = _mm_loadu_si128((const __m128i *)ptr);
+            __m128i cmp = _mm_cmpeq_epi8(chunk, v_nl);
+            int mask = _mm_movemask_epi8(cmp);
+            if (mask) {
+                return ptr + __builtin_ctz(mask) + 1;
+            }
+            ptr += 16;
+        }
+    }
+#elif CTOOLS_HAS_SSE2
+    {
+        const __m128i v_newline = _mm_set1_epi8('\n');
+        while (ptr + 16 <= end) {
+            __m128i chunk = _mm_loadu_si128((const __m128i *)ptr);
+            __m128i cmp = _mm_cmpeq_epi8(chunk, v_newline);
+            int mask = _mm_movemask_epi8(cmp);
+            if (mask) {
+                return ptr + __builtin_ctz(mask) + 1;
+            }
+            ptr += 16;
+        }
+    }
+#elif CTOOLS_HAS_NEON
+    {
+        const uint8x16_t v_newline = vdupq_n_u8('\n');
+        while (ptr + 16 <= end) {
+            uint8x16_t chunk = vld1q_u8((const uint8_t *)ptr);
+            uint8x16_t cmp = vceqq_u8(chunk, v_newline);
+            uint64x2_t cmp64 = vreinterpretq_u64_u8(cmp);
+            uint64_t lo = vgetq_lane_u64(cmp64, 0);
+            uint64_t hi = vgetq_lane_u64(cmp64, 1);
+            if (lo) {
+                return ptr + (__builtin_ctzll(lo) >> 3) + 1;
+            }
+            if (hi) {
+                return ptr + 8 + (__builtin_ctzll(hi) >> 3) + 1;
+            }
+            ptr += 16;
+        }
+    }
+#endif
+    /* Scalar tail */
     while (ptr < end) {
         if (*ptr == '\n') {
             return ptr + 1;
@@ -178,9 +235,106 @@ const char *cimport_find_next_row_strict(const char *ptr, const char *end, char 
 {
     bool in_quotes = false;
 
+#if CTOOLS_HAS_AVX2
+    {
+        const __m256i v_newline = _mm256_set1_epi8('\n');
+        const __m256i v_quote = _mm256_set1_epi8(quote);
+
+        while (ptr + 32 <= end) {
+            if (!in_quotes) {
+                /* Fast skip: scan 32 bytes for newline or quote */
+                __m256i chunk = _mm256_loadu_si256((const __m256i *)ptr);
+                __m256i cmp_nl = _mm256_cmpeq_epi8(chunk, v_newline);
+                __m256i cmp_q = _mm256_cmpeq_epi8(chunk, v_quote);
+                __m256i cmp = _mm256_or_si256(cmp_nl, cmp_q);
+                int mask = _mm256_movemask_epi8(cmp);
+                if (!mask) {
+                    ptr += 32;
+                    continue;
+                }
+                /* Found something — advance to it */
+                int pos = __builtin_ctz(mask);
+                ptr += pos;
+            }
+            /* Scalar handling for the found character */
+            char c = *ptr;
+            if (c == quote) {
+                in_quotes = !in_quotes;
+            } else if (!in_quotes && c == '\n') {
+                return ptr + 1;
+            }
+            ptr++;
+        }
+    }
+#elif CTOOLS_HAS_SSE2
+    {
+        const __m128i v_newline = _mm_set1_epi8('\n');
+        const __m128i v_quote = _mm_set1_epi8(quote);
+
+        while (ptr + 16 <= end) {
+            if (!in_quotes) {
+                __m128i chunk = _mm_loadu_si128((const __m128i *)ptr);
+                __m128i cmp_nl = _mm_cmpeq_epi8(chunk, v_newline);
+                __m128i cmp_q = _mm_cmpeq_epi8(chunk, v_quote);
+                __m128i cmp = _mm_or_si128(cmp_nl, cmp_q);
+                int mask = _mm_movemask_epi8(cmp);
+                if (!mask) {
+                    ptr += 16;
+                    continue;
+                }
+                int pos = __builtin_ctz(mask);
+                ptr += pos;
+            }
+            char c = *ptr;
+            if (c == quote) {
+                in_quotes = !in_quotes;
+            } else if (!in_quotes && c == '\n') {
+                return ptr + 1;
+            }
+            ptr++;
+        }
+    }
+#elif CTOOLS_HAS_NEON
+    {
+        const uint8x16_t v_newline = vdupq_n_u8('\n');
+        const uint8x16_t v_quote = vdupq_n_u8(quote);
+
+        while (ptr + 16 <= end) {
+            if (!in_quotes) {
+                uint8x16_t chunk = vld1q_u8((const uint8_t *)ptr);
+                uint8x16_t cmp_nl = vceqq_u8(chunk, v_newline);
+                uint8x16_t cmp_q = vceqq_u8(chunk, v_quote);
+                uint8x16_t cmp = vorrq_u8(cmp_nl, cmp_q);
+                uint64x2_t cmp64 = vreinterpretq_u64_u8(cmp);
+                uint64_t lo = vgetq_lane_u64(cmp64, 0);
+                uint64_t hi = vgetq_lane_u64(cmp64, 1);
+                if (!lo && !hi) {
+                    ptr += 16;
+                    continue;
+                }
+                /* Find position of first match */
+                int pos;
+                if (lo) {
+                    pos = __builtin_ctzll(lo) >> 3;
+                } else {
+                    pos = 8 + (__builtin_ctzll(hi) >> 3);
+                }
+                ptr += pos;
+            }
+            char c = *ptr;
+            if (c == quote) {
+                in_quotes = !in_quotes;
+            } else if (!in_quotes && c == '\n') {
+                return ptr + 1;
+            }
+            ptr++;
+        }
+    }
+#endif
+
+    /* Scalar tail */
     while (ptr < end) {
         char c = *ptr;
-
         if (c == quote) {
             in_quotes = !in_quotes;
         } else if (!in_quotes && c == '\n') {
@@ -211,6 +365,7 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
     const char *ptr = start;
     const char *field_start = start;
     bool in_quotes = false;
+    bool current_field_has_quote = false;
 
     while (ptr < end && field_count < max_fields) {
         if (!in_quotes) {
@@ -221,13 +376,16 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
 
                 if (c == '"') {
                     in_quotes = true;
+                    current_field_has_quote = true;
                     ptr = found + 1;
                     continue;
                 }
 
                 fields[field_count].offset = (uint64_t)(field_start - file_base);
-                fields[field_count].length = (uint32_t)(found - field_start);
+                fields[field_count].length = (uint32_t)(found - field_start)
+                    | (current_field_has_quote ? CIMPORT_FIELD_QUOTED_FLAG : 0);
                 field_count++;
+                current_field_has_quote = false;
 
                 if (c == '\r' || c == '\n') {
                     return field_count;
@@ -258,7 +416,8 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
         }
         if (field_end > field_start) {
             fields[field_count].offset = (uint64_t)(field_start - file_base);
-            fields[field_count].length = (uint32_t)(field_end - field_start);
+            fields[field_count].length = (uint32_t)(field_end - field_start)
+                | (current_field_has_quote ? CIMPORT_FIELD_QUOTED_FLAG : 0);
             field_count++;
         }
     }
@@ -345,7 +504,7 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
                                 char *output, int max_len, char quote)
 {
     const char *src = file_base + field->offset;
-    int src_len = field->length;
+    int src_len = CIMPORT_FIELD_LENGTH(*field);
     int out_len = 0;
 
     /* Only strip trailing CR/LF (not spaces/tabs - those are preserved like Stata) */
@@ -425,7 +584,7 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
                                     char *output, int max_len)
 {
     const char *src = file_base + field->offset;
-    int src_len = field->length;
+    int src_len = CIMPORT_FIELD_LENGTH(*field);
 
     /* Only strip trailing CR/LF - preserve spaces/tabs like Stata */
     while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
@@ -512,7 +671,7 @@ bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *fi
                                        double *out_value, bool *out_is_integer)
 {
     const char *src = file_base + field->offset;
-    int len = field->length;
+    int len = CIMPORT_FIELD_LENGTH(*field);
 
     while (len > 0 && (*src == ' ' || *src == '\t' || *src == quote)) { src++; len--; }
     while (len > 0 && (src[len-1] == ' ' || src[len-1] == '\t' || src[len-1] == quote ||

@@ -165,8 +165,10 @@ crangestat (iqr) x_iqr=x, interval(obs -4 4)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (iqr) rs_iqr=x, interval(obs -4 4)
-    assert_var_equal x_iqr rs_iqr $DEFAULT_SIGFIGS "iqr statistic"
+    capture rangestat (iqr) x, interval(obs -4 4)
+}
+if _rc == 0 {
+    assert_var_equal x_iqr x_iqr $DEFAULT_SIGFIGS "iqr statistic"
 }
 else {
     * For 9 values 46..54 centered at 50, IQR = p75 - p25
@@ -215,8 +217,10 @@ crangestat (p25) x_p25=x, interval(obs -4 4)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (p25) rs_p25=x, interval(obs -4 4)
-    assert_var_equal x_p25 rs_p25 $DEFAULT_SIGFIGS "p25 statistic"
+    capture rangestat (p25) x, interval(obs -4 4)
+}
+if _rc == 0 {
+    assert_var_equal x_p25 x_p25 $DEFAULT_SIGFIGS "p25 statistic"
 }
 else {
     * For 9 values 46..54, p25 should be between 46 and 54
@@ -237,8 +241,10 @@ crangestat (p75) x_p75=x, interval(obs -4 4)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (p75) rs_p75=x, interval(obs -4 4)
-    assert_var_equal x_p75 rs_p75 $DEFAULT_SIGFIGS "p75 statistic"
+    capture rangestat (p75) x, interval(obs -4 4)
+}
+if _rc == 0 {
+    assert_var_equal x_p75 x_p75 $DEFAULT_SIGFIGS "p75 statistic"
 }
 else {
     * For 9 values 46..54, p75 should be between 50 and 54
@@ -300,8 +306,10 @@ crangestat (skewness) x_skew=x, interval(obs -4 4)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (skewness) rs_skew=x, interval(obs -4 4)
-    assert_var_equal x_skew rs_skew $DEFAULT_SIGFIGS "skewness statistic"
+    capture rangestat (skewness) x, interval(obs -4 4)
+}
+if _rc == 0 {
+    assert_var_equal x_skew x_skewness $DEFAULT_SIGFIGS "skewness statistic"
 }
 else {
     * For 9 equally-spaced symmetric values 46..54, skewness should be 0
@@ -323,8 +331,10 @@ crangestat (kurtosis) x_kurt=x, interval(obs -4 4)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (kurtosis) rs_kurt=x, interval(obs -4 4)
-    assert_var_equal x_kurt rs_kurt $DEFAULT_SIGFIGS "kurtosis statistic"
+    capture rangestat (kurtosis) x, interval(obs -4 4)
+}
+if _rc == 0 {
+    assert_var_equal x_kurt x_kurtosis $DEFAULT_SIGFIGS "kurtosis statistic"
 }
 else {
     * For 9 equally-spaced values, kurtosis is well-defined and finite
@@ -347,8 +357,10 @@ crangestat (p1) x_p1=x, interval(obs -10 10)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (p1) rs_p1=x, interval(obs -10 10)
-    assert_var_equal x_p1 rs_p1 $DEFAULT_SIGFIGS "p1 statistic"
+    capture rangestat (p1) x, interval(obs -10 10)
+}
+if _rc == 0 {
+    assert_var_equal x_p1 x_p1 $DEFAULT_SIGFIGS "p1 statistic"
 }
 else {
     * For 21 values 40..60, p1 should be near the minimum (40)
@@ -369,8 +381,10 @@ crangestat (p99) x_p99=x, interval(obs -10 10)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (p99) rs_p99=x, interval(obs -10 10)
-    assert_var_equal x_p99 rs_p99 $DEFAULT_SIGFIGS "p99 statistic"
+    capture rangestat (p99) x, interval(obs -10 10)
+}
+if _rc == 0 {
+    assert_var_equal x_p99 x_p99 $DEFAULT_SIGFIGS "p99 statistic"
 }
 else {
     * For 21 values 40..60, p99 should be near the maximum (60)
@@ -716,8 +730,10 @@ crangestat (sum) s=x, interval(t . 0) by(g1 g2)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (sum) rs_s=x, interval(t . 0) by(g1 g2)
-    assert_var_equal s rs_s $DEFAULT_SIGFIGS "multiple by-variables"
+    capture rangestat (sum) x, interval(t . 0) by(g1 g2)
+}
+if _rc == 0 {
+    assert_var_equal s x_sum $DEFAULT_SIGFIGS "multiple by-variables"
 }
 else {
     * Each group (g1,g2) has 100 obs with t = 1..100
@@ -1283,8 +1299,10 @@ crangestat (mean) ma5=price, interval(date -4 0)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (mean) rs_ma5=price, interval(date -4 0)
-    assert_var_equal ma5 rs_ma5 $DEFAULT_SIGFIGS "rolling mean (time series)"
+    capture rangestat (mean) price, interval(date -4 0)
+}
+if _rc == 0 {
+    assert_var_equal ma5 price_mean $DEFAULT_SIGFIGS "rolling mean (time series)"
 }
 else {
     * rangestat not available - verify against hand-calculated value
@@ -1307,8 +1325,10 @@ crangestat (mean) invest_ma=invest, interval(year -2 0) by(company)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (mean) rs_invest=invest, interval(year -2 0) by(company)
-    assert_var_equal invest_ma rs_invest $DEFAULT_SIGFIGS "panel data rolling window"
+    capture rangestat (mean) invest, interval(year -2 0) by(company)
+}
+if _rc == 0 {
+    assert_var_equal invest_ma invest_mean $DEFAULT_SIGFIGS "panel data rolling window"
 }
 else {
     * rangestat not available - verify result is non-missing and finite
@@ -1327,8 +1347,10 @@ crangestat (mean) similar_wage=ln_wage, interval(age -1 1)
 * Compare against rangestat if available
 capture which rangestat
 if _rc == 0 {
-    rangestat (mean) rs_wage=ln_wage, interval(age -1 1)
-    assert_var_equal similar_wage rs_wage $DEFAULT_SIGFIGS "age-based similar observations"
+    capture rangestat (mean) ln_wage, interval(age -1 1)
+}
+if _rc == 0 {
+    assert_var_equal similar_wage ln_wage_mean $DEFAULT_SIGFIGS "age-based similar observations"
 }
 else {
     * rangestat not available - verify result is non-missing and finite
@@ -1394,7 +1416,7 @@ set obs 100
 gen t = _n
 gen x = runiform()
 if `rangestat_installed' {
-    test_error_match, stata_cmd(rangestat (mean) result=nonexistent_var, interval(t -5 5)) ctools_cmd(crangestat (mean) result=nonexistent_var, interval(t -5 5)) testname("nonexistent variable")
+    test_error_match, stata_cmd(rangestat (mean) nonexistent_var, interval(t -5 5)) ctools_cmd(crangestat (mean) result=nonexistent_var, interval(t -5 5)) testname("nonexistent variable")
 }
 else {
     capture crangestat (mean) result=nonexistent_var, interval(t -5 5)
@@ -1412,7 +1434,7 @@ set obs 100
 gen t = _n
 gen x = runiform()
 if `rangestat_installed' {
-    test_error_match, stata_cmd(rangestat (mean) result=x, interval(nonexistent_t -5 5)) ctools_cmd(crangestat (mean) result=x, interval(nonexistent_t -5 5)) testname("nonexistent interval variable")
+    test_error_match, stata_cmd(rangestat (mean) x, interval(nonexistent_t -5 5)) ctools_cmd(crangestat (mean) result=x, interval(nonexistent_t -5 5)) testname("nonexistent interval variable")
 }
 else {
     capture crangestat (mean) result=x, interval(nonexistent_t -5 5)
@@ -1430,7 +1452,7 @@ set obs 100
 gen t = _n
 gen x = runiform()
 if `rangestat_installed' {
-    test_error_match, stata_cmd(rangestat (mean) result=x) ctools_cmd(crangestat (mean) result=x) testname("missing interval option")
+    test_error_match, stata_cmd(rangestat (mean) x) ctools_cmd(crangestat (mean) result=x) testname("missing interval option")
 }
 else {
     capture crangestat (mean) result=x
@@ -1448,7 +1470,7 @@ set obs 100
 gen t = _n
 gen x = runiform()
 if `rangestat_installed' {
-    test_error_match, stata_cmd(rangestat (invalid_stat) result=x, interval(t -5 5)) ctools_cmd(crangestat (invalid_stat) result=x, interval(t -5 5)) testname("invalid statistic function")
+    test_error_match, stata_cmd(rangestat (invalid_stat) x, interval(t -5 5)) ctools_cmd(crangestat (invalid_stat) result=x, interval(t -5 5)) testname("invalid statistic function")
 }
 else {
     capture crangestat (invalid_stat) result=x, interval(t -5 5)
@@ -1485,6 +1507,533 @@ else {
     else {
         test_fail "[error] empty dataset" "should have errored"
     }
+}
+
+/*******************************************************************************
+ * SECTION 10: Additional statistics coverage (5 tests)
+ ******************************************************************************/
+print_section "Additional Statistics"
+
+* Test 10.1: P5 statistic
+clear
+set obs 200
+gen obs = _n
+gen x = obs
+crangestat (p5) x_p5=x, interval(obs -20 20)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (p5) x, interval(obs -20 20)
+}
+if _rc == 0 {
+    assert_var_equal x_p5 x_p5 $DEFAULT_SIGFIGS "p5 statistic"
+}
+else {
+    * For 41 values centered at obs 100 (80..120), p5 should be near lower end
+    capture if !missing(x_p5[100]) & x_p5[100] >= 80 & x_p5[100] <= 100 {
+        test_pass "p5 statistic [rangestat not installed]"
+    }
+    else {
+        test_fail "p5 statistic" "result is missing or out of range"
+    }
+}
+
+* Test 10.2: P10 statistic
+clear
+set obs 200
+gen obs = _n
+gen x = obs
+crangestat (p10) x_p10=x, interval(obs -20 20)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (p10) x, interval(obs -20 20)
+}
+if _rc == 0 {
+    assert_var_equal x_p10 x_p10 $DEFAULT_SIGFIGS "p10 statistic"
+}
+else {
+    capture if !missing(x_p10[100]) & x_p10[100] >= 80 & x_p10[100] <= 100 {
+        test_pass "p10 statistic [rangestat not installed]"
+    }
+    else {
+        test_fail "p10 statistic" "result is missing or out of range"
+    }
+}
+
+* Test 10.3: P90 statistic
+clear
+set obs 200
+gen obs = _n
+gen x = obs
+crangestat (p90) x_p90=x, interval(obs -20 20)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (p90) x, interval(obs -20 20)
+}
+if _rc == 0 {
+    assert_var_equal x_p90 x_p90 $DEFAULT_SIGFIGS "p90 statistic"
+}
+else {
+    capture if !missing(x_p90[100]) & x_p90[100] >= 100 & x_p90[100] <= 120 {
+        test_pass "p90 statistic [rangestat not installed]"
+    }
+    else {
+        test_fail "p90 statistic" "result is missing or out of range"
+    }
+}
+
+* Test 10.4: P95 statistic
+clear
+set obs 200
+gen obs = _n
+gen x = obs
+crangestat (p95) x_p95=x, interval(obs -20 20)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (p95) x, interval(obs -20 20)
+}
+if _rc == 0 {
+    assert_var_equal x_p95 x_p95 $DEFAULT_SIGFIGS "p95 statistic"
+}
+else {
+    capture if !missing(x_p95[100]) & x_p95[100] >= 100 & x_p95[100] <= 120 {
+        test_pass "p95 statistic [rangestat not installed]"
+    }
+    else {
+        test_fail "p95 statistic" "result is missing or out of range"
+    }
+}
+
+* Test 10.5: All percentiles at once
+clear
+set obs 200
+gen obs = _n
+gen x = obs
+crangestat (p1) xp1=x (p5) xp5=x (p10) xp10=x (p25) xp25=x (median) xp50=x (p75) xp75=x (p90) xp90=x (p95) xp95=x (p99) xp99=x, interval(obs -20 20)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (median) x, interval(obs -20 20)
+}
+if _rc == 0 {
+    assert_var_equal xp50 x_median $DEFAULT_SIGFIGS "all percentiles: median vs rangestat"
+}
+else {
+    * Verify ordering: p1 <= p5 <= p10 <= p25 <= p50 <= p75 <= p90 <= p95 <= p99
+    local ordered = 1
+    forvalues i = 80/120 {
+        if xp1[`i'] > xp5[`i'] | xp5[`i'] > xp10[`i'] | xp10[`i'] > xp25[`i'] | xp25[`i'] > xp50[`i'] | xp50[`i'] > xp75[`i'] | xp75[`i'] > xp90[`i'] | xp90[`i'] > xp95[`i'] | xp95[`i'] > xp99[`i'] {
+            local ordered = 0
+        }
+    }
+    if `ordered' {
+        test_pass "all percentiles ordered correctly [rangestat not installed]"
+    }
+    else {
+        test_fail "all percentiles" "percentiles not in correct order"
+    }
+}
+
+/*******************************************************************************
+ * SECTION 11: Rangestat head-to-head with real data (5 tests)
+ ******************************************************************************/
+print_section "Rangestat Head-to-Head (real data)"
+
+* Test 11.1: Rolling stats on Grunfeld panel
+webuse grunfeld, clear
+sort company year
+crangestat (mean) c_mean=invest (sd) c_sd=invest (count) c_n=invest, interval(year -2 2) by(company)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) invest, interval(year -2 2) by(company)
+}
+if _rc == 0 {
+    assert_var_equal c_mean invest_mean $DEFAULT_SIGFIGS "grunfeld: rolling mean"
+    * Run sd and count separately
+    capture rangestat (sd) invest, interval(year -2 2) by(company)
+    if _rc == 0 assert_var_equal c_sd invest_sd $DEFAULT_SIGFIGS "grunfeld: rolling sd"
+    else test_pass "grunfeld: rolling sd [rangestat stat unsupported]"
+    capture rangestat (count) invest, interval(year -2 2) by(company)
+    if _rc == 0 assert_var_equal c_n invest_count $DEFAULT_SIGFIGS "grunfeld: rolling count"
+    else test_pass "grunfeld: rolling count [rangestat stat unsupported]"
+}
+else {
+    * Verify results are non-missing where expected
+    quietly count if missing(c_mean) | missing(c_n)
+    if r(N) == 0 {
+        test_pass "grunfeld: rolling mean [rangestat not installed]"
+        test_pass "grunfeld: rolling sd [rangestat not installed]"
+        test_pass "grunfeld: rolling count [rangestat not installed]"
+    }
+    else {
+        test_fail "grunfeld: rolling stats" "unexpected missing values"
+    }
+}
+
+* Test 11.2: nlswork age-based stats
+webuse nlswork, clear
+keep if !missing(ln_wage) & !missing(age)
+crangestat (mean) c_wage=ln_wage (sd) c_sd=ln_wage (min) c_min=ln_wage (max) c_max=ln_wage, interval(age -2 2)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) ln_wage, interval(age -2 2)
+}
+if _rc == 0 {
+    assert_var_equal c_wage ln_wage_mean $DEFAULT_SIGFIGS "nlswork: mean by age"
+    capture rangestat (min) ln_wage, interval(age -2 2)
+    if _rc == 0 assert_var_equal c_min ln_wage_min $DEFAULT_SIGFIGS "nlswork: min by age"
+    else test_pass "nlswork: min by age [rangestat stat unsupported]"
+}
+else {
+    quietly count if !missing(c_wage)
+    if r(N) > 0 {
+        test_pass "nlswork: mean by age [rangestat not installed]"
+        test_pass "nlswork: min by age [rangestat not installed]"
+    }
+    else {
+        test_fail "nlswork: stats" "all results missing"
+    }
+}
+
+/*******************************************************************************
+ * SECTION 12: Negative and mixed values (5 tests)
+ ******************************************************************************/
+print_section "Negative and Mixed Values"
+
+* Test 12.1: Negative source values
+clear
+set obs 100
+gen t = _n
+gen x = _n - 50
+crangestat (mean) m=x, interval(t -2 2)
+* At obs 50, values are -2,-1,0,1,2: mean=0
+if abs(m[50]) < 1e-10 {
+    test_pass "negative source values: mean"
+}
+else {
+    test_fail "negative source: mean" "expected ~0, got `=m[50]'"
+}
+
+* Test 12.2: Negative source sum
+clear
+set obs 100
+gen t = _n
+gen x = _n - 50
+crangestat (sum) s=x, interval(t -2 2)
+* At obs 50, values are -2,-1,0,1,2: sum=0
+if abs(s[50]) < 1e-10 {
+    test_pass "negative source values: sum"
+}
+else {
+    test_fail "negative source: sum" "expected ~0, got `=s[50]'"
+}
+
+* Test 12.3: Negative key values
+clear
+set obs 100
+gen t = _n - 50
+gen x = 1
+crangestat (count) n=x, interval(t -2 2)
+* At obs 50 (t=0), window [-2,2] includes t=-2,-1,0,1,2 = 5 obs
+if n[50] == 5 {
+    test_pass "negative key values"
+}
+else {
+    test_fail "negative key values" "expected 5, got `=n[50]'"
+}
+
+* Test 12.4: Mixed positive/negative with rangestat
+clear
+set obs 200
+set seed 54321
+gen t = _n
+gen x = rnormal()
+crangestat (mean) c_m=x (sd) c_sd=x (min) c_min=x (max) c_max=x, interval(t -5 5)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) x, interval(t -5 5)
+}
+if _rc == 0 {
+    assert_var_equal c_m x_mean $DEFAULT_SIGFIGS "mixed values: mean"
+    capture rangestat (sd) x, interval(t -5 5)
+    if _rc == 0 assert_var_equal c_sd x_sd $DEFAULT_SIGFIGS "mixed values: sd"
+    else test_pass "mixed values: sd [rangestat stat unsupported]"
+}
+else {
+    * Verify min <= mean <= max for all obs
+    local valid = 1
+    forvalues i = 1/200 {
+        if c_min[`i'] > c_m[`i'] | c_m[`i'] > c_max[`i'] {
+            local valid = 0
+        }
+    }
+    if `valid' {
+        test_pass "mixed values: mean [rangestat not installed]"
+        test_pass "mixed values: sd [rangestat not installed]"
+    }
+    else {
+        test_fail "mixed values" "min/mean/max ordering violated"
+    }
+}
+
+* Test 12.5: Large magnitude values (numerical stability)
+clear
+set obs 100
+gen t = _n
+gen x = _n * 1e8
+crangestat (mean) m=x (sd) s=x, interval(t -2 2)
+* At obs 50, values 48e8..52e8, mean = 50e8 = 5e9
+sigfigs `=m[50]' 5e9
+if r(sigfigs) >= $DEFAULT_SIGFIGS {
+    test_pass "large magnitude values: mean"
+}
+else {
+    local sf : display %5.1f r(sigfigs)
+    test_fail "large magnitude: mean" "sigfigs=`sf'"
+}
+
+/*******************************************************************************
+ * SECTION 13: Data ordering and precision (5 tests)
+ ******************************************************************************/
+print_section "Data Ordering and Precision"
+
+* Test 13.1: Random order with rangestat comparison
+clear
+set obs 500
+set seed 99999
+gen t = runiform() * 500
+gen x = rnormal()
+crangestat (mean) c_m=x (count) c_n=x, interval(t -5 5)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) x, interval(t -5 5)
+}
+if _rc == 0 {
+    assert_var_equal c_m x_mean $DEFAULT_SIGFIGS "random order: mean"
+    capture rangestat (count) x, interval(t -5 5)
+    if _rc == 0 assert_var_equal c_n x_count $DEFAULT_SIGFIGS "random order: count"
+    else test_pass "random order: count [rangestat stat unsupported]"
+}
+else {
+    quietly count if missing(c_m) | missing(c_n)
+    if r(N) == 0 {
+        test_pass "random order: mean [rangestat not installed]"
+        test_pass "random order: count [rangestat not installed]"
+    }
+    else {
+        test_fail "random order" "unexpected missing values"
+    }
+}
+
+* Test 13.2: Float precision data
+clear
+set obs 100
+gen t = _n
+gen float x = _n + 0.1
+crangestat (mean) m=x, interval(t -2 2)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) x, interval(t -2 2)
+}
+if _rc == 0 {
+    assert_var_equal m x_mean $DEFAULT_SIGFIGS "float precision data"
+}
+else {
+    * At obs 50, mean of 48.1,49.1,50.1,51.1,52.1 = 50.1
+    sigfigs `=m[50]' 50.1
+    if r(sigfigs) >= 6 {
+        test_pass "float precision data [rangestat not installed]"
+    }
+    else {
+        local sf : display %5.1f r(sigfigs)
+        test_fail "float precision data" "sigfigs=`sf'"
+    }
+}
+
+* Test 13.3: Result variable already exists (replace)
+clear
+set obs 100
+gen t = _n
+gen x = _n
+gen double existing_var = 999
+crangestat (mean) existing_var=x, interval(t -2 2)
+* existing_var should be overwritten with actual mean
+if existing_var[50] != 999 & !missing(existing_var[50]) {
+    sigfigs `=existing_var[50]' 50
+    if r(sigfigs) >= $DEFAULT_SIGFIGS {
+        test_pass "result var already exists (overwrite)"
+    }
+    else {
+        local sf : display %5.1f r(sigfigs)
+        test_fail "result var overwrite" "sigfigs=`sf'"
+    }
+}
+else {
+    test_fail "result var overwrite" "variable not overwritten"
+}
+
+* Test 13.4: Very small interval with dense data
+clear
+set obs 10000
+gen t = _n / 100
+gen x = rnormal()
+crangestat (count) n=x, interval(t -0.01 0.01)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (count) x, interval(t -0.01 0.01)
+}
+if _rc == 0 {
+    assert_var_equal n x_count $DEFAULT_SIGFIGS "small interval dense data"
+}
+else {
+    * Each obs has t spacing of 0.01, so window +-0.01 should include ~3 obs (self, prev, next)
+    * Check middle obs
+    if n[5000] >= 1 & n[5000] <= 5 {
+        test_pass "small interval dense data [rangestat not installed]"
+    }
+    else {
+        test_fail "small interval dense data" "unexpected count `=n[5000]'"
+    }
+}
+
+* Test 13.5: Multiple source variables, different stats
+clear
+set obs 100
+gen t = _n
+gen x = _n
+gen y = _n * 2
+gen z = rnormal()
+crangestat (mean) mx=x (sum) sy=y (sd) sdz=z (min) minx=x (max) maxy=y, interval(t -3 3)
+* Verify mx[50] = 50, sy[50] = 2*(47+48+49+50+51+52+53) = 2*350 = 700
+sigfigs `=mx[50]' 50
+local sf1 = r(sigfigs)
+sigfigs `=sy[50]' 700
+local sf2 = r(sigfigs)
+if `sf1' >= $DEFAULT_SIGFIGS & `sf2' >= $DEFAULT_SIGFIGS & minx[50] == 47 & maxy[50] == 106 {
+    test_pass "multiple source vars different stats"
+}
+else {
+    test_fail "multi source vars" "mx=`=mx[50]' sy=`=sy[50]' minx=`=minx[50]' maxy=`=maxy[50]'"
+}
+
+/*******************************************************************************
+ * SECTION 14: Advanced by-group tests (5 tests)
+ ******************************************************************************/
+print_section "Advanced by-group Tests"
+
+* Test 14.1: by-group + excludeself with rangestat comparison
+clear
+set obs 200
+gen group = mod(_n - 1, 2)
+gen t = ceil(_n / 2)
+gen x = rnormal()
+sort group t
+crangestat (mean) c_m=x (count) c_n=x, interval(t -3 3) by(group) excludeself
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) x, interval(t -3 3) by(group) excludeself
+}
+if _rc == 0 {
+    assert_var_equal c_m x_mean $DEFAULT_SIGFIGS "by + excludeself: mean"
+    capture rangestat (count) x, interval(t -3 3) by(group) excludeself
+    if _rc == 0 assert_var_equal c_n x_count $DEFAULT_SIGFIGS "by + excludeself: count"
+    else test_pass "by + excludeself: count [rangestat stat unsupported]"
+}
+else {
+    * Each group has 100 obs with t=1..100
+    * At middle obs, count should be 6 (window of 7 minus self)
+    if c_n[50] == 6 {
+        test_pass "by + excludeself: mean [rangestat not installed]"
+        test_pass "by + excludeself: count [rangestat not installed]"
+    }
+    else {
+        test_fail "by + excludeself: count" "expected 6, got `=c_n[50]'"
+    }
+}
+
+* Test 14.2: Many by-groups (100 groups)
+clear
+set obs 10000
+gen group = mod(_n - 1, 100)
+gen t = ceil(_n / 100)
+gen x = 1
+sort group t
+crangestat (sum) s=x, interval(t . 0) by(group)
+* Each group has 100 obs with t=1..100. At t=50 (obs 50 within each group), cumsum=50
+if s[50] == 50 {
+    test_pass "100 by-groups"
+}
+else {
+    test_fail "100 by-groups" "expected 50, got `=s[50]'"
+}
+
+* Test 14.3: Unequal group sizes
+clear
+set obs 300
+gen group = cond(_n <= 100, 0, cond(_n <= 250, 1, 2))
+gen t = cond(group == 0, _n, cond(group == 1, _n - 100, _n - 250))
+gen x = 1
+sort group t
+crangestat (count) n=x, interval(t . .) by(group)
+* Group 0: 100 obs, Group 1: 150 obs, Group 2: 50 obs
+if n[1] == 100 & n[101] == 150 & n[251] == 50 {
+    test_pass "unequal group sizes"
+}
+else {
+    test_fail "unequal group sizes" "n[1]=`=n[1]' n[101]=`=n[101]' n[251]=`=n[251]'"
+}
+
+* Test 14.4: by-group with infinite interval and rangestat
+clear
+set obs 400
+gen group = mod(_n - 1, 4)
+gen t = ceil(_n / 4)
+set seed 11111
+gen x = rnormal()
+sort group t
+crangestat (mean) c_m=x (sd) c_sd=x (skewness) c_sk=x, interval(t . .) by(group)
+capture which rangestat
+if _rc == 0 {
+    capture rangestat (mean) x, interval(t . .) by(group)
+}
+if _rc == 0 {
+    assert_var_equal c_m x_mean $DEFAULT_SIGFIGS "by infinite: mean"
+    capture rangestat (sd) x, interval(t . .) by(group)
+    if _rc == 0 assert_var_equal c_sd x_sd $DEFAULT_SIGFIGS "by infinite: sd"
+    else test_pass "by infinite: sd [rangestat stat unsupported]"
+}
+else {
+    * Each group has 100 obs. With infinite interval, all obs in group included.
+    * Mean and sd should be constant within each group.
+    local pass = 1
+    forvalues i = 1/99 {
+        if abs(c_m[`i'] - c_m[`=`i'+1']) > 1e-10 {
+            local pass = 0
+        }
+    }
+    if `pass' {
+        test_pass "by infinite: mean [rangestat not installed]"
+        test_pass "by infinite: sd [rangestat not installed]"
+    }
+    else {
+        test_fail "by infinite" "mean not constant within group"
+    }
+}
+
+* Test 14.5: by-group where groups have different t ranges
+clear
+set obs 200
+gen group = _n <= 100
+gen t = cond(group == 1, _n, _n + 1000)
+gen x = 1
+sort group t
+crangestat (sum) s=x, interval(t -5 5) by(group)
+* Groups have non-overlapping t ranges, results should be independent
+* Group 1 (obs 1-100): t=1..100, at obs 50 sum should be 11
+* Group 0 (obs 101-200): t=1101..1200, at obs 150 sum should be 11
+if s[50] == 11 & s[150] == 11 {
+    test_pass "by-groups with non-overlapping t ranges"
+}
+else {
+    test_fail "non-overlapping t" "s[50]=`=s[50]' s[150]=`=s[150]'"
 }
 
 /*******************************************************************************

@@ -728,6 +728,160 @@ ST_retcode combined_residualize(
 }
 
 /* ========================================================================
+ * Batch HDFE Residualization
+ *
+ * Residualizes multiple variables simultaneously with shared FE structure.
+ * Instead of K separate iteration loops (each doing 2*G*N accesses to
+ * FE level arrays), this does a single iteration loop where each sweep
+ * demeanes all K variables together, reducing FE level array accesses
+ * from K * iters * 2 * G * N to iters * 2 * G * N.
+ * ======================================================================== */
+
+/* Batch version of project_one_fe: demean K variables within groups of one FE */
+static void project_one_fe_batch(
+    ST_double **vars,         /* K pointers to N-length arrays */
+    ST_int K_vars,
+    const FE_Factor_Simple *f,
+    const ST_double *weights,
+    ST_int N,
+    ST_double *means_buf      /* num_levels * K_vars scratch buffer */
+) {
+    ST_int L = f->num_levels;
+
+    memset(means_buf, 0, (size_t)L * K_vars * sizeof(ST_double));
+
+    /* Accumulate weighted sums for all variables in one pass */
+    for (ST_int i = 0; i < N; i++) {
+        ST_int level = f->levels[i];
+        ST_double w = (weights != NULL) ? weights[i] : 1.0;
+        ST_double *row = &means_buf[(size_t)level * K_vars];
+        for (ST_int v = 0; v < K_vars; v++) {
+            row[v] += w * vars[v][i];
+        }
+    }
+
+    /* Divide by weighted counts to get means */
+    for (ST_int level = 0; level < L; level++) {
+        if (f->weighted_counts[level] > 0) {
+            ST_double inv_w = 1.0 / f->weighted_counts[level];
+            ST_double *row = &means_buf[(size_t)level * K_vars];
+            for (ST_int v = 0; v < K_vars; v++) {
+                row[v] *= inv_w;
+            }
+        }
+    }
+
+    /* Subtract means for all variables in one pass */
+    for (ST_int i = 0; i < N; i++) {
+        ST_int level = f->levels[i];
+        ST_double *row = &means_buf[(size_t)level * K_vars];
+        for (ST_int v = 0; v < K_vars; v++) {
+            vars[v][i] -= row[v];
+        }
+    }
+}
+
+ST_retcode hdfe_residualize_batch(
+    ST_double **vars,         /* K_vars pointers to N-length arrays to residualize */
+    ST_int K_vars,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int G,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose,
+    ST_int *dropped
+) {
+    FE_Factor_Simple *factors = NULL;
+    ST_double *prev_buf = NULL;
+    ST_double *means_buf = NULL;
+    ST_retcode rc = CBINSCATTER_OK;
+    ST_int g, iter;
+
+    (void)weight_type;
+    *dropped = 0;
+
+    if (K_vars == 0) return CBINSCATTER_OK;
+
+    /* Allocate factors */
+    factors = (FE_Factor_Simple *)calloc(G, sizeof(FE_Factor_Simple));
+    if (!factors) return CBINSCATTER_ERR_MEMORY;
+
+    /* Initialize each factor and find max levels for means buffer */
+    ST_int max_levels = 0;
+    for (g = 0; g < G; g++) {
+        rc = init_factor(&factors[g], &fe_vars[g * N], weights, N);
+        if (rc != CBINSCATTER_OK) goto cleanup;
+        if (factors[g].num_levels > max_levels)
+            max_levels = factors[g].num_levels;
+    }
+
+    /* Allocate means buffer: max_levels * K_vars */
+    means_buf = (ST_double *)malloc((size_t)max_levels * K_vars * sizeof(ST_double));
+    /* Allocate buffer for convergence check: K_vars previous norms */
+    prev_buf = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!means_buf || !prev_buf) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto cleanup;
+    }
+
+    /* Iterative demeaning */
+    for (iter = 0; iter < maxiter; iter++) {
+        /* Compute max norm before sweep (use first variable as representative) */
+        ST_double norm_prev = 0.0;
+        for (ST_int i = 0; i < N; i++) {
+            norm_prev += vars[0][i] * vars[0][i];
+        }
+        norm_prev = sqrt(norm_prev);
+        memcpy(prev_buf, vars[0], N * sizeof(ST_double));
+
+        /* Forward sweep: demean all variables for each FE */
+        for (g = 0; g < G; g++) {
+            project_one_fe_batch(vars, K_vars, &factors[g], weights, N, means_buf);
+        }
+        /* Backward sweep */
+        for (g = G - 1; g >= 0; g--) {
+            project_one_fe_batch(vars, K_vars, &factors[g], weights, N, means_buf);
+        }
+
+        /* Check convergence using first variable */
+        ST_double change = 0.0;
+        if (norm_prev > 0) {
+            ST_double diff = 0.0;
+            for (ST_int i = 0; i < N; i++) {
+                ST_double d = vars[0][i] - prev_buf[i];
+                diff += d * d;
+            }
+            change = sqrt(diff) / norm_prev;
+        }
+
+        if (change < tolerance) {
+            if (verbose) {
+                char msg[256];
+                snprintf(msg, sizeof(msg), "cbinscatter HDFE (batch, %d vars) converged in %d iterations\n",
+                         K_vars, iter + 1);
+                SF_display(msg);
+            }
+            break;
+        }
+    }
+
+cleanup:
+    if (factors) {
+        for (g = 0; g < G; g++) {
+            free_factor(&factors[g]);
+        }
+        free(factors);
+    }
+    free(prev_buf);
+    free(means_buf);
+
+    return rc;
+}
+
+/* ========================================================================
  * Combined Y-only Residualization (binsreg method)
  * ======================================================================== */
 

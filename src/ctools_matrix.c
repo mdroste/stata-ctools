@@ -204,7 +204,8 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
      * - No weights:      w_i = e_i^2
      * - fweight:          w_i = e_i^2 * fw_i
      * - aw/pw normalized: w_i = (e_i * w_norm_i)^2
-     * - aw/pw raw (IV):   w_i = (w_i * e_i)^2    [but actually w_i * e_i^2] */
+     * - aw/pw raw (IV):   w_i = (w_i * e_i)^2    [but actually w_i * e_i^2]
+     * Symmetric: accumulate upper triangle, then mirror. */
     for (idx = 0; idx < N; idx++) {
         ST_double w_i;
         ST_double e = d->resid[idx];
@@ -222,11 +223,17 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
         }
 
         for (j = 0; j < K; j++) {
-            ST_double xj = d->X_eff[j * N + idx];
-            for (k = 0; k < K; k++) {
-                ST_double xk = d->X_eff[k * N + idx];
-                meat[j * K + k] += w_i * xj * xk;
+            ST_double wxj = w_i * d->X_eff[j * N + idx];
+            meat[j * K + j] += wxj * d->X_eff[j * N + idx];
+            for (k = j + 1; k < K; k++) {
+                meat[j * K + k] += wxj * d->X_eff[k * N + idx];
             }
+        }
+    }
+    /* Mirror upper triangle to lower */
+    for (j = 0; j < K; j++) {
+        for (k = j + 1; k < K; k++) {
+            meat[k * K + j] = meat[j * K + k];
         }
     }
 
@@ -320,10 +327,12 @@ void ctools_vce_cluster(const ctools_vce_data *d,
             }
         }
 
-        /* Accumulate outer product ecX * ecX' into meat */
+        /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
         for (ST_int jj = 0; jj < K; jj++) {
-            for (ST_int kk = 0; kk < K; kk++) {
-                meat[jj * K + kk] += ecX[jj] * ecX[kk];
+            ST_double ecXj = ecX[jj];
+            meat[jj * K + jj] += ecXj * ecXj;
+            for (ST_int kk = jj + 1; kk < K; kk++) {
+                meat[jj * K + kk] += ecXj * ecX[kk];
             }
         }
     }
@@ -332,6 +341,13 @@ void ctools_vce_cluster(const ctools_vce_data *d,
     free(sort_perm);
     free(boundaries);
     if (w_norm) free(w_norm);
+
+    /* Mirror upper triangle to lower */
+    for (ST_int jj = 0; jj < K; jj++) {
+        for (ST_int kk = jj + 1; kk < K; kk++) {
+            meat[kk * K + jj] = meat[jj * K + kk];
+        }
+    }
 
     /* V = D * meat * D * dof_adj */
     ctools_matmul_ab(d->D, meat, K, K, K, temp);

@@ -1158,12 +1158,6 @@ ST_retcode cpsmatch_main(const char *args)
     double *out_match = malloc(n_filtered * sizeof(double));
     double *out_support = malloc(n_filtered * sizeof(double));
 
-    /* Initialize to missing */
-    for (size_t i = 0; i < n_filtered; i++) {
-        out_match[i] = SV_missval;
-        out_support[i] = SV_missval;
-    }
-
     if (!out_weight || !out_match || !out_support) {
         ctools_filtered_data_free(&filtered);
         free(treated_idx);
@@ -1176,6 +1170,12 @@ ST_retcode cpsmatch_main(const char *args)
         free(out_support);
         SF_error("cpsmatch: memory allocation failed\n");
         return 920;
+    }
+
+    /* Initialize to missing */
+    for (size_t i = 0; i < n_filtered; i++) {
+        out_match[i] = SV_missval;
+        out_support[i] = SV_missval;
     }
 
     /* Caliper is always in absolute units (propensity score scale) for psmatch2 compatibility */

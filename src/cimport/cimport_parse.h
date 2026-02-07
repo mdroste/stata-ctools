@@ -23,11 +23,15 @@ typedef enum {
     CIMPORT_BINDQUOTES_STRICT = 1   /* Respect quotes: fields can span lines */
 } CImportBindQuotesMode;
 
-/* Field reference - offset and length into memory-mapped file */
+/* Field reference - offset and length into memory-mapped file.
+ * High bit of length serves as quote flag to avoid redundant SIMD scans. */
 typedef struct {
     uint64_t offset;
-    uint32_t length;
+    uint32_t length;   /* Bit 31 = has_quote flag, bits 0-30 = actual length */
 } CImportFieldRef;
+
+#define CIMPORT_FIELD_QUOTED_FLAG 0x80000000u
+#define CIMPORT_FIELD_LENGTH(f) ((f).length & 0x7FFFFFFFu)
 
 /* Parsed row - number of fields plus flexible array of field refs */
 typedef struct {

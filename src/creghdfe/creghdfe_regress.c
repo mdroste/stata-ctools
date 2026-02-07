@@ -477,24 +477,23 @@ ST_retcode do_full_regression(int argc, char *argv[])
         orig_num_levels[g] = factors[g].num_levels;
     }
 
-    /* Recount levels after singleton removal */
-    ST_int *levels_remaining = NULL;
+    /* Recount levels after singleton removal.
+     * Re-accumulate counts from masked observations, then count non-zeros. */
     for (g = 0; g < G; g++) {
-        levels_remaining = (ST_int *)calloc(orig_num_levels[g], sizeof(ST_int));
-        if (levels_remaining) {
-            ST_int num_levels_after = 0;
-            for (i = 0; i < N_orig; i++) {
-                if (mask[i]) {
-                    ST_int level = factors[g].levels[i] - 1;
-                    if (level >= 0 && level < orig_num_levels[g] && !levels_remaining[level]) {
-                        levels_remaining[level] = 1;
-                        num_levels_after++;
-                    }
+        memset(factors[g].counts, 0, orig_num_levels[g] * sizeof(ST_int));
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                ST_int level = factors[g].levels[i] - 1;
+                if (level >= 0 && level < orig_num_levels[g]) {
+                    factors[g].counts[level]++;
                 }
             }
-            factors[g].num_levels = num_levels_after;
-            free(levels_remaining);
         }
+        ST_int num_levels_after = 0;
+        for (i = 0; i < orig_num_levels[g]; i++) {
+            if (factors[g].counts[i] > 0) num_levels_after++;
+        }
+        factors[g].num_levels = num_levels_after;
     }
 
     /* ================================================================
@@ -737,11 +736,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
         free(remap);
 
-        /* Sorted indices built lazily in partial_out_columns for large factors */
-        g_state->factors[g].sorted_indices = NULL;
-        g_state->factors[g].sorted_levels = NULL;
-        g_state->factors[g].level_offsets = NULL;
-        g_state->factors[g].sorted_initialized = 0;
+        /* Build sorted permutation for cache-friendly scatter-gather */
+        ctools_build_sorted_permutation(&g_state->factors[g], N);
     }
 
     /* Allocate inv_counts, inv_weighted_counts, and thread buffers */
@@ -780,22 +776,56 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 1;
     }
 
-    /* Compact data and recompute means (weighted if using weights) */
+    /* Compact data and recompute means (weighted if using weights).
+     * Build compact index first, then parallelize column copy + means. */
     for (k = 0; k < K; k++) means_compact[k] = 0.0;
-    ST_double sum_w_compact = 0.0;
 
+    /* Build compact index map: compact_idx[j] = destination index for j-th valid obs */
+    ST_int *compact_map = (ST_int *)malloc(N * sizeof(ST_int));
+    if (!compact_map) {
+        free(data_compact); free(means_compact);
+        cleanup_state();
+        for (g = 0; g < G; g++) {
+            if (factors[g].levels) free(factors[g].levels);
+            if (factors[g].counts) free(factors[g].counts);
+        }
+        free(factors); free(mask);
+        free(data); free(means); free(stdevs); free(tss);
+        return 1;
+    }
     idx = 0;
     for (i = 0; i < N_orig; i++) {
         if (mask[i]) {
-            ST_double w = (has_weights) ? weights[i] : 1.0;
-            for (k = 0; k < K; k++) {
-                data_compact[k * N + idx] = data[k * N_orig + i];
-                means_compact[k] += w * data[k * N_orig + i];
-            }
-            sum_w_compact += w;
+            compact_map[idx] = i;
             idx++;
         }
     }
+
+    /* Compute sum_w_compact */
+    ST_double sum_w_compact = 0.0;
+    if (has_weights) {
+        for (idx = 0; idx < N; idx++) {
+            sum_w_compact += weights[compact_map[idx]];
+        }
+    }
+
+    /* Parallel copy + mean accumulation per column */
+    #pragma omp parallel for schedule(static) if(K > 1)
+    for (k = 0; k < K; k++) {
+        ST_double col_mean = 0.0;
+        const ST_double *src_col = data + k * N_orig;
+        ST_double *dst_col = data_compact + k * N;
+        ST_int ii;
+        for (ii = 0; ii < N; ii++) {
+            ST_int orig_i = compact_map[ii];
+            ST_double val = src_col[orig_i];
+            dst_col[ii] = val;
+            ST_double w = (has_weights) ? weights[orig_i] : 1.0;
+            col_mean += w * val;
+        }
+        means_compact[k] = col_mean;
+    }
+    free(compact_map);
 
     /* Divide by sum of weights (or N if unweighted) */
     ST_double mean_divisor = (has_weights) ? sum_w_compact : (ST_double)N;
@@ -887,18 +917,24 @@ ST_retcode do_full_regression(int argc, char *argv[])
         /* Compute TSS = sum((x - mean)^2) [or weighted variant].
          * When quad option is specified, use double-double arithmetic
          * to match Mata's quadcross() precision. Otherwise use Kahan
-         * summation with volatile to prevent FMA. */
+         * compensated summation for near-quad precision without
+         * blocking FMA/SIMD vectorization. */
         ST_double ss = 0.0;
         if (has_weights && g_state->weights != NULL) {
             if (use_quad) {
                 ss = dd_sum_sq_dev_weighted(col, mean_k, g_state->weights, N);
             } else {
-                /* Kahan summation to match Mata's crossdev() */
+                /* Kahan compensated summation */
+                ST_double kc = 0.0;
                 for (idx = 0; idx < N; idx++) {
                     ST_double d = col[idx] - mean_k;
-                    volatile ST_double sq = d * d;
-                    ss += g_state->weights[idx] * sq;
+                    ST_double sq = d * d;
+                    ST_double wsq = g_state->weights[idx] * sq;
+                    ST_double t = ss + wsq;
+                    kc += (ss - t) + wsq;
+                    ss = t;
                 }
+                ss += kc;
             }
             ST_double df_stdev = (weight_type == 2) ? (g_state->sum_weights - 1.0) : (ST_double)(N - 1);
             tss[k] = ss;
@@ -907,12 +943,16 @@ ST_retcode do_full_regression(int argc, char *argv[])
             if (use_quad) {
                 ss = dd_sum_sq_dev(col, mean_k, N);
             } else {
-                /* Kahan summation to match Mata's crossdev() */
+                /* Kahan compensated summation */
+                ST_double kc = 0.0;
                 for (idx = 0; idx < N; idx++) {
                     ST_double d = col[idx] - mean_k;
-                    volatile ST_double sq = d * d;
-                    ss += sq;
+                    ST_double sq = d * d;
+                    ST_double t = ss + sq;
+                    kc += (ss - t) + sq;
+                    ss = t;
                 }
+                ss += kc;
             }
             tss[k] = ss;
             stdevs[k] = sqrt(ss / (N - 1));

@@ -145,3 +145,45 @@ void *xlsx_zip_extract_file(xlsx_zip_archive *archive, const char *filename,
 
     return xlsx_zip_extract_to_heap(archive, idx, out_size);
 }
+
+/* ============================================================================
+ * Streaming Extraction
+ * ============================================================================ */
+
+struct xlsx_zip_stream {
+    mz_zip_reader_extract_iter_state *iter;
+};
+
+xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index)
+{
+    if (!archive) return NULL;
+
+    mz_uint num_files = mz_zip_reader_get_num_files(&archive->zip);
+    if (file_index >= num_files) return NULL;
+
+    xlsx_zip_stream *stream = (xlsx_zip_stream *)malloc(sizeof(xlsx_zip_stream));
+    if (!stream) return NULL;
+
+    stream->iter = mz_zip_reader_extract_iter_new(&archive->zip, (mz_uint)file_index, 0);
+    if (!stream->iter) {
+        free(stream);
+        return NULL;
+    }
+
+    return stream;
+}
+
+size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size)
+{
+    if (!stream || !stream->iter || !buffer || buffer_size == 0) return 0;
+    return mz_zip_reader_extract_iter_read(stream->iter, buffer, buffer_size);
+}
+
+void xlsx_zip_stream_close(xlsx_zip_stream *stream)
+{
+    if (!stream) return;
+    if (stream->iter) {
+        mz_zip_reader_extract_iter_free(stream->iter);
+    }
+    free(stream);
+}

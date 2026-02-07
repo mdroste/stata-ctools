@@ -83,7 +83,8 @@ ST_retcode adjust_bins_binsreg(
     ST_retcode rc = CBINSCATTER_OK;
     ST_int num_bins = result->num_bins;
 
-    /* Allocate working arrays */
+    /* Allocate all working arrays in a single block for cache locality.
+     * Layout: [y_bin_means | w_bin_means | gamma | XtX | Xty | w_overall_means | y_demeaned | w_demeaned] */
     ST_double *y_bin_means = NULL;      /* E[Y|bin] for each bin */
     ST_double *w_bin_means = NULL;      /* E[W_k|bin] for each bin, all K controls */
     ST_double *y_demeaned = NULL;       /* Y - E[Y|bin] */
@@ -92,20 +93,35 @@ ST_retcode adjust_bins_binsreg(
     ST_double *XtX = NULL;              /* K x K normal equations matrix */
     ST_double *Xty = NULL;              /* K x 1 right-hand side */
     ST_double *w_overall_means = NULL;  /* Overall mean of each control */
+    void *binsreg_block = NULL;         /* Single allocation block */
 
-    y_bin_means = (ST_double *)calloc(num_bins, sizeof(ST_double));
-    w_bin_means = (ST_double *)calloc((size_t)num_bins * K, sizeof(ST_double));
-    y_demeaned = (ST_double *)malloc(N * sizeof(ST_double));
-    w_demeaned = (ST_double *)malloc((size_t)N * K * sizeof(ST_double));
-    gamma = (ST_double *)calloc(K, sizeof(ST_double));
-    XtX = (ST_double *)calloc((size_t)K * K, sizeof(ST_double));
-    Xty = (ST_double *)calloc(K, sizeof(ST_double));
-    w_overall_means = (ST_double *)calloc(K, sizeof(ST_double));
+    {
+        /* Compute total size for consolidated allocation */
+        size_t sz_small = (size_t)num_bins              /* y_bin_means */
+                        + (size_t)num_bins * K          /* w_bin_means */
+                        + (size_t)K                     /* gamma */
+                        + (size_t)K * K                 /* XtX */
+                        + (size_t)K                     /* Xty */
+                        + (size_t)K;                    /* w_overall_means */
+        size_t sz_large = (size_t)N + (size_t)N * K;    /* y_demeaned + w_demeaned */
+        size_t total_doubles = sz_small + sz_large;
 
-    if (!y_bin_means || !w_bin_means || !y_demeaned || !w_demeaned ||
-        !gamma || !XtX || !Xty || !w_overall_means) {
-        rc = CBINSCATTER_ERR_MEMORY;
-        goto cleanup;
+        binsreg_block = calloc(total_doubles, sizeof(ST_double));
+        if (!binsreg_block) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
+        }
+
+        /* Partition the block */
+        ST_double *p = (ST_double *)binsreg_block;
+        y_bin_means = p;      p += num_bins;
+        w_bin_means = p;      p += (size_t)num_bins * K;
+        gamma = p;            p += K;
+        XtX = p;              p += (size_t)K * K;
+        Xty = p;              p += K;
+        w_overall_means = p;  p += K;
+        y_demeaned = p;       p += N;
+        w_demeaned = p;       /* p += (size_t)N * K; */
     }
 
     /* Step 1: Compute within-bin means of Y */
@@ -200,14 +216,7 @@ ST_retcode adjust_bins_binsreg(
     }
 
 cleanup:
-    free(y_bin_means);
-    free(w_bin_means);
-    free(y_demeaned);
-    free(w_demeaned);
-    free(gamma);
-    free(XtX);
-    free(Xty);
-    free(w_overall_means);
+    free(binsreg_block);
 
     return rc;
 }
@@ -307,31 +316,37 @@ ST_retcode adjust_bins_binsreg_hdfe(
         bin_weights[b] /= total_weight;
     }
 
-    /* Step 3: HDFE demean Y */
-    rc = hdfe_residualize_y_only(y_hdfe, fe_vars, N, K_fe,
-                                  weights, weight_type,
-                                  maxiter, tolerance, 0, &dropped);
-    if (rc != CBINSCATTER_OK) goto cleanup;
-
-    /* Step 4: HDFE demean each bin indicator */
+    /* Steps 3-5: HDFE demean Y, bin indicators, and controls simultaneously.
+     * Using batch residualization reduces FE level array traversals from
+     * (1 + num_bins + K_ctrl) * iters * 2G to iters * 2G. */
     memcpy(bin_indicators_dm, bin_indicators, (size_t)N * num_bins * sizeof(ST_double));
-    for (ST_int b = 0; b < num_bins; b++) {
-        ST_double *bin_col = &bin_indicators_dm[b * N];
-        rc = hdfe_residualize_y_only(bin_col, fe_vars, N, K_fe,
-                                      weights, weight_type,
-                                      maxiter, tolerance, 0, &dropped);
-        if (rc != CBINSCATTER_OK) goto cleanup;
-    }
 
-    /* Step 5: HDFE demean control variables if present */
-    if (controls_hdfe != NULL) {
-        for (ST_int k = 0; k < K_ctrl; k++) {
-            ST_double *ctrl_col = &controls_hdfe[k * N];
-            rc = hdfe_residualize_y_only(ctrl_col, fe_vars, N, K_fe,
-                                          weights, weight_type,
-                                          maxiter, tolerance, 0, &dropped);
-            if (rc != CBINSCATTER_OK) goto cleanup;
+    {
+        ST_int K_batch = 1 + num_bins + K_ctrl;
+        ST_double **batch_vars = (ST_double **)malloc(K_batch * sizeof(ST_double *));
+        if (!batch_vars) {
+            rc = CBINSCATTER_ERR_MEMORY;
+            goto cleanup;
         }
+
+        /* First variable: Y */
+        batch_vars[0] = y_hdfe;
+        /* Next num_bins: bin indicators */
+        for (ST_int b = 0; b < num_bins; b++) {
+            batch_vars[1 + b] = &bin_indicators_dm[b * N];
+        }
+        /* Last K_ctrl: control variables */
+        if (controls_hdfe != NULL) {
+            for (ST_int k = 0; k < K_ctrl; k++) {
+                batch_vars[1 + num_bins + k] = &controls_hdfe[k * N];
+            }
+        }
+
+        rc = hdfe_residualize_batch(batch_vars, K_batch, fe_vars, N, K_fe,
+                                     weights, weight_type,
+                                     maxiter, tolerance, 0, &dropped);
+        free(batch_vars);
+        if (rc != CBINSCATTER_OK) goto cleanup;
     }
 
     /* Step 6: Run OLS: y_dm ~ bin_indicators_dm + controls_dm

@@ -894,7 +894,7 @@ ST_int cqreg_vce_cluster(ST_double *V,
 cleanup:
     ctools_aligned_free(XtX_inv);
     ctools_aligned_free(M);
-    ctools_aligned_free(score_g);
+    free(score_g);
     free(cluster_map);
 
     return rc;

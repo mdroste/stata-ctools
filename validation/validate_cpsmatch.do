@@ -880,6 +880,605 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 20: Default Epanechnikov Kernel (vs psmatch2)
+ ******************************************************************************/
+print_section "Epanechnikov Kernel (vs psmatch2)"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* Default kernel type is epan
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) kernel kerneltype(epan)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) kernel kerneltype(epan)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "kernel(epan): ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "kernel(epan): ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 21: NN with Caliper (vs psmatch2)
+ ******************************************************************************/
+print_section "NN with Caliper (vs psmatch2)"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* NN with caliper (not radius mode)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) caliper(0.1)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) caliper(0.1)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "NN caliper(0.1): ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "NN caliper(0.1): ATT" "sigfigs=`sf_fmt'"
+}
+
+* NN with tight caliper
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) caliper(0.01)
+local psm2_att = r(att)
+local psm2_n_matched = r(att) != .
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) caliper(0.01)
+local cps_att = r(att)
+
+* With tight caliper, some treated may be unmatched
+if !missing(`psm2_att') & !missing(`cps_att') {
+    sigfigs `psm2_att' `cps_att'
+    local sf = r(sigfigs)
+    if `sf' >= 7 {
+        test_pass "NN caliper(0.01): ATT matches psmatch2"
+    }
+    else {
+        local sf_fmt : display %4.1f `sf'
+        test_fail "NN caliper(0.01): ATT" "sigfigs=`sf_fmt'"
+    }
+}
+else if missing(`psm2_att') & missing(`cps_att') {
+    test_pass "NN caliper(0.01): both missing (too few matches)"
+}
+else {
+    test_fail "NN caliper(0.01): ATT" "one missing, other not"
+}
+
+/*******************************************************************************
+ * SECTION 22: Multiple Covariates (vs psmatch2)
+ ******************************************************************************/
+print_section "Multiple Covariates (vs psmatch2)"
+
+clear
+set obs 1000
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen x3 = rnormal()
+gen x4 = runiform()
+gen x5 = rnormal() * 2
+gen treat = (0.2*x1 + 0.15*x2 + 0.1*x3 - 0.1*x4 + 0.05*x5 + rnormal() > 0)
+gen y = 3*treat + x1 + 0.5*x2 - 0.3*x3 + x4 + rnormal()
+
+* NN with 5 covariates
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2 x3 x4 x5, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2 x3 x4 x5, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "5 covariates: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "5 covariates: ATT" "sigfigs=`sf_fmt'"
+}
+
+* Kernel with 5 covariates
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2 x3 x4 x5, outcome(y) kernel
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2 x3 x4 x5, outcome(y) kernel
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "5 covariates kernel: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "5 covariates kernel: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 23: Many Neighbors (vs psmatch2)
+ ******************************************************************************/
+print_section "Many Neighbors (vs psmatch2)"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* NN(5)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) neighbor(5)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) neighbor(5)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "NN(5): ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "NN(5): ATT" "sigfigs=`sf_fmt'"
+}
+
+* NN(10)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) neighbor(10)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) neighbor(10)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "NN(10): ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "NN(10): ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 24: Unbalanced Treatment Groups (vs psmatch2)
+ ******************************************************************************/
+print_section "Unbalanced Treatment (vs psmatch2)"
+
+* Many treated, few controls
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > -0.5)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+quietly count if treat == 1
+local nt = r(N)
+quietly count if treat == 0
+local nc = r(N)
+
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "unbalanced (many treated `nt'/`nc'): ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "unbalanced many treated: ATT" "sigfigs=`sf_fmt'"
+}
+
+* Few treated, many controls
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 1.0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+quietly count if treat == 1
+local nt = r(N)
+quietly count if treat == 0
+local nc = r(N)
+
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "unbalanced (few treated `nt'/`nc'): ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "unbalanced few treated: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 25: Weight Variable Comparison (vs psmatch2)
+ ******************************************************************************/
+print_section "Weight Variable Comparison (vs psmatch2)"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* Run psmatch2 and save _weight
+psmatch2 treat x1 x2, outcome(y)
+tempvar psm2_weight psm2_pscore
+gen double `psm2_weight' = _weight
+gen double `psm2_pscore' = _pscore
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+* Run cpsmatch
+cpsmatch treat x1 x2, outcome(y)
+
+* Compare _weight for treated observations only (controls may differ)
+* psmatch2 assigns _weight=1 for treated on support
+rename `psm2_weight' _psm2_weight
+quietly count if _treated == 1 & _support == 1 & !missing(_weight) & !missing(_psm2_weight)
+local n_compare = r(N)
+if `n_compare' > 0 {
+    * For treated obs, both should assign weight=1
+    tempvar tw_match
+    quietly gen `tw_match' = (_weight == _psm2_weight) if _treated == 1 & _support == 1
+    quietly count if `tw_match' == 1
+    local n_match = r(N)
+    if `n_match' == `n_compare' {
+        test_pass "NN: treated _weight matches psmatch2"
+    }
+    else {
+        test_fail "NN: treated _weight" "`=`n_compare'-`n_match'' of `n_compare' treated weights differ"
+    }
+}
+else {
+    test_fail "NN: _weight" "no observations to compare"
+}
+
+/*******************************************************************************
+ * SECTION 26: pscore() with Different Methods (vs psmatch2)
+ ******************************************************************************/
+print_section "pscore() with Methods (vs psmatch2)"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* Estimate propensity score externally
+logit treat x1 x2
+predict double pscore_ext, pr
+
+* pscore() with kernel matching
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat, pscore(pscore_ext) outcome(y) kernel
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat, pscore(pscore_ext) outcome(y) kernel
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "pscore() kernel: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "pscore() kernel: ATT" "sigfigs=`sf_fmt'"
+}
+
+* pscore() with radius matching
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat, pscore(pscore_ext) outcome(y) radius caliper(0.1)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat, pscore(pscore_ext) outcome(y) radius caliper(0.1)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "pscore() radius: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "pscore() radius: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 27: Larger Dataset (vs psmatch2)
+ ******************************************************************************/
+print_section "Larger Dataset (vs psmatch2)"
+
+clear
+set obs 25000
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen x3 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + 0.1*x3 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 - 0.3*x3 + rnormal()
+
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2 x3, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2 x3, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "25K obs: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "25K obs: ATT" "sigfigs=`sf_fmt'"
+}
+
+* 25K with kernel matching
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2 x3, outcome(y) kernel
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2 x3, outcome(y) kernel
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "25K kernel: ATT matches psmatch2"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "25K kernel: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 28: benchmark_psmatch2 Helper Tests
+ ******************************************************************************/
+print_section "benchmark_psmatch2 Helper"
+
+* Use the benchmark_psmatch2 helper for comprehensive comparison
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+benchmark_psmatch2 treat x1 x2, outcome(y) testname("benchmark: NN default")
+
+preserve
+benchmark_psmatch2 treat x1 x2, outcome(y) neighbor(3) testname("benchmark: NN(3)")
+restore
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+preserve
+benchmark_psmatch2 treat x1 x2, outcome(y) kernel testname("benchmark: kernel default")
+restore
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+preserve
+benchmark_psmatch2 treat x1 x2, outcome(y) radius caliper(0.1) testname("benchmark: radius 0.1")
+restore
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+preserve
+benchmark_psmatch2 treat x1 x2, outcome(y) logit testname("benchmark: logit")
+restore
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+/*******************************************************************************
+ * SECTION 29: Small Sample Edge Cases
+ ******************************************************************************/
+print_section "Small Sample Edge Cases"
+
+* Minimal sample
+clear
+set obs 30
+set seed 12345
+gen x1 = rnormal()
+gen treat = (_n > 15)
+gen y = 2*treat + x1 + rnormal()
+
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "small sample (N=30): ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "small sample: ATT" "sigfigs=`sf_fmt'"
+}
+
+* Single covariate
+clear
+set obs 200
+set seed 12345
+gen x1 = rnormal()
+gen treat = (0.5*x1 + rnormal() > 0)
+gen y = 2*treat + x1 + rnormal()
+
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1, outcome(y)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1, outcome(y)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "single covariate: ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "single covariate: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
+ * SECTION 30: Combined Options with benchmark_psmatch2
+ ******************************************************************************/
+print_section "Additional Combined Options"
+
+clear
+set obs 500
+set seed 12345
+gen x1 = rnormal()
+gen x2 = rnormal()
+gen treat = (0.3*x1 + 0.2*x2 + rnormal() > 0)
+gen y = 2*treat + x1 + 0.5*x2 + rnormal()
+
+* Noreplacement with ties
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) noreplacement ties
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) noreplacement ties
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "noreplacement ties: ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "noreplacement ties: ATT" "sigfigs=`sf_fmt'"
+}
+
+* Kernel with large bandwidth
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) kernel bwidth(0.2)
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) kernel bwidth(0.2)
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "kernel bwidth(0.2): ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "kernel bwidth(0.2): ATT" "sigfigs=`sf_fmt'"
+}
+
+* Radius with common and logit
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) radius caliper(0.1) common logit
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) radius caliper(0.1) common logit
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "radius common logit: ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "radius common logit: ATT" "sigfigs=`sf_fmt'"
+}
+
+* Descending + common + ties
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+psmatch2 treat x1 x2, outcome(y) noreplacement descending common ties
+local psm2_att = r(att)
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
+cpsmatch treat x1 x2, outcome(y) noreplacement descending common ties
+local cps_att = r(att)
+
+sigfigs `psm2_att' `cps_att'
+local sf = r(sigfigs)
+if `sf' >= 7 {
+    test_pass "descending common ties: ATT matches"
+}
+else {
+    local sf_fmt : display %4.1f `sf'
+    test_fail "descending common ties: ATT" "sigfigs=`sf_fmt'"
+}
+
+/*******************************************************************************
  * SECTION: Intentional Error Tests
  *
  * These tests verify that cpsmatch returns the same error codes as psmatch2

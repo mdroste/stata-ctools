@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 
 #include "stplugin.h"
 #include "ctools_types.h"
@@ -130,6 +131,11 @@ ST_retcode cdecode_main(const char *args)
     int n_missing = 0;
     int n_unlabeled = 0;
 
+    /* Last-value cache: categorical data often has consecutive identical values.
+     * Caching the last lookup avoids redundant hash table probes. */
+    int cache_key = INT_MIN;
+    const char *cache_label = NULL;
+
     /* Decode and write directly to Stata — no intermediate array needed */
     for (size_t i = 0; i < nobs; i++) {
         double dval = src_values[i];
@@ -143,12 +149,25 @@ ST_retcode cdecode_main(const char *args)
             if (fabs(dval - rounded) > 1e-9) {
                 n_unlabeled++;
             } else {
-                const char *found = ctools_int_hash_lookup(&ht, (int)rounded);
-                if (found) {
-                    label = found;
-                    n_decoded++;
+                int key = (int)rounded;
+                if (key == cache_key) {
+                    /* Cache hit — reuse previous lookup result */
+                    if (cache_label) {
+                        label = cache_label;
+                        n_decoded++;
+                    } else {
+                        n_unlabeled++;
+                    }
                 } else {
-                    n_unlabeled++;
+                    const char *found = ctools_int_hash_lookup(&ht, key);
+                    cache_key = key;
+                    cache_label = found;
+                    if (found) {
+                        label = found;
+                        n_decoded++;
+                    } else {
+                        n_unlabeled++;
+                    }
                 }
             }
         }

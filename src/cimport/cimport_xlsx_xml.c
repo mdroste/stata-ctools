@@ -213,19 +213,41 @@ bool xlsx_xml_parse(xlsx_xml_parser *p, const char *data, size_t len, bool is_fi
         char ch = *c;
 
         switch (p->state) {
-        case STATE_TEXT:
-            if (ch == '<') {
-                if (!emit_text(p)) return true; /* stopped by callback */
+        case STATE_TEXT: {
+            /* Bulk scan for next '<' using SIMD-accelerated memchr */
+            const char *lt = (const char *)memchr(c, '<', (size_t)(end - c));
+            if (lt == NULL) {
+                /* No '<' in remaining data — copy all as text */
+                size_t span = (size_t)(end - c);
+                if (span > 0) {
+                    if (!ensure_text_space(p, span)) {
+                        set_error(p, "Out of memory");
+                        return false;
+                    }
+                    memcpy(p->text_buf + p->text_len, c, span);
+                    p->text_len += span;
+                }
+                p->total_pos += span - 1; /* -1 because for-loop increments */
+                c = end - 1;              /* -1 because for-loop increments */
+            } else if (lt == c) {
+                /* '<' is the current character */
+                if (!emit_text(p)) return true;
                 p->state = STATE_TAG_START;
                 reset_tag(p);
             } else {
-                if (!ensure_text_space(p, 1)) {
+                /* Copy text span before '<' */
+                size_t span = (size_t)(lt - c);
+                if (!ensure_text_space(p, span)) {
                     set_error(p, "Out of memory");
                     return false;
                 }
-                p->text_buf[p->text_len++] = ch;
+                memcpy(p->text_buf + p->text_len, c, span);
+                p->text_len += span;
+                p->total_pos += span - 1;
+                c = lt - 1; /* position at char before '<', loop will advance to '<' */
             }
             break;
+        }
 
         case STATE_TAG_START:
             if (ch == '/') {
@@ -411,6 +433,9 @@ const char *xlsx_xml_get_attr(const xlsx_xml_event *event, const char *name)
 size_t xlsx_xml_decode_entities(char *str, size_t len)
 {
     if (!str || len == 0) return 0;
+
+    /* Fast path: most strings contain no entities */
+    if (!memchr(str, '&', len)) return len;
 
     char *read = str;
     char *write = str;

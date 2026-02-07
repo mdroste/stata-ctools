@@ -144,19 +144,44 @@ int ctools_uint64_to_str(uint64_t val, char *buf)
         return 1;
     }
 
-    char tmp[24];
-    int len = 0;
-
-    while (val > 0) {
-        tmp[len++] = '0' + (val % 10);
-        val /= 10;
+    /* Determine number of digits using binary search */
+    int len;
+    if (val < 10000000000ULL) {
+        if (val < 100000) {
+            if (val < 100) { len = (val < 10) ? 1 : 2; }
+            else { len = (val < 1000) ? 3 : (val < 10000) ? 4 : 5; }
+        } else {
+            if (val < 10000000) { len = (val < 1000000) ? 6 : 7; }
+            else { len = (val < 100000000) ? 8 : (val < 1000000000ULL) ? 9 : 10; }
+        }
+    } else {
+        if (val < 1000000000000000ULL) {
+            if (val < 1000000000000ULL) { len = (val < 100000000000ULL) ? 11 : 12; }
+            else { len = (val < 10000000000000ULL) ? 13 : (val < 100000000000000ULL) ? 14 : 15; }
+        } else {
+            if (val < 100000000000000000ULL) { len = (val < 10000000000000000ULL) ? 16 : 17; }
+            else { len = (val < 1000000000000000000ULL) ? 18 : (val < 10000000000000000000ULL) ? 19 : 20; }
+        }
     }
 
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
     buf[len] = '\0';
+
+    /* Write digits from right to left directly into output buffer */
+    char *p = buf + len;
+    while (val >= 100) {
+        int idx = (int)(val % 100) * 2;
+        val /= 100;
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx + 1];
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx];
+    }
+    if (val >= 10) {
+        int idx = (int)val * 2;
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx + 1];
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx];
+    } else {
+        *(--p) = '0' + (int)val;
+    }
+
     return len;
 }
 
@@ -171,38 +196,8 @@ int ctools_int64_to_str(int64_t val, char *buf)
 
 int ctools_uint64_to_str_fast(uint64_t val, char *buf)
 {
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-
-    char tmp[24];
-    int len = 0;
-
-    /* Process two digits at a time using lookup table */
-    while (val >= 100) {
-        int idx = (val % 100) * 2;
-        val /= 100;
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx + 1];
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx];
-    }
-
-    /* Handle remaining 1-2 digits */
-    if (val >= 10) {
-        int idx = (int)val * 2;
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx + 1];
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx];
-    } else {
-        tmp[len++] = '0' + (int)val;
-    }
-
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
-    buf[len] = '\0';
-    return len;
+    /* Now identical to ctools_uint64_to_str which already uses digit pairs */
+    return ctools_uint64_to_str(val, buf);
 }
 
 /* ===========================================================================

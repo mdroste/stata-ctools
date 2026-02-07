@@ -52,7 +52,7 @@
    Configuration Constants
    ======================================================================== */
 
-#define CEXPORT_SAMPLE_ROWS      100   /* Number of rows to sample for sizing */
+#define CEXPORT_SAMPLE_ROWS      500   /* Number of rows to sample for sizing */
 #define CEXPORT_ROW_BUFFER_ROWS 1000   /* Rows to buffer before fwrite */
 
 /* ========================================================================
@@ -74,6 +74,7 @@ static size_t sample_row_sizes(size_t nobs)
     char sample_buf[4096];
     size_t sample_count = (nobs < CEXPORT_SAMPLE_ROWS) ? nobs : CEXPORT_SAMPLE_ROWS;
     size_t total_size = 0;
+    size_t max_row_size = 0;
     size_t rows_sampled = 0;
     bool all_numeric = g_ctx.all_numeric;
 
@@ -90,6 +91,7 @@ static size_t sample_row_sizes(size_t nobs)
 
         if (row_len > 0) {
             total_size += row_len;
+            if ((size_t)row_len > max_row_size) max_row_size = (size_t)row_len;
             rows_sampled++;
         }
     }
@@ -98,8 +100,10 @@ static size_t sample_row_sizes(size_t nobs)
         return 0;
     }
 
-    /* Return average with 20% safety margin */
-    return (total_size / rows_sampled) * 12 / 10 + 64;
+    /* Use average + 10% margin, but ensure at least max_row_size + padding */
+    size_t avg_with_margin = (total_size / rows_sampled) * 11 / 10 + 64;
+    size_t min_safe = max_row_size + 64;
+    return (avg_with_margin > min_safe) ? avg_with_margin : min_safe;
 }
 
 /*
@@ -478,8 +482,10 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_chunk_args_t));
     write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_arena_alloc(arena, wave_size * sizeof(write_chunk_args_t));
 
-    /* Only allocate wave_size buffers instead of num_chunks */
-    char **wave_buffers = (char **)ctools_arena_alloc(arena, wave_size * sizeof(char *));
+    /* Allocate 2x wave_size buffer pointers for double-buffered pipeline */
+    size_t total_buffers = wave_size * 2;
+    if (total_buffers > num_chunks + wave_size) total_buffers = num_chunks + wave_size;
+    char **wave_buffers = (char **)ctools_arena_alloc(arena, total_buffers * sizeof(char *));
 
     if (chunk_args == NULL || write_args == NULL || wave_buffers == NULL) {
         free(header_buf);
@@ -487,15 +493,15 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         return 920;
     }
 
-    for (size_t b = 0; b < wave_size; b++) {
+    for (size_t b = 0; b < total_buffers; b++) {
         wave_buffers[b] = NULL;
     }
 
-    /* Allocate only wave_size large buffers */
-    for (size_t b = 0; b < wave_size; b++) {
+    /* Allocate double-buffered wave buffers */
+    for (size_t b = 0; b < total_buffers; b++) {
         wave_buffers[b] = (char *)malloc(chunk_buffer_size);
         if (wave_buffers[b] == NULL) {
-            for (size_t u = 0; u < wave_size; u++) {
+            for (size_t u = 0; u < total_buffers; u++) {
                 if (wave_buffers[u]) free(wave_buffers[u]);
             }
             free(header_buf);
@@ -525,7 +531,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
                 g_ctx.filename, outfile.error_message);
         SF_error(msg);
-        for (size_t u = 0; u < wave_size; u++) {
+        for (size_t u = 0; u < total_buffers; u++) {
             if (wave_buffers[u]) free(wave_buffers[u]);
         }
         free(header_buf);
@@ -537,7 +543,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                 outfile.error_message);
         SF_error(msg);
         cexport_io_close(&outfile, 0);
-        for (size_t u = 0; u < wave_size; u++) {
+        for (size_t u = 0; u < total_buffers; u++) {
             if (wave_buffers[u]) free(wave_buffers[u]);
         }
         free(header_buf);
@@ -561,31 +567,88 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     }
     free(header_buf);
 
-    /* Process chunks in waves of wave_size */
+    /* Pipelined format/write: format wave N+1 while writing wave N.
+     * Uses alternating buffer sets (A and B) so writes and formats
+     * never touch the same buffers simultaneously. */
     size_t file_offset = header_len;
+    int cur_buf_set = 0;
 
-    for (size_t wave_start = 0; wave_start < num_chunks; wave_start += wave_size) {
-        size_t wave_end = wave_start + wave_size;
-        if (wave_end > num_chunks) wave_end = num_chunks;
-        size_t wave_count = wave_end - wave_start;
+    /* Format first wave */
+    size_t wave_start = 0;
+    size_t wave_end_first = (wave_start + wave_size < num_chunks) ? wave_start + wave_size : num_chunks;
+    size_t wave_count = wave_end_first - wave_start;
 
-        /* Assign reusable buffers to this wave's chunks */
+    for (size_t w = 0; w < wave_count; w++) {
+        chunk_args[wave_start + w].output_buffer = wave_buffers[cur_buf_set * wave_size + w];
+        chunk_args[wave_start + w].bytes_written = 0;
+        chunk_args[wave_start + w].success = 0;
+    }
+    for (size_t w = 0; w < wave_count; w++) {
+        ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[wave_start + w]);
+    }
+    ctools_persistent_pool_wait(pool);
+
+    for (size_t w = 0; w < wave_count; w++) {
+        if (!chunk_args[wave_start + w].success) {
+            for (size_t u = 0; u < total_buffers; u++) {
+                if (wave_buffers[u]) free(wave_buffers[u]);
+            }
+            cexport_io_close(&outfile, 0);
+            SF_error("cexport: formatting failed\n");
+            return 920;
+        }
+    }
+
+    /* Main pipeline: overlap write of current wave with format of next wave */
+    while (wave_start < num_chunks) {
+        /* Compute write offsets for current wave */
         for (size_t w = 0; w < wave_count; w++) {
-            chunk_args[wave_start + w].output_buffer = wave_buffers[w];
-            chunk_args[wave_start + w].bytes_written = 0;
-            chunk_args[wave_start + w].success = 0;
+            write_args[w].file = &outfile;
+            write_args[w].buffer = chunk_args[wave_start + w].output_buffer;
+            write_args[w].len = chunk_args[wave_start + w].bytes_written;
+            write_args[w].offset = file_offset;
+            write_args[w].success = 0;
+            file_offset += chunk_args[wave_start + w].bytes_written;
         }
 
-        /* Format wave (parallel) */
+        /* Determine next wave */
+        size_t next_start = wave_start + wave_size;
+        size_t next_end = (next_start + wave_size < num_chunks) ? next_start + wave_size : num_chunks;
+        size_t next_count = (next_start < num_chunks) ? next_end - next_start : 0;
+        int next_buf_set = 1 - cur_buf_set;
+
+        /* Assign buffers to next wave from alternate buffer set */
+        for (size_t w = 0; w < next_count; w++) {
+            chunk_args[next_start + w].output_buffer = wave_buffers[next_buf_set * wave_size + w];
+            chunk_args[next_start + w].bytes_written = 0;
+            chunk_args[next_start + w].success = 0;
+        }
+
+        /* Submit writes for current wave AND formats for next wave concurrently */
         for (size_t w = 0; w < wave_count; w++) {
-            ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[wave_start + w]);
+            ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[w]);
+        }
+        for (size_t w = 0; w < next_count; w++) {
+            ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[next_start + w]);
         }
         ctools_persistent_pool_wait(pool);
 
-        /* Check for format failures */
+        /* Check for write failures */
         for (size_t w = 0; w < wave_count; w++) {
-            if (!chunk_args[wave_start + w].success) {
-                for (size_t u = 0; u < wave_size; u++) {
+            if (!write_args[w].success) {
+                for (size_t u = 0; u < total_buffers; u++) {
+                    if (wave_buffers[u]) free(wave_buffers[u]);
+                }
+                cexport_io_close(&outfile, 0);
+                SF_error("cexport: write error during parallel I/O\n");
+                return 693;
+            }
+        }
+
+        /* Check for format failures in next wave */
+        for (size_t w = 0; w < next_count; w++) {
+            if (!chunk_args[next_start + w].success) {
+                for (size_t u = 0; u < total_buffers; u++) {
                     if (wave_buffers[u]) free(wave_buffers[u]);
                 }
                 cexport_io_close(&outfile, 0);
@@ -594,32 +657,10 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
             }
         }
 
-        /* Compute offsets for this wave and write (parallel pwrite) */
-        for (size_t w = 0; w < wave_count; w++) {
-            write_args[w].file = &outfile;
-            write_args[w].buffer = wave_buffers[w];
-            write_args[w].len = chunk_args[wave_start + w].bytes_written;
-            write_args[w].offset = file_offset;
-            write_args[w].success = 0;
-            file_offset += chunk_args[wave_start + w].bytes_written;
-        }
-
-        for (size_t w = 0; w < wave_count; w++) {
-            ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[w]);
-        }
-        ctools_persistent_pool_wait(pool);
-
-        /* Check for write failures */
-        for (size_t w = 0; w < wave_count; w++) {
-            if (!write_args[w].success) {
-                for (size_t u = 0; u < wave_size; u++) {
-                    if (wave_buffers[u]) free(wave_buffers[u]);
-                }
-                cexport_io_close(&outfile, 0);
-                SF_error("cexport: write error during parallel I/O\n");
-                return 693;
-            }
-        }
+        /* Advance to next wave */
+        wave_start = next_start;
+        wave_count = next_count;
+        cur_buf_set = next_buf_set;
     }
 
     size_t total_file_size = file_offset;
@@ -630,7 +671,7 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
     }
 
     /* Free large data buffers (arena handles metadata) */
-    for (size_t u = 0; u < wave_size; u++) {
+    for (size_t u = 0; u < total_buffers; u++) {
         if (wave_buffers[u]) free(wave_buffers[u]);
     }
     return ret;
