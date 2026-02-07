@@ -66,6 +66,10 @@ SOURCES      = $(shell find $(SRC_DIR) -name '*.c')
 HEADERS      = $(shell find $(SRC_DIR) -name '*.h')
 INCLUDE_DIRS = $(addprefix -I,$(sort $(dir $(SOURCES) $(HEADERS))))
 
+# Separate third-party sources (compiled with warnings suppressed) from project sources
+THIRDPARTY_SOURCES = $(shell find $(SRC_DIR)/cimport/miniz $(SRC_DIR)/cimport/libdeflate -name '*.c' 2>/dev/null)
+PROJECT_SOURCES    = $(filter-out $(THIRDPARTY_SOURCES),$(SOURCES))
+
 # ------------------------------------------------------------------------------
 # Output Configuration
 # ------------------------------------------------------------------------------
@@ -216,6 +220,7 @@ else
 endif
 
 LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE \
+                   -D_LARGEFILE64_SOURCE \
                    -ffast-math -funroll-loops -ftree-vectorize -flto \
                    -fdata-sections -ffunction-sections \
                    -fno-strict-aliasing $(INCLUDE_DIRS)
@@ -418,7 +423,14 @@ endif
 ifeq ($(MAC_ARM_HAS_OMP),no)
 	@echo "    Warning:   Install libomp for OpenMP: brew install libomp"
 endif
-	@$(CC_MAC) $(CFLAGS_MAC_ARM) -o $(PLUGIN_MAC_ARM) $(SOURCES) $(LDFLAGS_MAC_ARM)
+	@mkdir -p $(BUILD_DIR)/obj/mac_arm
+	@for f in $(THIRDPARTY_SOURCES); do \
+		$(CC_MAC) $(CFLAGS_MAC_ARM) -w -c $$f -o $(BUILD_DIR)/obj/mac_arm/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@for f in $(PROJECT_SOURCES); do \
+		$(CC_MAC) $(CFLAGS_MAC_ARM) -c $$f -o $(BUILD_DIR)/obj/mac_arm/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@$(CC_MAC) -o $(PLUGIN_MAC_ARM) $(BUILD_DIR)/obj/mac_arm/*.o $(LDFLAGS_MAC_ARM)
 	@echo "    Output:    $(PLUGIN_MAC_ARM)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_ARM) | awk '{print $$5}'
 
@@ -438,7 +450,14 @@ endif
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
-	@$(CC_MAC) $(CFLAGS_MAC_X86) -o $(PLUGIN_MAC_X86) $(SOURCES) $(LDFLAGS_MAC_X86)
+	@mkdir -p $(BUILD_DIR)/obj/mac_x86
+	@for f in $(THIRDPARTY_SOURCES); do \
+		$(CC_MAC) $(CFLAGS_MAC_X86) -w -c $$f -o $(BUILD_DIR)/obj/mac_x86/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@for f in $(PROJECT_SOURCES); do \
+		$(CC_MAC) $(CFLAGS_MAC_X86) -c $$f -o $(BUILD_DIR)/obj/mac_x86/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@$(CC_MAC) -o $(PLUGIN_MAC_X86) $(BUILD_DIR)/obj/mac_x86/*.o $(LDFLAGS_MAC_X86)
 	@echo "    Output:    $(PLUGIN_MAC_X86)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_X86) | awk '{print $$5}'
 
@@ -497,7 +516,14 @@ ifeq ($(WIN_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(LDFLAGS_WIN)
+	@mkdir -p $(BUILD_DIR)/obj/windows
+	@for f in $(THIRDPARTY_SOURCES); do \
+		$(CC_WIN) $(CFLAGS_WIN) -w -c $$f -o $(BUILD_DIR)/obj/windows/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@for f in $(PROJECT_SOURCES); do \
+		$(CC_WIN) $(CFLAGS_WIN) -c $$f -o $(BUILD_DIR)/obj/windows/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@$(CC_WIN) -shared -o $(PLUGIN_WINDOWS) $(BUILD_DIR)/obj/windows/*.o $(LDFLAGS_WIN)
 	@echo "    Output:    $(PLUGIN_WINDOWS)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_WINDOWS) | awk '{print $$5}'
 endif
@@ -528,7 +554,14 @@ ifeq ($(LINUX_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(LDFLAGS_LINUX)
+	@mkdir -p $(BUILD_DIR)/obj/linux
+	@for f in $(THIRDPARTY_SOURCES); do \
+		$(CC_LINUX) $(CFLAGS_LINUX) -w -c $$f -o $(BUILD_DIR)/obj/linux/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@for f in $(PROJECT_SOURCES); do \
+		$(CC_LINUX) $(CFLAGS_LINUX) -c $$f -o $(BUILD_DIR)/obj/linux/$$(echo $$f | tr '/' '_' | sed 's/\.c$$/.o/'); \
+	done
+	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(BUILD_DIR)/obj/linux/*.o $(LDFLAGS_LINUX)
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
 endif
@@ -577,6 +610,7 @@ ifeq ($(DETECTED_OS),Windows)
 else
 	@-rm -f $(BUILD_DIR)/ctools_*.plugin
 	@-rm -f $(BUILD_DIR)/*.o
+	@-rm -rf $(BUILD_DIR)/obj
 	@-rm -f $(SRC_DIR)/*.o
 endif
 	@echo "  Done."
