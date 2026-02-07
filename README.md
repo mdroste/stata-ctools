@@ -9,7 +9,7 @@
   ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-0.9.1_(February_2026)-blue)
+![Version](https://img.shields.io/badge/version-1.0.1_(February_2026)-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
