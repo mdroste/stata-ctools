@@ -113,7 +113,11 @@ program define cencode, rclass
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
+        timer clear 91
+        timer clear 92
+        timer clear 93
         timer on 90
+        timer on 91
     }
 
     * Mark sample
@@ -279,7 +283,15 @@ program define cencode, rclass
 
         * Call the C plugin with ALL variables
         unab allvars : *
+        if `__do_timing' {
+            timer off 91
+            timer on 92
+        }
         plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code' `existing_code'"
+        if `__do_timing' {
+            timer off 92
+            timer on 93
+        }
 
         * =====================================================================
         * Create value labels from plugin output
@@ -356,6 +368,15 @@ program define cencode, rclass
 
         * Store rclass results for this variable
         return scalar N_unique = `n_unique'
+
+        if `__do_timing' {
+            timer off 93
+            timer on 91
+        }
+    }
+
+    if `__do_timing' {
+        timer off 91
     }
 
     * Store rclass results
@@ -368,11 +389,18 @@ program define cencode, rclass
         quietly timer list 90
         local __time_total = r(t90)
 
-        * Calculate Stata overhead
+        * Extract sub-timer values
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+        quietly timer list 93
+        local __time_postplugin = r(t93)
+
+        * Calculate plugin call overhead
         capture local __plugin_time_total = _cencode_time_total
         if _rc != 0 local __plugin_time_total = 0
-        local __stata_overhead = `__time_total' - `__plugin_time_total'
-        if `__stata_overhead' < 0 local __stata_overhead = 0
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
         di as text ""
         di as text "{hline 55}"
@@ -387,8 +415,14 @@ program define cencode, rclass
         di as text "    Apply labels:           " as result %8.4f _cencode_time_labels " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cencode_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
+        di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
         di as text "  {hline 53}"
-        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"

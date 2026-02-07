@@ -301,9 +301,8 @@ ST_retcode cdestring_main(const char *args)
         double *res = results[v];
         int local_converted = 0;
         int local_failed = 0;
-        int local_nonnumeric = 0;
 
-        #pragma omp parallel for reduction(+:local_converted,local_failed,local_nonnumeric) schedule(static)
+        #pragma omp parallel for reduction(+:local_converted,local_failed) schedule(static)
         for (size_t i = 0; i < nobs; i++) {
             const char *src = str_data[i];
 
@@ -356,7 +355,6 @@ ST_retcode cdestring_main(const char *args)
                     local_converted++;
                 } else {
                     local_failed++;
-                    local_nonnumeric = 1;
                 }
             }
         }

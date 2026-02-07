@@ -85,6 +85,16 @@ program define crangestat
         local int_high_val = `int_high'
     }
 
+    * Start timing
+    local __do_timing = ("`verbose'" != "")
+    if `__do_timing' {
+        timer clear 90
+        timer clear 91
+        timer clear 92
+        timer on 90
+        timer on 91
+    }
+
     * Parse stat specifications
     * Format: (stat) [newvar=]varname [(stat) [newvar=]varname ...]
     local stat_codes ""
@@ -347,15 +357,15 @@ program define crangestat
     * Format: nstats nsource nby key_idx source_indices... result_indices... by_indices... stat_types... source_var_map... [options]
     local plugin_args "`nstats' `nsource' `nby' `key_idx' `source_indices' `result_indices' `by_indices' `stat_codes' `source_var_map' `opts'"
 
-    * Start timing
-    local __do_timing = ("`verbose'" != "")
-    if `__do_timing' {
-        timer clear 90
-        timer on 90
-    }
-
     * Call plugin
+    if `__do_timing' {
+        timer off 91
+        timer on 92
+    }
     plugin call ctools_plugin `all_vars', "crangestat `threads_opt' `plugin_args'"
+    if `__do_timing' {
+        timer off 92
+    }
 
     * Display summary or timing
     if `__do_timing' {
@@ -363,11 +373,16 @@ program define crangestat
         quietly timer list 90
         local __time_total = r(t90)
 
-        * Calculate Stata overhead
+        * Extract sub-timer values
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+
+        * Calculate plugin call overhead
         capture local __plugin_time_total = _crangestat_time_total
         if _rc != 0 local __plugin_time_total = 0
-        local __stata_overhead = `__time_total' - `__plugin_time_total'
-        if `__stata_overhead' < 0 local __stata_overhead = 0
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
         di as text ""
         di as text "{hline 55}"
@@ -381,8 +396,13 @@ program define crangestat
         di as text "    Store results:          " as result %8.4f _crangestat_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _crangestat_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
         di as text "  {hline 53}"
-        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"

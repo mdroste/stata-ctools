@@ -37,6 +37,13 @@ program define csort, rclass
 
     syntax varlist [if] [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby NOSTReam]
 
+    * Start wall-clock timer as early as possible to match rmsg
+    local __do_timing = ("`verbose'" != "")
+    if `__do_timing' {
+        timer clear 90
+        timer on 90
+    }
+
     * =========================================================================
     * UPFRONT VALIDATION - check all options before any data manipulation
     * =========================================================================
@@ -97,14 +104,11 @@ program define csort, rclass
     * END UPFRONT VALIDATION
     * =========================================================================
 
-    * Start overall wall-clock timer
-    local __do_timing = ("`verbose'" != "")
+    * Start pre-plugin timer
     if `__do_timing' {
-        timer clear 90
         timer clear 91
         timer clear 92
         timer clear 93
-        timer on 90
         timer on 91
     }
 
@@ -231,14 +235,11 @@ program define csort, rclass
         sort `varlist', stable
     }
 
-    * End all timers
+    * End post-plugin timer (wall-clock timer 90 stays running)
     if `__do_timing' {
         timer off 93
-        timer off 90
 
-        * Extract timer values
-        quietly timer list 90
-        local __time_total = r(t90)
+        * Extract timer values (timer 90 still running — captures up to this point)
         quietly timer list 91
         local __time_preplugin = r(t91)
         quietly timer list 92
@@ -325,6 +326,10 @@ program define csort, rclass
         di as text "  {hline 53}"
         di as text "    Stata overhead total:   " as result %8.4f `__ado_total' " sec"
         di as text "{hline 55}"
+        * Stop wall-clock timer right before reading
+        timer off 90
+        quietly timer list 90
+        local __time_total = r(t90)
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
 

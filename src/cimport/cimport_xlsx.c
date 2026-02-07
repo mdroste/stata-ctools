@@ -322,9 +322,6 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
             if (ctx->num_shared_strings >= ctx->shared_strings_capacity) {
                 size_t new_cap = ctx->shared_strings_capacity == 0 ?
                                  1024 : ctx->shared_strings_capacity * 2;
-                if (new_cap > XLSX_MAX_SHARED_STRINGS) {
-                    new_cap = XLSX_MAX_SHARED_STRINGS;
-                }
                 char **new_strings = (char **)realloc(ctx->shared_strings,
                                                        new_cap * sizeof(char *));
                 if (!new_strings) return false;

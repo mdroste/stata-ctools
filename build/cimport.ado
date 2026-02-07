@@ -520,7 +520,8 @@ program define cimport, rclass
         else if `nobs' == 0 {
             di as text "(no data rows found)"
         }
-        timer clear
+        timer clear 11
+        timer clear 99
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
@@ -804,7 +805,10 @@ program define cimport, rclass
         capture scalar drop _cimport_threads_max _cimport_openmp_enabled
     }
 
-    timer clear
+    timer clear 11
+    timer clear 12
+    timer clear 13
+    timer clear 99
 
     * Return results
     return scalar N = _N
@@ -1011,7 +1015,8 @@ program define cimport_excel, rclass
         else if `nobs' == 0 {
             di as text "(no data rows found)"
         }
-        timer clear
+        timer clear 11
+        timer clear 99
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
@@ -1128,7 +1133,10 @@ program define cimport_excel, rclass
         di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
     }
 
-    timer clear
+    timer clear 11
+    timer clear 12
+    timer clear 13
+    timer clear 99
 
     * Return results
     return scalar N = _N

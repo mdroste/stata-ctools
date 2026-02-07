@@ -9,16 +9,18 @@
 #   - Linux (x64):         ctools_linux.plugin      (with OpenMP)
 #
 # Usage:
-#   make              - Build for current platform
-#   make all          - Build all distribution plugins
-#   make native       - Build optimized plugin for current architecture
-#   make macos-arm    - Build macOS Apple Silicon plugin
-#   make macos-intel  - Build macOS Intel plugin
-#   make windows      - Build Windows x64 plugin
-#   make linux        - Build Linux x64 plugin
-#   make check        - Check build dependencies
-#   make clean        - Remove compiled files
-#   make help         - Show this help
+#   make                - Build for current platform
+#   make all            - Build all distribution plugins
+#   make native         - Build optimized plugin for current architecture
+#   make macos-arm      - Build macOS Apple Silicon plugin
+#   make macos-intel    - Build macOS Intel plugin
+#   make windows        - Build Windows x64 plugin
+#   make linux          - Build Linux x64 plugin
+#   make windows-docker - Build Windows plugin via Docker
+#   make linux-docker   - Build Linux plugin via Docker
+#   make check          - Check build dependencies
+#   make clean          - Remove compiled files
+#   make help           - Show this help
 #
 # Requirements:
 #   macOS:   Xcode Command Line Tools, Homebrew with libomp
@@ -150,35 +152,45 @@ endif
 # ==============================================================================
 #                             Windows Configuration
 # ==============================================================================
-# Try llvm-mingw first (has OpenMP), fall back to mingw-w64
-LLVM_MINGW_PREFIX = /opt/llvm-mingw
-LLVM_MINGW_EXISTS := $(shell test -x $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang && echo yes || echo no)
+# Cross-compile: try llvm-mingw first (has OpenMP), fall back to mingw-w64
+LLVM_MINGW_PREFIX ?= /opt/llvm-mingw
 
 ifeq ($(DETECTED_OS),Windows)
-    # Native Windows build - static link libgomp
+    # Native Windows build (requires MSYS2/MinGW) - static link libgomp
     CC_WIN = gcc
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                  -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
     LDFLAGS_WIN = -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread
     WIN_HAS_OMP = yes
     WIN_OMP_STATIC = yes
-else ifeq ($(LLVM_MINGW_EXISTS),yes)
-    # Cross-compile with llvm-mingw (OpenMP requires DLL - bundle libomp.dll with plugin)
-    CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
-    CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -fopenmp -lpthread
-    WIN_HAS_OMP = yes
-    WIN_OMP_STATIC = no
 else
-    # Cross-compile with mingw-w64 (no OpenMP)
-    CC_WIN = x86_64-w64-mingw32-gcc
+    LLVM_MINGW_EXISTS := $(shell test -x $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang && echo yes || echo no)
     MINGW_EXISTS := $(shell which x86_64-w64-mingw32-gcc 2>/dev/null && echo yes || echo no)
-    CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
-                 -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
-    LDFLAGS_WIN = -static-libgcc -lpthread
-    WIN_HAS_OMP = no
-    WIN_OMP_STATIC = no
+
+    ifeq ($(LLVM_MINGW_EXISTS),yes)
+        # llvm-mingw: OpenMP support via bundled libomp.dll
+        CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
+        CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
+                     -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+        LDFLAGS_WIN = -fopenmp -lpthread
+        WIN_HAS_OMP = yes
+        WIN_OMP_STATIC = no
+    else ifeq ($(MINGW_EXISTS),yes)
+        # mingw-w64: no OpenMP
+        CC_WIN = x86_64-w64-mingw32-gcc
+        CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
+                     -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+        LDFLAGS_WIN = -static-libgcc -lpthread
+        WIN_HAS_OMP = no
+        WIN_OMP_STATIC = no
+    else
+        # No cross-compiler available
+        CC_WIN =
+        CFLAGS_WIN =
+        LDFLAGS_WIN =
+        WIN_HAS_OMP = no
+        WIN_OMP_STATIC = no
+    endif
 endif
 
 # ==============================================================================
@@ -187,26 +199,46 @@ endif
 ifeq ($(DETECTED_OS),Linux)
     CC_LINUX = gcc
 else
-    # Cross-compile attempt (usually won't work well)
-    CC_LINUX = gcc
+    # Check for a proper cross-compiler
+    LINUX_CROSS := $(shell which x86_64-linux-gnu-gcc 2>/dev/null && echo yes || echo no)
+    ifeq ($(LINUX_CROSS),yes)
+        CC_LINUX = x86_64-linux-gnu-gcc
+    else
+        CC_LINUX =
+    endif
 endif
 
 LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE \
-                   -ffast-math -funroll-loops -ftree-vectorize -flto -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+                   -ffast-math -funroll-loops -ftree-vectorize -flto -fno-strict-aliasing $(INCLUDE_DIRS)
 
-# Check for OpenMP support on Linux
-LINUX_HAS_OMP := $(shell which gcc >/dev/null 2>&1 && \
-                         gcc -fopenmp -E - < /dev/null >/dev/null 2>&1 && \
-                         echo yes || echo no)
+# Add -mavx2 for x86_64 targets (native Linux or cross-compile)
+ifeq ($(DETECTED_OS),Linux)
+    LINUX_BASE_FLAGS += -mavx2
+else ifneq ($(CC_LINUX),)
+    LINUX_BASE_FLAGS += -mavx2
+endif
+
+# Check for OpenMP support (test the actual compiler, not just host gcc)
+ifeq ($(DETECTED_OS),Linux)
+    LINUX_HAS_OMP := $(shell gcc -fopenmp -E - < /dev/null >/dev/null 2>&1 && echo yes || echo no)
+else ifneq ($(CC_LINUX),)
+    LINUX_HAS_OMP := $(shell $(CC_LINUX) -fopenmp -E - < /dev/null >/dev/null 2>&1 && echo yes || echo no)
+else
+    LINUX_HAS_OMP = no
+endif
 
 # Note: Static linking of libgomp.a doesn't work on Linux for shared libraries
 # because libgomp uses TLS relocations incompatible with PIC code.
 # Linux plugins require libgomp.so at runtime.
 
-# Check for OpenBLAS on Linux
-LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
-                              (test -f /usr/include/cblas.h && test -f /usr/lib/libopenblas.so && echo yes) || \
-                              echo no)
+# Check for OpenBLAS (native Linux only)
+ifeq ($(DETECTED_OS),Linux)
+    LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
+                                  (test -f /usr/include/cblas.h && test -f /usr/lib/libopenblas.so && echo yes) || \
+                                  echo no)
+else
+    LINUX_HAS_OPENBLAS = no
+endif
 
 ifeq ($(LINUX_HAS_OMP),yes)
     ifeq ($(LINUX_HAS_OPENBLAS),yes)
@@ -229,7 +261,7 @@ endif
 # ==============================================================================
 #                                  Targets
 # ==============================================================================
-.PHONY: all native macos-arm macos-intel windows linux clean help check rebuild
+.PHONY: all native macos-arm macos-intel windows linux clean help check rebuild linux-docker windows-docker
 
 # Default: build for current platform
 ifeq ($(DETECTED_OS),macOS)
@@ -251,23 +283,23 @@ endif
 # ------------------------------------------------------------------------------
 help:
 	@echo ""
-	@echo "======================================================================"
-	@echo "                   ctools Stata Plugin Build System                   "
-	@echo "======================================================================"
+	@echo "ctools plugin makefile"
 	@echo ""
-	@echo "  High-performance C plugins for Stata: csort, cmerge, cimport, cexport, creghdfe, cqreg"
+	@echo "  Builds the C plugin backend for ctools"
 	@echo ""
 	@echo "  Usage:"
 	@echo "    make              Build for current platform ($(DETECTED_OS) $(DETECTED_ARCH))"
 	@echo "    make all          Build all distribution plugins"
 	@echo "    make native       Build optimized plugin for current architecture"
-	@echo "    make macos-arm    Build macOS Apple Silicon plugin"
-	@echo "    make macos-intel  Build macOS Intel plugin"
-	@echo "    make windows      Build Windows x64 plugin"
-	@echo "    make linux        Build Linux x64 plugin"
-	@echo "    make check        Check build dependencies"
-	@echo "    make clean        Remove compiled files"
-	@echo "    make rebuild      Clean and rebuild all"
+	@echo "    make macos-arm       Build macOS Apple Silicon plugin"
+	@echo "    make macos-intel     Build macOS Intel plugin"
+	@echo "    make windows         Build Windows x64 plugin"
+	@echo "    make linux           Build Linux x64 plugin"
+	@echo "    make windows-docker  Build Windows plugin via Docker"
+	@echo "    make linux-docker    Build Linux plugin via Docker"
+	@echo "    make check           Check build dependencies"
+	@echo "    make clean           Remove compiled files"
+	@echo "    make rebuild         Clean and rebuild all"
 	@echo ""
 	@echo "  Detected: $(DETECTED_OS) $(DETECTED_ARCH)"
 	@echo ""
@@ -277,16 +309,12 @@ help:
 # ------------------------------------------------------------------------------
 check:
 	@echo ""
-	@echo "======================================================================"
-	@echo "                     Build Environment Check                          "
-	@echo "======================================================================"
+	@echo "ctools build environment check"
 	@echo ""
 	@echo "  Detected OS:   $(DETECTED_OS)"
 	@echo "  Architecture:  $(DETECTED_ARCH)"
 	@echo ""
-	@echo "----------------------------------------------------------------------"
 	@echo "  macOS Apple Silicon (arm64)"
-	@echo "----------------------------------------------------------------------"
 	@printf "    clang:     " && (which clang >/dev/null 2>&1 && printf "OK\n" || printf "MISSING - install Xcode CLT\n")
 ifeq ($(LIBOMP_EXISTS),yes)
 	@echo "    libomp:    OK ($(LIBOMP_PREFIX))"
@@ -296,9 +324,7 @@ else
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
-	@echo "----------------------------------------------------------------------"
 	@echo "  macOS Intel (x86_64)"
-	@echo "----------------------------------------------------------------------"
 	@printf "    clang:     " && (which clang >/dev/null 2>&1 && printf "OK\n" || printf "MISSING\n")
 ifeq ($(MAC_X86_HAS_OMP),yes)
 	@echo "    libomp:    OK (/usr/local/opt/libomp)"
@@ -308,22 +334,23 @@ else
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  Windows x64 (cross-compile)"
-	@echo "----------------------------------------------------------------------"
-ifeq ($(LLVM_MINGW_EXISTS),yes)
-	@echo "    llvm-mingw: OK ($(LLVM_MINGW_PREFIX))"
+	@echo "  Windows x64"
+ifeq ($(DETECTED_OS),Windows)
+	@printf "    gcc:        " && (which gcc >/dev/null 2>&1 && printf "OK (MSYS2/MinGW)\n" || printf "MISSING - install MSYS2\n")
 	@echo "    OpenMP:     Enabled"
 else
-	@printf "    mingw-w64:  " && (which x86_64-w64-mingw32-gcc >/dev/null 2>&1 && printf "OK (no OpenMP)\n" || printf "MISSING - brew install mingw-w64\n")
-	@echo "    llvm-mingw: MISSING (optional, enables OpenMP)"
-	@echo "                  Download: https://github.com/mstorsjo/llvm-mingw/releases"
-	@echo "                  Extract to: /opt/llvm-mingw"
+	@printf "    llvm-mingw: " && (test -x $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang && printf "OK ($(LLVM_MINGW_PREFIX)) - OpenMP enabled\n" || printf "MISSING (optional, enables OpenMP)\n")
+	@printf "    mingw-w64:  " && (which x86_64-w64-mingw32-gcc >/dev/null 2>&1 && printf "OK (no OpenMP)\n" || printf "MISSING\n")
+ifneq ($(CC_WIN),)
+	@echo "    Status:     Ready ($(CC_WIN))"
+else
+	@echo "    Status:     No cross-compiler found"
+	@echo "                  Use: make windows-docker, brew install mingw-w64,"
+	@echo "                  or install llvm-mingw from https://github.com/mstorsjo/llvm-mingw/releases"
+endif
 endif
 	@echo ""
-	@echo "----------------------------------------------------------------------"
 	@echo "  Linux x64"
-	@echo "----------------------------------------------------------------------"
 ifeq ($(DETECTED_OS),Linux)
 	@printf "    gcc:       " && (which gcc >/dev/null 2>&1 && printf "OK\n" || printf "MISSING\n")
 ifeq ($(LINUX_HAS_OMP),yes)
@@ -331,10 +358,16 @@ ifeq ($(LINUX_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    MISSING - install libgomp-dev"
 endif
+else ifneq ($(CC_LINUX),)
+	@echo "    Cross:     $(CC_LINUX)"
 else
-	@echo "    (Cross-compile from $(DETECTED_OS) not fully supported)"
-	@printf "    gcc:       " && (which gcc >/dev/null 2>&1 && printf "OK\n" || printf "MISSING\n")
+	@echo "    Cross:     No cross-compiler found (no x86_64-linux-gnu-gcc)"
+	@echo "               Use: make linux-docker"
 endif
+	@echo ""
+	@echo "  Docker (cross-compilation)"
+	@printf "    docker:    " && (which docker >/dev/null 2>&1 && printf "OK\n" || printf "MISSING - https://docs.docker.com/get-docker/\n")
+	@echo "    Targets:   make linux-docker, make windows-docker"
 	@echo ""
 
 # ------------------------------------------------------------------------------
@@ -342,19 +375,13 @@ endif
 # ------------------------------------------------------------------------------
 all: $(BUILD_DIR)
 	@echo ""
-	@echo "======================================================================"
-	@echo "                   ctools Multi-Platform Build                        "
-	@echo "  Building: csort, cmerge, cimport, cexport, creghdfe, cqreg          "
-	@echo "======================================================================"
+	@echo "Building ctools plugins..."
 	@$(MAKE) --no-print-directory macos-arm
 	@$(MAKE) --no-print-directory macos-intel
 	@$(MAKE) --no-print-directory windows
 	@$(MAKE) --no-print-directory linux
 	@echo ""
-	@echo "======================================================================"
-	@echo "                        BUILD COMPLETE                                "
-	@echo "======================================================================"
-	@echo ""
+	@echo "Build complete."
 	@echo "  Plugins created:"
 	@ls -lh $(BUILD_DIR)/ctools_*.plugin 2>/dev/null | awk '{printf "    %-30s %s\n", $$9, $$5}'
 	@echo ""
@@ -368,9 +395,7 @@ $(BUILD_DIR):
 # ------------------------------------------------------------------------------
 macos-arm: $(BUILD_DIR) $(SOURCES) $(HEADERS)
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  [1/4] macOS Apple Silicon (arm64)"
-	@echo "----------------------------------------------------------------------"
+	@echo " Building MacOS plugin (arm64)"
 	@echo "    Compiler:  $(CC_MAC) -arch arm64"
 ifeq ($(MAC_ARM_HAS_OMP),yes)
 ifeq ($(LIBOMP_STATIC_ARM),yes)
@@ -378,28 +403,22 @@ ifeq ($(LIBOMP_STATIC_ARM),yes)
 else
 	@echo "    OpenMP:    Enabled (dynamic)"
 endif
-	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
-	@echo "    Threads:   Parallel variable I/O"
 endif
-	@echo "    Features:  SD_FASTMODE, LTO, Apple M1 tuning"
 ifeq ($(MAC_ARM_HAS_OMP),no)
 	@echo "    Warning:   Install libomp for OpenMP: brew install libomp"
 endif
 	@$(CC_MAC) $(CFLAGS_MAC_ARM) -o $(PLUGIN_MAC_ARM) $(SOURCES) $(LDFLAGS_MAC_ARM)
 	@echo "    Output:    $(PLUGIN_MAC_ARM)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_ARM) | awk '{print $$5}'
-	@echo "----------------------------------------------------------------------"
 
 # ------------------------------------------------------------------------------
 # macOS Intel (x86_64)
 # ------------------------------------------------------------------------------
 macos-intel: $(BUILD_DIR) $(SOURCES) $(HEADERS)
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  [2/4] macOS Intel (x86_64)"
-	@echo "----------------------------------------------------------------------"
+	@echo " Building MacOS plugin (x86_64)"
 	@echo "    Compiler:  $(CC_MAC) -arch x86_64"
 ifeq ($(MAC_X86_HAS_OMP),yes)
 ifeq ($(LIBOMP_STATIC_X86),yes)
@@ -407,16 +426,12 @@ ifeq ($(LIBOMP_STATIC_X86),yes)
 else
 	@echo "    OpenMP:    Enabled (dynamic)"
 endif
-	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
-	@echo "    Threads:   Parallel variable I/O"
 endif
-	@echo "    Features:  SD_FASTMODE, LTO, Haswell tuning"
 	@$(CC_MAC) $(CFLAGS_MAC_X86) -o $(PLUGIN_MAC_X86) $(SOURCES) $(LDFLAGS_MAC_X86)
 	@echo "    Output:    $(PLUGIN_MAC_X86)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_X86) | awk '{print $$5}'
-	@echo "----------------------------------------------------------------------"
 
 # ------------------------------------------------------------------------------
 # Native build (for development)
@@ -424,26 +439,26 @@ endif
 native: $(BUILD_DIR)
 ifeq ($(DETECTED_OS),macOS)
 ifeq ($(DETECTED_ARCH),arm64)
-	@echo "  Detected Apple Silicon - building arm64..."
+	@echo "  Detected Apple Silicon - building macOS arm64 plugin..."
 	@$(MAKE) --no-print-directory macos-arm
 	@cp $(PLUGIN_MAC_ARM) $(PLUGIN_NATIVE)
 	@echo ""
 	@echo "  -> Copied to $(PLUGIN_NATIVE) for local development"
 else
-	@echo "  Detected Intel Mac - building x86_64..."
+	@echo "  Detected Intel Mac - building macOS x86_64 plugin..."
 	@$(MAKE) --no-print-directory macos-intel
 	@cp $(PLUGIN_MAC_X86) $(PLUGIN_NATIVE)
 	@echo ""
 	@echo "  -> Copied to $(PLUGIN_NATIVE) for local development"
 endif
 else ifeq ($(DETECTED_OS),Linux)
-	@echo "  Detected Linux - building native..."
+	@echo "  Detected Linux - building Linux plugin..."
 	@$(MAKE) --no-print-directory linux
 	@cp $(PLUGIN_LINUX) $(PLUGIN_NATIVE)
 	@echo ""
 	@echo "  -> Copied to $(PLUGIN_NATIVE) for local development"
 else ifeq ($(DETECTED_OS),Windows)
-	@echo "  Detected Windows - building native..."
+	@echo "  Detected Windows - building Windows plugin..."
 	@$(MAKE) --no-print-directory windows
 	@cp $(PLUGIN_WINDOWS) $(PLUGIN_NATIVE)
 	@echo ""
@@ -454,94 +469,91 @@ endif
 # Windows x64
 # ------------------------------------------------------------------------------
 windows: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+ifeq ($(CC_WIN),)
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  [3/4] Windows x64"
-	@echo "----------------------------------------------------------------------"
+	@echo "  ERROR: No Windows cross-compiler found."
+	@echo ""
+	@echo "  Options:"
+	@echo "    make windows-docker              Build via Docker (recommended)"
+	@echo "    brew install mingw-w64           Install cross-compiler (macOS)"
+	@echo "    apt install mingw-w64            Install cross-compiler (Linux)"
+	@echo ""
+	@exit 1
+else
+	@echo ""
+	@echo " Building Windows plugin (x86_64)"
 	@echo "    Compiler:  $(CC_WIN)"
 ifeq ($(WIN_HAS_OMP),yes)
 	@echo "    OpenMP:    Enabled"
-	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled"
-	@echo "    Threads:   Parallel variable I/O (pthread)"
 endif
-	@echo "    Features:  SD_FASTMODE, static linking"
-ifeq ($(DETECTED_OS),macOS)
-ifeq ($(LLVM_MINGW_EXISTS),no)
-ifeq ($(MINGW_EXISTS),no)
-	@echo "    ERROR: No Windows cross-compiler found"
-	@echo "      Install mingw-w64:  brew install mingw-w64"
-	@echo "      Or llvm-mingw for OpenMP support"
-	@exit 1
-endif
-endif
-endif
-	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(LDFLAGS_WIN) 2>&1 || \
-		(echo "    Build failed. Check compiler installation." && exit 1)
+	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(LDFLAGS_WIN)
 	@echo "    Output:    $(PLUGIN_WINDOWS)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_WINDOWS) | awk '{print $$5}'
-	@echo "----------------------------------------------------------------------"
+endif
 
 # ------------------------------------------------------------------------------
 # Linux x64
 # ------------------------------------------------------------------------------
 linux: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+ifeq ($(CC_LINUX),)
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  [4/4] Linux x64"
-	@echo "----------------------------------------------------------------------"
+	@echo "  ERROR: No Linux cross-compiler found."
+	@echo ""
+	@echo "  Options:"
+	@echo "    make linux-docker                Build via Docker (recommended)"
+	@echo "                                     Or build natively on a Linux machine"
+	@echo ""
+	@exit 1
+else
+	@echo ""
+	@echo " Building Linux plugin (x86_64)"
+ifneq ($(DETECTED_OS),Linux)
+	@echo "    Compiler:  $(CC_LINUX) (cross-compile)"
+else
 	@echo "    Compiler:  $(CC_LINUX)"
-ifeq ($(DETECTED_OS),Linux)
+endif
 ifeq ($(LINUX_HAS_OMP),yes)
 	@echo "    OpenMP:    Enabled"
-	@echo "    Threads:   Parallel variable I/O + parallel sorting"
 else
 	@echo "    OpenMP:    Disabled"
-	@echo "    Threads:   Parallel variable I/O (pthread)"
 endif
-else
-	@echo "    OpenMP:    Disabled (cross-compile)"
-	@echo "    Note:      Cross-compile from $(DETECTED_OS) - build on Linux for best results"
-endif
-	@echo "    Features:  SD_FASTMODE, LTO"
-ifeq ($(DETECTED_OS),Linux)
 	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(LDFLAGS_LINUX)
-else
-	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(LDFLAGS_LINUX) 2>&1 || \
-		(echo "    Cross-compile failed. Build on Linux instead." && exit 1)
-endif
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
-	@echo "----------------------------------------------------------------------"
+endif
 
 # ------------------------------------------------------------------------------
-# Debug build with AddressSanitizer
+# Docker Cross-Compilation
 # ------------------------------------------------------------------------------
-ASAN_FLAGS = -fsanitize=address -fno-omit-frame-pointer -g -O1
-TSAN_FLAGS = -fsanitize=thread -fno-omit-frame-pointer -g -O1
+DOCKER = docker
+DOCKER_LINUX_IMAGE = ctools-build-linux
+DOCKER_WINDOWS_IMAGE = ctools-build-windows
 
-debug-asan: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+linux-docker: $(BUILD_DIR)
+	@command -v $(DOCKER) >/dev/null 2>&1 || \
+		{ echo ""; echo "  ERROR: Docker is not installed."; echo "    Install: https://docs.docker.com/get-docker/"; echo ""; exit 1; }
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  Debug build with AddressSanitizer"
-	@echo "----------------------------------------------------------------------"
-	$(CC_MAC) $(MAC_BASE_FLAGS) $(ASAN_FLAGS) -arch arm64 \
-		-Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include \
-		-o $(PLUGIN_MAC_ARM) $(SOURCES) \
-		-bundle -arch arm64 -L$(LIBOMP_PREFIX)/lib -lomp -framework Accelerate
-	@echo "    Output: $(PLUGIN_MAC_ARM) (with ASan)"
+	@echo " Building Linux plugin via Docker"
+	@echo "    Preparing container..."
+	@printf 'FROM ubuntu:22.04\nRUN apt-get update -qq && apt-get install -y -qq gcc make libgomp-dev libopenblas-dev pkg-config > /dev/null 2>&1\n' | \
+		$(DOCKER) build --platform linux/amd64 -q -t $(DOCKER_LINUX_IMAGE) - > /dev/null
+	@echo "    Compiling (x86_64)..."
+	@$(DOCKER) run --rm --platform linux/amd64 -v "$$(pwd)":/src -w /src $(DOCKER_LINUX_IMAGE) make linux
+	@echo ""
 
-debug-tsan: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+windows-docker: $(BUILD_DIR)
+	@command -v $(DOCKER) >/dev/null 2>&1 || \
+		{ echo ""; echo "  ERROR: Docker is not installed."; echo "    Install: https://docs.docker.com/get-docker/"; echo ""; exit 1; }
 	@echo ""
-	@echo "----------------------------------------------------------------------"
-	@echo "  Debug build with ThreadSanitizer"
-	@echo "----------------------------------------------------------------------"
-	$(CC_MAC) $(MAC_BASE_FLAGS) $(TSAN_FLAGS) -arch arm64 \
-		-Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include \
-		-o $(PLUGIN_MAC_ARM) $(SOURCES) \
-		-bundle -arch arm64 -L$(LIBOMP_PREFIX)/lib -lomp -framework Accelerate
-	@echo "    Output: $(PLUGIN_MAC_ARM) (with TSan)"
+	@echo " Building Windows plugin via Docker"
+	@echo "    Preparing container..."
+	@printf 'FROM ubuntu:22.04\nRUN apt-get update -qq && apt-get install -y -qq gcc-mingw-w64-x86-64 make > /dev/null 2>&1\n' | \
+		$(DOCKER) build -q -t $(DOCKER_WINDOWS_IMAGE) - > /dev/null
+	@echo "    Compiling (cross-compile)..."
+	@$(DOCKER) run --rm -v "$$(pwd)":/src -w /src $(DOCKER_WINDOWS_IMAGE) make windows
+	@echo ""
 
 # ------------------------------------------------------------------------------
 # Clean

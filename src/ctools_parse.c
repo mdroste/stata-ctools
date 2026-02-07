@@ -152,7 +152,7 @@ size_t ctools_parse_size_option(const char *args, const char *key,
     char *endptr;
     errno = 0;
     unsigned long val = strtoul(p, &endptr, 10);
-    if (endptr == p || errno == ERANGE || val > SIZE_MAX) {
+    if (endptr == p || errno == ERANGE) {
         return default_val;
     }
 

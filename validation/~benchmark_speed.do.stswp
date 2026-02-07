@@ -450,7 +450,7 @@ local t_csample = r(t1)
 * BSAMPLE BENCHMARKS
 *===============================================================================
 
-noi di as text "  Running bsample benchmarks"
+noi di as text "  Running bsample benchmarks (cbsample vs bsample)"
 
 use `main', clear
 set seed 12345
@@ -474,7 +474,7 @@ local t_cbsample = r(t1)
 * RANGESTAT BENCHMARKS
 *===============================================================================
 
-noi di as text "  Running rangestat benchmarks"
+noi di as text "  Running rangestat benchmarks (crangestat vs rangestat)"
 
 capture which rangestat
 local rangestat_installed = (_rc == 0)
@@ -507,7 +507,7 @@ local t_crangestat = r(t1)
 * PSMATCH BENCHMARKS
 *===============================================================================
 
-noi di as text "  Running psmatch benchmarks"
+noi di as text "  Running psmatch benchmarks (cpsmatch vs psmatch2)"
 
 capture which psmatch2
 local psmatch2_installed = (_rc == 0)

@@ -183,7 +183,11 @@ program define cdecode, rclass
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
+        timer clear 91
+        timer clear 92
+        timer clear 93
         timer on 90
+        timer on 91
     }
 
     * Mark sample
@@ -326,8 +330,16 @@ program define cdecode, rclass
         local maxlen_code "maxlen=`strwidth'"
 
         * Call the C plugin
+        if `__do_timing' {
+            timer off 91
+            timer on 92
+        }
         plugin call ctools_plugin `srcvar' `destvar' `if' `in', ///
             `"cdecode `threads_code' `maxlen_code' labelsfile=`__labelsfile'"'
+        if `__do_timing' {
+            timer off 92
+            timer on 93
+        }
 
         local plugin_rc = _rc
 
@@ -340,6 +352,15 @@ program define cdecode, rclass
             capture drop `srcvar'
             rename `destvar' `srcvar'
         }
+
+        if `__do_timing' {
+            timer off 93
+            timer on 91
+        }
+    }
+
+    if `__do_timing' {
+        timer off 91
     }
 
     * Store rclass results
@@ -352,11 +373,18 @@ program define cdecode, rclass
         quietly timer list 90
         local __time_total = r(t90)
 
-        * Calculate Stata overhead
+        * Extract sub-timer values
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+        quietly timer list 93
+        local __time_postplugin = r(t93)
+
+        * Calculate plugin call overhead
         capture local __plugin_time_total = _cdecode_time_total
         if _rc != 0 local __plugin_time_total = 0
-        local __stata_overhead = `__time_total' - `__plugin_time_total'
-        if `__stata_overhead' < 0 local __stata_overhead = 0
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
 
         di as text ""
         di as text "{hline 55}"
@@ -367,8 +395,14 @@ program define cdecode, rclass
         di as text "    Decode:                 " as result %8.4f _cdecode_time_decode " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cdecode_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
+        di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
         di as text "  {hline 53}"
-        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"
