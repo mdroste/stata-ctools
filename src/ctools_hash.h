@@ -1,12 +1,13 @@
 /*
  * ctools_hash.h
- * Unified hash table implementations for ctools
+ * Hash tables and label utilities for ctools
  *
- * Provides two specialized hash table types:
+ * Provides:
  * 1. ctools_str_hash_table - String keys to integer values (for cencode)
  * 2. ctools_int_hash_table - Integer keys to string values (for cdecode)
+ * 3. Label escape/unescape/parse/serialize utilities (for cdecode/cencode)
  *
- * Both implementations use:
+ * Both hash table implementations use:
  * - Open addressing with linear probing
  * - Automatic resizing at 75% load factor
  * - String arena for efficient memory management
@@ -151,5 +152,70 @@ int ctools_int_hash_insert(ctools_int_hash_table *ht, int key, const char *value
  * @return     Associated string value if found, NULL if not found
  */
 const char *ctools_int_hash_lookup(ctools_int_hash_table *ht, int key);
+
+/* ============================================================================
+ * Label Utilities
+ *
+ * Shared label escape/unescape/parse/serialize for cdecode and cencode.
+ *
+ * Escape convention (for serialization):
+ *   " -> \"    \ -> \\    | -> \|
+ *
+ * Unescape convention (for parsing):
+ *   \" -> "    \\ -> \    \| -> |
+ * ============================================================================ */
+
+#define CTOOLS_MAX_LABEL_LEN    2045
+#define CTOOLS_MAX_LABELS       65536
+#define CTOOLS_LABEL_BUF_SIZE   2048
+#define CTOOLS_MACRO_CHUNK_SIZE 31000
+
+/*
+ * Unescape a label string.
+ * Converts \| -> |, \\ -> \, \" -> "
+ * Writes at most max_len characters (excluding null terminator) to dst.
+ */
+void ctools_label_unescape(const char *src, char *dst, size_t max_len);
+
+/*
+ * Escape a label string for serialization.
+ * Escapes: " -> \", \ -> \\, | -> \|
+ * Writes at most dst_size-1 characters to dst (always null-terminated).
+ * Returns number of bytes written (excluding null terminator).
+ */
+size_t ctools_label_escape(const char *src, char *dst, size_t dst_size);
+
+/*
+ * Parse value-label pairs from a file (one "value|label" per line).
+ * Used by cdecode. Calls ctools_label_unescape internally.
+ * If max_label_len is non-NULL, tracks the maximum unescaped label length.
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_parse_file(const char *filepath,
+                            ctools_int_hash_table *ht,
+                            int *max_label_len);
+
+/*
+ * Parse value-label pairs from a "value|label||value|label||..." string.
+ * Used by cencode (noextend path). Calls ctools_label_unescape internally.
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_parse_string(const char *str,
+                              ctools_str_hash_table *ht);
+
+/*
+ * Serialize sorted label entries into chunked Stata macros.
+ * Used by cencode to pass new labels back to the .ado file.
+ * Calls ctools_label_escape internally.
+ *
+ * Format per entry: "code|escaped_string", entries separated by "||"
+ * Chunks are saved as Stata macros named "<prefix>_0", "<prefix>_1", etc.
+ * Each chunk is at most CTOOLS_MACRO_CHUNK_SIZE bytes.
+ *
+ * prefix: macro name prefix (e.g. "_cencode_labels")
+ * Returns number of chunks written, or -1 on error.
+ */
+int ctools_label_serialize_macros(const char **strings, const int *codes,
+                                  size_t n_labels, const char *prefix);
 
 #endif /* CTOOLS_HASH_H */

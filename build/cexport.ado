@@ -1,4 +1,4 @@
-*! version 0.9.1 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!
@@ -54,10 +54,16 @@ program define cexport, rclass
         exit 198
     }
 
+    * Check that data is loaded (match export delimited rc=102)
+    if c(k) == 0 {
+        di as error "no variables defined"
+        exit 102
+    }
+
     * Parse the rest with export delimited-style syntax
     * Try with 'using' first, then without (allows both syntaxes)
     capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-        NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose TIMEit ///
+        NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
     if _rc {
         * 'using' not found - parse filename from positional arguments
@@ -146,7 +152,7 @@ program define cexport, rclass
 
         local using `"`filename'"'
         syntax [varlist] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-            NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose TIMEit ///
+            NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
             MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
     }
 
@@ -329,7 +335,7 @@ program define cexport, rclass
     local opt_noheader = cond("`novarnames'" != "", "noheader", "")
     local opt_quote = cond("`quote'" != "", "quote", "")
     local opt_noquoteif = cond("`noquoteif'" != "", "noquoteif", "")
-    local opt_verbose = cond("`verbose'" != "" | "`timeit'" != "", "verbose", "")
+    local opt_verbose = cond("`verbose'" != "", "verbose", "")
 
     * Performance options
     local opt_mmap = cond("`mmap'" != "", "mmap", "")
@@ -406,21 +412,38 @@ program define cexport, rclass
     di as text "(" as result %12.0fc `nobs' as text " observations written)"
 
     * Display timing if requested
-    if "`timeit'" != "" | "`verbose'" != "" {
-        local plugin_overhead = `elapsed' - _cexport_time_total
-        if `plugin_overhead' < 0 local plugin_overhead = 0
+    if "`verbose'" != "" {
+        capture local __time_load = _cexport_time_load
+        if _rc != 0 local __time_load = .
+        capture local __time_format = _cexport_time_format
+        if _rc != 0 local __time_format = .
+        capture local __time_write = _cexport_time_write
+        if _rc != 0 local __time_write = .
+        capture local __time_total = _cexport_time_total
+        if _rc != 0 local __time_total = .
+
+        if `__time_total' != . {
+            local plugin_overhead = `elapsed' - `__time_total'
+            if `plugin_overhead' < 0 local plugin_overhead = 0
+        }
+        else {
+            local plugin_overhead = .
+        }
         di as text ""
         di as text "{hline 55}"
         di as text "cexport timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Data load:              " as result %8.4f _cexport_time_load " sec"
-        di as text "    Format:                 " as result %8.4f _cexport_time_format " sec"
-        di as text "    Write to file:          " as result %8.4f _cexport_time_write " sec"
+        di as text "    Data load:              " as result %8.4f `__time_load' " sec"
+        di as text "    Format:                 " as result %8.4f `__time_format' " sec"
+        di as text "    Write to file:          " as result %8.4f `__time_write' " sec"
         di as text "  {hline 53}"
-        di as text "    C plugin total:         " as result %8.4f _cexport_time_total " sec"
+        di as text "    C plugin total:         " as result %8.4f `__time_total' " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Plugin call overhead:   " as result %8.4f `plugin_overhead' " sec"
         di as text "  {hline 53}"
-        di as text "  Plugin call overhead:     " as result %8.4f `plugin_overhead' " sec"
+        di as text "    Stata overhead total:   " as result %8.4f `plugin_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
         di as text "{hline 55}"
@@ -776,8 +799,8 @@ program define cexport_excel, rclass
     timer clear 99
     timer on 99
 
-    * Call plugin - pass touse variable for if/in filtering
-    capture noisily plugin call ctools_plugin `touse' `export_varlist', ///
+    * Call plugin with if `touse' so SF_ifobs() filters correctly
+    capture noisily plugin call ctools_plugin `export_varlist' if `touse', ///
         "cexport_xlsx `using' `opt_sheet' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose' `opt_cell' `opt_missing' `opt_keepcellfmt'"
 
     local export_rc = _rc

@@ -54,54 +54,6 @@ void ivvce_compute_unadjusted(
 );
 
 /*
-    Compute robust (HC1) VCE for k-class estimator.
-
-    V = (XkX)^-1 * Meat * (XkX)^-1 * dof_adj
-    where Meat = sum_i (PzX_i * e_i)^2
-
-    Parameters:
-    - ctx: IV estimation context
-    - resid: Residuals (N x 1)
-    - XkX_inv: Inverse of k-class matrix (K_total x K_total)
-    - df_a: Absorbed degrees of freedom
-    - V: Output VCE matrix (K_total x K_total)
-*/
-void ivvce_compute_robust(
-    IVEstContext *ctx,
-    const ST_double *resid,
-    const ST_double *XkX_inv,
-    ST_int df_a,
-    ST_double *V
-);
-
-/*
-    Compute clustered VCE for k-class estimator.
-
-    V = (XkX)^-1 * Meat * (XkX)^-1 * dof_adj
-    where Meat = sum_c (sum_i in c (PzX_i * e_i))^2
-
-    Parameters:
-    - ctx: IV estimation context
-    - resid: Residuals (N x 1)
-    - XkX_inv: Inverse of k-class matrix
-    - cluster_ids: Cluster IDs (1-indexed)
-    - num_clusters: Number of clusters
-    - df_a: Absorbed degrees of freedom
-    - nested_adj: 1 if FE nested in cluster, else 0
-    - V: Output VCE matrix
-*/
-void ivvce_compute_cluster(
-    IVEstContext *ctx,
-    const ST_double *resid,
-    const ST_double *XkX_inv,
-    const ST_int *cluster_ids,
-    ST_int num_clusters,
-    ST_int df_a,
-    ST_int nested_adj,
-    ST_double *V
-);
-
-/*
     Compute two-way clustered VCE using Cameron-Gelbach-Miller (2011) formula.
 
     V_twoway = V_cluster1 + V_cluster2 - V_intersection
@@ -135,30 +87,6 @@ void ivvce_compute_twoway(
     ST_int num_clusters1,
     const ST_int *cluster2_ids,
     ST_int num_clusters2,
-    ST_int df_a,
-    ST_double *V
-);
-
-/*
-    Compute HAC (Heteroskedasticity and Autocorrelation Consistent) VCE.
-
-    Uses kernel weighting for cross-lag products.
-
-    Parameters:
-    - ctx: IV estimation context
-    - resid: Residuals (N x 1)
-    - XkX_inv: Inverse of k-class matrix
-    - kernel_type: CIVREGHDFE_KERNEL_* constant
-    - bw: Bandwidth
-    - df_a: Absorbed degrees of freedom
-    - V: Output VCE matrix
-*/
-void ivvce_compute_hac(
-    IVEstContext *ctx,
-    const ST_double *resid,
-    const ST_double *XkX_inv,
-    ST_int kernel_type,
-    ST_int bw,
     ST_int df_a,
     ST_double *V
 );

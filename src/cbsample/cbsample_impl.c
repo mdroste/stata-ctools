@@ -26,8 +26,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
-#include "ctools_error.h"
+#include "ctools_runtime.h"
 #include "ctools_spi.h"
 #include "cbsample_impl.h"
 

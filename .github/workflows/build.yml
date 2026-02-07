@@ -69,6 +69,12 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-libomp
+
       - name: Install OpenMP (libomp)
         run: |
           brew install libomp
@@ -109,6 +115,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Cache Homebrew downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/Homebrew/downloads
+          key: brew-${{ runner.os }}-${{ runner.arch }}-libomp
 
       - name: Install OpenMP (libomp)
         run: |
@@ -151,41 +163,26 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Cache MSYS2 packages
+        uses: actions/cache@v4
+        with:
+          path: C:\msys64\var\cache\pacman\pkg
+          key: msys2-pkgs-${{ hashFiles('.github/workflows/build.yml') }}
+
       - name: Setup MSYS2
         uses: msys2/setup-msys2@v2
         with:
           msystem: MINGW64
-          update: true
+          update: false
           install: >-
+            make
             mingw-w64-x86_64-gcc
-            mingw-w64-x86_64-make
             mingw-w64-x86_64-openmp
             mingw-w64-x86_64-winpthreads-git
 
       - name: Build Windows plugin
         shell: msys2 {0}
-        run: |
-          # Set compiler flags for Windows with OpenMP (statically linked)
-          export CC=gcc
-          export CFLAGS="-O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp -ffast-math -funroll-loops -ftree-vectorize -fno-strict-aliasing -mavx2"
-          # Use -Wl,-Bstatic to force static linking of libgomp
-          # This avoids runtime dependency on libgomp-1.dll
-          export LDFLAGS="-static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread"
-
-          # Build manually since Makefile detection might not work in MSYS2
-          mkdir -p build
-
-          # Get all source files
-          SOURCES=$(find src -name "*.c" | tr '\n' ' ')
-          INCLUDES="-Isrc -Isrc/csort -Isrc/cimport -Isrc/cimport/miniz -Isrc/cexport -Isrc/cmerge -Isrc/creghdfe -Isrc/cqreg -Isrc/cbinscatter -Isrc/civreghdfe -Isrc/cencode -Isrc/cwinsor -Isrc/cdestring -Isrc/cdecode -Isrc/csample -Isrc/cbsample -Isrc/crangestat -Isrc/cpsmatch"
-
-          echo "Compiling with OpenMP support (statically linked)..."
-          echo "CFLAGS: $CFLAGS"
-          echo "LDFLAGS: $LDFLAGS"
-          gcc $CFLAGS $INCLUDES -o build/ctools_windows.plugin $SOURCES $LDFLAGS
-
-          echo "Build complete!"
-          ls -la build/
+        run: make windows
 
       - name: Verify build
         shell: msys2 {0}
@@ -195,27 +192,21 @@ jobs:
 
           echo ""
           echo "=== Checking OpenMP is statically linked ==="
-          # Verify GOMP symbols are present (indicates OpenMP was compiled in)
           if nm build/ctools_windows.plugin | grep -q "GOMP_parallel"; then
             echo "✓ OpenMP symbols found (GOMP_parallel present)"
           else
             echo "✗ WARNING: OpenMP symbols NOT found"
           fi
 
-          # Verify libgomp is NOT in DLL imports (confirms static linking)
           if objdump -p build/ctools_windows.plugin | grep -qi "libgomp"; then
-            echo "✗ WARNING: libgomp found in DLL imports - OpenMP may be dynamically linked!"
+            echo "✗ WARNING: libgomp found in DLL imports - dynamically linked"
           else
-            echo "✓ libgomp NOT in DLL imports (confirms static linking)"
+            echo "✓ libgomp NOT in DLL imports (statically linked)"
           fi
 
           echo ""
           echo "=== DLL dependencies ==="
           objdump -p build/ctools_windows.plugin | grep "DLL Name" || echo "No DLL dependencies found"
-
-          echo ""
-          echo "=== OpenMP function symbols (sample) ==="
-          nm build/ctools_windows.plugin | grep -E "omp_get_max_threads|GOMP_parallel" | head -5 || echo "No OpenMP symbols found"
 
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4

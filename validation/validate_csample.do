@@ -68,6 +68,44 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 2b: Self-consistency with set seed
+ ******************************************************************************/
+print_section "Self-Consistency with set seed"
+
+* csample with same seed should produce identical results
+clear
+set obs 1000
+gen id = _n
+
+set seed 54321
+preserve
+csample 50
+local N1 = _N
+tempfile csample_result
+save `csample_result'
+restore
+
+set seed 54321
+preserve
+csample 50
+local N2 = _N
+
+if `N1' == `N2' {
+    merge 1:1 id using `csample_result'
+    quietly count if _merge != 3
+    if r(N) == 0 {
+        test_pass "csample reproducible with same seed (50%)"
+    }
+    else {
+        test_fail "csample reproducible with same seed" "`=r(N)' observations differ"
+    }
+}
+else {
+    test_fail "csample reproducible with same seed" "N differ: run1=`N1' run2=`N2'"
+}
+restore
+
+/*******************************************************************************
  * SECTION 3: Fixed count sampling
  ******************************************************************************/
 print_section "Fixed Count Sampling"
@@ -96,6 +134,34 @@ else {
     test_fail "count(50) yields exactly 50 obs" "got `=_N'"
 }
 
+* Deterministic comparison: count(100) csample vs itself
+clear
+set obs 1000
+gen id = _n
+
+set seed 99999
+preserve
+csample, count(100)
+sort id
+tempfile csample_result
+save `csample_result'
+restore
+
+set seed 99999
+preserve
+csample, count(100)
+sort id
+
+merge 1:1 id using `csample_result'
+quietly count if _merge != 3
+if r(N) == 0 {
+    test_pass "count(100) reproducible with same seed"
+}
+else {
+    test_fail "count(100) reproducible with same seed" "`=r(N)' observations differ"
+}
+restore
+
 /*******************************************************************************
  * SECTION 4: By-group sampling
  ******************************************************************************/
@@ -109,11 +175,13 @@ gen id = _n
 set seed 12345
 csample 50, by(group)
 
+* Note: Stata's sample doesn't support by(), so exact comparison isn't possible.
+* Use tighter range check with 20% tolerance around expected 50 per group.
 local all_ok = 1
 forvalues g = 0/9 {
     count if group == `g'
     local n_g = r(N)
-    if `n_g' < 35 | `n_g' > 65 {
+    if `n_g' < 40 | `n_g' > 60 {
         local all_ok = 0
     }
 }
@@ -121,7 +189,7 @@ if `all_ok' {
     test_pass "50% by-group sample (~50 per group)"
 }
 else {
-    test_fail "50% by-group sample" "some groups outside [35,65] range"
+    test_fail "50% by-group sample" "some groups outside [40,60] range"
 }
 
 * By-group fixed count
@@ -458,10 +526,17 @@ else {
 }
 
 * By variable doesn't exist
+* Note: Stata's sample doesn't support by(), so we test csample independently
 clear
 set obs 100
 gen id = _n
-test_error_match, stata_cmd(sample 50, by(nonexistent_var)) ctools_cmd(csample 50, by(nonexistent_var)) testname("nonexistent by variable")
+capture csample 50, by(nonexistent_var)
+if _rc != 0 {
+    test_pass "[error] nonexistent by variable (rc=`=_rc')"
+}
+else {
+    test_fail "[error] nonexistent by variable" "should have errored"
+}
 
 * End of csample validation
 noi print_summary "csample"

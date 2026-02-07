@@ -11,35 +11,6 @@
 #include <string.h>
 
 /* ============================================================================
- * Aligned memory allocation
- * ============================================================================ */
-
-void *cqreg_aligned_alloc(size_t size, size_t alignment)
-{
-    void *ptr = NULL;
-#if defined(_WIN32)
-    ptr = _aligned_malloc(size, alignment);
-#elif defined(__APPLE__) || defined(__linux__)
-    if (posix_memalign(&ptr, alignment, size) != 0) {
-        ptr = NULL;
-    }
-#else
-    ptr = malloc(size);
-#endif
-    return ptr;
-}
-
-void cqreg_aligned_free(void *ptr)
-{
-    if (ptr == NULL) return;
-#if defined(_WIN32)
-    _aligned_free(ptr);
-#else
-    free(ptr);
-#endif
-}
-
-/* ============================================================================
  * IPM Configuration
  * ============================================================================ */
 
@@ -53,6 +24,7 @@ void cqreg_ipm_config_init(cqreg_ipm_config *config)
     config->tol_gap = CQREG_DEFAULT_TOL;
     config->verbose = 0;
     config->use_mehrotra = 1;
+    config->skip_crossover = 0;
     config->mu_init = CQREG_DEFAULT_MU_INIT;
     config->sigma = CQREG_DEFAULT_SIGMA;
 }
@@ -85,21 +57,21 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
     ipm->num_threads = ctools_get_max_threads();
 
     /* Allocate coefficient vector */
-    ipm->beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
     if (ipm->beta == NULL) goto cleanup;
 
     /* Allocate primal variables */
-    ipm->u = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->v = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (ipm->u == NULL || ipm->v == NULL) goto cleanup;
 
     /* Allocate dual variables */
-    ipm->lambda_u = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->lambda_v = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->lambda_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->lambda_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (ipm->lambda_u == NULL || ipm->lambda_v == NULL) goto cleanup;
 
     /* Allocate diagonal scaling */
-    ipm->D = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->D = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (ipm->D == NULL) goto cleanup;
 
     /* Compute K*K size with overflow check */
@@ -109,37 +81,37 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
     }
 
     /* Allocate normal equations storage */
-    ipm->XDX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    ipm->XDXcopy = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    ipm->L = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    ipm->rhs = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->XDX = (ST_double *)ctools_cacheline_alloc(kk_size);
+    ipm->XDXcopy = (ST_double *)ctools_cacheline_alloc(kk_size);
+    ipm->L = (ST_double *)ctools_cacheline_alloc(kk_size);
+    ipm->rhs = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
     if (ipm->XDX == NULL || ipm->XDXcopy == NULL || ipm->L == NULL || ipm->rhs == NULL) goto cleanup;
 
     /* Allocate search directions */
-    ipm->delta_beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_u = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_v = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_lambda_u = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_lambda_v = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->delta_beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
+    ipm->delta_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_lambda_u = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_lambda_v = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (ipm->delta_beta == NULL || ipm->delta_u == NULL || ipm->delta_v == NULL ||
         ipm->delta_lambda_u == NULL || ipm->delta_lambda_v == NULL) goto cleanup;
 
     /* Allocate Mehrotra affine directions */
-    ipm->delta_u_aff = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_v_aff = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_lambda_u_aff = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->delta_lambda_v_aff = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->delta_u_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_v_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_lambda_u_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->delta_lambda_v_aff = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (ipm->delta_u_aff == NULL || ipm->delta_v_aff == NULL ||
         ipm->delta_lambda_u_aff == NULL || ipm->delta_lambda_v_aff == NULL) goto cleanup;
 
     /* Allocate residuals */
-    ipm->r_primal = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->r_dual = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->r_primal = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->r_dual = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
     if (ipm->r_primal == NULL || ipm->r_dual == NULL) goto cleanup;
 
     /* Allocate working arrays */
-    ipm->work_N = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->work_K = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
+    ipm->work_N = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    ipm->work_K = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
     if (ipm->work_N == NULL || ipm->work_K == NULL) goto cleanup;
 
     /* Allocate per-thread buffers */
@@ -147,7 +119,7 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
     if (ipm->thread_buf == NULL) goto cleanup;
 
     for (t = 0; t < ipm->num_threads; t++) {
-        ipm->thread_buf[t] = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+        ipm->thread_buf[t] = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
         if (ipm->thread_buf[t] == NULL) goto cleanup;
     }
 
@@ -158,25 +130,25 @@ cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *co
     }
 
     /* Allocate Frisch-Newton solver workspace */
-    ipm->fn_xp = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_s = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_yd = (ST_double *)cqreg_aligned_alloc((size_t)K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_z = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_w = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dx = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_ds = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dy = (ST_double *)cqreg_aligned_alloc((size_t)K * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dz = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_dw = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fx = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fs = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fz = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_fw = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_q = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_r = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_tmp = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_sinv = (ST_double *)cqreg_aligned_alloc((size_t)N * sizeof(ST_double), CQREG_CACHE_LINE);
-    ipm->fn_Xq = (ST_double *)cqreg_aligned_alloc(nk_size, CQREG_CACHE_LINE);
+    ipm->fn_xp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_s = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_yd = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
+    ipm->fn_z = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_w = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_ds = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dy = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
+    ipm->fn_dz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fs = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_q = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_r = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_tmp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_sinv = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_Xq = (ST_double *)ctools_cacheline_alloc(nk_size);
     if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
         !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
         !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||
@@ -195,6 +167,95 @@ cleanup:
     return NULL;
 }
 
+cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_config *config)
+{
+    cqreg_ipm_state *ipm = NULL;
+
+    if (N <= 0 || K <= 0) return NULL;
+
+    /* calloc zeros all pointers to NULL, so cqreg_ipm_free works correctly
+     * even though we skip allocating most fields */
+    ipm = (cqreg_ipm_state *)calloc(1, sizeof(cqreg_ipm_state));
+    if (ipm == NULL) return NULL;
+
+    ipm->N = N;
+    ipm->K = K;
+
+    if (config != NULL) {
+        memcpy(&ipm->config, config, sizeof(cqreg_ipm_config));
+    } else {
+        cqreg_ipm_config_init(&ipm->config);
+    }
+
+    ipm->num_threads = 0;  /* No thread_buf allocated */
+
+    /* Compute sizes with overflow check */
+    size_t kk_size;
+    if (ctools_safe_alloc_size((size_t)K, (size_t)K, sizeof(ST_double), &kk_size) != 0) {
+        goto cleanup;
+    }
+    size_t nk_size;
+    if (ctools_safe_alloc_size((size_t)N, (size_t)K, sizeof(ST_double), &nk_size) != 0) {
+        goto cleanup;
+    }
+
+    /* Only allocate arrays that cqreg_fn_solve actually uses */
+
+    /* beta (K) - stores result */
+    ipm->beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
+    if (!ipm->beta) goto cleanup;
+
+    /* Normal equations: XDX, XDXcopy (K*K), rhs (K) */
+    ipm->XDX = (ST_double *)ctools_cacheline_alloc(kk_size);
+    ipm->XDXcopy = (ST_double *)ctools_cacheline_alloc(kk_size);
+    ipm->rhs = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
+    if (!ipm->XDX || !ipm->XDXcopy || !ipm->rhs) goto cleanup;
+
+    /* r_primal, u, v (N each) - used by crossover + final residuals */
+    if (!config || !config->skip_crossover) {
+        ipm->r_primal = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+        ipm->u = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+        ipm->v = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+        if (!ipm->r_primal || !ipm->u || !ipm->v) goto cleanup;
+    }
+
+    /* Frisch-Newton workspace: 18 N-sized + 1 N*K + 2 K-sized */
+    ipm->fn_xp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_s = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_yd = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
+    ipm->fn_z = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_w = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_ds = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dy = (ST_double *)ctools_cacheline_alloc((size_t)K * sizeof(ST_double));
+    ipm->fn_dz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_dw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fx = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fs = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fz = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_fw = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_q = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_r = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_tmp = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_sinv = (ST_double *)ctools_cacheline_alloc((size_t)N * sizeof(ST_double));
+    ipm->fn_Xq = (ST_double *)ctools_cacheline_alloc(nk_size);
+    if (!ipm->fn_xp || !ipm->fn_s || !ipm->fn_yd || !ipm->fn_z || !ipm->fn_w ||
+        !ipm->fn_dx || !ipm->fn_ds || !ipm->fn_dy || !ipm->fn_dz || !ipm->fn_dw ||
+        !ipm->fn_fx || !ipm->fn_fs || !ipm->fn_fz || !ipm->fn_fw ||
+        !ipm->fn_q || !ipm->fn_r || !ipm->fn_tmp || !ipm->fn_sinv || !ipm->fn_Xq)
+        goto cleanup;
+
+    ipm->mu = ipm->config.mu_init;
+    ipm->converged = 0;
+    ipm->iterations = 0;
+
+    return ipm;
+
+cleanup:
+    cqreg_ipm_free(ipm);
+    return NULL;
+}
+
 void cqreg_ipm_free(cqreg_ipm_state *ipm)
 {
     ST_int t;
@@ -202,74 +263,74 @@ void cqreg_ipm_free(cqreg_ipm_state *ipm)
     if (ipm == NULL) return;
 
     /* Free coefficient vector */
-    cqreg_aligned_free(ipm->beta);
+    ctools_aligned_free(ipm->beta);
 
     /* Free primal variables */
-    cqreg_aligned_free(ipm->u);
-    cqreg_aligned_free(ipm->v);
+    ctools_aligned_free(ipm->u);
+    ctools_aligned_free(ipm->v);
 
     /* Free dual variables */
-    cqreg_aligned_free(ipm->lambda_u);
-    cqreg_aligned_free(ipm->lambda_v);
+    ctools_aligned_free(ipm->lambda_u);
+    ctools_aligned_free(ipm->lambda_v);
 
     /* Free diagonal scaling */
-    cqreg_aligned_free(ipm->D);
+    ctools_aligned_free(ipm->D);
 
     /* Free normal equations storage */
-    cqreg_aligned_free(ipm->XDX);
-    cqreg_aligned_free(ipm->XDXcopy);
-    cqreg_aligned_free(ipm->L);
-    cqreg_aligned_free(ipm->rhs);
+    ctools_aligned_free(ipm->XDX);
+    ctools_aligned_free(ipm->XDXcopy);
+    ctools_aligned_free(ipm->L);
+    ctools_aligned_free(ipm->rhs);
 
     /* Free search directions */
-    cqreg_aligned_free(ipm->delta_beta);
-    cqreg_aligned_free(ipm->delta_u);
-    cqreg_aligned_free(ipm->delta_v);
-    cqreg_aligned_free(ipm->delta_lambda_u);
-    cqreg_aligned_free(ipm->delta_lambda_v);
+    ctools_aligned_free(ipm->delta_beta);
+    ctools_aligned_free(ipm->delta_u);
+    ctools_aligned_free(ipm->delta_v);
+    ctools_aligned_free(ipm->delta_lambda_u);
+    ctools_aligned_free(ipm->delta_lambda_v);
 
     /* Free Mehrotra affine directions */
-    cqreg_aligned_free(ipm->delta_u_aff);
-    cqreg_aligned_free(ipm->delta_v_aff);
-    cqreg_aligned_free(ipm->delta_lambda_u_aff);
-    cqreg_aligned_free(ipm->delta_lambda_v_aff);
+    ctools_aligned_free(ipm->delta_u_aff);
+    ctools_aligned_free(ipm->delta_v_aff);
+    ctools_aligned_free(ipm->delta_lambda_u_aff);
+    ctools_aligned_free(ipm->delta_lambda_v_aff);
 
     /* Free residuals */
-    cqreg_aligned_free(ipm->r_primal);
-    cqreg_aligned_free(ipm->r_dual);
+    ctools_aligned_free(ipm->r_primal);
+    ctools_aligned_free(ipm->r_dual);
 
     /* Free working arrays */
-    cqreg_aligned_free(ipm->work_N);
-    cqreg_aligned_free(ipm->work_K);
+    ctools_aligned_free(ipm->work_N);
+    ctools_aligned_free(ipm->work_K);
 
     /* Free per-thread buffers */
     if (ipm->thread_buf != NULL) {
         for (t = 0; t < ipm->num_threads; t++) {
-            cqreg_aligned_free(ipm->thread_buf[t]);
+            ctools_aligned_free(ipm->thread_buf[t]);
         }
         free(ipm->thread_buf);
     }
 
     /* Free Frisch-Newton solver workspace */
-    cqreg_aligned_free(ipm->fn_xp);
-    cqreg_aligned_free(ipm->fn_s);
-    cqreg_aligned_free(ipm->fn_yd);
-    cqreg_aligned_free(ipm->fn_z);
-    cqreg_aligned_free(ipm->fn_w);
-    cqreg_aligned_free(ipm->fn_dx);
-    cqreg_aligned_free(ipm->fn_ds);
-    cqreg_aligned_free(ipm->fn_dy);
-    cqreg_aligned_free(ipm->fn_dz);
-    cqreg_aligned_free(ipm->fn_dw);
-    cqreg_aligned_free(ipm->fn_fx);
-    cqreg_aligned_free(ipm->fn_fs);
-    cqreg_aligned_free(ipm->fn_fz);
-    cqreg_aligned_free(ipm->fn_fw);
-    cqreg_aligned_free(ipm->fn_q);
-    cqreg_aligned_free(ipm->fn_r);
-    cqreg_aligned_free(ipm->fn_tmp);
-    cqreg_aligned_free(ipm->fn_sinv);
-    cqreg_aligned_free(ipm->fn_Xq);
+    ctools_aligned_free(ipm->fn_xp);
+    ctools_aligned_free(ipm->fn_s);
+    ctools_aligned_free(ipm->fn_yd);
+    ctools_aligned_free(ipm->fn_z);
+    ctools_aligned_free(ipm->fn_w);
+    ctools_aligned_free(ipm->fn_dx);
+    ctools_aligned_free(ipm->fn_ds);
+    ctools_aligned_free(ipm->fn_dy);
+    ctools_aligned_free(ipm->fn_dz);
+    ctools_aligned_free(ipm->fn_dw);
+    ctools_aligned_free(ipm->fn_fx);
+    ctools_aligned_free(ipm->fn_fs);
+    ctools_aligned_free(ipm->fn_fz);
+    ctools_aligned_free(ipm->fn_fw);
+    ctools_aligned_free(ipm->fn_q);
+    ctools_aligned_free(ipm->fn_r);
+    ctools_aligned_free(ipm->fn_tmp);
+    ctools_aligned_free(ipm->fn_sinv);
+    ctools_aligned_free(ipm->fn_Xq);
 
     free(ipm);
 }
@@ -293,7 +354,7 @@ cqreg_sparsity_state *cqreg_sparsity_create(ST_int N, ST_double quantile, cqreg_
     sp->bandwidth = 0.0;
     sp->sparsity = 0.0;
 
-    sp->sorted_resid = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    sp->sorted_resid = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (sp->sorted_resid == NULL) {
         free(sp);
         return NULL;
@@ -305,7 +366,7 @@ cqreg_sparsity_state *cqreg_sparsity_create(ST_int N, ST_double quantile, cqreg_
 void cqreg_sparsity_free(cqreg_sparsity_state *sp)
 {
     if (sp == NULL) return;
-    cqreg_aligned_free(sp->sorted_resid);
+    ctools_aligned_free(sp->sorted_resid);
     free(sp);
 }
 
@@ -345,11 +406,11 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K)
     state->X_owned = 0;
 
     /* Allocate results */
-    state->beta = (ST_double *)cqreg_aligned_alloc(K * sizeof(ST_double), CQREG_CACHE_LINE);
-    state->V = (ST_double *)cqreg_aligned_alloc(K * K * sizeof(ST_double), CQREG_CACHE_LINE);
-    state->residuals = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    state->fitted = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
-    state->obs_density = (ST_double *)cqreg_aligned_alloc(N * sizeof(ST_double), CQREG_CACHE_LINE);
+    state->beta = (ST_double *)ctools_cacheline_alloc(K * sizeof(ST_double));
+    state->V = (ST_double *)ctools_cacheline_alloc(K * K * sizeof(ST_double));
+    state->residuals = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    state->fitted = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
+    state->obs_density = (ST_double *)ctools_cacheline_alloc(N * sizeof(ST_double));
     if (state->beta == NULL || state->V == NULL || state->residuals == NULL ||
         state->fitted == NULL || state->obs_density == NULL) goto cleanup;
 
@@ -398,17 +459,17 @@ void cqreg_state_free(cqreg_state *state)
      * - X is always a contiguous copy we allocated, so always free it.
      */
     if (state->y_owned && state->y != NULL) {
-        cqreg_aligned_free(state->y);
+        ctools_aligned_free(state->y);
     }
     /* y is NOT freed if !y_owned because it points into stata_data */
 
     /* X is always our contiguous allocation */
     if (state->X != NULL) {
-        cqreg_aligned_free(state->X);
+        ctools_aligned_free(state->X);
     }
 
-    cqreg_aligned_free(state->weights);
-    cqreg_aligned_free(state->obs_mask);
+    ctools_aligned_free(state->weights);
+    ctools_aligned_free(state->obs_mask);
 
     /* Free stata_data if we own it */
     if (state->data_owned && state->data != NULL) {
@@ -417,14 +478,14 @@ void cqreg_state_free(cqreg_state *state)
     }
 
     /* Free results */
-    cqreg_aligned_free(state->beta);
-    cqreg_aligned_free(state->V);
-    cqreg_aligned_free(state->residuals);
-    cqreg_aligned_free(state->fitted);
-    cqreg_aligned_free(state->obs_density);
+    ctools_aligned_free(state->beta);
+    ctools_aligned_free(state->V);
+    ctools_aligned_free(state->residuals);
+    ctools_aligned_free(state->fitted);
+    ctools_aligned_free(state->obs_density);
 
     /* Free cluster IDs */
-    cqreg_aligned_free(state->cluster_ids);
+    ctools_aligned_free(state->cluster_ids);
 
     /* Free IPM state */
     cqreg_ipm_free(state->ipm);

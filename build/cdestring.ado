@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cdestring: C-accelerated string to numeric conversion for Stata
 *! Part of the ctools suite
 *!
@@ -26,7 +26,7 @@ program define cdestring
     }
 
     * Parse syntax - note varlist is optional (defaults to all string vars)
-    syntax [varlist(string)] [if] [in], [Generate(string) replace ///
+    syntax [varlist] [if] [in], [Generate(string) replace ///
         IGnore(string) force float percent dpcomma Verbose THReads(integer 0)]
 
     * =========================================================================
@@ -82,13 +82,43 @@ program define cdestring
         }
     }
 
-    * Verify all source variables are string
+    * Handle already-numeric variables (match destring behavior: skip gracefully)
+    local string_vars ""
+    local string_gen ""
+    local _var_idx = 0
     foreach v of local varlist {
+        local ++_var_idx
         capture confirm string variable `v'
         if _rc != 0 {
-            di as error "cdestring: `v' is not a string variable"
-            exit 198
+            * Variable is already numeric - match destring behavior
+            if "`replace'" != "" {
+                local vtype : type `v'
+                di as text "`v': already " as result "`vtype'"
+            }
+            else if "`generate'" != "" {
+                local vtype : type `v'
+                di as text "`v': already " as result "`vtype'"
+            }
         }
+        else {
+            local string_vars "`string_vars' `v'"
+            if "`generate'" != "" {
+                local gv : word `_var_idx' of `generate'
+                local string_gen "`string_gen' `gv'"
+            }
+        }
+    }
+
+    * Update varlist and generate to only include string variables
+    local varlist "`string_vars'"
+    if "`generate'" != "" {
+        local generate "`string_gen'"
+    }
+    local nvars : word count `varlist'
+
+    * If no string variables remain, exit successfully (like destring)
+    if `nvars' == 0 {
+        exit 0
     }
 
     * =========================================================================
@@ -189,7 +219,6 @@ program define cdestring
     else {
         * For generate, create the new variables
         local dest_varlist ""
-        local i = 1
         foreach gv of local generate {
             if "`float'" != "" {
                 quietly generate float `gv' = .
@@ -198,7 +227,6 @@ program define cdestring
                 quietly generate double `gv' = .
             }
             local dest_varlist "`dest_varlist' `gv'"
-            local ++i
         }
     }
 
@@ -376,14 +404,19 @@ program define cdestring
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Argument parsing:       " as result %8.4f _cdestring_time_parse " sec"
+        di as text "    Data load:              " as result %8.4f _cdestring_time_load " sec"
         di as text "    String conversion:      " as result %8.4f _cdestring_time_convert " sec"
+        di as text "    Store results:          " as result %8.4f _cdestring_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cdestring_time_total " sec"
-        di as text "  {hline 53}"
+        di as text ""
         di as text "  Stata overhead:"
         di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
         di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
         di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"

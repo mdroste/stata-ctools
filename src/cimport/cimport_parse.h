@@ -108,9 +108,6 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
  * ============================================================================ */
 
 /* Quick check if field looks like a number (for type inference) */
-bool cimport_field_looks_numeric(const char *src, int len);
-
-/* Quick check with custom decimal and group separators */
 bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, char grp_sep);
 
 /*
@@ -123,9 +120,6 @@ bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, cha
  * @param out_is_integer Output: true if value is integer
  * @return             true if successfully parsed as number
  */
-bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,
-                                   double *out_value, bool *out_is_integer);
-
 /*
  * Analyze numeric field with custom separators.
  *

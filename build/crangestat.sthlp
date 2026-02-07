@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 31Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "crangestat##syntax"}{...}
 {viewerjumpto "Description" "crangestat##description"}{...}
 {viewerjumpto "Options" "crangestat##options"}{...}
@@ -49,7 +49,7 @@ where {it:stat_specification} is
 {pstd}
 {cmd:crangestat} calculates statistics for each observation using all observations
 where a numeric key variable is within the low and high bounds defined for the
-current observation. It is designed as a drop-in replacement for {cmd:rangestat}
+current observation. It is designed as a drop-in replacement for {cmd:rangestat} (v1.1.1) by Robert Picard, Nicholas J. Cox, and Roberto Ferrer, available from SSC,
 with significantly better performance through C acceleration and parallel
 processing.
 
@@ -101,12 +101,10 @@ statistics like the mean of all {it:other} observations in the range.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-processing. By default, {cmd:crangestat} uses all available CPU cores.
+operations. By default, {cmd:crangestat} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a detailed timing breakdown showing time spent in
-each phase: loading data, sorting, group detection, computation, and storing
-results.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker statistics}{...}

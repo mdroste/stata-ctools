@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cwinsor##syntax"}{...}
 {viewerjumpto "Description" "cwinsor##description"}{...}
 {viewerjumpto "Options" "cwinsor##options"}{...}
@@ -50,7 +50,7 @@
 {title:Description}
 
 {pstd}
-{cmd:cwinsor} is a high-performance C-accelerated replacement for {cmd:winsor2}.
+{cmd:cwinsor} is a high-performance C-accelerated replacement for {cmd:winsor2} (v1.1) by Yujun Lian, available from SSC.
 It winsorizes or trims numeric variables at specified percentiles using parallel
 processing and an efficient O(n) percentile algorithm.
 
@@ -119,13 +119,10 @@ Cannot be combined with {opt suffix()} or {opt prefix()}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-processing. By default, {cmd:cwinsor} uses all available CPU cores. Use this
-option to limit parallelism when running multiple jobs simultaneously.
+operations. By default, {cmd:cwinsor} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a detailed timing breakdown showing time spent in each
-phase of the winsorization: loading data, computing percentiles, applying
-winsorization, and storing results.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}

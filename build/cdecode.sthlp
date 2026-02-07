@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cdecode##syntax"}{...}
 {viewerjumpto "Description" "cdecode##description"}{...}
 {viewerjumpto "Options" "cdecode##options"}{...}
@@ -91,10 +91,10 @@ labels to a specific length.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-processing. By default, {cmd:cdecode} uses all available CPU cores.
+operations. By default, {cmd:cdecode} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent decoding the variables.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker examples}{...}

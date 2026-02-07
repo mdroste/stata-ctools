@@ -20,7 +20,7 @@
 
 #include "stplugin.h"
 #include "ctools_types.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "../ctools_config.h"
 #include "cbinscatter_impl.h"
 #include "cbinscatter_types.h"
@@ -505,9 +505,7 @@ static ST_retcode do_compute_bins(void) {
     rc = read_config(&config);
     if (rc != CBINSCATTER_OK) return rc;
 
-    if (config.verbose) {
-        SF_display("cbinscatter: starting computation\n");
-    }
+    /* Verbose output handled by .ado file using stored scalars */
 
     /* Load data */
     rc = load_data(&config, &y, &x, &controls, &fe_vars, &by_groups, &weights,
@@ -525,12 +523,7 @@ static ST_retcode do_compute_bins(void) {
     results.total_obs = N_valid;
     results.obs_dropped = N - N_valid;
 
-    if (config.verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "cbinscatter: loaded %d observations (%d dropped)\n",
-                 N_valid, N - N_valid);
-        SF_display(msg);
-    }
+    /* Verbose output handled by .ado file using stored scalars */
 
     /* Residualize if needed */
     t_resid = t_load;
@@ -728,50 +721,7 @@ static ST_retcode do_compute_bins(void) {
                 goto cleanup;
             }
 
-            /* Assign observations to bins based on their x values */
-            for (ST_int i = 0; i < n_group; i++) {
-                /* Find which bin this observation belongs to */
-                ST_int assigned_bin = 1;  /* Default to first bin */
-                for (ST_int b = 0; b < group->num_bins; b++) {
-                    /* Check if x is below the upper bound of this bin */
-                    if (b == group->num_bins - 1) {
-                        /* Last bin includes all remaining */
-                        assigned_bin = b + 1;
-                        break;
-                    }
-                    /* Check against next bin's x_mean as approximate boundary */
-                    ST_double x_mid = (group->bins[b].x_mean + group->bins[b + 1].x_mean) / 2.0;
-                    if (x_group[i] <= x_mid) {
-                        assigned_bin = b + 1;
-                        break;
-                    }
-                }
-                bin_ids[i] = assigned_bin;
-            }
-
-            /* Use the bin_id that was already stored during initial binning */
-            /* Re-extract bin assignments by checking which bin each obs is in */
-            /* Actually, we need to use the quantile-based assignment */
-            /* Let's re-use the binning logic by looking at percentiles */
-
-            /* Simpler approach: Sort x and assign to bins by percentile */
-            /* Since compute_bins_single_group already computed the bins based on
-             * x quantiles, we can reconstruct the bin assignments */
-            ST_double *x_sorted = (ST_double *)malloc(n_group * sizeof(ST_double));
-            ST_int *sort_idx = (ST_int *)malloc(n_group * sizeof(ST_int));
-            if (!x_sorted || !sort_idx) {
-                free(bin_ids); free(x_sorted); free(sort_idx);
-                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
-                rc = CBINSCATTER_ERR_MEMORY;
-                goto cleanup;
-            }
-
-            /* Copy and sort x */
-            memcpy(x_sorted, x_group, n_group * sizeof(ST_double));
-            for (ST_int i = 0; i < n_group; i++) sort_idx[i] = i;
-
-            /* Simple insertion sort for small n, or we rely on approximate assignment */
-            /* For correctness, use rank-based assignment */
+            /* Assign observations to bins using rank-based percentile assignment */
             for (ST_int i = 0; i < n_group; i++) {
                 /* Count how many x values are less than this one */
                 ST_int rank = 0;
@@ -785,9 +735,6 @@ static ST_retcode do_compute_bins(void) {
                 if (bin_num >= group->num_bins) bin_num = group->num_bins - 1;
                 bin_ids[i] = bin_num + 1;  /* 1-based */
             }
-
-            free(x_sorted);
-            free(sort_idx);
 
             /* Apply FWL-based HDFE adjustment */
             rc = adjust_bins_binsreg_hdfe(y_group, c_group, fe_group, bin_ids, w_group,
@@ -812,12 +759,7 @@ static ST_retcode do_compute_bins(void) {
 
     t_bins = ctools_timer_seconds();
 
-    if (config.verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "cbinscatter: bin computation complete (%.3f sec)\n",
-                 t_bins - t_resid);
-        SF_display(msg);
-    }
+    /* Verbose output handled by .ado file using stored scalars */
 
     /* Fit lines if requested */
     t_fit = t_bins;
@@ -827,12 +769,7 @@ static ST_retcode do_compute_bins(void) {
 
         t_fit = ctools_timer_seconds();
 
-        if (config.verbose) {
-            char msg[256];
-            snprintf(msg, sizeof(msg), "cbinscatter: line fitting complete (%.3f sec)\n",
-                     t_fit - t_bins);
-            SF_display(msg);
-        }
+        /* Verbose output handled by .ado file using stored scalars */
     }
 
     /* Store results to Stata */
@@ -848,11 +785,7 @@ static ST_retcode do_compute_bins(void) {
     SF_scal_save("__cbinscatter_time_total", t_total);
     CTOOLS_SAVE_THREAD_INFO("__cbinscatter");
 
-    if (config.verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "cbinscatter: total time %.3f sec\n", t_total);
-        SF_display(msg);
-    }
+    /* Verbose output handled by .ado file using stored scalars */
 
 cleanup:
     free(y);

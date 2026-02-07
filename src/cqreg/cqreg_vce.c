@@ -75,8 +75,8 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
         vce_debug_log("  ERROR: size overflow K*K*sizeof\n");
         return -1;
     }
-    XtX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    L = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XtX = (ST_double *)ctools_cacheline_alloc(kk_size);
+    L = (ST_double *)ctools_cacheline_alloc(kk_size);
 
     vce_debug_log("  XtX=%p, L=%p\n", (void*)XtX, (void*)L);
 
@@ -90,7 +90,7 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
     /* Compute X'X
      * OPTIMIZED: Uses cqreg_dot and cqreg_dot_self which have 8x unrolling.
      * NOTE: OpenMP is INTENTIONALLY DISABLED here.
-     * When enabled, it causes heap corruption during cqreg_aligned_free()
+     * When enabled, it causes heap corruption during ctools_aligned_free()
      * later in this function. This appears to be an interaction between
      * OpenMP and the Stata plugin's memory allocation (posix_memalign).
      * Since K is typically small (3-20), parallelization provides minimal
@@ -137,9 +137,9 @@ ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
 
 cleanup:
     vce_debug_log("  Cleanup: freeing XtX=%p...\n", (void*)XtX);
-    cqreg_aligned_free(XtX);
+    ctools_aligned_free(XtX);
     vce_debug_log("  XtX freed. Now freeing L=%p...\n", (void*)L);
-    cqreg_aligned_free(L);
+    ctools_aligned_free(L);
     vce_debug_log("  L freed. cqreg_compute_xtx_inv: returning %d\n", rc);
 
     return rc;
@@ -161,7 +161,7 @@ void cqreg_sandwich_product(ST_double *V,
     }
 
     /* Allocate temporary for A * B */
-    AB = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    AB = (ST_double *)ctools_cacheline_alloc(kk_size);
     if (AB == NULL) {
         memset(V, 0, kk_size);
         return;
@@ -191,7 +191,7 @@ void cqreg_sandwich_product(ST_double *V,
         }
     }
 
-    cqreg_aligned_free(AB);
+    ctools_aligned_free(AB);
 }
 
 ST_int cqreg_map_clusters(const ST_int *cluster_ids,
@@ -286,7 +286,7 @@ ST_int cqreg_vce_iid(ST_double *V,
     }
 
     /* Allocate (X'X)^{-1} */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)ctools_cacheline_alloc(kk_size);
     vce_debug_log("  XtX_inv=%p\n", (void*)XtX_inv);
     if (XtX_inv == NULL) {
         vce_debug_log("  ERROR: XtX_inv alloc failed\n");
@@ -298,7 +298,7 @@ ST_int cqreg_vce_iid(ST_double *V,
     /* Compute (X'X)^{-1} */
     if (cqreg_compute_xtx_inv(XtX_inv, X, N, K) != 0) {
         vce_debug_log("  ERROR: cqreg_compute_xtx_inv failed\n");
-        cqreg_aligned_free(XtX_inv);
+        ctools_aligned_free(XtX_inv);
         vce_debug_close();
         return -1;
     }
@@ -322,7 +322,7 @@ ST_int cqreg_vce_iid(ST_double *V,
     vce_debug_log("  V computed, V[0]=%.6e\n", V[0]);
 
     vce_debug_log("  Freeing XtX_inv...\n");
-    cqreg_aligned_free(XtX_inv);
+    ctools_aligned_free(XtX_inv);
 
     vce_debug_log("cqreg_vce_iid: EXIT\n");
     vce_debug_close();
@@ -378,8 +378,8 @@ ST_int cqreg_vce_robust(ST_double *V,
     }
 
     /* Allocate matrices */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    Omega = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)ctools_cacheline_alloc(kk_size);
+    Omega = (ST_double *)ctools_cacheline_alloc(kk_size);
 
     if (XtX_inv == NULL || Omega == NULL) {
         vce_debug_log("  ERROR: allocation failed\n");
@@ -491,7 +491,7 @@ ST_int cqreg_vce_robust(ST_double *V,
     vce_debug_log("  sparsity^2 = %.6e\n", scale);
 
     /* First compute temp = Omega * (X'X)^{-1} */
-    ST_double *temp = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    ST_double *temp = (ST_double *)ctools_cacheline_alloc(kk_size);
     if (temp == NULL) {
         vce_debug_log("  ERROR: temp allocation failed\n");
         rc = -1;
@@ -521,15 +521,15 @@ ST_int cqreg_vce_robust(ST_double *V,
         }
     }
 
-    cqreg_aligned_free(temp);
+    ctools_aligned_free(temp);
 
     vce_debug_log("  V[0,0] = %.6e, SE[0] = %.4f\n", V[0], sqrt(V[0]));
 
 cleanup:
     vce_debug_log("cqreg_vce_robust: EXIT rc=%d\n", rc);
     vce_debug_close();
-    cqreg_aligned_free(XtX_inv);
-    cqreg_aligned_free(Omega);
+    ctools_aligned_free(XtX_inv);
+    ctools_aligned_free(Omega);
 
     return rc;
 }
@@ -575,10 +575,10 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     }
 
     /* Allocate matrices */
-    XDX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    XDX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    XtX = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    L = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XDX = (ST_double *)ctools_cacheline_alloc(kk_size);
+    XDX_inv = (ST_double *)ctools_cacheline_alloc(kk_size);
+    XtX = (ST_double *)ctools_cacheline_alloc(kk_size);
+    L = (ST_double *)ctools_cacheline_alloc(kk_size);
 
     if (XDX == NULL || XDX_inv == NULL || XtX == NULL || L == NULL) {
         vce_debug_log("  ERROR: allocation failed\n");
@@ -715,7 +715,7 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
     vce_debug_log("  scale (q*(1-q)) = %.6e\n", scale);
 
     /* temp = X'X * (X'DX)^{-1} */
-    ST_double *temp = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    ST_double *temp = (ST_double *)ctools_cacheline_alloc(kk_size);
     if (temp == NULL) {
         rc = -1;
         goto cleanup;
@@ -744,17 +744,17 @@ ST_int cqreg_vce_robust_fitted(ST_double *V,
         }
     }
 
-    cqreg_aligned_free(temp);
+    ctools_aligned_free(temp);
 
     vce_debug_log("  V[0,0] = %.6e, SE[0] = %.4f\n", V[0], sqrt(V[0]));
 
 cleanup:
     vce_debug_log("cqreg_vce_robust_fitted: EXIT rc=%d\n", rc);
     vce_debug_close();
-    cqreg_aligned_free(XDX);
-    cqreg_aligned_free(XDX_inv);
-    cqreg_aligned_free(XtX);
-    cqreg_aligned_free(L);
+    ctools_aligned_free(XDX);
+    ctools_aligned_free(XDX_inv);
+    ctools_aligned_free(XtX);
+    ctools_aligned_free(L);
 
     return rc;
 }
@@ -798,8 +798,8 @@ ST_int cqreg_vce_cluster(ST_double *V,
     }
 
     /* Allocate matrices */
-    XtX_inv = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
-    M = (ST_double *)cqreg_aligned_alloc(kk_size, CQREG_CACHE_LINE);
+    XtX_inv = (ST_double *)ctools_cacheline_alloc(kk_size);
+    M = (ST_double *)ctools_cacheline_alloc(kk_size);
     score_g = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
     cluster_map = (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int));
 
@@ -892,9 +892,9 @@ ST_int cqreg_vce_cluster(ST_double *V,
     }
 
 cleanup:
-    cqreg_aligned_free(XtX_inv);
-    cqreg_aligned_free(M);
-    cqreg_aligned_free(score_g);
+    ctools_aligned_free(XtX_inv);
+    ctools_aligned_free(M);
+    ctools_aligned_free(score_g);
     free(cluster_map);
 
     return rc;

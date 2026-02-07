@@ -10,48 +10,7 @@
 #define CIVREGHDFE_MATRIX_H
 
 #include "../stplugin.h"
-
-/*
-    Matrix multiply C = A' * B
-    A is N x K1, B is N x K2, Result C is K1 x K2
-    All matrices stored in column-major order.
-
-    OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
-*/
-void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
-                           ST_int N, ST_int K1, ST_int K2,
-                           ST_double * restrict C);
-
-/*
-    Matrix multiply C = A * B
-    A is K1 x K2, B is K2 x K3, Result C is K1 x K3
-    All matrices stored in column-major order.
-
-    OPTIMIZED: Uses cache-friendly loop order and OpenMP parallelization
-*/
-void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restrict B,
-                          ST_int K1, ST_int K2, ST_int K3,
-                          ST_double * restrict C);
-
-/*
-    Weighted matrix multiply C = A' * diag(w) * B
-    A is N x K1, B is N x K2, w is N x 1 (weights, may be NULL)
-    Result C is K1 x K2
-
-    OPTIMIZED: Uses K-way unrolled weighted dot products and OpenMP parallelization
-*/
-void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
-                            const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
-                            ST_double * restrict C);
-
-/*
-    Solve linear system Ax = b using Cholesky decomposition
-    A is K x K symmetric positive definite (modified in place)
-    b is K x 1
-    x is K x 1 (output, can be same as b for in-place)
-    Returns 0 on success, -1 if not positive definite
-*/
-ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x);
+#include "../ctools_matrix.h"
 
 /*
     HAC Kernel weight functions for Newey-West style standard errors.

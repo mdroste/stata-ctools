@@ -15,7 +15,7 @@
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
-#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
 /*
  * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
@@ -48,9 +48,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int num_singletons;
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
-    char msg[256];
     char scalar_name[64];
-    double t_start, t_read, t_singleton, t_dof, t_partial, t_ols, t_vce;
+    double t_start, t_load, t_copy, t_remap, t_singleton, t_dof, t_partial, t_ols, t_vce;
     ST_int max_iter_singleton = 100;
     ST_int mobility_groups = 1;
     ST_int df_a = 0;
@@ -70,7 +69,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     ST_int num_threads;
     ST_int *cluster_ids = NULL;
     ST_int num_clusters = 0;
-    ST_int t;
     perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
 
     (void)argc;  /* Unused */
@@ -160,14 +158,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 198;
     }
 
-    /* Debug output for verbose mode */
-    if (verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "creghdfe: K=%d G=%d vcetype=%d has_weights=%d in1=%d in2=%d\n",
-                 K, G, vcetype, has_weights, in1, in2);
-        SF_display(msg);
-    }
-
     /* Determine threads */
 #ifdef _OPENMP
     num_threads = omp_get_max_threads();
@@ -221,20 +211,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
         return 198;
     }
 
-    if (verbose >= 1) {
-        snprintf(msg, sizeof(msg), "{txt}   C plugin: full_regression N=%d, K=%d, G=%d, threads=%d\n",
-                 N_orig, K, G, num_threads);
-        SF_display(msg);
-    }
-
-    /* Debug output after load */
-    if (verbose) {
-        char msg[256];
-        snprintf(msg, sizeof(msg), "creghdfe: loaded total_vars=%d, filtered.data.nvars=%zu, N_orig=%d\n",
-                 total_vars, filtered.data.nvars, N_orig);
-        SF_display(msg);
-    }
-
     /* Verify all variables were loaded successfully (defensive check) */
     for (i = 0; i < total_vars; i++) {
         if (filtered.data.vars[i].nobs > 0) {
@@ -256,6 +232,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
             }
         }
     }
+
+    t_load = get_time_sec();
 
     /* Allocate factor structures (no hash tables needed with sort-based remapping) */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
@@ -331,6 +309,8 @@ ST_retcode do_full_regression(int argc, char *argv[])
     for (k = 0; k < K; k++) {
         means[k] /= N_orig;
     }
+
+    t_copy = get_time_sec();
 
     /* Use sort-based remapping for FE variables (much faster than hash tables).
      * Data is already filtered, use direct access. */
@@ -446,7 +426,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    t_read = get_time_sec();
+    t_remap = get_time_sec();
 
     /* ================================================================
      * STEP 2: Iteratively drop singletons using shared utility
@@ -645,11 +625,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     t_dof = get_time_sec();
 
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
-        SF_display(msg);
-    }
-
     /* ================================================================
      * STEP 4: Set up global state for CG solver (compacted data)
      * ================================================================ */
@@ -762,77 +737,16 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
         free(remap);
 
-        /* Compute inverse counts for fast division in projection */
-        ST_int num_lev = g_state->factors[g].num_levels;
-        g_state->factors[g].inv_counts = (ST_double *)malloc(num_lev * sizeof(ST_double));
-        if (g_state->factors[g].inv_counts) {
-            for (ST_int lev = 0; lev < num_lev; lev++) {
-                g_state->factors[g].inv_counts[lev] =
-                    (g_state->factors[g].counts[lev] > 0) ? 1.0 / g_state->factors[g].counts[lev] : 0.0;
-            }
-        }
-        if (has_weights && g_state->factors[g].weighted_counts) {
-            g_state->factors[g].inv_weighted_counts = (ST_double *)malloc(num_lev * sizeof(ST_double));
-            if (g_state->factors[g].inv_weighted_counts) {
-                for (ST_int lev = 0; lev < num_lev; lev++) {
-                    g_state->factors[g].inv_weighted_counts[lev] =
-                        (g_state->factors[g].weighted_counts[lev] > 0) ? 1.0 / g_state->factors[g].weighted_counts[lev] : 0.0;
-                }
-            }
-        } else {
-            g_state->factors[g].inv_weighted_counts = NULL;
-        }
-
-        /* Initialize sorted indices fields (not used - sequential ans access is better) */
+        /* Sorted indices built lazily in partial_out_columns for large factors */
         g_state->factors[g].sorted_indices = NULL;
         g_state->factors[g].sorted_levels = NULL;
+        g_state->factors[g].level_offsets = NULL;
         g_state->factors[g].sorted_initialized = 0;
     }
 
-    /* Allocate thread buffers */
-    g_state->thread_cg_r = (ST_double **)calloc(num_threads, sizeof(ST_double *));
-    g_state->thread_cg_u = (ST_double **)calloc(num_threads, sizeof(ST_double *));
-    g_state->thread_cg_v = (ST_double **)calloc(num_threads, sizeof(ST_double *));
-    g_state->thread_proj = NULL;  /* Not used in creghdfe - CG solver uses fused Kaczmarz */
-    g_state->thread_fe_means = (ST_double **)calloc(num_threads * G, sizeof(ST_double *));
-
-    /* Check array allocations */
-    if (!g_state->thread_cg_r || !g_state->thread_cg_u || !g_state->thread_cg_v ||
-        !g_state->thread_fe_means) {
-        cleanup_state();
-        for (i = 0; i < G; i++) {
-            if (factors[i].levels) free(factors[i].levels);
-            if (factors[i].counts) free(factors[i].counts);
-        }
-        free(factors); free(mask);
-        free(data); free(means); free(stdevs); free(tss);
-        if (weights) free(weights);
-        for (i = 0; i < G; i++) {
-            if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
-        }
-        return 1;
-    }
-
-    int thread_alloc_failed = 0;
-    for (t = 0; t < num_threads && !thread_alloc_failed; t++) {
-        g_state->thread_cg_r[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        g_state->thread_cg_u[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        g_state->thread_cg_v[t] = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!g_state->thread_cg_r[t] || !g_state->thread_cg_u[t] ||
-            !g_state->thread_cg_v[t]) {
-            thread_alloc_failed = 1;
-            break;
-        }
-        for (g = 0; g < G; g++) {
-            g_state->thread_fe_means[t * G + g] = (ST_double *)malloc(
-                g_state->factors[g].num_levels * sizeof(ST_double));
-            if (!g_state->thread_fe_means[t * G + g]) {
-                thread_alloc_failed = 1;
-                break;
-            }
-        }
-    }
-    if (thread_alloc_failed) {
+    /* Allocate inv_counts, inv_weighted_counts, and thread buffers */
+    g_state->num_threads = num_threads;
+    if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
         cleanup_state();
         for (i = 0; i < G; i++) {
             if (factors[i].levels) free(factors[i].levels);
@@ -1021,20 +935,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Partial out via CG solver using shared helper */
-    if (verbose >= 1) {
-        SF_display("{txt}   Partialling out and solving OLS...\n");
-    }
-
     ST_int max_iters = partial_out_columns(g_state, data, N, K, num_threads);
     if (max_iters < 0) max_iters = -max_iters;  /* Handle failure indicator */
 
     /* Save iteration count to Stata scalar */
     ctools_scal_save("__creghdfe_iterations", (ST_double)max_iters);
-
-    if (verbose >= 1) {
-        snprintf(msg, sizeof(msg), "{txt}   Converged in %d iterations\n", max_iters);
-        SF_display(msg);
-    }
 
     t_partial = get_time_sec();
 
@@ -1113,12 +1018,6 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     K_keep = K_x - num_collinear;
-
-    if (verbose >= 1 && num_collinear > 0) {
-        snprintf(msg, sizeof(msg), "{txt}   Dropped %d collinear variable%s\n",
-                 num_collinear, num_collinear == 1 ? "" : "s");
-        SF_display(msg);
-    }
 
     /* Store collinearity flags */
     ctools_scal_save("__creghdfe_num_collinear", (ST_double)num_collinear);
@@ -1430,38 +1329,20 @@ ST_retcode do_full_regression(int argc, char *argv[])
                 cluster_ids[idx] = fe_levels_for_cluster[idx] - 1;  /* Convert 1-based to 0-based */
             }
 
-            /* When cluster == FE, that FE is trivially nested within cluster */
+            /* Check FE nesting within cluster */
             for (g = 0; g < G; g++) {
+                ST_int is_nested;
                 if (g == cluster_matches_fe) {
-                    /* This FE is the cluster variable - it's nested */
-                    df_a_nested_computed += g_state->factors[g].num_levels;
-                    snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
-                    ctools_scal_save(scalar_name, 1.0);
+                    is_nested = 1;  /* FE is the cluster variable - trivially nested */
                 } else {
-                    /* Check if this FE is nested within cluster */
-                    ST_int *fe_levels_g = g_state->factors[g].levels;
-                    ST_int num_fe_levels = g_state->factors[g].num_levels;
-                    ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
-                    ST_int is_nested = 0;
-
-                    if (fe_to_cluster) {
-                        for (i = 0; i < num_fe_levels; i++) fe_to_cluster[i] = -1;
-                        is_nested = 1;
-                        for (idx = 0; idx < N && is_nested; idx++) {
-                            ST_int fe_level = fe_levels_g[idx] - 1;
-                            ST_int clust_id = cluster_ids[idx];
-                            if (fe_to_cluster[fe_level] == -1) {
-                                fe_to_cluster[fe_level] = clust_id;
-                            } else if (fe_to_cluster[fe_level] != clust_id) {
-                                is_nested = 0;
-                            }
-                        }
-                        if (is_nested) df_a_nested_computed += num_fe_levels;
-                        free(fe_to_cluster);
-                    }
-                    snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
-                    ctools_scal_save(scalar_name, (ST_double)is_nested);
+                    is_nested = ctools_fe_nested_in_cluster(
+                        g_state->factors[g].levels, g_state->factors[g].num_levels,
+                        cluster_ids, N);
+                    if (is_nested < 0) is_nested = 0;  /* Treat alloc failure as not nested */
                 }
+                if (is_nested) df_a_nested_computed += g_state->factors[g].num_levels;
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                ctools_scal_save(scalar_name, (ST_double)is_nested);
             }
         } else {
             /* Cluster variable is different from all FE variables.
@@ -1545,26 +1426,11 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
             /* Check if any FE is nested within cluster */
             for (g = 0; g < G; g++) {
-                ST_int *fe_levels_g = g_state->factors[g].levels;
-                ST_int num_fe_levels = g_state->factors[g].num_levels;
-                ST_int *fe_to_cluster = (ST_int *)malloc(num_fe_levels * sizeof(ST_int));
-                ST_int is_nested = 0;
-
-                if (fe_to_cluster) {
-                    for (i = 0; i < num_fe_levels; i++) fe_to_cluster[i] = -1;
-                    is_nested = 1;
-                    for (idx = 0; idx < N && is_nested; idx++) {
-                        ST_int fe_level = fe_levels_g[idx] - 1;
-                        ST_int clust_id = cluster_ids[idx];
-                        if (fe_to_cluster[fe_level] == -1) {
-                            fe_to_cluster[fe_level] = clust_id;
-                        } else if (fe_to_cluster[fe_level] != clust_id) {
-                            is_nested = 0;
-                        }
-                    }
-                    if (is_nested) df_a_nested_computed += num_fe_levels;
-                    free(fe_to_cluster);
-                }
+                ST_int is_nested = ctools_fe_nested_in_cluster(
+                    g_state->factors[g].levels, g_state->factors[g].num_levels,
+                    cluster_ids, N);
+                if (is_nested < 0) is_nested = 0;  /* Treat alloc failure as not nested */
+                if (is_nested) df_a_nested_computed += g_state->factors[g].num_levels;
                 snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
                 ctools_scal_save(scalar_name, (ST_double)is_nested);
             }
@@ -1684,24 +1550,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     /* Store residuals back to Stata if requested.
      * Uses obs_map to write to correct Stata observations. */
     if (compute_resid && resid_var_idx > 0 && resid) {
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "{txt}   Storing residuals: resid_var_idx=%d, N=%d, N_orig=%d\n",
-                     resid_var_idx, N, N_orig);
-            SF_display(msg);
-        }
-
-        ST_int stored_count = 0;
         idx = 0;
         for (i = 0; i < N_orig; i++) {
             if (mask[i]) {
-                ST_retcode rc = SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
-                if (rc == 0) stored_count++;
+                SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
                 idx++;
             }
-        }
-        if (verbose) {
-            snprintf(msg, sizeof(msg), "{txt}   Stored %d residuals (expected N=%d)\n", stored_count, N);
-            SF_display(msg);
         }
     }
 
@@ -1829,8 +1683,10 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     /* Save timing results to Stata scalars */
-    ctools_scal_save("_creghdfe_time_read", t_read - t_start);
-    ctools_scal_save("_creghdfe_time_singleton", t_singleton - t_read);
+    ctools_scal_save("_creghdfe_time_load", t_load - t_start);
+    ctools_scal_save("_creghdfe_time_copy", t_copy - t_load);
+    ctools_scal_save("_creghdfe_time_remap", t_remap - t_copy);
+    ctools_scal_save("_creghdfe_time_singleton", t_singleton - t_remap);
     ctools_scal_save("_creghdfe_time_dof", t_dof - t_singleton);
     ctools_scal_save("_creghdfe_time_partial", t_partial - t_dof);
     ctools_scal_save("_creghdfe_time_ols", t_ols - t_partial);

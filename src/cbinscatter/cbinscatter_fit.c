@@ -17,6 +17,7 @@
 #include "cbinscatter_fit.h"
 #include "cbinscatter_resid.h"
 #include "../ctools_config.h"
+#include "../ctools_ols.h"
 
 /* ========================================================================
  * Fast Linear Fit (Single Pass)
@@ -193,15 +194,10 @@ static ST_retcode fit_quadratic_fast(
     /* Build X'y vector */
     ST_double Xty[3] = { s_y, s_xy, s_x2y };
 
-    /* Cholesky solve */
-    ST_retcode rc = cholesky_decompose(XtX, 3);
-    if (rc != CBINSCATTER_OK) return rc;
-
-    coefs[0] = Xty[0];
-    coefs[1] = Xty[1];
-    coefs[2] = Xty[2];
-    rc = cholesky_solve(XtX, 3, coefs);
-    if (rc != CBINSCATTER_OK) return rc;
+    /* Solve via shared Cholesky */
+    if (ctools_solve_cholesky(XtX, Xty, 3, coefs) != 0) {
+        return CBINSCATTER_ERR_SINGULAR;
+    }
 
     /* Compute R² (TSS = Σ(y-ȳ)² = Σy² - (Σy)²/n) */
     ST_double tss = s_yy - s_y * s_y / s_1;
@@ -328,13 +324,11 @@ ST_retcode fit_polynomial(
         }
     }
 
-    /* Cholesky solve */
-    rc = cholesky_decompose(XtX, K);
-    if (rc != CBINSCATTER_OK) goto cleanup;
-
-    memcpy(coefs, Xty, K * sizeof(ST_double));
-    rc = cholesky_solve(XtX, K, coefs);
-    if (rc != CBINSCATTER_OK) goto cleanup;
+    /* Solve via shared Cholesky */
+    if (ctools_solve_cholesky(XtX, Xty, K, coefs) != 0) {
+        rc = CBINSCATTER_ERR_SINGULAR;
+        goto cleanup;
+    }
 
     /* Compute R² with second pass for RSS (TSS = Σw(y-ȳ)² = Σwy² - (Σwy)²/Σw) */
     ST_double tss;

@@ -612,36 +612,28 @@ save `using_1'
 
 use `master', clear
 merge 1:1 id using `using_1', update nogenerate
-local stata_v2 = value[2]
-local stata_v3 = value[3]
+rename value stata_value
+tempfile stata_update
+save `stata_update'
 
 use `master', clear
 cmerge 1:1 id using `using_1', update nogenerate noreport
-local cmerge_v2 = value[2]
-local cmerge_v3 = value[3]
-
-if `stata_v2' == `cmerge_v2' & `stata_v3' == `cmerge_v3' {
-    test_pass "update option"
-}
-else {
-    test_fail "update option" "values differ"
-}
+rename value cmerge_value
+merge 1:1 id using `stata_update', nogenerate
+assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update option"
 
 * Test update replace option
 use `master', clear
 merge 1:1 id using `using_1', update replace nogenerate
-local stata_v1 = value[1]
+rename value stata_value
+tempfile stata_update_replace
+save `stata_update_replace'
 
 use `master', clear
 cmerge 1:1 id using `using_1', update replace nogenerate noreport
-local cmerge_v1 = value[1]
-
-if `stata_v1' == `cmerge_v1' {
-    test_pass "update replace option"
-}
-else {
-    test_fail "update replace option" "values differ"
-}
+rename value cmerge_value
+merge 1:1 id using `stata_update_replace', nogenerate
+assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update replace option"
 
 /*******************************************************************************
  * SECTION 15: sorted option
@@ -1510,10 +1502,21 @@ gen other = runiform()
 tempfile same_key_using
 save `same_key_using'
 
+* First run Stata's merge to get expected N
+use `same_key_master', clear
+merge m:m key1 key2 key3 using `same_key_using', nogen
+local expected_N = _N
+
 use `same_key_master', clear
 capture noisily cmerge m:m key1 key2 key3 using `same_key_using', nogen noreport
 if _rc == 0 {
-    test_pass "all same keys (degenerate m:m)"
+    * Verify N matches Stata's merge result
+    if _N == `expected_N' {
+        test_pass "all same keys (degenerate m:m)"
+    }
+    else {
+        test_fail "all same keys (degenerate m:m)" "N=`=_N', expected `expected_N'"
+    }
 }
 else {
     test_fail "all same keys (degenerate)" "rc=`=_rc'"
@@ -2075,38 +2078,28 @@ save `update_using'
 
 use `update_master', clear
 merge 1:1 id using `update_using', update nogenerate
-local stata_v2 = value[2]
-local stata_v4 = value[4]
+rename value stata_value
+tempfile stata_update_fill
+save `stata_update_fill'
 
 use `update_master', clear
 cmerge 1:1 id using `update_using', update nogenerate noreport
-local cmerge_v2 = value[2]
-local cmerge_v4 = value[4]
-
-if `stata_v2' == `cmerge_v2' & `stata_v4' == `cmerge_v4' {
-    test_pass "update fills missing values"
-}
-else {
-    test_fail "update option" "values differ"
-}
+rename value cmerge_value
+merge 1:1 id using `stata_update_fill', nogenerate
+assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update fills missing values"
 
 * update replace - replace non-missing too
 use `update_master', clear
 merge 1:1 id using `update_using', update replace nogenerate
-local stata_v1 = value[1]
-local stata_v3 = value[3]
+rename value stata_value
+tempfile stata_update_repl2
+save `stata_update_repl2'
 
 use `update_master', clear
 cmerge 1:1 id using `update_using', update replace nogenerate noreport
-local cmerge_v1 = value[1]
-local cmerge_v3 = value[3]
-
-if `stata_v1' == `cmerge_v1' & `stata_v3' == `cmerge_v3' {
-    test_pass "update replace replaces non-missing"
-}
-else {
-    test_fail "update replace" "values differ"
-}
+rename value cmerge_value
+merge 1:1 id using `stata_update_repl2', nogenerate
+assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update replace replaces non-missing"
 
 * update with multiple variables
 clear
@@ -2131,20 +2124,21 @@ save `update_multi_using'
 
 use `update_multi_master', clear
 merge 1:1 id using `update_multi_using', update nogenerate
-local stata_y1 = y[1]
-local stata_x2 = x[2]
+rename x stata_x
+rename y stata_y
+rename z stata_z
+tempfile stata_update_multi
+save `stata_update_multi'
 
 use `update_multi_master', clear
 cmerge 1:1 id using `update_multi_using', update nogenerate noreport
-local cmerge_y1 = y[1]
-local cmerge_x2 = x[2]
-
-if `stata_y1' == `cmerge_y1' & `stata_x2' == `cmerge_x2' {
-    test_pass "update with multiple variables"
-}
-else {
-    test_fail "update multi" "values differ"
-}
+rename x cmerge_x
+rename y cmerge_y
+rename z cmerge_z
+merge 1:1 id using `stata_update_multi', nogenerate
+assert_var_equal stata_x cmerge_x $DEFAULT_SIGFIGS "update multi: x"
+assert_var_equal stata_y cmerge_y $DEFAULT_SIGFIGS "update multi: y"
+assert_var_equal stata_z cmerge_z $DEFAULT_SIGFIGS "update multi: z"
 
 /*******************************************************************************
  * SECTION 30: Assert Option Tests

@@ -8,6 +8,8 @@
 #ifndef CTOOLS_CONFIG_H
 #define CTOOLS_CONFIG_H
 
+#include <stddef.h>  /* size_t */
+
 /* ============================================================================
    Parallelization thresholds
    ============================================================================ */

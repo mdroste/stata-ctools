@@ -59,13 +59,13 @@ typedef struct {
     bool is_integer;
     double min_value;
     double max_value;
-    int max_decimal_digits;
+    bool column_has_quotes;  /* Aggregated from all chunks: any quotes in this column */
 } CImportColumnInfo;
 
 typedef struct {
     bool seen_string;
-    bool seen_non_empty;
     int max_field_len;
+    bool has_quotes;      /* Any quotes seen in this column's fields */
 } CImportColumnParseStats;
 
 typedef struct {
@@ -116,11 +116,7 @@ typedef struct CImportContext {
     CImportBindQuotesMode bindquotes;
     CImportParsedChunk *chunks;
     int num_chunks;
-    size_t *row_offsets;
     CImportColumnCache *col_cache;
-    char *string_arena;
-    size_t string_arena_size;
-    size_t string_arena_used;
     int num_threads;
     atomic_int error_code;
     char error_message[256];

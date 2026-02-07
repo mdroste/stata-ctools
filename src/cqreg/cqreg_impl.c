@@ -8,7 +8,7 @@
 #include "cqreg_impl.h"
 #include "cqreg_regress.h"
 #include "cqreg_types.h"
-#include "../ctools_error.h"
+#include "../ctools_runtime.h"
 
 #include <string.h>
 #include <ctype.h>

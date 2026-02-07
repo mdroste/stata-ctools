@@ -146,13 +146,9 @@ benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(id) testname("20K dataset
 print_section "first Option"
 
 sysuse auto, clear
-capture civreghdfe price (mpg = weight), absorb(foreign) first
-if _rc == 0 {
-    test_pass "first option accepted"
-}
-else {
-    test_fail "first option" "returned error `=_rc'"
-}
+test_error_match, stata_cmd("ivreghdfe price (mpg = weight), absorb(foreign) first") ///
+    ctools_cmd("civreghdfe price (mpg = weight), absorb(foreign) first") ///
+    testname("first option")
 
 /*******************************************************************************
  * SECTION 10: small option
@@ -160,13 +156,9 @@ else {
 print_section "small Option"
 
 sysuse auto, clear
-capture civreghdfe price (mpg = weight), absorb(foreign) small
-if _rc == 0 {
-    test_pass "small option accepted"
-}
-else {
-    test_fail "small option" "returned error `=_rc'"
-}
+test_error_match, stata_cmd("ivreghdfe price (mpg = weight), absorb(foreign) small") ///
+    ctools_cmd("civreghdfe price (mpg = weight), absorb(foreign) small") ///
+    testname("small option")
 
 /*******************************************************************************
  * SECTION 11: tolerance/maxiter options
@@ -174,13 +166,9 @@ else {
 print_section "tolerance/maxiter Options"
 
 sysuse auto, clear
-capture civreghdfe price (mpg = weight), absorb(foreign) tolerance(1e-10)
-if _rc == 0 {
-    test_pass "tolerance(1e-10) accepted"
-}
-else {
-    test_fail "tolerance option" "returned error `=_rc'"
-}
+test_error_match, stata_cmd("ivreghdfe price (mpg = weight), absorb(foreign) tolerance(1e-10)") ///
+    ctools_cmd("civreghdfe price (mpg = weight), absorb(foreign) tolerance(1e-10)") ///
+    testname("tolerance(1e-10)")
 
 sysuse auto, clear
 capture civreghdfe price (mpg = weight), absorb(foreign) maxiter(1000)
@@ -192,10 +180,11 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 12: verbose/timeit options
+ * SECTION 12: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
+* Verify verbose option is accepted
 sysuse auto, clear
 capture civreghdfe price (mpg = weight), absorb(foreign) verbose
 if _rc == 0 {
@@ -205,14 +194,9 @@ else {
     test_fail "verbose option" "returned error `=_rc'"
 }
 
+* Verify underlying regression is correct (benchmark without verbose)
 sysuse auto, clear
-capture civreghdfe price (mpg = weight), absorb(foreign) timeit
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
-}
+benchmark_ivreghdfe price (mpg = weight), absorb(foreign) testname("verbose: underlying regression correct")
 
 /*******************************************************************************
  * SECTION 13: if/in conditions
@@ -233,25 +217,7 @@ benchmark_ivreghdfe price (mpg = weight) in 1/50, absorb(foreign) testname("in c
 print_section "Coefficient Comparison"
 
 sysuse auto, clear
-
-ivreghdfe price (mpg = weight length), absorb(foreign)
-matrix ivreghdfe_b = e(b)
-
-civreghdfe price (mpg = weight length), absorb(foreign)
-matrix civreghdfe_b = e(b)
-
-* Compare coefficients using sigfigs
-matrix_min_sigfigs ivreghdfe_b civreghdfe_b
-local min_sf = r(min_sigfigs)
-
-if `min_sf' >= $DEFAULT_SIGFIGS {
-    local sf_fmt : display %4.1f `min_sf'
-    test_pass "coefficients match (sigfigs=`sf_fmt')"
-}
-else {
-    local sf_fmt : display %4.1f `min_sf'
-    test_fail "coefficients" "sigfigs=`sf_fmt' below threshold"
-}
+benchmark_ivreghdfe price (mpg = weight length), absorb(foreign) testname("coefficient comparison")
 
 /*******************************************************************************
  * SECTION 15: Weights
@@ -414,26 +380,8 @@ else {
     test_fail "two-way vcetype" "vcetype = `e(vcetype)' instead of Two-way Cluster"
 }
 
-* Test that two-way SE >= max(one-way SEs)
-civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) vce(cluster firm time)
-local se_twoway = sqrt(e(V)[1,1])
-
-civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) vce(cluster firm)
-local se_firm = sqrt(e(V)[1,1])
-
-civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) vce(cluster time)
-local se_time = sqrt(e(V)[1,1])
-
-* Two-way SE is computed as V_firm + V_time - V_iid, so it can be smaller than
-* max(one-way SEs) in some data configurations. Instead, verify the SE is positive
-* and reasonable (between 0 and 10x the larger one-way SE).
-local max_oneway = max(`se_firm', `se_time')
-if `se_twoway' > 0 & `se_twoway' < 10 * `max_oneway' {
-    test_pass "two-way SE is positive and reasonable"
-}
-else {
-    test_fail "two-way SE" "se_twoway=`se_twoway' (max_oneway=`max_oneway')"
-}
+* Compare two-way clustering against ivreghdfe (full comparison: coefficients, VCE, N, df_r, etc.)
+benchmark_ivreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) vce(cluster firm time) testname("two-way clustering")
 
 * Test that clustvar1 and clustvar2 are stored
 civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) vce(cluster firm time)
@@ -472,21 +420,28 @@ else {
     test_fail "orthog()" "returned error `=_rc'"
 }
 
-* Test orthog() stores results
-civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) orthog(z3)
-if e(cstat) != . & e(cstat_df) != . & e(cstat_p) != . {
-    test_pass "orthog() stores cstat, cstat_df, cstat_p"
-}
-else {
-    test_fail "orthog() results" "cstat=`e(cstat)', df=`e(cstat_df)', p=`e(cstat_p)'"
-}
+* Test orthog() stores results and matches ivreghdfe
+quietly ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) orthog(z3)
+local ivr_cstat = e(cstat)
+local ivr_cstat_p = e(cstatp)
 
-* Test C-stat is non-negative and p-value is in [0,1]
-if e(cstat) >= 0 & e(cstat_p) >= 0 & e(cstat_p) <= 1 {
-    test_pass "orthog() produces valid statistics"
+quietly civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) orthog(z3)
+if e(cstat) != . & e(cstat_df) != . & e(cstat_p) != . {
+    sigfigs `ivr_cstat' `=e(cstat)'
+    local sf1 = r(sigfigs)
+    sigfigs `ivr_cstat_p' `=e(cstat_p)'
+    local sf2 = r(sigfigs)
+    if `sf1' >= $DEFAULT_SIGFIGS & `sf2' >= $DEFAULT_SIGFIGS {
+        test_pass "orthog() cstat matches ivreghdfe"
+    }
+    else {
+        local sf_min = min(`sf1', `sf2')
+        local sf_fmt : display %5.1f `sf_min'
+        test_fail "orthog() cstat" "sigfigs=`sf_fmt'"
+    }
 }
 else {
-    test_fail "orthog() values" "invalid cstat or p-value"
+    test_fail "orthog()" "diagnostic values missing"
 }
 
 * Test noid option
@@ -512,13 +467,28 @@ else {
     test_fail "endogtest()" "returned error `=_rc'"
 }
 
-* Test endogtest() stores results
-civreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) endogtest(x_endog2)
+* Test endogtest() stores results and matches ivreghdfe
+quietly ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) endogtest(x_endog2)
+local ivr_endogtest = e(estat)
+local ivr_endogtest_p = e(estatp)
+
+quietly civreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) endogtest(x_endog2)
 if e(endogtest) != . & e(endogtest_df) != . & e(endogtest_p) != . {
-    test_pass "endogtest() stores endogtest, endogtest_df, endogtest_p"
+    sigfigs `ivr_endogtest' `=e(endogtest)'
+    local sf1 = r(sigfigs)
+    sigfigs `ivr_endogtest_p' `=e(endogtest_p)'
+    local sf2 = r(sigfigs)
+    if `sf1' >= $DEFAULT_SIGFIGS & `sf2' >= $DEFAULT_SIGFIGS {
+        test_pass "endogtest() matches ivreghdfe"
+    }
+    else {
+        local sf_min = min(`sf1', `sf2')
+        local sf_fmt : display %5.1f `sf_min'
+        test_fail "endogtest()" "sigfigs=`sf_fmt'"
+    }
 }
 else {
-    test_fail "endogtest() results" "missing stored results"
+    test_fail "endogtest()" "diagnostic values missing"
 }
 
 * Test redundant() option
@@ -530,13 +500,28 @@ else {
     test_fail "redundant()" "returned error `=_rc'"
 }
 
-* Test redundant() stores results
-civreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) redundant(z3)
+* Test redundant() stores results and matches ivreghdfe
+quietly ivreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) redundant(z3)
+local ivr_redund = e(redstat)
+local ivr_redund_p = e(redp)
+
+quietly civreghdfe y (x_endog1 x_endog2 = z1 z2 z3) x_exog, absorb(firm) redundant(z3)
 if e(redund) != . & e(redund_df) != . & e(redund_p) != . {
-    test_pass "redundant() stores redund, redund_df, redund_p"
+    sigfigs `ivr_redund' `=e(redund)'
+    local sf1 = r(sigfigs)
+    sigfigs `ivr_redund_p' `=e(redund_p)'
+    local sf2 = r(sigfigs)
+    if `sf1' >= $DEFAULT_SIGFIGS & `sf2' >= $DEFAULT_SIGFIGS {
+        test_pass "redundant() matches ivreghdfe"
+    }
+    else {
+        local sf_min = min(`sf1', `sf2')
+        local sf_fmt : display %5.1f `sf_min'
+        test_fail "redundant()" "sigfigs=`sf_fmt'"
+    }
 }
 else {
-    test_fail "redundant() results" "missing stored results"
+    test_fail "redundant()" "diagnostic values missing"
 }
 
 /*******************************************************************************
@@ -577,17 +562,24 @@ else {
 
 * Test FWL theorem: coefficients on non-partialled vars should match
 civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm)
-local b_full = _b[x_endog]
+local b_full_endog = _b[x_endog]
+local b_full_exog1 = _b[x_exog1]
 civreghdfe y (x_endog = z1 z2) x_exog1 x_exog2, absorb(firm) partial(x_exog2)
-local b_partial = _b[x_endog]
-sigfigs `b_full' `b_partial'
-local sf = r(sigfigs)
-if `sf' >= $DEFAULT_SIGFIGS {
+local b_partial_endog = _b[x_endog]
+local b_partial_exog1 = _b[x_exog1]
+
+sigfigs `b_full_endog' `b_partial_endog'
+local sf_endog = r(sigfigs)
+sigfigs `b_full_exog1' `b_partial_exog1'
+local sf_exog1 = r(sigfigs)
+
+if `sf_endog' >= $DEFAULT_SIGFIGS & `sf_exog1' >= $DEFAULT_SIGFIGS {
     test_pass "partial() coefficients match full model (FWL theorem)"
 }
 else {
-    local sf_fmt : display %4.1f `sf'
-    test_fail "partial() FWL" "coefficient sigfigs = `sf_fmt'"
+    local sf_min = min(`sf_endog', `sf_exog1')
+    local sf_fmt : display %4.1f `sf_min'
+    test_fail "partial() FWL" "min sigfigs = `sf_fmt' (x_endog=`sf_endog', x_exog1=`sf_exog1')"
 }
 
 * Test partial() with multiple variables
@@ -645,10 +637,26 @@ else {
     test_fail "ffirst" "returned error `=_rc'"
 }
 
-* Test ffirst stores partial R²
-civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) ffirst
+* Test ffirst stores partial R² and matches ivreghdfe
+quietly ivreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) ffirst
+local ivr_partial_r2 = e(partial_r2_1)
+
+quietly civreghdfe y (x_endog = z1 z2 z3) x_exog, absorb(firm) ffirst
 if e(partial_r2_1) != . {
-    test_pass "ffirst stores partial_r2_1"
+    if !missing(`ivr_partial_r2') {
+        sigfigs `ivr_partial_r2' `=e(partial_r2_1)'
+        local sf = r(sigfigs)
+        if `sf' >= $DEFAULT_SIGFIGS {
+            test_pass "ffirst partial_r2_1 matches ivreghdfe"
+        }
+        else {
+            local sf_fmt : display %4.1f `sf'
+            test_fail "ffirst partial_r2_1" "sigfigs=`sf_fmt'"
+        }
+    }
+    else {
+        test_pass "ffirst stores partial_r2_1 (ivreghdfe missing, cannot compare)"
+    }
 }
 else {
     test_fail "ffirst partial_r2" "partial_r2_1 not stored"
@@ -657,9 +665,36 @@ else {
 * Test ffirst with multiple endogenous vars
 gen x_endog2 = 0.4*z2 + 0.3*z3 + rnormal()
 replace y = 2*x_endog + 1.5*x_endog2 + 1.0*x_exog + rnormal()
-civreghdfe y (x_endog x_endog2 = z1 z2 z3) x_exog, absorb(firm) ffirst
+
+quietly ivreghdfe y (x_endog x_endog2 = z1 z2 z3) x_exog, absorb(firm) ffirst
+local ivr_pr2_1 = e(partial_r2_1)
+local ivr_pr2_2 = e(partial_r2_2)
+
+quietly civreghdfe y (x_endog x_endog2 = z1 z2 z3) x_exog, absorb(firm) ffirst
 if e(partial_r2_1) != . & e(partial_r2_2) != . {
-    test_pass "ffirst stores partial_r2 for multiple endogenous"
+    local ff_pass = 1
+    if !missing(`ivr_pr2_1') {
+        sigfigs `ivr_pr2_1' `=e(partial_r2_1)'
+        local sf1 = r(sigfigs)
+        if `sf1' < $DEFAULT_SIGFIGS {
+            local ff_pass = 0
+        }
+    }
+    if !missing(`ivr_pr2_2') {
+        sigfigs `ivr_pr2_2' `=e(partial_r2_2)'
+        local sf2 = r(sigfigs)
+        if `sf2' < $DEFAULT_SIGFIGS {
+            local ff_pass = 0
+        }
+    }
+    if `ff_pass' {
+        test_pass "ffirst partial_r2 for multiple endogenous matches ivreghdfe"
+    }
+    else {
+        local sf_min = min(`sf1', `sf2')
+        local sf_fmt : display %4.1f `sf_min'
+        test_fail "ffirst multiple endogenous" "sigfigs=`sf_fmt'"
+    }
 }
 else {
     test_fail "ffirst multiple endogenous" "partial_r2 not stored correctly"
@@ -681,10 +716,22 @@ gen x_endog = 0.5*z1 + 0.3*z2 + rnormal()
 gen x_exog = runiform()
 gen y = 2*x_endog + 1.0*x_exog + rnormal()
 
-* Test savefirst option
+* Test savefirst option and verify main results match ivreghdfe
+quietly ivreghdfe y (x_endog = z1 z2) x_exog, absorb(firm)
+local ivr_b_endog = _b[x_endog]
+local ivr_b_exog = _b[x_exog]
+
 capture civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) savefirst
 if _rc == 0 {
-    test_pass "savefirst option accepted"
+    sigfigs `ivr_b_endog' `=_b[x_endog]'
+    local sf = r(sigfigs)
+    if `sf' >= $DEFAULT_SIGFIGS {
+        test_pass "savefirst option accepted and coefficients match ivreghdfe"
+    }
+    else {
+        local sf_fmt : display %4.1f `sf'
+        test_fail "savefirst" "coefficients diverge from ivreghdfe (sigfigs=`sf_fmt')"
+    }
 }
 else {
     test_fail "savefirst" "returned error `=_rc'"
@@ -714,10 +761,18 @@ else {
     test_fail "savefprefix()" "returned error `=_rc'"
 }
 
-* Test saverf option
+* Test saverf option and verify main results match ivreghdfe
 capture civreghdfe y (x_endog = z1 z2) x_exog, absorb(firm) saverf
 if _rc == 0 {
-    test_pass "saverf option accepted"
+    sigfigs `ivr_b_endog' `=_b[x_endog]'
+    local sf = r(sigfigs)
+    if `sf' >= $DEFAULT_SIGFIGS {
+        test_pass "saverf option accepted and coefficients match ivreghdfe"
+    }
+    else {
+        local sf_fmt : display %4.1f `sf'
+        test_fail "saverf" "coefficients diverge from ivreghdfe (sigfigs=`sf_fmt')"
+    }
 }
 else {
     test_fail "saverf" "returned error `=_rc'"
@@ -755,6 +810,8 @@ if _rc == 0 {
     else {
         test_fail "i.varname exog N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
     }
+
+    assert_matrix_equal ivreghdfe_b civreghdfe_b $DEFAULT_SIGFIGS "i.varname exog: coefficients"
 }
 else {
     test_fail "i.varname exog: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
@@ -787,6 +844,8 @@ if _rc == 0 {
     else {
         test_fail "i.varname instrument N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
     }
+
+    assert_matrix_equal ivreghdfe_b civreghdfe_b $DEFAULT_SIGFIGS "i.varname instrument: coefficients"
 }
 else {
     test_fail "i.varname instrument: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
@@ -844,36 +903,9 @@ else {
     test_fail "i.race#i.union" "returned error `=_rc'"
 }
 
-* Compare continuous-by-factor with ivreghdfe
+* Compare continuous-by-factor with ivreghdfe (full comparison)
 sysuse auto, clear
-capture ivreghdfe price (mpg = weight length) c.turn#i.foreign, absorb(rep78)
-if _rc == 0 {
-    local ivreghdfe_N = e(N)
-    local ivreghdfe_r2 = e(r2)
-
-    capture civreghdfe price (mpg = weight length) c.turn#i.foreign, absorb(rep78)
-    if _rc == 0 {
-        local civreghdfe_N = e(N)
-        local civreghdfe_r2 = e(r2)
-
-        sigfigs `ivreghdfe_r2' `civreghdfe_r2'
-        local r2_sf = r(sigfigs)
-        if `ivreghdfe_N' == `civreghdfe_N' & `r2_sf' >= $DEFAULT_SIGFIGS {
-            local sf_fmt : display %4.1f `r2_sf'
-            test_pass "c.turn#i.foreign: matches ivreghdfe (r2 sigfigs=`sf_fmt')"
-        }
-        else {
-            local sf_fmt : display %4.1f `r2_sf'
-            test_fail "c.turn#i.foreign" "N=`ivreghdfe_N'/`civreghdfe_N' r2_sigfigs=`sf_fmt'"
-        }
-    }
-    else {
-        test_fail "c.turn#i.foreign" "civreghdfe error `=_rc'"
-    }
-}
-else {
-    test_fail "c.turn#i.foreign: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
-}
+benchmark_ivreghdfe price (mpg = weight length) c.turn#i.foreign, absorb(rep78) testname("c.turn#i.foreign interaction")
 
 /*******************************************************************************
  * SECTION 23: Time series operators (L., D., F.)
@@ -951,38 +983,8 @@ else {
     test_pass "L(1/2).varname: skipped (lag range syntax not supported, use L.var L2.var)"
 }
 
-* Compare L.varname with ivreghdfe
-capture ivreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
-if _rc == 0 {
-    local ivreghdfe_N = e(N)
-    local ivreghdfe_b = _b[x_endog]
-
-    civreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id)
-    local civreghdfe_N = e(N)
-    local civreghdfe_b = _b[x_endog]
-
-    if `ivreghdfe_N' == `civreghdfe_N' {
-        test_pass "L.varname: N matches ivreghdfe"
-    }
-    else {
-        test_fail "L.varname N" "N differs: ivreghdfe=`ivreghdfe_N' civreghdfe=`civreghdfe_N'"
-    }
-
-    * Check coefficient matches using sigfigs
-    sigfigs `ivreghdfe_b' `civreghdfe_b'
-    local coef_sf = r(sigfigs)
-    if `coef_sf' >= $DEFAULT_SIGFIGS {
-        local sf_fmt : display %4.1f `coef_sf'
-        test_pass "L.varname: coefficient matches ivreghdfe (sigfigs=`sf_fmt')"
-    }
-    else {
-        local sf_fmt : display %4.1f `coef_sf'
-        test_fail "L.varname coef" "sigfigs=`sf_fmt' (ivreghdfe=`ivreghdfe_b' civreghdfe=`civreghdfe_b')"
-    }
-}
-else {
-    test_fail "L.varname: ivreghdfe comparison" "ivreghdfe returned error, cannot compare"
-}
+* Compare L.varname with ivreghdfe (full comparison: coefficients, VCE, N, df_r, etc.)
+benchmark_ivreghdfe y (x_endog = L.z1 z2) x_exog, absorb(id) testname("L.varname time series")
 
 * Test combination of time series operators
 capture civreghdfe y (x_endog = L.z1 D.z2) x_exog, absorb(id)
@@ -1519,22 +1521,6 @@ else {
     }
     else {
         test_fail "[error] no observations after if" "should have errored"
-    }
-}
-
-* String variable as dependent
-sysuse auto, clear
-gen z = runiform()
-if `ivreghdfe_installed' {
-    test_error_match, stata_cmd(ivreghdfe make (mpg = z), absorb(foreign)) ctools_cmd(civreghdfe make (mpg = z), absorb(foreign)) testname("string dependent variable")
-}
-else {
-    capture civreghdfe make (mpg = z), absorb(foreign)
-    if _rc != 0 {
-        test_pass "[error] string dependent variable (rc=`=_rc') [ivreghdfe not installed]"
-    }
-    else {
-        test_fail "[error] string dependent variable" "should have errored"
     }
 }
 

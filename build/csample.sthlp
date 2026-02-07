@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "csample##syntax"}{...}
 {viewerjumpto "Description" "csample##description"}{...}
 {viewerjumpto "Options" "csample##options"}{...}
@@ -83,8 +83,7 @@ percentage or count of observations sampled.
 operations. By default, {cmd:csample} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a detailed timing breakdown showing how long each phase
-of the operation took.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}
@@ -104,23 +103,23 @@ Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Draw a 10% random sample{p_end}
+{pstd}Draw a 10% random sample:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csample 10}{p_end}
 
-{pstd}Draw exactly 20 observations{p_end}
+{pstd}Draw exactly 20 observations:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csample, count(20)}{p_end}
 
-{pstd}Draw 50% sample within each foreign category{p_end}
+{pstd}Draw 50% sample within each foreign category:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csample 50, by(foreign)}{p_end}
 
-{pstd}Draw 5 observations from each group{p_end}
+{pstd}Draw 5 observations from each group:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. csample, count(5) by(foreign)}{p_end}
 
-{pstd}Reproducible sampling{p_end}
+{pstd}Reproducible sampling:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. set seed 12345}{p_end}
 {phang2}{cmd:. csample 25}{p_end}
@@ -130,12 +129,15 @@ Unlike {help sample:sample}, {cmd:csample} does not support frequency weights.
 {title:Stored results}
 
 {pstd}
-{cmd:csample} stores the following in {cmd:r()}:
+{cmd:csample} stores the following in global scalars (accessible via
+{cmd:scalar(_csample_...)}):
 
-{synoptset 20 tabbed}{...}
-{p2col 5 20 24 2: Scalars}{p_end}
-{synopt:{cmd:r(N_kept)}}number of observations kept{p_end}
-{synopt:{cmd:r(N_dropped)}}number of observations dropped{p_end}
+{synoptset 24 tabbed}{...}
+{p2col 5 24 28 2: Scalars}{p_end}
+{synopt:{cmd:_csample_kept}}number of observations kept{p_end}
+{synopt:{cmd:_csample_dropped}}number of observations dropped{p_end}
+{synopt:{cmd:_csample_ngroups}}number of groups{p_end}
+{synopt:{cmd:_csample_threads}}number of threads used{p_end}
 
 
 {marker author}{...}

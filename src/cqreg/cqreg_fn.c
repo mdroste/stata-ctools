@@ -20,6 +20,7 @@
 #include "cqreg_fn.h"
 #include "cqreg_linalg.h"
 #include "cqreg_blas.h"
+#include "../ctools_runtime.h"
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -44,7 +45,7 @@
 #define FN_TIMING 0
 
 #if FN_TIMING
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 static double fn_time_init = 0.0;
 static double fn_time_scaling = 0.0;
 static double fn_time_xtdx = 0.0;
@@ -817,9 +818,12 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     IPM_LOG("=== IPM Solver Start ===\n");
     IPM_LOG("N=%d, K=%d, tau=%.4f\n", N, K, tau);
 
+    /* Runtime phase timing (always collected, very low overhead) */
+    double rt_phase_start = ctools_timer_seconds();
+
 #if FN_TIMING
     fn_timing_reset();
-    double t_start = ctools_timer_seconds();
+    double t_start = rt_phase_start;
 #endif
 
     /* Use pre-allocated working arrays from IPM state (avoids malloc in hot loop) */
@@ -937,6 +941,9 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     /* ========================================================================
      * MAIN INTERIOR POINT LOOP
      * ======================================================================== */
+
+    ipm->time_init = ctools_timer_seconds() - rt_phase_start;
+    rt_phase_start = ctools_timer_seconds();
 
 #if FN_TIMING
     fn_time_init = ctools_timer_seconds() - t_start;
@@ -1180,6 +1187,9 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 
     } /* End main loop */
 
+    ipm->time_iterate = ctools_timer_seconds() - rt_phase_start;
+    rt_phase_start = ctools_timer_seconds();
+
     /* ========================================================================
      * FINALIZE: beta = -y_d (the return value is negative of dual variable)
      * ======================================================================== */
@@ -1202,6 +1212,21 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
     /* Store results in ipm state */
     ipm->iterations = iter;
     ipm->converged = (gap < ipm_tol) ? 1 : 0;
+
+    /*
+     * For auxiliary solves (sparsity estimation), we only need beta.
+     * Skip the expensive crossover and residual computation.
+     */
+    if (ipm->config.skip_crossover) {
+        memcpy(ipm->beta, beta, K * sizeof(ST_double));
+        ipm->time_crossover = 0.0;
+        IPM_LOG("skip_crossover: returning beta only\n");
+        ipm_debug_close();
+#if FN_TIMING
+        fn_timing_report(N, K, ipm->config.verbose);
+#endif
+        return iter;
+    }
 
     /* Compute residuals from IPM solution */
     blas_dgemv(0, N, K, 1.0, X, N, beta, 0.0, ipm->r_primal);
@@ -1357,6 +1382,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         }
     }
     memcpy(ipm->beta, beta, K * sizeof(ST_double));
+    ipm->time_crossover = ctools_timer_seconds() - rt_phase_start;
 
 #if FN_TIMING
     fn_timing_report(N, K, ipm->config.verbose);

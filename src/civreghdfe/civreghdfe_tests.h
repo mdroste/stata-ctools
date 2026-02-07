@@ -212,7 +212,9 @@ void civreghdfe_compute_dwh_test(
     df = number of tested instruments.
 
     Parameters:
-    - resid: 2SLS residuals (N x 1)
+    - y: Dependent variable (N x 1)
+    - X_exog: Exogenous regressors (N x K_exog)
+    - X_endog: Endogenous regressors (N x K_endog)
     - Z: All instruments (N x K_iv)
     - K_exog: Number of exogenous regressors (included in instruments)
     - K_endog: Number of endogenous regressors
@@ -225,7 +227,9 @@ void civreghdfe_compute_dwh_test(
     - cstat_df: Output - degrees of freedom
 */
 void civreghdfe_compute_cstat(
-    const ST_double *resid,
+    const ST_double *y,
+    const ST_double *X_exog,
+    const ST_double *X_endog,
     const ST_double *Z,
     ST_int N,
     ST_int K_exog,
@@ -239,6 +243,7 @@ void civreghdfe_compute_cstat(
     const ST_int *cluster_ids,
     ST_int num_clusters,
     ST_double sargan_full,
+    ST_double rss_full,
     ST_double *cstat,
     ST_int *cstat_df
 );
@@ -247,18 +252,23 @@ void civreghdfe_compute_cstat(
     Compute endogeneity test for specified subset of endogenous regressors.
 
     Tests H0: specified regressors are exogenous (can be treated as exogenous).
-    Uses DWH-style augmented regression approach.
+    Uses difference-in-Sargan C-statistic approach (matching ivreg2):
+    C = J_exog - J_orig, where:
+    - J_exog: Sargan from model where tested vars are treated as exogenous
+      (added to instruments), using sigma^2 from that model
+    - J_orig: Sargan from original model, using sigma^2 from the exogenous model
 
     Parameters:
     - y: Dependent variable (N x 1)
     - X_exog: Exogenous regressors (N x K_exog, may be NULL)
     - X_endog: Endogenous regressors (N x K_endog)
     - Z: All instruments (N x K_iv)
-    - temp1: First-stage coefficients (K_iv x K_total)
-    - N, K_exog, K_endog, K_iv, df_a: Parameters
+    - resid: Original model residuals (N x 1)
+    - ZtZ_inv: Original model (Z'Z)^-1 (K_iv x K_iv)
+    - N, K_exog, K_endog, K_iv: Parameters
     - endogtest_indices: 1-based indices of endogenous regressors to test
     - n_endogtest: Number of regressors to test
-    - endogtest_stat: Output - test statistic (chi-sq)
+    - endogtest_stat: Output - C statistic (chi-sq)
     - endogtest_df: Output - degrees of freedom
 */
 void civreghdfe_compute_endogtest_subset(
@@ -266,12 +276,12 @@ void civreghdfe_compute_endogtest_subset(
     const ST_double *X_exog,
     const ST_double *X_endog,
     const ST_double *Z,
-    const ST_double *temp1,
+    const ST_double *resid,
+    const ST_double *ZtZ_inv,
     ST_int N,
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
-    ST_int df_a,
     const ST_int *endogtest_indices,
     ST_int n_endogtest,
     ST_double *endogtest_stat,

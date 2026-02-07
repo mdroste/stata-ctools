@@ -9,7 +9,7 @@
 #include "creghdfe_utils.h"
 #include "../ctools_hdfe_utils.h"
 #include "../ctools_config.h"
-#include "../ctools_spi_checked.h"  /* Error-checking SPI wrappers */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 
 /* Define the global state pointer */
 HDFE_State *g_state = NULL;
@@ -19,52 +19,14 @@ HDFE_State *g_state = NULL;
  */
 void cleanup_state(void)
 {
-    ST_int g, t;
-
     if (g_state == NULL) return;
 
-    if (g_state->factors != NULL) {
-        for (g = 0; g < g_state->G; g++) {
-            if (g_state->factors[g].levels != NULL) free(g_state->factors[g].levels);
-            if (g_state->factors[g].counts != NULL) free(g_state->factors[g].counts);
-            if (g_state->factors[g].inv_counts != NULL) free(g_state->factors[g].inv_counts);
-            if (g_state->factors[g].weighted_counts != NULL) free(g_state->factors[g].weighted_counts);
-            if (g_state->factors[g].inv_weighted_counts != NULL) free(g_state->factors[g].inv_weighted_counts);
-            if (g_state->factors[g].means != NULL) free(g_state->factors[g].means);
-            /* Free sorted indices */
-            if (g_state->factors[g].sorted_indices != NULL) free(g_state->factors[g].sorted_indices);
-            if (g_state->factors[g].sorted_levels != NULL) free(g_state->factors[g].sorted_levels);
-        }
-        free(g_state->factors);
-    }
-
+    /* Free weights (ctools_hdfe_state_cleanup does not free weights) */
     if (g_state->weights != NULL) free(g_state->weights);
+    g_state->weights = NULL;
 
-    /* Free per-thread buffers */
-    if (g_state->thread_cg_r != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_r[t]) free(g_state->thread_cg_r[t]);
-        }
-        free(g_state->thread_cg_r);
-    }
-    if (g_state->thread_cg_u != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_u[t]) free(g_state->thread_cg_u[t]);
-        }
-        free(g_state->thread_cg_u);
-    }
-    if (g_state->thread_cg_v != NULL) {
-        for (t = 0; t < g_state->num_threads; t++) {
-            if (g_state->thread_cg_v[t]) free(g_state->thread_cg_v[t]);
-        }
-        free(g_state->thread_cg_v);
-    }
-    if (g_state->thread_fe_means != NULL) {
-        for (t = 0; t < g_state->num_threads * g_state->G; t++) {
-            if (g_state->thread_fe_means[t]) free(g_state->thread_fe_means[t]);
-        }
-        free(g_state->thread_fe_means);
-    }
+    /* Free factors, thread buffers, etc. */
+    ctools_hdfe_state_cleanup(g_state);
 
     free(g_state);
     g_state = NULL;
@@ -105,10 +67,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
     IntHashTable **hash_tables = NULL;
-    ST_int *raw_values = NULL;  /* Temporary buffer for single-pass reading */
-    char msg[256];
     char scalar_name[64];
-    double t_start, t_read, t_singleton, t_dof, t_write;
     ST_int max_iter = 100;  /* Safety limit for singleton iterations */
     ST_int mobility_groups = 1;  /* Default: 1 mobility group */
     ST_int df_a = 0;
@@ -145,24 +104,15 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
         return 198;
     }
 
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   C plugin: HDFE init (N=%d, G=%d, compute_dof=%d)\n", N_orig, G, compute_dof);
-        SF_display(msg);
-    }
-
-    t_start = get_time_sec();
-
     /* Allocate structures */
     factors = (FactorData *)calloc(G, sizeof(FactorData));
     hash_tables = (IntHashTable **)calloc(G, sizeof(IntHashTable *));
     mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
-    raw_values = (ST_int *)ctools_safe_malloc2((size_t)G, sizeof(ST_int));  /* One value per FE for current obs */
-
-    if (!factors || !hash_tables || !mask || !raw_values) {
+    if (!factors || !hash_tables || !mask) {
         if (factors) free(factors);
         if (hash_tables) free(hash_tables);
         if (mask) free(mask);
-        if (raw_values) free(raw_values);
+
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -188,7 +138,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             free(factors);
             free(hash_tables);
             free(mask);
-            free(raw_values);
             return 1;
         }
     }
@@ -211,7 +160,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
                 free(factors);
                 free(hash_tables);
                 free(mask);
-                free(raw_values);
                 return 198;
             }
             /* Check for missing FE value before casting to avoid undefined behavior */
@@ -245,18 +193,12 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             free(factors);
             free(hash_tables);
             free(mask);
-            free(raw_values);
             return 1;
         }
         for (i = 0; i < N_orig; i++) {
             factors[g].counts[factors[g].levels[i] - 1]++;
         }
     }
-
-    free(raw_values);
-    raw_values = NULL;
-
-    t_read = get_time_sec();
 
     /* STEP 2: Iteratively drop singletons using shared utility */
     num_singletons = 0;
@@ -280,8 +222,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             }
         }
     }
-
-    t_singleton = get_time_sec();
 
     /* Recount levels after singleton removal */
     ST_int *levels_remaining = NULL;
@@ -359,13 +299,7 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             mobility_groups = 0;
         }
 
-        if (verbose >= 2) {
-            snprintf(msg, sizeof(msg), "{txt}   DOF: df_a=%d, mobility_groups=%d\n", df_a, mobility_groups);
-            SF_display(msg);
-        }
     }
-
-    t_dof = get_time_sec();
 
     /* STEP 4: Write results back to Stata */
     ST_int touse_var = 2 * G + 1;
@@ -404,8 +338,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
         }
         idx++;
     }
-
-    t_write = get_time_sec();
 
     /* STEP 5: Store factors in global state for reuse */
     cleanup_state();
@@ -472,12 +404,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
         ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups);
     }
 
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   HDFE init: read=%.3fs singleton=%.3fs dof=%.3fs write=%.3fs total=%.3fs\n",
-                 t_read - t_start, t_singleton - t_read, t_dof - t_singleton, t_write - t_dof, t_write - t_start);
-        SF_display(msg);
-    }
-
     /* Cleanup local copies */
     for (g = 0; g < G; g++) {
         if (factors[g].levels) free(factors[g].levels);
@@ -509,10 +435,7 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
     ST_int *fe1_levels = NULL;
     ST_int *fe2_levels = NULL;
     ST_int num_levels1, num_levels2;
-    ST_int verbose;
     ST_int mobility_groups;
-    char msg[256];
-    double t_start, t_read, t_compute;
 
     (void)argc;  /* Unused */
     (void)argv;  /* Unused */
@@ -533,15 +456,6 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
     /* Read parameters */
     SF_scal_use("__creghdfe_num_levels1", &val); num_levels1 = (ST_int)val;
     SF_scal_use("__creghdfe_num_levels2", &val); num_levels2 = (ST_int)val;
-    SF_scal_use("__creghdfe_verbose", &val); verbose = (ST_int)val;
-
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   C plugin: computing mobility groups (N=%d, L1=%d, L2=%d)\n",
-                 N, num_levels1, num_levels2);
-        SF_display(msg);
-    }
-
-    t_start = get_time_sec();
 
     /* Allocate level arrays and hash tables */
     fe1_levels = (ST_int *)malloc(N * sizeof(ST_int));
@@ -595,25 +509,15 @@ ST_retcode do_mobility_groups(int argc, char *argv[])
     hash_destroy(ht1);
     hash_destroy(ht2);
 
-    t_read = get_time_sec();
-
     /* Compute connected components */
     mobility_groups = count_connected_components(
         fe1_levels, fe2_levels, N, num_levels1, num_levels2
     );
 
-    t_compute = get_time_sec();
-
     if (mobility_groups < 0) {
         free(fe1_levels); free(fe2_levels);
         SF_error("creghdfe: failed to compute mobility groups\n");
         return 1;
-    }
-
-    if (verbose >= 2) {
-        snprintf(msg, sizeof(msg), "{txt}   Mobility groups: %d (read=%.3fs, compute=%.3fs)\n",
-                 mobility_groups, t_read - t_start, t_compute - t_read);
-        SF_display(msg);
     }
 
     /* Store result */

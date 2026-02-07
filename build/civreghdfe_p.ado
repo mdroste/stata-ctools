@@ -1,4 +1,4 @@
-*! version 0.9.0 01Feb2026
+*! version 0.9.1 06Feb2026
 *! civreghdfe_p: Predict program for civreghdfe
 *! Part of the ctools suite
 

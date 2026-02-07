@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cmerge##syntax"}{...}
 {viewerjumpto "Description" "cmerge##description"}{...}
 {viewerjumpto "Options" "cmerge##options"}{...}
@@ -35,22 +35,25 @@ where {it:merge_type} is one of
 {synoptset 28 tabbed}{...}
 {synopthdr}
 {synoptline}
-{syntab:Options}
+{syntab:Main}
 {synopt:{opt keep(results)}}which observations to keep from merged data{p_end}
 {synopt:{opt assert(results)}}verify that merge results are as expected{p_end}
 {synopt:{opt gen:erate(varname)}}name of variable to mark merge results; default is {cmd:_merge}{p_end}
 {synopt:{opt nogen:erate}}do not create {cmd:_merge} variable{p_end}
 {synopt:{opt keepus:ing(varlist)}}variables to keep from using data{p_end}
+{syntab:Merge behavior}
 {synopt:{opt sorted}}assert that both datasets are sorted on key variables{p_end}
 {synopt:{opt force}}allow string/numeric variable type mismatches{p_end}
-{synopt:{opt norep:ort}}do not display result summary{p_end}
-{synopt:{opt verbose}}display detailed timing and progress information{p_end}
-{synopt:{opt time:it}}display timing breakdown{p_end}
-{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
 {synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
 {synopt:{opt replace}}replace all values of same-named variables with using data{p_end}
+{synopt:{opt preserve_order(#)}}preserve observation order from master dataset (0=no, 1=yes){p_end}
+{syntab:Reporting}
+{synopt:{opt norep:ort}}do not display result summary{p_end}
+{synopt:{opt verbose}}display detailed timing and progress information{p_end}
+{synopt:{opt time:it}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 
 {pstd}
@@ -107,18 +110,11 @@ numeric) in master and using datasets.
 {opt noreport} suppresses the table showing the merge result summary.
 
 {phang}
-{opt verbose} displays detailed timing information and progress messages
-during the merge operation.
-
-{phang}
-{opt timeit} displays a timing breakdown showing time spent in each phase of
-the merge operation.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cmerge} uses all available CPU cores as reported by
-OpenMP. Use this option to limit parallelism, for example when running multiple
-jobs simultaneously.
+operations. By default, {cmd:cmerge} uses all available CPU cores.
 
 {phang}
 {opt nolabel} prevents value labels from being copied from the using dataset.
@@ -140,6 +136,12 @@ always added.
 variables that exist in both datasets should be replaced with corresponding
 values from the using dataset. This is more aggressive than {opt update}
 as it replaces non-missing values too.
+
+{phang}
+{opt preserve_order(#)} controls whether the observation order from the master
+dataset is preserved in the merged result. The default value of 0 allows {cmd:cmerge}
+to reorder observations for performance. Set to 1 to maintain the original master
+dataset observation order.
 
 
 {marker remarks}{...}

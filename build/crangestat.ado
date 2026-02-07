@@ -1,4 +1,4 @@
-*! version 0.9.0 31Jan2026
+*! version 0.9.1 06Feb2026
 *! crangestat: C-accelerated range statistics for Stata
 *! Part of the ctools suite
 
@@ -44,6 +44,11 @@ program define crangestat
     }
 
     * Validate key variable exists and is numeric
+    capture confirm variable `keyvar'
+    if _rc != 0 {
+        di as error "crangestat: variable `keyvar' not found"
+        exit 111
+    }
     capture confirm numeric variable `keyvar'
     if _rc != 0 {
         di as error "crangestat: key variable `keyvar' must be numeric"
@@ -78,6 +83,16 @@ program define crangestat
             exit 198
         }
         local int_high_val = `int_high'
+    }
+
+    * Start timing
+    local __do_timing = ("`verbose'" != "")
+    if `__do_timing' {
+        timer clear 90
+        timer clear 91
+        timer clear 92
+        timer on 90
+        timer on 91
     }
 
     * Parse stat specifications
@@ -175,6 +190,11 @@ program define crangestat
         }
 
         * Validate source variable
+        capture confirm variable `source_var'
+        if _rc != 0 {
+            di as error "crangestat: variable `source_var' not found"
+            exit 111
+        }
         capture confirm numeric variable `source_var'
         if _rc != 0 {
             di as error "crangestat: source variable `source_var' must be numeric"
@@ -338,10 +358,73 @@ program define crangestat
     local plugin_args "`nstats' `nsource' `nby' `key_idx' `source_indices' `result_indices' `by_indices' `stat_codes' `source_var_map' `opts'"
 
     * Call plugin
+    if `__do_timing' {
+        timer off 91
+        timer on 92
+    }
     plugin call ctools_plugin `all_vars', "crangestat `threads_opt' `plugin_args'"
+    if `__do_timing' {
+        timer off 92
+    }
 
-    * Display summary
-    if "`verbose'" == "" {
+    * Display summary or timing
+    if `__do_timing' {
+        timer off 90
+        quietly timer list 90
+        local __time_total = r(t90)
+
+        * Extract sub-timer values
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+
+        * Calculate plugin call overhead
+        capture local __plugin_time_total = _crangestat_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
+
+        di as text ""
+        di as text "{hline 55}"
+        di as text "crangestat timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Data load:              " as result %8.4f _crangestat_time_load " sec"
+        di as text "    Sort:                   " as result %8.4f _crangestat_time_sort " sec"
+        di as text "    Group detection:        " as result %8.4f _crangestat_time_groups " sec"
+        di as text "    Compute statistics:     " as result %8.4f _crangestat_time_compute " sec"
+        di as text "    Store results:          " as result %8.4f _crangestat_time_store " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _crangestat_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
+
+        * Display thread diagnostics
+        capture local __threads_max = _crangestat_threads_max
+        if _rc == 0 {
+            capture local __openmp_enabled = _crangestat_openmp_enabled
+            if _rc != 0 local __openmp_enabled = 0
+            di as text ""
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
+        }
+
+        * Clean up timing scalars
+        capture scalar drop _crangestat_time_load _crangestat_time_sort _crangestat_time_groups
+        capture scalar drop _crangestat_time_compute _crangestat_time_store _crangestat_time_total
+        capture scalar drop _crangestat_threads_max _crangestat_openmp_enabled
+    }
+    else {
         di as text "(`nstats' range statistics computed)"
     }
 end

@@ -15,192 +15,11 @@
 
 #include "civreghdfe_matrix.h"
 #include "../ctools_config.h"
-#include "../ctools_unroll.h"
 #include "../ctools_ols.h"
 
 /* Use shared Cholesky functions from ctools_ols */
 #define cholesky ctools_cholesky
 #define invert_from_cholesky ctools_invert_from_cholesky
-
-/*
-    Matrix multiply C = A' * B
-    A is N x K1, B is N x K2, Result C is K1 x K2
-
-    OPTIMIZED: Uses K-way unrolled dot products and OpenMP parallelization
-*/
-void civreghdfe_matmul_atb(const ST_double * restrict A, const ST_double * restrict B,
-                           ST_int N, ST_int K1, ST_int K2,
-                           ST_double * restrict C)
-{
-    ST_int j;
-
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
-
-    /* Parallelize over output columns - i must be private to avoid race condition */
-    #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
-    for (j = 0; j < K2; j++) {
-        ST_int i;  /* Declare inside parallel region to make it private */
-        const ST_double *b_col = B + j * N;
-        for (i = 0; i < K1; i++) {
-            const ST_double *a_col = A + i * N;
-            C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
-        }
-    }
-}
-
-/*
-    Matrix multiply C = A * B
-    A is K1 x K2, B is K2 x K3, Result C is K1 x K3
-
-    OPTIMIZED: Uses cache-friendly loop order and OpenMP parallelization
-*/
-void civreghdfe_matmul_ab(const ST_double * restrict A, const ST_double * restrict B,
-                          ST_int K1, ST_int K2, ST_int K3,
-                          ST_double * restrict C)
-{
-    ST_int j;
-
-    memset(C, 0, K1 * K3 * sizeof(ST_double));
-
-    /* C[i,j] = sum_k A[i,k] * B[k,j] */
-    /* A is K1 x K2, stored column-major: A[i,k] = A[k*K1 + i] */
-    /* B is K2 x K3, stored column-major: B[k,j] = B[j*K2 + k] */
-    /* C is K1 x K3, stored column-major: C[i,j] = C[j*K1 + i] */
-
-    /* Reorder loops for better cache locality: k-j-i instead of j-i-k */
-    /* This allows sequential access to A columns and B columns */
-    #pragma omp parallel for schedule(static) if(K1 * K3 > 16)
-    for (j = 0; j < K3; j++) {
-        ST_int i, k;  /* Private to each thread */
-        const ST_double *b_col = B + j * K2;
-        ST_double *c_col = C + j * K1;
-        for (k = 0; k < K2; k++) {
-            ST_double b_kj = b_col[k];
-            const ST_double *a_col = A + k * K1;
-            #pragma omp simd
-            for (i = 0; i < K1; i++) {
-                c_col[i] += a_col[i] * b_kj;
-            }
-        }
-    }
-}
-
-/*
-    Weighted matrix multiply C = A' * diag(w) * B
-
-    OPTIMIZED: Uses K-way unrolled weighted dot products and OpenMP parallelization
-*/
-void civreghdfe_matmul_atdb(const ST_double * restrict A, const ST_double * restrict B,
-                            const ST_double * restrict w, ST_int N, ST_int K1, ST_int K2,
-                            ST_double * restrict C)
-{
-    ST_int j;
-
-    memset(C, 0, K1 * K2 * sizeof(ST_double));
-
-    if (w) {
-        /* Weighted case: use unrolled weighted dot product */
-        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
-        for (j = 0; j < K2; j++) {
-            ST_int i;  /* Private to each thread */
-            const ST_double *b_col = B + j * N;
-            for (i = 0; i < K1; i++) {
-                const ST_double *a_col = A + i * N;
-                /* K-way unrolled weighted dot product */
-                ST_int k;
-                CTOOLS_DECLARE_ACCUM(sum);
-                ST_int N_main = N - (N % CTOOLS_UNROLL_K);
-
-                for (k = 0; k < N_main; k += CTOOLS_UNROLL_K) {
-                    #if CTOOLS_UNROLL_K >= 4
-                    sum0 += a_col[k]     * w[k]     * b_col[k];
-                    sum1 += a_col[k + 1] * w[k + 1] * b_col[k + 1];
-                    sum2 += a_col[k + 2] * w[k + 2] * b_col[k + 2];
-                    sum3 += a_col[k + 3] * w[k + 3] * b_col[k + 3];
-                    #endif
-                    #if CTOOLS_UNROLL_K >= 8
-                    sum4 += a_col[k + 4] * w[k + 4] * b_col[k + 4];
-                    sum5 += a_col[k + 5] * w[k + 5] * b_col[k + 5];
-                    sum6 += a_col[k + 6] * w[k + 6] * b_col[k + 6];
-                    sum7 += a_col[k + 7] * w[k + 7] * b_col[k + 7];
-                    #endif
-                    #if CTOOLS_UNROLL_K >= 16
-                    sum8  += a_col[k + 8]  * w[k + 8]  * b_col[k + 8];
-                    sum9  += a_col[k + 9]  * w[k + 9]  * b_col[k + 9];
-                    sum10 += a_col[k + 10] * w[k + 10] * b_col[k + 10];
-                    sum11 += a_col[k + 11] * w[k + 11] * b_col[k + 11];
-                    sum12 += a_col[k + 12] * w[k + 12] * b_col[k + 12];
-                    sum13 += a_col[k + 13] * w[k + 13] * b_col[k + 13];
-                    sum14 += a_col[k + 14] * w[k + 14] * b_col[k + 14];
-                    sum15 += a_col[k + 15] * w[k + 15] * b_col[k + 15];
-                    #endif
-                }
-                /* Handle remainder */
-                for (; k < N; k++) {
-                    sum0 += a_col[k] * w[k] * b_col[k];
-                }
-                C[j * K1 + i] = CTOOLS_TREE_REDUCE(sum);
-            }
-        }
-    } else {
-        /* Unweighted case: use standard unrolled dot product */
-        #pragma omp parallel for schedule(static) if(K1 * K2 > 4)
-        for (j = 0; j < K2; j++) {
-            ST_int i;  /* Private to each thread */
-            const ST_double *b_col = B + j * N;
-            for (i = 0; i < K1; i++) {
-                const ST_double *a_col = A + i * N;
-                C[j * K1 + i] = ctools_dot_unrolled(a_col, b_col, N);
-            }
-        }
-    }
-}
-
-/*
-    Solve linear system Ax = b using Cholesky decomposition
-*/
-ST_int civreghdfe_solve_cholesky(ST_double *A, ST_double *b, ST_int K, ST_double *x)
-{
-    ST_int i, j;
-    /* Cast to size_t to prevent 32-bit overflow */
-    ST_double *L = (ST_double *)malloc((size_t)K * K * sizeof(ST_double));
-    if (!L) return -1;
-
-    memcpy(L, A, K * K * sizeof(ST_double));
-
-    if (cholesky(L, K) != 0) {
-        free(L);
-        return -1;
-    }
-
-    /* Forward substitution: solve Ly = b */
-    ST_double *y_temp = (ST_double *)malloc(K * sizeof(ST_double));
-    if (!y_temp) {
-        free(L);
-        return -1;
-    }
-
-    for (i = 0; i < K; i++) {
-        ST_double sum = b[i];
-        for (j = 0; j < i; j++) {
-            sum -= L[i * K + j] * y_temp[j];
-        }
-        y_temp[i] = sum / L[i * K + i];
-    }
-
-    /* Backward substitution: solve L'x = y */
-    for (i = K - 1; i >= 0; i--) {
-        ST_double sum = y_temp[i];
-        for (j = i + 1; j < K; j++) {
-            sum -= L[j * K + i] * x[j];
-        }
-        x[i] = sum / L[i * K + i];
-    }
-
-    free(L);
-    free(y_temp);
-    return 0;
-}
 
 /*
     HAC Kernel weight functions
@@ -511,7 +330,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+    ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
 
     /* Invert Z'Z using Cholesky */
     ZtZ_L = (ST_double *)malloc((size_t)K_iv * K_iv * sizeof(ST_double));
@@ -534,7 +353,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
+    ctools_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
 
     /* Compute Y'Y */
     YtY = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -542,7 +361,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY);
         return 1.0;
     }
-    civreghdfe_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
+    ctools_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
 
     /* Compute (Z'Z)^-1 * Z'Y */
     ZtZ_inv_ZtY = (ST_double *)calloc((size_t)K_iv * K_Y, sizeof(ST_double));
@@ -550,7 +369,7 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY); free(YtY);
         return 1.0;
     }
-    civreghdfe_matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
+    ctools_matmul_ab(ZtZ_inv, ZtY, K_iv, K_iv, K_Y, ZtZ_inv_ZtY);
 
     /* Compute QWW = Y'Y - (Z'Y)'(Z'Z)^-1(Z'Y) = Y'M_Z Y */
     QWW = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -593,7 +412,7 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
             return 1.0;
         }
-        civreghdfe_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
+        ctools_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
 
         memcpy(Z2tZ2_L, Z2tZ2, (size_t)K_exog * K_exog * sizeof(ST_double));
         if (cholesky(Z2tZ2_L, K_exog) != 0) {
@@ -615,8 +434,8 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tY); free(Z2tZ2_inv_Z2tY); free(Z2tY_t_Z2tZ2_inv_Z2tY);
             return 1.0;
         }
-        civreghdfe_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
-        civreghdfe_matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
+        ctools_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
+        ctools_matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
 
         for (i = 0; i < K_Y; i++) {
             for (j = 0; j < K_Y; j++) {
@@ -657,8 +476,8 @@ ST_double civreghdfe_compute_liml_lambda(
         return 1.0;
     }
 
-    civreghdfe_matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
-    civreghdfe_matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
+    ctools_matmul_ab(QWW_inv_sqrt, QWW1, K_Y, K_Y, K_Y, temp1);
+    ctools_matmul_ab(temp1, QWW_inv_sqrt, K_Y, K_Y, K_Y, M_for_eigen);
 
     ST_double lambda = civreghdfe_jacobi_min_eigenvalue(M_for_eigen, K_Y);
 

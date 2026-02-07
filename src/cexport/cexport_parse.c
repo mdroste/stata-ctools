@@ -74,6 +74,7 @@ void cexport_context_cleanup(cexport_context *ctx)
         ctx->vartypes = NULL;
     }
 
+    ctools_arena_free(&ctx->chunk_arena);
     ctools_filtered_data_free(&ctx->filtered);
 }
 

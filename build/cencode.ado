@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cencode: C-accelerated string encoding for Stata
 *! Part of the ctools suite
 *!
@@ -28,7 +28,7 @@ program define cencode, rclass
         exit 920
     }
 
-    syntax varlist(string) [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
+    syntax varlist [if] [in], [Generate(string) replace Label(name) noextend Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -46,6 +46,32 @@ program define cencode, rclass
 
     * Count input variables
     local n_vars : word count `varlist'
+
+    * Handle empty dataset early - match encode behavior (succeed with empty output)
+    * Must come before generate-exists check since test framework may leave
+    * variables from a prior encode call
+    if _N == 0 {
+        if "`replace'" != "" {
+            * For replace with 0 obs, convert string vars to numeric
+            foreach v of local varlist {
+                capture drop `v'
+                quietly generate long `v' = .
+            }
+        }
+        else if "`generate'" != "" {
+            local n_gen : word count `generate'
+            if `n_gen' == `n_vars' {
+                forvalues i = 1/`n_gen' {
+                    local gvar : word `i' of `generate'
+                    capture drop `gvar'
+                    quietly generate long `gvar' = .
+                }
+            }
+        }
+        return scalar N_unique = 0
+        return scalar N_vars = `n_vars'
+        exit 0
+    }
 
     * Handle replace vs generate
     local __do_replace = 0
@@ -70,12 +96,12 @@ program define cencode, rclass
         }
     }
 
-    * Check that all source variables are string
+    * Check that all source variables are string (match encode rc=107)
     foreach v of local varlist {
         capture confirm string variable `v'
         if _rc != 0 {
-            di as error "cencode: `v' is not a string variable"
-            exit 198
+            di as error "`v' is not a string variable"
+            exit 107
         }
     }
 
@@ -87,7 +113,11 @@ program define cencode, rclass
     local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
+        timer clear 91
+        timer clear 92
+        timer clear 93
         timer on 90
+        timer on 91
     }
 
     * Mark sample
@@ -221,7 +251,7 @@ program define cencode, rclass
         * Build noextend option and extract existing label mappings if needed
         local noextend_code ""
         local existing_code ""
-        if "`extend'" == "noextend" {
+        if "`noextend'" != "" {
             local noextend_code "noextend"
             * Check if the label already exists and extract its mappings
             capture label list `this_label'
@@ -253,7 +283,15 @@ program define cencode, rclass
 
         * Call the C plugin with ALL variables
         unab allvars : *
+        if `__do_timing' {
+            timer off 91
+            timer on 92
+        }
         plugin call ctools_plugin `allvars' `if' `in', "cencode `threads_code' `var_idx' `gen_idx' `label_code' `noextend_code' `existing_code'"
+        if `__do_timing' {
+            timer off 92
+            timer on 93
+        }
 
         * =====================================================================
         * Create value labels from plugin output
@@ -265,7 +303,7 @@ program define cencode, rclass
         if `n_unique' > 0 {
             * Check if label already exists
             local label_exists = 0
-            if "`extend'" == "noextend" {
+            if "`noextend'" != "" {
                 capture label list `this_label'
                 if _rc == 0 {
                     local label_exists = 1
@@ -330,6 +368,15 @@ program define cencode, rclass
 
         * Store rclass results for this variable
         return scalar N_unique = `n_unique'
+
+        if `__do_timing' {
+            timer off 93
+            timer on 91
+        }
+    }
+
+    if `__do_timing' {
+        timer off 91
     }
 
     * Store rclass results
@@ -342,30 +389,62 @@ program define cencode, rclass
         quietly timer list 90
         local __time_total = r(t90)
 
+        * Extract sub-timer values
+        quietly timer list 91
+        local __time_preplugin = r(t91)
+        quietly timer list 92
+        local __time_plugin = r(t92)
+        quietly timer list 93
+        local __time_postplugin = r(t93)
+
+        * Calculate plugin call overhead
+        capture local __plugin_time_total = _cencode_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __plugin_call_overhead = `__time_plugin' - `__plugin_time_total'
+
         di as text ""
         di as text "{hline 55}"
         di as text "cencode timing breakdown:"
         di as text "{hline 55}"
-        di as text "  Variables encoded:        " as result `n_vars'
-        di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
+        di as text "  C plugin internals:"
+        di as text "    Argument parsing:       " as result %8.4f _cencode_time_parse " sec"
+        di as text "    Data load:              " as result %8.4f _cencode_time_load " sec"
+        di as text "    Collect unique values:  " as result %8.4f _cencode_time_collect " sec"
+        di as text "    Sort:                   " as result %8.4f _cencode_time_sort " sec"
+        di as text "    Encode:                 " as result %8.4f _cencode_time_encode " sec"
+        di as text "    Apply labels:           " as result %8.4f _cencode_time_labels " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cencode_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
+        di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
+        di as text ""
+        di as text "  Variables encoded:        " as result `n_vars'
 
         * Display thread diagnostics
-        capture confirm scalar __cencode_threads_max
+        capture local __threads_max = _cencode_threads_max
         if _rc == 0 {
-            local __threads_max = scalar(__cencode_threads_max)
-            capture local __openmp_enabled = scalar(__cencode_openmp_enabled)
+            capture local __openmp_enabled = _cencode_openmp_enabled
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
             di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
-
-            * Clean up scalars
-            capture scalar drop __cencode_threads_max
-            capture scalar drop __cencode_openmp_enabled
         }
+
+        * Clean up timing scalars
+        capture scalar drop _cencode_time_parse _cencode_time_load _cencode_time_collect
+        capture scalar drop _cencode_time_sort _cencode_time_encode _cencode_time_labels _cencode_time_total
+        capture scalar drop _cencode_threads_max _cencode_openmp_enabled
     }
 
     * Clean up any remaining scalars

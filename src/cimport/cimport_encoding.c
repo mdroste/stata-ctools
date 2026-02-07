@@ -167,7 +167,6 @@ CImportEncodingDetection cimport_detect_encoding(const char *data, size_t size)
     /* Check UTF-8 validity and high-byte patterns */
     int utf8_valid = 1;
     int high_bytes = 0;
-    int cp1252_special_chars = 0;
     int utf8_multibyte_sequences = 0;
 
     for (size_t i = 0; i < check_size && utf8_valid; i++) {
@@ -175,11 +174,6 @@ CImportEncodingDetection cimport_detect_encoding(const char *data, size_t size)
 
         if (c >= 0x80) {
             high_bytes++;
-
-            /* Check for Windows-1252 special characters (0x80-0x9F) */
-            if (c >= 0x80 && c <= 0x9F) {
-                cp1252_special_chars++;
-            }
 
             /* Validate UTF-8 sequence */
             if ((c & 0xE0) == 0xC0) {
@@ -235,14 +229,10 @@ CImportEncodingDetection cimport_detect_encoding(const char *data, size_t size)
     }
 
     if (!utf8_valid) {
-        /* Not valid UTF-8, likely Windows-1252 or ISO-8859-1 */
-        if (cp1252_special_chars > 0) {
-            result.encoding = CIMPORT_ENC_WINDOWS_1252;
-            result.confidence = 0.8f;
-        } else {
-            result.encoding = CIMPORT_ENC_ISO_8859_1;
-            result.confidence = 0.7f;
-        }
+        /* Not valid UTF-8 - default to UTF-8 anyway (matching Stata behavior).
+         * Invalid sequences will be stripped during parsing. */
+        result.encoding = CIMPORT_ENC_UTF8;
+        result.confidence = 0.5f;
         return result;
     }
 
@@ -568,4 +558,94 @@ int cimport_convert_to_utf8(const char *data, size_t size, CImportEncoding encod
     *out_data = output;
     *out_size = out_pos;
     return 0;
+}
+
+/* ============================================================================
+ * UTF-8 Validation and Stripping
+ * ============================================================================ */
+
+bool cimport_has_invalid_utf8(const char *data, size_t size)
+{
+    for (size_t i = 0; i < size; ) {
+        unsigned char c = (unsigned char)data[i];
+
+        if (c < 0x80) {
+            i++;
+        } else if ((c & 0xE0) == 0xC0) {
+            if (i + 1 < size && ((unsigned char)data[i+1] & 0xC0) == 0x80) {
+                i += 2;
+            } else {
+                return true;
+            }
+        } else if ((c & 0xF0) == 0xE0) {
+            if (i + 2 < size &&
+                ((unsigned char)data[i+1] & 0xC0) == 0x80 &&
+                ((unsigned char)data[i+2] & 0xC0) == 0x80) {
+                i += 3;
+            } else {
+                return true;
+            }
+        } else if ((c & 0xF8) == 0xF0) {
+            if (i + 3 < size &&
+                ((unsigned char)data[i+1] & 0xC0) == 0x80 &&
+                ((unsigned char)data[i+2] & 0xC0) == 0x80 &&
+                ((unsigned char)data[i+3] & 0xC0) == 0x80) {
+                i += 4;
+            } else {
+                return true;
+            }
+        } else {
+            return true;
+        }
+    }
+    return false;
+}
+
+size_t cimport_strip_invalid_utf8(const char *src, size_t src_size, char *dst)
+{
+    size_t j = 0;
+    for (size_t i = 0; i < src_size; ) {
+        unsigned char c = (unsigned char)src[i];
+
+        if (c < 0x80) {
+            /* ASCII - always valid */
+            dst[j++] = src[i++];
+        } else if ((c & 0xE0) == 0xC0) {
+            /* 2-byte sequence */
+            if (i + 1 < src_size && ((unsigned char)src[i+1] & 0xC0) == 0x80) {
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+            } else {
+                i++; /* skip invalid lead byte */
+            }
+        } else if ((c & 0xF0) == 0xE0) {
+            /* 3-byte sequence */
+            if (i + 2 < src_size &&
+                ((unsigned char)src[i+1] & 0xC0) == 0x80 &&
+                ((unsigned char)src[i+2] & 0xC0) == 0x80) {
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+            } else {
+                i++;
+            }
+        } else if ((c & 0xF8) == 0xF0) {
+            /* 4-byte sequence */
+            if (i + 3 < src_size &&
+                ((unsigned char)src[i+1] & 0xC0) == 0x80 &&
+                ((unsigned char)src[i+2] & 0xC0) == 0x80 &&
+                ((unsigned char)src[i+3] & 0xC0) == 0x80) {
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+                dst[j++] = src[i++];
+            } else {
+                i++;
+            }
+        } else {
+            /* Continuation byte without lead, or invalid byte (0xF8+) */
+            i++;
+        }
+    }
+    return j;
 }

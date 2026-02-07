@@ -333,9 +333,9 @@ keep in 1/10000
 benchmark_export, testname("panel data")
 
 /*******************************************************************************
- * SECTION 15: verbose/timeit options
+ * SECTION 15: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 
@@ -345,14 +345,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
-}
-
-capture cexport delimited using "temp/test.csv", timeit replace
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
@@ -1042,6 +1034,7 @@ use `date_testdata', clear
 benchmark_export, testname("datafmt with tab delimiter") exportopts(datafmt delimiter(tab)) importopts(delimiters(tab))
 
 * Test 16: datestring with missing dates (cexport-specific)
+* Compare cexport datestring behavior against Stata's datafmt export for missing dates
 clear
 set obs 10
 gen id = _n
@@ -1049,36 +1042,50 @@ gen daily_date = mdy(1, _n, 2024)
 replace daily_date = . if mod(_n, 3) == 0
 format daily_date %td
 gen value = _n * 10
+tempfile missing_dates_data
+save `missing_dates_data'
+
+* First: export with Stata's export delimited using datafmt to see how Stata handles missing dates
+use `missing_dates_data', clear
+export delimited using "temp/datestring_missing_stata.csv", datafmt replace
+import delimited using "temp/datestring_missing_stata.csv", clear
+* Count missing date values in Stata's export
+capture confirm string variable daily_date
+if _rc == 0 {
+    count if daily_date == "" | missing(daily_date)
+}
+else {
+    count if missing(daily_date)
+}
+local stata_n_missing = r(N)
+
+* Now: export with cexport datestring
+use `missing_dates_data', clear
 capture cexport delimited using "temp/datestring_missing.csv", datestring("%tdCCYY-NN-DD") replace
 if _rc == 0 {
     import delimited using "temp/datestring_missing.csv", clear
-    * Check that missing dates are exported as empty strings
-    * import delimited may import empty strings as missing or as empty string
+    * Count missing date values in cexport's output
     capture confirm string variable daily_date
     if _rc == 0 {
-        * daily_date is string - check for empty strings
         count if daily_date == "" | missing(daily_date)
-        if r(N) == 3 {
-            test_pass "datestring with missing dates"
-        }
-        else {
-            test_fail "datestring with missing dates" "expected 3 empty/missing, got `r(N)'"
-        }
     }
     else {
-        * daily_date was imported as numeric (all empty -> all missing)
         count if missing(daily_date)
-        if r(N) == 3 {
-            test_pass "datestring with missing dates"
-        }
-        else {
-            test_fail "datestring with missing dates" "expected 3 missing, got `r(N)'"
-        }
+    }
+    local cexport_n_missing = r(N)
+
+    * Both should agree on how many missing dates there are
+    if `cexport_n_missing' == `stata_n_missing' {
+        test_pass "datestring with missing dates (matches Stata: `stata_n_missing' missing)"
+    }
+    else {
+        test_fail "datestring with missing dates" "cexport has `cexport_n_missing' missing but Stata has `stata_n_missing' missing"
     }
 }
 else {
     test_fail "datestring with missing dates" "cexport failed with rc=`=_rc'"
 }
+capture erase "temp/datestring_missing_stata.csv"
 
 * Test 17: Negative format prefix (%-t)
 clear
@@ -1525,16 +1532,17 @@ cexport delimited using "temp/compare_cexport.csv", replace
 
 * Compare file sizes (should be similar)
 capture file open f1 using "temp/compare_stata.csv", read
+local rc1 = _rc
 capture file open f2 using "temp/compare_cexport.csv", read
-* Just check both files exist and can be opened
-if _rc == 0 {
+local rc2 = _rc
+capture file close f1
+capture file close f2
+if `rc1' == 0 & `rc2' == 0 {
     test_pass "comparison files created"
 }
 else {
-    test_fail "comparison" "file error"
+    test_fail "comparison files" "file open errors: stata_rc=`rc1' cexport_rc=`rc2'"
 }
-capture file close f1
-capture file close f2
 
 * Round-trip test: export then import
 clear

@@ -62,6 +62,20 @@ gen x2 = rnormal()
 gen treat = (0.5 + 0.3*x1 + 0.2*x2 + rnormal() > 0.5)
 gen y = 2*treat + x1 + 0.5*x2 + rnormal()
 
+* Run psmatch2 first to get ground-truth values for comparison
+psmatch2 treat x1 x2, outcome(y)
+local psm2_att = r(att)
+local psm2_att_se = r(seatt)
+quietly count if _treated == 1 & _support == 1
+local psm2_n_treated = r(N)
+quietly count if _treated == 0 & _support == 1
+local psm2_n_controls = r(N)
+quietly count if _weight != . & _weight > 0 & _treated == 1
+local psm2_n_matched = r(N)
+
+* Clean up psmatch2 variables before running cpsmatch
+capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
+
 cpsmatch treat x1 x2, outcome(y)
 
 * Store ALL r() values before they get overwritten
@@ -164,6 +178,12 @@ else {
     test_fail "scalar returns" "N=`cps_N' n_treated=`cps_n_treated' n_controls=`cps_n_controls' n_matched=`cps_n_matched' n_off=`cps_n_off_support' att=`cps_att'"
 }
 
+* Compare scalar return values against psmatch2 ground truth
+assert_scalar_equal `cps_n_treated' `psm2_n_treated' $DEFAULT_SIGFIGS "r(n_treated) matches psmatch2"
+assert_scalar_equal `cps_n_controls' `psm2_n_controls' $DEFAULT_SIGFIGS "r(n_controls) matches psmatch2"
+assert_scalar_equal `cps_n_matched' `psm2_n_matched' $DEFAULT_SIGFIGS "r(n_matched) matches psmatch2"
+assert_scalar_equal `cps_att' `psm2_att' $DEFAULT_SIGFIGS "r(att) matches psmatch2"
+
 * Test local return values
 local all_locals_ok = 1
 
@@ -226,17 +246,10 @@ else {
     test_fail "NN: ATT matches psmatch2" "sigfigs=`sf_fmt'"
 }
 
-* Compare propensity scores
-gen double _pdiff = abs(_pscore - `pscore_psm2')
-sum _pdiff, meanonly
-local maxdiff = r(max)
-if `maxdiff' < 1e-6 {
-    test_pass "NN: pscores match psmatch2"
-}
-else {
-    test_fail "NN: pscores match" "max diff=`maxdiff'"
-}
-drop _pdiff
+* Compare propensity scores using sigfigs (no absolute tolerance gate)
+rename `pscore_psm2' _pscore_psm2
+assert_var_equal _pscore _pscore_psm2 $DEFAULT_SIGFIGS "NN: pscores match psmatch2"
+drop _pscore_psm2
 
 /*******************************************************************************
  * SECTION 4: psmatch2 comparison - Multiple Neighbors
@@ -880,7 +893,7 @@ print_section "Intentional Error Tests"
 capture which psmatch2
 local psmatch2_installed = (_rc == 0)
 
-* Variable doesn't exist
+* Variable doesn't exist (expected rc=111: variable not found)
 clear
 set obs 100
 gen treat = runiform() > 0.5
@@ -890,15 +903,19 @@ if `psmatch2_installed' {
 }
 else {
     capture cpsmatch treat nonexistent_var
-    if _rc != 0 {
-        test_pass "[error] nonexistent variable (rc=`=_rc') [psmatch2 not installed]"
+    local ctools_rc = _rc
+    if `ctools_rc' == 111 {
+        test_pass "[error] nonexistent variable (rc=`ctools_rc') [psmatch2 not installed]"
+    }
+    else if `ctools_rc' != 0 {
+        test_fail "[error] nonexistent variable" "expected rc=111, got rc=`ctools_rc' [psmatch2 not installed]"
     }
     else {
-        test_fail "[error] nonexistent variable" "should have errored"
+        test_fail "[error] nonexistent variable" "should have errored [psmatch2 not installed]"
     }
 }
 
-* Treatment variable doesn't exist
+* Treatment variable doesn't exist (expected rc=111: variable not found)
 clear
 set obs 100
 gen x = rnormal()
@@ -907,15 +924,19 @@ if `psmatch2_installed' {
 }
 else {
     capture cpsmatch nonexistent_treat x
-    if _rc != 0 {
-        test_pass "[error] nonexistent treatment variable (rc=`=_rc') [psmatch2 not installed]"
+    local ctools_rc = _rc
+    if `ctools_rc' == 111 {
+        test_pass "[error] nonexistent treatment variable (rc=`ctools_rc') [psmatch2 not installed]"
+    }
+    else if `ctools_rc' != 0 {
+        test_fail "[error] nonexistent treatment variable" "expected rc=111, got rc=`ctools_rc' [psmatch2 not installed]"
     }
     else {
-        test_fail "[error] nonexistent treatment variable" "should have errored"
+        test_fail "[error] nonexistent treatment variable" "should have errored [psmatch2 not installed]"
     }
 }
 
-* String treatment variable
+* String treatment variable (expected rc=109: type mismatch, or rc=198: syntax)
 clear
 set obs 100
 gen str10 treat = cond(runiform() > 0.5, "yes", "no")
@@ -925,15 +946,19 @@ if `psmatch2_installed' {
 }
 else {
     capture cpsmatch treat x
-    if _rc != 0 {
-        test_pass "[error] string treatment variable (rc=`=_rc') [psmatch2 not installed]"
+    local ctools_rc = _rc
+    if `ctools_rc' == 109 | `ctools_rc' == 198 {
+        test_pass "[error] string treatment variable (rc=`ctools_rc') [psmatch2 not installed]"
+    }
+    else if `ctools_rc' != 0 {
+        test_fail "[error] string treatment variable" "expected rc=109 or 198, got rc=`ctools_rc' [psmatch2 not installed]"
     }
     else {
-        test_fail "[error] string treatment variable" "should have errored"
+        test_fail "[error] string treatment variable" "should have errored [psmatch2 not installed]"
     }
 }
 
-* No covariates specified
+* No covariates specified (expected rc=198: syntax error, or rc=100)
 clear
 set obs 100
 gen treat = runiform() > 0.5
@@ -942,15 +967,19 @@ if `psmatch2_installed' {
 }
 else {
     capture cpsmatch treat
-    if _rc != 0 {
-        test_pass "[error] no covariates specified (rc=`=_rc') [psmatch2 not installed]"
+    local ctools_rc = _rc
+    if `ctools_rc' == 198 | `ctools_rc' == 100 {
+        test_pass "[error] no covariates specified (rc=`ctools_rc') [psmatch2 not installed]"
+    }
+    else if `ctools_rc' != 0 {
+        test_fail "[error] no covariates specified" "expected rc=198 or 100, got rc=`ctools_rc' [psmatch2 not installed]"
     }
     else {
-        test_fail "[error] no covariates specified" "should have errored"
+        test_fail "[error] no covariates specified" "should have errored [psmatch2 not installed]"
     }
 }
 
-* All treated or all control
+* All treated or all control (expected rc=459: no observations, or rc=198, or rc=2000+)
 clear
 set obs 100
 gen treat = 1
@@ -960,11 +989,15 @@ if `psmatch2_installed' {
 }
 else {
     capture cpsmatch treat x
-    if _rc != 0 {
-        test_pass "[error] all treated observations (rc=`=_rc') [psmatch2 not installed]"
+    local ctools_rc = _rc
+    if `ctools_rc' == 459 | `ctools_rc' == 198 | `ctools_rc' == 2000 | `ctools_rc' == 2001 | `ctools_rc' == 480 {
+        test_pass "[error] all treated observations (rc=`ctools_rc') [psmatch2 not installed]"
+    }
+    else if `ctools_rc' != 0 {
+        test_fail "[error] all treated observations" "expected rc=459/198/2000/2001/480, got rc=`ctools_rc' [psmatch2 not installed]"
     }
     else {
-        test_fail "[error] all treated observations" "should have errored"
+        test_fail "[error] all treated observations" "should have errored [psmatch2 not installed]"
     }
 }
 

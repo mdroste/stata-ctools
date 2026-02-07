@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cimport##syntax"}{...}
 {viewerjumpto "Description" "cimport##description"}{...}
 {viewerjumpto "Options" "cimport##options"}{...}
@@ -56,7 +56,29 @@
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
-{synopt:{opt thr:eads(#)}}number of threads to use; default is auto-detect{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+{synoptline}
+
+{pstd}Import Excel (.xlsx) file:
+
+{p 8 17 2}
+{cmdab:cimport}
+{cmd:excel}
+[{cmd:using}]
+{it:filename}
+[{cmd:,} {it:excel_options}]
+
+{synoptset 32 tabbed}{...}
+{synopthdr:excel options}
+{synoptline}
+{syntab:Main}
+{synopt:{opt sheet(name)}}worksheet name to import{p_end}
+{synopt:{opt cellr:ange(range)}}cell range to import (e.g., A1:F100){p_end}
+{synopt:{opt first:row}}treat first row as variable names{p_end}
+{synopt:{opt alls:tring}}import all columns as string{p_end}
+{synopt:{opt case(option)}}variable name case; {opt preserve}, {opt lower}, or {opt upper}{p_end}
+{synopt:{opt clear}}clear data in memory before loading{p_end}
+{synopt:{opt v:erbose}}display progress information{p_end}
 {synoptline}
 
 
@@ -64,13 +86,15 @@
 {title:Description}
 
 {pstd}
-{cmd:cimport delimited} is a high-performance replacement for
-{help import delimited:import delimited} that uses a C plugin with
-multi-threaded parallel parsing.
+{cmd:cimport} provides high-performance data import using C plugins. It supports two formats:
 
-{pstd}
-The command reads delimited text files (CSV, TSV, etc.) and loads them into
-Stata, automatically inferring variable types and handling quoted fields.
+{phang2}
+{cmd:cimport delimited} imports delimited text files (CSV, TSV, etc.).
+It is a high-performance replacement for {help import delimited:import delimited}.
+
+{phang2}
+{cmd:cimport excel} imports Excel (.xlsx) files. It is a high-performance
+replacement for {help import excel:import excel}.
 
 
 {marker options}{...}
@@ -93,7 +117,8 @@ tab-delimited files.
 {opt varnames(rule)} specifies how variable names are determined.
 {opt varnames(1)} treats the first row as variable names (the default).
 {opt varnames(nonames)} treats the first row as data and generates default
-variable names (v1, v2, ...).
+variable names (v1, v2, ...). You can also specify {opt varnames(}{it:N}{opt )}
+to use row {it:N} as variable names (e.g., {opt varnames(3)} uses the third row).
 
 {phang}
 {opt case(option)} specifies the case of variable names. {opt preserve}
@@ -131,7 +156,8 @@ This overrides automatic type detection for these columns.
 
 {phang}
 {opt stripquotes} removes surrounding quotation marks from string values
-after parsing.
+after parsing. {bf:Note:} This option is currently accepted but not yet
+implemented in the C plugin.
 
 {phang}
 {opt encoding(encoding)} specifies the file encoding. Currently only UTF-8
@@ -139,8 +165,9 @@ is supported.
 
 {phang}
 {opt rowrange([start][:end])} specifies a range of rows to import.
-Use {opt rowrange(100:200)} to import rows 100-200, or {opt rowrange(100:)}
-to import from row 100 to the end.
+Use {opt rowrange(100:200)} to import rows 100-200, {opt rowrange(100:)}
+to import from row 100 to the end, or {opt rowrange(100)} to import only
+row 100.
 
 {phang}
 {opt colrange([start][:end])} specifies a range of columns to import.
@@ -187,12 +214,11 @@ this value if your file has quoted fields that don't appear until later rows.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information including timing
-breakdown and throughput in MB/s.
+{opt verbose} displays detailed progress information.
 
 {phang}
-{opt threads(#)} specifies the number of threads to use for parallel
-parsing. The default (0) auto-detects based on available CPU cores.
+{opt threads(#)} specifies the maximum number of threads to use for parallel
+operations. By default, {cmd:cimport} uses all available CPU cores.
 
 
 {marker remarks}{...}
@@ -244,6 +270,20 @@ use both {opt decimalseparator(,)} and {opt groupseparator(.)} together.
 {pstd}Import with multi-threading:{p_end}
 {phang2}{cmd:. cimport delimited using auto.csv, clear threads(4)}{p_end}
 
+{pstd}{ul:Excel import examples}
+
+{pstd}Import an Excel file:{p_end}
+{phang2}{cmd:. cimport excel using mydata.xlsx, clear}{p_end}
+
+{pstd}Import a specific sheet:{p_end}
+{phang2}{cmd:. cimport excel using mydata.xlsx, clear sheet("Sheet2")}{p_end}
+
+{pstd}Import with first row as variable names:{p_end}
+{phang2}{cmd:. cimport excel using mydata.xlsx, clear firstrow}{p_end}
+
+{pstd}Import all columns as string:{p_end}
+{phang2}{cmd:. cimport excel using mydata.xlsx, clear allstring}{p_end}
+
 
 {marker results}{...}
 {title:Stored results}
@@ -271,8 +311,8 @@ Michael Droste{break}
 {title:Also see}
 
 {psee}
-Manual: {bf:[D] import delimited}
+Manual: {bf:[D] import delimited}, {bf:[D] import excel}
 
 {psee}
-Online: {help import delimited}, {help insheet}, {help cexport}, {help ctools}
+Online: {help import delimited}, {help import excel}, {help insheet}, {help cexport}, {help ctools}
 {p_end}

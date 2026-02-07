@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! civreghdfe: C-accelerated instrumental variables regression with HDFE
 *! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
 
@@ -12,6 +12,10 @@ program define civreghdfe, eclass
         exit 920
     }
 
+    * Start wall clock timer immediately
+    timer clear 97
+    timer on 97
+
     * Parse syntax
     * Basic syntax: civreghdfe depvar (endogvars = instruments) [exogvars], absorb() [options]
     * absorb() is optional - without it, runs as regular IV (no FE absorption)
@@ -22,7 +26,7 @@ program define civreghdfe, eclass
         CLuster(varlist) ///
         TOLerance(real 1e-8) ///
         MAXiter(integer 500) ///
-        Verbose TIMEit ///
+        Verbose ///
         FIRST ///
         FFIRst ///
         RF ///
@@ -85,6 +89,11 @@ program define civreghdfe, eclass
         capture scalar drop __civreghdfe_orthog_`i'
         capture scalar drop __civreghdfe_endogtest_`i'
         capture scalar drop __civreghdfe_partial_`i'
+    }
+    capture scalar drop __civreghdfe_num_collinear
+    capture scalar drop __civreghdfe_K_keep
+    forval i = 1/20 {
+        capture scalar drop __civreghdfe_collinear_`i'
     }
 
     * Handle standalone robust/cluster as aliases for vce()
@@ -195,71 +204,114 @@ program define civreghdfe, eclass
     marksample touse
     markout `touse' `depvar' `absorb'
 
-    * Early check for no observations (before _rmcoll which throws error 2000)
-    qui count if `touse'
-    if r(N) == 0 {
-        di as error "no observations"
-        exit 2001
-    }
-
-    * Expand factor variables for endogenous variables
-    local endogvars_coef ""
+    * Expand factor variables — single fvrevar, base pre-filter, then _rmcoll
+    * fvexpand (cheap) gets names; fvrevar (expensive) creates temp vars
+    * Pre-filtering base/omitted levels reduces _rmcoll input size
+    local endogvars_names_all ""
+    local __n_endog_total = 0
     if "`endogvars'" != "" {
-        fvrevar `endogvars' if `touse'
-        local endogvars_fvrevar "`r(varlist)'"
-        _rmcoll `endogvars_fvrevar' if `touse', forcedrop
-        local endogvars_expanded "`r(varlist)'"
-
         fvexpand `endogvars' if `touse'
         local endogvars_names_all "`r(varlist)'"
-        foreach v of local endogvars_names_all {
-            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
-                local endogvars_coef `endogvars_coef' `v'
-            }
-        }
-    }
-    else {
-        local endogvars_expanded ""
+        local __n_endog_total : word count `endogvars_names_all'
     }
 
-    * Expand factor variables for exogenous variables
-    local exogvars_coef ""
+    local exogvars_names_all ""
+    local __n_exog_total = 0
     if "`exogvars'" != "" {
-        fvrevar `exogvars' if `touse'
-        local exogvars_fvrevar "`r(varlist)'"
-        _rmcoll `exogvars_fvrevar' if `touse', forcedrop
-        local exogvars_expanded "`r(varlist)'"
-
         fvexpand `exogvars' if `touse'
         local exogvars_names_all "`r(varlist)'"
-        foreach v of local exogvars_names_all {
-            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
-                local exogvars_coef `exogvars_coef' `v'
-            }
-        }
-    }
-    else {
-        local exogvars_expanded ""
+        local __n_exog_total : word count `exogvars_names_all'
     }
 
-    * Expand factor variables for instruments
-    local instruments_coef ""
+    local instruments_names_all ""
+    local __n_inst_total = 0
     if "`instruments'" != "" {
-        fvrevar `instruments' if `touse'
-        local instruments_fvrevar "`r(varlist)'"
-        _rmcoll `instruments_fvrevar' if `touse', forcedrop
-        local instruments_expanded "`r(varlist)'"
-
         fvexpand `instruments' if `touse'
         local instruments_names_all "`r(varlist)'"
-        foreach v of local instruments_names_all {
-            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
-                local instruments_coef `instruments_coef' `v'
-            }
-        }
+        local __n_inst_total : word count `instruments_names_all'
     }
-    else {
-        local instruments_expanded ""
+
+    * Single fvrevar call for all variable groups
+    local endogvars_expanded ""
+    local endogvars_coef ""
+    local exogvars_expanded ""
+    local exogvars_coef ""
+    local instruments_expanded ""
+    local instruments_coef ""
+    local __all_fv `endogvars' `exogvars' `instruments'
+    if `"`__all_fv'"' != "" {
+        fvrevar `__all_fv' if `touse'
+        local __all_exp "`r(varlist)'"
+
+        * Helper: pre-filter base/omitted levels, then _rmcoll per group
+        * Keep term if ANY #-separated component is non-base/non-omitted
+        local __pos = 1
+
+        * --- Endogenous variables ---
+        local __vars_nobase ""
+        local __names_nobase ""
+        forval __i = 1/`__n_endog_total' {
+            local __vname : word `__i' of `endogvars_names_all'
+            local __keep = 0
+            local __parts : subinstr local __vname "#" " ", all
+            foreach __p of local __parts {
+                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
+                    local __keep = 1
+                }
+            }
+            if `__keep' {
+                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
+                local __names_nobase `__names_nobase' `__vname'
+            }
+            local __pos = `__pos' + 1
+        }
+        * Collinearity detection handled by C plugin
+        local endogvars_expanded "`__vars_nobase'"
+        local endogvars_coef "`__names_nobase'"
+
+        * --- Exogenous variables ---
+        local __vars_nobase ""
+        local __names_nobase ""
+        forval __i = 1/`__n_exog_total' {
+            local __vname : word `__i' of `exogvars_names_all'
+            local __keep = 0
+            local __parts : subinstr local __vname "#" " ", all
+            foreach __p of local __parts {
+                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
+                    local __keep = 1
+                }
+            }
+            if `__keep' {
+                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
+                local __names_nobase `__names_nobase' `__vname'
+            }
+            local __pos = `__pos' + 1
+        }
+        * Collinearity detection handled by C plugin
+        local exogvars_expanded "`__vars_nobase'"
+        local exogvars_coef "`__names_nobase'"
+
+        * --- Instruments ---
+        local __vars_nobase ""
+        local __names_nobase ""
+        forval __i = 1/`__n_inst_total' {
+            local __vname : word `__i' of `instruments_names_all'
+            local __keep = 0
+            local __parts : subinstr local __vname "#" " ", all
+            foreach __p of local __parts {
+                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
+                    local __keep = 1
+                }
+            }
+            if `__keep' {
+                local __vars_nobase `__vars_nobase' `: word `__pos' of `__all_exp''
+                local __names_nobase `__names_nobase' `__vname'
+            }
+            local __pos = `__pos' + 1
+        }
+        * Collinearity detection handled by C plugin
+        local instruments_expanded "`__vars_nobase'"
+        local instruments_coef "`__names_nobase'"
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
@@ -901,6 +953,11 @@ program define civreghdfe, eclass
         local threads_code "threads(`threads')"
     }
 
+    * Record Stata pre-processing time
+    timer off 97
+    qui timer list 97
+    local t_stata_pre = r(t97)
+
     * Call the C plugin
     timer clear 99
     timer on 99
@@ -980,9 +1037,16 @@ program define civreghdfe, eclass
     * Build variable names in [endog, exog] order (matching C output)
     * Use coefficient names which have proper factor variable notation
     * Exclude partialled variables from varnames
+    * Also build full names list (including base/omitted levels) for ivreghdfe compatibility
     local varnames ""
+    local varnames_full ""
     foreach v of local endogvars_coef {
         local varnames `varnames' `v'
+    }
+    if "`endogvars'" != "" {
+        foreach v of local endogvars_names_all {
+            local varnames_full `varnames_full' `v'
+        }
     }
     foreach v of local exogvars_coef {
         * Check if this variable was partialled out
@@ -997,6 +1061,19 @@ program define civreghdfe, eclass
             local varnames `varnames' `v'
         }
     }
+    if "`exogvars'" != "" {
+        foreach v of local exogvars_names_all {
+            local is_partial = 0
+            foreach pv of local partial_vars {
+                if "`v'" == "`pv'" {
+                    local is_partial = 1
+                }
+            }
+            if `is_partial' == 0 {
+                local varnames_full `varnames_full' `v'
+            }
+        }
+    }
 
     * Update K_exog to reflect partialled variables removed
     local K_exog = `K_exog' - `n_partial'
@@ -1006,6 +1083,90 @@ program define civreghdfe, eclass
     tempname V_sym
     matrix `V_sym' = (`V_temp' + `V_temp'') / 2
     matrix `V_temp' = `V_sym'
+
+    * Insert base/omitted factor variable levels (coefficient=0, variance=0)
+    * to match ivreghdfe's e(b) format
+    local K_active : word count `varnames'
+    local K_full : word count `varnames_full'
+    if `K_full' > `K_active' {
+        * Build expanded b and V with zeros for base/omitted levels
+        tempname b_full V_full
+        matrix `b_full' = J(1, `K_full', 0)
+        matrix `V_full' = J(`K_full', `K_full', 0)
+
+        local active_idx = 1
+        forvalues j = 1/`K_full' {
+            local vname : word `j' of `varnames_full'
+            * Check if this is a base or omitted level
+            local is_base = 0
+            if regexm("`vname'", "^[0-9]+b\.") | regexm("`vname'", "^o\.") {
+                local is_base = 1
+            }
+            if `is_base' == 0 {
+                * Copy coefficient from active vector
+                matrix `b_full'[1, `j'] = `b_temp'[1, `active_idx']
+                * Copy row and column of V
+                local active_idx2 = 1
+                forvalues jj = 1/`K_full' {
+                    local vname2 : word `jj' of `varnames_full'
+                    local is_base2 = 0
+                    if regexm("`vname2'", "^[0-9]+b\.") | regexm("`vname2'", "^o\.") {
+                        local is_base2 = 1
+                    }
+                    if `is_base2' == 0 {
+                        matrix `V_full'[`j', `jj'] = `V_temp'[`active_idx', `active_idx2']
+                        local active_idx2 = `active_idx2' + 1
+                    }
+                }
+                local active_idx = `active_idx' + 1
+            }
+        }
+        matrix `b_temp' = `b_full'
+        matrix `V_temp' = `V_full'
+        local varnames `varnames_full'
+    }
+
+    * Apply o. prefix for collinear variables detected by C plugin
+    * Collinearity flags are in [exog, endog] order (matching C internal order)
+    * varnames is in [endog, exog] order (matching ivreghdfe convention)
+    capture confirm scalar __civreghdfe_num_collinear
+    if _rc == 0 & __civreghdfe_num_collinear > 0 {
+        local varnames_new ""
+        * Walk through varnames: first K_endog entries are endog, then K_exog are exog
+        * Map back to C's [exog, endog] flag order
+        local active_k = 1
+        foreach v of local varnames {
+            * Skip names that are already base levels (b. or o. prefix)
+            local is_base = 0
+            if regexm("`v'", "^[0-9]+b\.") | regexm("`v'", "^o\.") {
+                local is_base = 1
+            }
+            if `is_base' {
+                local varnames_new `varnames_new' `v'
+            }
+            else {
+                * Map active_k to C's [exog, endog] order flag index
+                * active_k 1..K_endog -> C flag K_exog + k (endog)
+                * active_k K_endog+1..K_total -> C flag k - K_endog (exog)
+                if `active_k' <= `K_endog' {
+                    local c_flag_idx = `K_exog' + `active_k'
+                }
+                else {
+                    local c_flag_idx = `active_k' - `K_endog'
+                }
+                capture local is_collin = __civreghdfe_collinear_`c_flag_idx'
+                if _rc != 0 local is_collin = 0
+                if `is_collin' == 1 {
+                    local varnames_new `varnames_new' o.`v'
+                }
+                else {
+                    local varnames_new `varnames_new' `v'
+                }
+                local active_k = `active_k' + 1
+            }
+        }
+        local varnames `varnames_new'
+    }
 
     * Add column/row names to matrices
     matrix colnames `b_temp' = `varnames'
@@ -1609,7 +1770,8 @@ program define civreghdfe, eclass
     di as text "                          variables in regressor count K"
     di as text "{hline 78}"
 
-    * Display absorbed degrees of freedom table
+    * Display absorbed degrees of freedom table (only when absorb was specified)
+    if `G' > 0 {
     di as text ""
     di as text "Absorbed degrees of freedom:"
     di as text "{hline 13}{c TT}{hline 39}{c TRC}"
@@ -1655,13 +1817,14 @@ program define civreghdfe, eclass
         }
         local coefs = `cats' - `redundant'
         local total_coefs = `total_coefs' + `coefs'
-        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "   `nested_marker'{c |}"
+        di as text %12s abbrev("`fevar'", 12) " {c |}" as result %10.0fc `cats' as text "  " as result %10.0fc `redundant' as text "  " as result %10.0fc `coefs' as text "    `nested_marker'{c |}"
     }
     di as text "{hline 13}{c BT}{hline 39}{c BRC}"
     if `has_nested' {
         di as text "* = FE nested within cluster; treated as redundant for DoF computation"
     }
     di as text ""
+    } /* end if G > 0 */
 
     } /* End of if "`footer'" == "" */
 
@@ -1689,30 +1852,37 @@ program define civreghdfe, eclass
     qui timer list 98
     local t_stata_post = r(t98)
 
-    * Display timing breakdown if verbose or timeit specified
-    if "`verbose'" != "" | "`timeit'" != "" {
-        local t_total_wall = `t_plugin' + `t_stata_post'
+    * Display timing breakdown if verbose specified
+    if "`verbose'" != "" {
+        local t_total_wall = `t_stata_pre' + `t_plugin' + `t_stata_post'
         di as text ""
         di as text "{hline 55}"
         di as text "civreghdfe timing breakdown:"
         di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Data load:              " as result %8.4f _civreghdfe_time_load " sec"
+        di as text "    Data load (SPI):        " as result %8.4f _civreghdfe_time_load " sec"
+        di as text "    Data extraction:        " as result %8.4f _civreghdfe_time_extract " sec"
+        di as text "    Missing check+compact:  " as result %8.4f _civreghdfe_time_missing " sec"
         di as text "    Singleton removal:      " as result %8.4f _civreghdfe_time_singleton " sec"
-        di as text "    HDFE setup:             " as result %8.4f _civreghdfe_time_setup " sec"
+        di as text "    FE remap + counts:      " as result %8.4f _civreghdfe_time_remap " sec"
         di as text "    FWL partialling:        " as result %8.4f _civreghdfe_time_fwl " sec"
         di as text "    HDFE partial out:       " as result %8.4f _civreghdfe_time_partial " sec"
-        di as text "    Post-processing:        " as result %8.4f _civreghdfe_time_postproc " sec"
+        di as text "    DOF + post-processing:  " as result %8.4f _civreghdfe_time_dof " sec"
         di as text "    IV estimation + VCE:    " as result %8.4f _civreghdfe_time_estimate " sec"
         di as text "    Stats computation:      " as result %8.4f _civreghdfe_time_stats " sec"
         di as text "    Store results:          " as result %8.4f _civreghdfe_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _civreghdfe_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Setup (parsing, etc):   " as result %8.4f `t_stata_pre' " sec"
+        di as text "    Plugin call overhead:   " as result %8.4f (`t_plugin' - _civreghdfe_time_total) " sec"
+        di as text "    Post-processing:        " as result %8.4f `t_stata_post' " sec"
         di as text "  {hline 53}"
-        di as text "  Plugin call (wall clock): " as result %8.4f `t_plugin' " sec"
-        di as text "  Stata post-processing:    " as result %8.4f `t_stata_post' " sec"
-        di as text "  {hline 53}"
-        di as text "  Total wall clock:         " as result %8.4f `t_total_wall' " sec"
+        local __stata_overhead = `t_stata_pre' + (`t_plugin' - _civreghdfe_time_total) + `t_stata_post'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `t_total_wall' " sec"
         di as text "{hline 55}"
 
         * Display thread diagnostics
@@ -1827,18 +1997,26 @@ program define civreghdfe, eclass
         capture scalar drop __civreghdfe_partial_`i'
     }
 
+    * Clean up collinearity scalars
+    capture scalar drop __civreghdfe_num_collinear
+    capture scalar drop __civreghdfe_K_keep
+    forval i = 1/20 {
+        capture scalar drop __civreghdfe_collinear_`i'
+    }
+
     * Clean up timing scalars
-    capture scalar drop _civreghdfe_time_load
+    capture scalar drop _civreghdfe_time_load _civreghdfe_time_extract _civreghdfe_time_missing
     capture scalar drop _civreghdfe_time_singleton
-    capture scalar drop _civreghdfe_time_setup
+    capture scalar drop _civreghdfe_time_remap
     capture scalar drop _civreghdfe_time_fwl
     capture scalar drop _civreghdfe_time_partial
-    capture scalar drop _civreghdfe_time_postproc
+    capture scalar drop _civreghdfe_time_dof
     capture scalar drop _civreghdfe_time_estimate
     capture scalar drop _civreghdfe_time_stats
     capture scalar drop _civreghdfe_time_store
     capture scalar drop _civreghdfe_time_total
     capture scalar drop _civreghdfe_threads_max
     capture scalar drop _civreghdfe_openmp_enabled
+    timer clear 97
 
 end

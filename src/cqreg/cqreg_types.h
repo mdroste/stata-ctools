@@ -23,9 +23,8 @@
 #define CQREG_DEFAULT_TOL         1e-8
 #define CQREG_DEFAULT_MU_INIT     0.1
 #define CQREG_DEFAULT_SIGMA       0.1
-#define CQREG_CACHE_LINE          64
-
 /* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
+/* Aligned allocation uses ctools_cacheline_alloc / ctools_aligned_free from ctools_config.h */
 
 /* Compiler hints */
 #if defined(__GNUC__) || defined(__clang__)
@@ -69,6 +68,7 @@ typedef struct {
     ST_double tol_gap;        /* Duality gap tolerance */
     ST_int verbose;           /* Verbosity level (0=none, 1=summary, 2=detailed) */
     ST_int use_mehrotra;      /* Use predictor-corrector (default: 1) */
+    ST_int skip_crossover;    /* Skip crossover + residuals (for auxiliary solves) */
     ST_double mu_init;        /* Initial barrier parameter */
     ST_double sigma;          /* Centering parameter (0.1-0.3) */
 } cqreg_ipm_config;
@@ -159,6 +159,11 @@ typedef struct {
     /* Status */
     ST_int converged;         /* 1 if converged, 0 otherwise */
     ST_int iterations;        /* Number of iterations used */
+
+    /* Runtime timing (populated by cqreg_fn_solve) */
+    ST_double time_init;      /* Initialization (OLS warm start + setup) */
+    ST_double time_iterate;   /* Main iteration loop */
+    ST_double time_crossover; /* Crossover to LP vertex */
 } cqreg_ipm_state;
 
 /* Sparsity estimation state */
@@ -252,7 +257,11 @@ void cqreg_ipm_config_init(cqreg_ipm_config *config);
 /* Create and initialize IPM solver state */
 cqreg_ipm_state *cqreg_ipm_create(ST_int N, ST_int K, const cqreg_ipm_config *config);
 
-/* Free IPM solver state */
+/* Create lightweight IPM state with only Frisch-Newton solver arrays.
+ * Saves ~60% memory vs full state. Use for auxiliary solves (sparsity estimation). */
+cqreg_ipm_state *cqreg_ipm_create_lite(ST_int N, ST_int K, const cqreg_ipm_config *config);
+
+/* Free IPM solver state (works for both full and lite states) */
 void cqreg_ipm_free(cqreg_ipm_state *ipm);
 
 /* Create sparsity estimation state */
@@ -266,11 +275,5 @@ cqreg_state *cqreg_state_create(ST_int N, ST_int K);
 
 /* Free main cqreg state */
 void cqreg_state_free(cqreg_state *state);
-
-/* Aligned memory allocation */
-void *cqreg_aligned_alloc(size_t size, size_t alignment);
-
-/* Aligned memory free */
-void cqreg_aligned_free(void *ptr);
 
 #endif /* CQREG_TYPES_H */

@@ -10,14 +10,11 @@
  * 2. Parse (parallel across observations): OpenMP parallel loop converts
  *    strings to doubles in pure C memory with no SPI calls.
  * 3. Bulk store (parallel across variables): Write numeric results back to
- *    Stata via SF_vstore, one thread per variable.
+ *    Stata via ctools_store_filtered, one variable at a time.
  */
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <ctype.h>
-#include <stdbool.h>
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -25,9 +22,9 @@
 
 #include "stplugin.h"
 #include "ctools_types.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "ctools_config.h"
-#include "ctools_arena.h"
+#include "ctools_parse.h"
 #include "ctools_threads.h"
 #include "cdestring_impl.h"
 
@@ -59,7 +56,7 @@ typedef struct {
  * Check if a character should be ignored during parsing.
  * Uses a lookup table for O(1) checking.
  */
-static int ignore_table[256];
+static unsigned char ignore_table[256];
 
 static void build_ignore_table(const char *ignore_chars, int len)
 {
@@ -106,13 +103,41 @@ static int strip_percent(char *str, int *len)
 }
 
 /*
- * Parse variable indices from command string.
- * Format: "src1 dst1 src2 dst2 ... nvars=N [options]"
- *
- * Returns:
- *   0 on success
- *  -1 on syntax error (invalid arguments)
- *  -2 on memory allocation failure
+ * Parse the ignore= option value, handling escape sequences.
+ * This is kept as a local helper because escape sequences like \s, \n, \t
+ * are specific to cdestring and not handled by ctools_parse_string_option.
+ */
+static int parse_ignore_option(const char *args, char *ignore_chars, int max_len)
+{
+    const char *ignore_ptr = strstr(args, "ignore=");
+    if (!ignore_ptr) return 0;
+
+    ignore_ptr += 7;
+    int i = 0;
+    while (*ignore_ptr && *ignore_ptr != ' ' && *ignore_ptr != '\t' &&
+           i < max_len - 1) {
+        if (*ignore_ptr == '\\' && *(ignore_ptr + 1)) {
+            ignore_ptr++;
+            switch (*ignore_ptr) {
+                case 'n': ignore_chars[i++] = '\n'; break;
+                case 't': ignore_chars[i++] = '\t'; break;
+                case 'r': ignore_chars[i++] = '\r'; break;
+                case 's': ignore_chars[i++] = ' '; break;
+                case '\\': ignore_chars[i++] = '\\'; break;
+                default: ignore_chars[i++] = *ignore_ptr; break;
+            }
+        } else {
+            ignore_chars[i++] = *ignore_ptr;
+        }
+        ignore_ptr++;
+    }
+    ignore_chars[i] = '\0';
+    return i;
+}
+
+/*
+ * Parse all options from args string.
+ * Returns 0 on success, -1 on syntax error, -2 on memory failure.
  */
 static int parse_options(const char *args, cdestring_options *opts)
 {
@@ -122,33 +147,11 @@ static int parse_options(const char *args, cdestring_options *opts)
         return -1;
     }
 
-    /* Make a working copy */
-    char *args_copy = strdup(args);
-    if (!args_copy) return -2;  /* Memory allocation failure */
-
-    /* First, find nvars= to know how many variables */
-    const char *nvars_ptr = strstr(args, "nvars=");
-    if (nvars_ptr == NULL) {
-        free(args_copy);
+    /* Parse nvars= */
+    if (!ctools_parse_int_option(args, "nvars", &opts->nvars)) {
         return -1;
     }
-
-    /* Extract just the number part (until whitespace or end) */
-    const char *num_start = nvars_ptr + 6;
-    char nvars_buf[32];
-    int i = 0;
-    while (num_start[i] && num_start[i] != ' ' && num_start[i] != '\t' && i < 31) {
-        nvars_buf[i] = num_start[i];
-        i++;
-    }
-    nvars_buf[i] = '\0';
-
-    if (!ctools_safe_atoi(nvars_buf, &opts->nvars)) {
-        free(args_copy);
-        return -1;  /* Invalid nvars value */
-    }
     if (opts->nvars <= 0 || opts->nvars > CDESTRING_MAX_VARS) {
-        free(args_copy);
         return -1;
     }
 
@@ -158,86 +161,33 @@ static int parse_options(const char *args, cdestring_options *opts)
     if (!opts->src_indices || !opts->dst_indices) {
         free(opts->src_indices);
         free(opts->dst_indices);
-        free(args_copy);
-        return -2;  /* Memory allocation failure */
+        return -2;
     }
 
-    /* Parse variable indices (pairs of src, dst) */
-    char *saveptr = NULL;
-    char *token = strtok_r(args_copy, " \t", &saveptr);
-    int idx = 0;
+    /* Parse variable index pairs from start of args (stack-allocated) */
+    const char *cursor = args;
+    int indices[CDESTRING_MAX_VARS * 2];
 
-    while (token != NULL && idx < opts->nvars * 2) {
-        /* Stop when we hit an option keyword */
-        if (strncmp(token, "nvars=", 6) == 0 ||
-            strncmp(token, "ignore=", 7) == 0 ||
-            strcmp(token, "force") == 0 ||
-            strcmp(token, "percent") == 0 ||
-            strcmp(token, "dpcomma") == 0 ||
-            strcmp(token, "verbose") == 0) {
-            break;
-        }
-
-        int val;
-        if (!ctools_safe_atoi(token, &val)) {
-            /* Invalid number - skip this token */
-            token = strtok_r(NULL, " \t", &saveptr);
-            continue;
-        }
-        if (val > 0) {
-            if (idx % 2 == 0) {
-                opts->src_indices[idx / 2] = val;
-            } else {
-                opts->dst_indices[idx / 2] = val;
-            }
-            idx++;
-        }
-        token = strtok_r(NULL, " \t", &saveptr);
-    }
-
-    free(args_copy);
-
-    if (idx < opts->nvars * 2) {
-        /* Not enough indices provided */
+    if (ctools_parse_int_array(indices, (size_t)(opts->nvars * 2), &cursor) != 0) {
         free(opts->src_indices);
         free(opts->dst_indices);
         return -1;
     }
 
-    /* Parse other options from original args */
-
-    /* ignore= option */
-    const char *ignore_ptr = strstr(args, "ignore=");
-    if (ignore_ptr != NULL) {
-        ignore_ptr += 7;
-        int i = 0;
-        while (*ignore_ptr && *ignore_ptr != ' ' && *ignore_ptr != '\t' &&
-               i < CDESTRING_MAX_IGNORE - 1) {
-            /* Handle escape sequences */
-            if (*ignore_ptr == '\\' && *(ignore_ptr + 1)) {
-                ignore_ptr++;
-                switch (*ignore_ptr) {
-                    case 'n': opts->ignore_chars[i++] = '\n'; break;
-                    case 't': opts->ignore_chars[i++] = '\t'; break;
-                    case 'r': opts->ignore_chars[i++] = '\r'; break;
-                    case 's': opts->ignore_chars[i++] = ' '; break;
-                    case '\\': opts->ignore_chars[i++] = '\\'; break;
-                    default: opts->ignore_chars[i++] = *ignore_ptr; break;
-                }
-            } else {
-                opts->ignore_chars[i++] = *ignore_ptr;
-            }
-            ignore_ptr++;
-        }
-        opts->ignore_chars[i] = '\0';
-        opts->ignore_len = i;
+    for (int i = 0; i < opts->nvars; i++) {
+        opts->src_indices[i] = indices[i * 2];
+        opts->dst_indices[i] = indices[i * 2 + 1];
     }
 
+    /* Parse ignore= with escape sequence handling */
+    opts->ignore_len = parse_ignore_option(args, opts->ignore_chars,
+                                            CDESTRING_MAX_IGNORE);
+
     /* Boolean options */
-    opts->force = (strstr(args, "force") != NULL) ? 1 : 0;
-    opts->percent = (strstr(args, "percent") != NULL) ? 1 : 0;
-    opts->dpcomma = (strstr(args, "dpcomma") != NULL) ? 1 : 0;
-    opts->verbose = (strstr(args, "verbose") != NULL) ? 1 : 0;
+    opts->force = ctools_parse_bool_option(args, "force");
+    opts->percent = ctools_parse_bool_option(args, "percent");
+    opts->dpcomma = ctools_parse_bool_option(args, "dpcomma");
+    opts->verbose = ctools_parse_bool_option(args, "verbose");
 
     return 0;
 }
@@ -258,11 +208,8 @@ ST_retcode cdestring_main(const char *args)
 {
     double t_start, t_parse, t_load, t_convert, t_store, t_total;
     cdestring_options opts;
-    ST_retcode rc = 0;
     int total_converted = 0;
     int total_failed = 0;
-    int had_nonnumeric = 0;
-    int force_flag;
 
     t_start = ctools_timer_seconds();
 
@@ -277,8 +224,7 @@ ST_retcode cdestring_main(const char *args)
         return 198;
     }
 
-    /* Save force flag before we potentially free opts */
-    force_flag = opts.force;
+
 
     /* Build ignore character lookup table */
     if (opts.ignore_len > 0) {
@@ -327,9 +273,11 @@ ST_retcode cdestring_main(const char *args)
      * Note: No if_mask needed since data is pre-filtered.
      * ==================================================================== */
 
-    /* Allocate result arrays: one double array per variable (sized for filtered obs) */
-    double **results = malloc((size_t)nvars * sizeof(double *));
-    if (!results) {
+    /* Allocate result arrays: single contiguous block for all variables */
+    double *results_block = malloc((size_t)nvars * nobs * sizeof(double));
+    double *results_ptrs[CDESTRING_MAX_VARS];
+    double **results = results_ptrs;
+    if (!results_block) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
         SF_error("cdestring: memory allocation failed\n");
@@ -337,30 +285,14 @@ ST_retcode cdestring_main(const char *args)
     }
 
     for (int v = 0; v < nvars; v++) {
-        results[v] = malloc(nobs * sizeof(double));
-        if (!results[v]) {
-            for (int j = 0; j < v; j++) free(results[j]);
-            free(results);
-            ctools_filtered_data_free(&filtered);
-            free_options(&opts);
-            SF_error("cdestring: memory allocation failed\n");
-            return 920;
-        }
+        results[v] = results_block + (size_t)v * nobs;
     }
 
-    /* Per-variable counters */
-    int *var_converted = calloc(nvars, sizeof(int));
-    int *var_failed = calloc(nvars, sizeof(int));
-    if (!var_converted || !var_failed) {
-        for (int v = 0; v < nvars; v++) free(results[v]);
-        free(results);
-        free(var_converted);
-        free(var_failed);
-        ctools_filtered_data_free(&filtered);
-        free_options(&opts);
-        SF_error("cdestring: memory allocation failed\n");
-        return 920;
-    }
+    /* Per-variable counters (stack-allocated, nvars <= CDESTRING_MAX_VARS = 1000) */
+    int var_converted[CDESTRING_MAX_VARS];
+    int var_failed[CDESTRING_MAX_VARS];
+    memset(var_converted, 0, nvars * sizeof(int));
+    memset(var_failed, 0, nvars * sizeof(int));
 
     /* Process each variable: parallel over observations.
      * Note: All observations are valid (passed if/in filter). */
@@ -369,9 +301,8 @@ ST_retcode cdestring_main(const char *args)
         double *res = results[v];
         int local_converted = 0;
         int local_failed = 0;
-        int local_nonnumeric = 0;
 
-        #pragma omp parallel for reduction(+:local_converted,local_failed,local_nonnumeric) schedule(static)
+        #pragma omp parallel for reduction(+:local_converted,local_failed) schedule(static)
         for (size_t i = 0; i < nobs; i++) {
             const char *src = str_data[i];
 
@@ -424,32 +355,24 @@ ST_retcode cdestring_main(const char *args)
                     local_converted++;
                 } else {
                     local_failed++;
-                    local_nonnumeric = 1;
                 }
             }
         }
 
         var_converted[v] = local_converted;
         var_failed[v] = local_failed;
-        if (local_nonnumeric) had_nonnumeric = 1;
     }
 
     t_convert = ctools_timer_seconds();
 
     /* ====================================================================
-     * Phase 3: Store results back to Stata (parallel across variables)
+     * Phase 3: Store results back to Stata via ctools_store_filtered
      * Uses obs_map to write to correct Stata observations.
      * ==================================================================== */
 
-    /* Each thread writes one variable's results via SF_vstore.
-     * Different threads access different variable columns — SPI-safe. */
     #pragma omp parallel for schedule(static)
     for (int v = 0; v < nvars; v++) {
-        int dst_idx = opts.dst_indices[v];
-        double *res = results[v];
-        for (size_t i = 0; i < nobs; i++) {
-            SF_vstore(dst_idx, (ST_int)obs_map[i], res[i]);
-        }
+        ctools_store_filtered(results[v], nobs, opts.dst_indices[v], obs_map);
     }
 
     /* Free loaded string data — no longer needed after store */
@@ -463,11 +386,9 @@ ST_retcode cdestring_main(const char *args)
         total_failed += var_failed[v];
     }
 
-    /* Free result arrays */
-    for (int v = 0; v < nvars; v++) free(results[v]);
-    free(results);
-    free(var_converted);
-    free(var_failed);
+    /* Free contiguous results block (results pointer array is stack-allocated) */
+    free(results_block);
+    /* var_converted and var_failed are stack-allocated */
 
     t_total = t_store - t_start;
 
@@ -480,20 +401,9 @@ ST_retcode cdestring_main(const char *args)
     SF_scal_save("_cdestring_time_store", t_store - t_convert);
     SF_scal_save("_cdestring_time_total", t_total);
 
-#ifdef _OPENMP
-    SF_scal_save("_cdestring_openmp_enabled", 1.0);
-    SF_scal_save("_cdestring_threads_max", (double)omp_get_max_threads());
-#else
-    SF_scal_save("_cdestring_openmp_enabled", 0.0);
-    SF_scal_save("_cdestring_threads_max", 1.0);
-#endif
+    CTOOLS_SAVE_THREAD_INFO("_cdestring");
 
     free_options(&opts);
 
-    /* If non-numeric values found and force not specified, let ado handle message */
-    if (had_nonnumeric && !force_flag) {
-        rc = 0;
-    }
-
-    return rc;
+    return 0;
 }

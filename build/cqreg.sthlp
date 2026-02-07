@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {vieweralsosee "[R] qreg" "help qreg"}{...}
 {vieweralsosee "ctools" "help ctools"}{...}
 {viewerjumpto "Syntax" "cqreg##syntax"}{...}
@@ -10,9 +10,8 @@
 {viewerjumpto "Methods" "cqreg##methods"}{...}
 {title:Title}
 
-{p2colset 5 14 16 2}{...}
-{p2col:{bf:cqreg} {hline 2}}C-accelerated quantile regression{p_end}
-{p2colreset}{...}
+{phang}
+{bf:cqreg} {hline 2} C-accelerated quantile regression
 
 
 {marker syntax}{...}
@@ -40,12 +39,11 @@
 {synopt:{opt bwmethod(method)}}bandwidth selection: {opt hsheather}, {opt bofinger}, or {opt chamberlain}{p_end}
 
 {syntab:Reporting}
-{synopt:{opt v:erbose}}display progress information{p_end}
-{synopt:{opt timeit}}display execution time{p_end}
+{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 
 {syntab:Optimization}
-{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-8)}{p_end}
+{synopt:{opt tol:erance(#)}}convergence tolerance; default is {cmd:tolerance(1e-12)}{p_end}
 {synopt:{opt max:iter(#)}}maximum iterations; default is {cmd:maxiter(200)}{p_end}
 {synopt:{opt nopreprocess(#)}}disable preprocessing algorithm; default is {cmd:nopreprocess(0)}{p_end}
 {synoptline}
@@ -57,7 +55,7 @@
 {pstd}
 {cmd:cqreg} fits quantile regression models using a high-performance C implementation
 with an Interior Point Method (IPM) solver. It is a drop-in replacement for Stata's
-{helpb qreg} command with significant performance improvements, especially for
+{help qreg:qreg} command with significant performance improvements, especially for
 large datasets.
 
 {pstd}
@@ -140,23 +138,16 @@ density estimation used in computing standard errors.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays progress information during estimation, including
-timing breakdowns.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {phang}
-{opt timeit} displays the total execution time.
-
-{phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-linear algebra operations. By default, {cmd:cqreg} uses all available CPU cores
-as reported by OpenMP. Use this option to limit parallelism, for example when
-running multiple jobs simultaneously.
+{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cqreg} uses all available CPU cores.
 
 {dlgtab:Optimization}
 
 {phang}
 {opt tolerance(#)} specifies the convergence tolerance for the IPM solver.
-The default is {cmd:tolerance(1e-8)}.
+The default is {cmd:tolerance(1e-12)}.
 
 {phang}
 {opt maxiter(#)} specifies the maximum number of IPM iterations. The default
@@ -175,23 +166,23 @@ slow or unstable for some datasets.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Setup{p_end}
+{pstd}Setup:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 
-{pstd}Basic median regression{p_end}
+{pstd}Basic median regression:{p_end}
 {phang2}{cmd:. cqreg price mpg weight}{p_end}
 
-{pstd}25th percentile regression{p_end}
+{pstd}25th percentile regression:{p_end}
 {phang2}{cmd:. cqreg price mpg weight, quantile(0.25)}{p_end}
 
-{pstd}75th percentile with robust standard errors{p_end}
+{pstd}75th percentile with robust standard errors:{p_end}
 {phang2}{cmd:. cqreg price mpg weight, quantile(0.75) vce(robust)}{p_end}
 
-{pstd}Quantile regression with fixed effects{p_end}
+{pstd}Quantile regression with fixed effects:{p_end}
 {phang2}{cmd:. webuse nlswork, clear}{p_end}
 {phang2}{cmd:. cqreg ln_wage age ttl_exp tenure, absorb(idcode)}{p_end}
 
-{pstd}Two-way fixed effects with clustering{p_end}
+{pstd}Two-way fixed effects with clustering:{p_end}
 {phang2}{cmd:. cqreg ln_wage age ttl_exp tenure, absorb(idcode year) vce(cluster idcode)}{p_end}
 
 

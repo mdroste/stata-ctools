@@ -41,7 +41,7 @@
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
-#include "ctools_timer.h"
+#include "ctools_runtime.h"
 #include "cexport_impl.h"
 #include "cexport_io.h"
 #include "cexport_context.h"
@@ -81,12 +81,6 @@ static size_t sample_row_sizes(size_t nobs)
     size_t step = (nobs > sample_count) ? (nobs / sample_count) : 1;
 
     for (size_t i = 0; i < nobs && rows_sampled < sample_count; i += step) {
-        /* Check if this observation satisfies the if condition */
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i, sample_buf, sizeof(sample_buf));
@@ -146,11 +140,6 @@ static void *format_chunk_thread(void *arg)
     bool all_numeric = g_ctx.all_numeric;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i,
@@ -201,11 +190,6 @@ static void *format_mmap_thread(void *arg)
     bool all_numeric = g_ctx.all_numeric;
 
     for (size_t i = args->start_row; i < args->end_row; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         int row_len;
         if (all_numeric) {
             row_len = cexport_format_row_numeric(&g_ctx, i,
@@ -249,11 +233,6 @@ static int write_rows_buffered(FILE *fp, size_t nobs, size_t avg_row_size, size_
     size_t buf_pos = 0;
 
     for (size_t i = 0; i < nobs; i++) {
-        ST_int stata_obs = (ST_int)(g_ctx.obs1 + i);
-        if (!SF_ifobs(stata_obs)) {
-            continue;
-        }
-
         if (buf_pos > buffer_size - avg_row_size * 2) {
             if (fwrite(buffer, 1, buf_pos, fp) != buf_pos) {
                 free(buffer);
@@ -395,8 +374,14 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
     }
     free(header_buf);
 
-    size_t *chunk_offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
-    if (chunk_offsets == NULL) {
+    /* Arena-allocated metadata */
+    ctools_arena *arena = &g_ctx.chunk_arena;
+    ctools_arena_init(arena, 64 * 1024);
+
+    size_t *chunk_offsets = (size_t *)ctools_arena_alloc(arena, (num_chunks + 1) * sizeof(size_t));
+    format_mmap_args_t *mmap_args = (format_mmap_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_mmap_args_t));
+
+    if (chunk_offsets == NULL || mmap_args == NULL) {
         SF_error("cexport: memory allocation failed\n");
         cexport_io_close(&outfile, 0);
         return 920;
@@ -409,14 +394,6 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
             rows_in_chunk = nobs - c * chunk_size;
         }
         chunk_offsets[c + 1] = chunk_offsets[c] + (rows_in_chunk * avg_row_size * 15 / 10);
-    }
-
-    format_mmap_args_t *mmap_args = (format_mmap_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_mmap_args_t));
-    if (mmap_args == NULL) {
-        SF_error("cexport: memory allocation failed\n");
-        free(chunk_offsets);
-        cexport_io_close(&outfile, 0);
-        return 920;
     }
 
     for (size_t c = 0; c < num_chunks; c++) {
@@ -444,8 +421,6 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
 
     if (format_failed) {
         SF_error("cexport: formatting to mmap failed\n");
-        free(mmap_args);
-        free(chunk_offsets);
         cexport_io_close(&outfile, 0);
         return 920;
     }
@@ -464,18 +439,21 @@ static ST_retcode export_mmap(size_t nobs, size_t avg_row_size, size_t chunk_siz
 
     if (cexport_io_close(&outfile, actual_total) != 0) {
         SF_error("cexport: failed to close file\n");
-        free(mmap_args);
-        free(chunk_offsets);
         return 693;
     }
 
-    free(mmap_args);
-    free(chunk_offsets);
+    /* Arena freed by cexport_context_cleanup() */
     return 0;
 }
 
 /*
     Parallel pwrite export path.
+
+    Uses a sliding-window approach: only num_threads buffers are allocated
+    (not num_chunks), and chunks are processed in waves. This dramatically
+    reduces memory for large datasets.
+    Example: 10M rows at 10K/chunk = 1000 chunks * 2.4MB = 2.4GB
+             -> 8 threads * 2.4MB = 19MB
 */
 static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_size,
                                  size_t num_chunks, size_t chunk_buffer_size,
@@ -484,82 +462,60 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
 {
     (void)avg_row_size;  /* Used for buffer sizing, computed externally */
     char msg[512];
+    ST_retcode ret = 0;
 
-    format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(format_chunk_args_t));
-    char **chunk_buffers = (char **)ctools_safe_malloc2(num_chunks, sizeof(char *));
+    /* Determine wave size = number of concurrent buffers */
+    size_t max_threads = (size_t)ctools_get_max_threads();
+    if (max_threads < 1) max_threads = 1;
+    size_t wave_size = max_threads;
+    if (wave_size > num_chunks) wave_size = num_chunks;
 
-    if (chunk_args == NULL || chunk_buffers == NULL) {
-        free(chunk_args);
-        free(chunk_buffers);
+    /* Initialize arena for small metadata allocations */
+    ctools_arena *arena = &g_ctx.chunk_arena;
+    ctools_arena_init(arena, 64 * 1024);  /* 64KB blocks */
+
+    /* Arena-allocated metadata (sized to total num_chunks for offset tracking) */
+    format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_chunk_args_t));
+    write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_arena_alloc(arena, wave_size * sizeof(write_chunk_args_t));
+
+    /* Only allocate wave_size buffers instead of num_chunks */
+    char **wave_buffers = (char **)ctools_arena_alloc(arena, wave_size * sizeof(char *));
+
+    if (chunk_args == NULL || write_args == NULL || wave_buffers == NULL) {
         free(header_buf);
         SF_error("cexport: memory allocation failed\n");
         return 920;
     }
 
-    for (size_t c = 0; c < num_chunks; c++) {
-        chunk_buffers[c] = NULL;
+    for (size_t b = 0; b < wave_size; b++) {
+        wave_buffers[b] = NULL;
     }
 
-    for (size_t c = 0; c < num_chunks; c++) {
-        chunk_buffers[c] = (char *)malloc(chunk_buffer_size);
-        if (chunk_buffers[c] == NULL) {
-            for (size_t u = 0; u < num_chunks; u++) {
-                if (chunk_buffers[u]) free(chunk_buffers[u]);
+    /* Allocate only wave_size large buffers */
+    for (size_t b = 0; b < wave_size; b++) {
+        wave_buffers[b] = (char *)malloc(chunk_buffer_size);
+        if (wave_buffers[b] == NULL) {
+            for (size_t u = 0; u < wave_size; u++) {
+                if (wave_buffers[u]) free(wave_buffers[u]);
             }
-            free(chunk_args);
-            free(chunk_buffers);
             free(header_buf);
             SF_error("cexport: memory allocation failed for chunk buffers\n");
             return 920;
         }
     }
 
+    /* Initialize all chunk_args (row ranges only; buffers assigned per wave) */
     for (size_t c = 0; c < num_chunks; c++) {
         chunk_args[c].start_row = c * chunk_size;
         chunk_args[c].end_row = (c + 1) * chunk_size;
         if (chunk_args[c].end_row > nobs) chunk_args[c].end_row = nobs;
-        chunk_args[c].output_buffer = chunk_buffers[c];
         chunk_args[c].buffer_size = chunk_buffer_size;
         chunk_args[c].bytes_written = 0;
         chunk_args[c].success = 0;
     }
 
-    for (size_t c = 0; c < num_chunks; c++) {
-        ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[c]);
-    }
-    ctools_persistent_pool_wait(pool);
-
-    for (size_t c = 0; c < num_chunks; c++) {
-        if (!chunk_args[c].success) {
-            for (size_t u = 0; u < num_chunks; u++) {
-                if (chunk_buffers[u]) free(chunk_buffers[u]);
-            }
-            free(chunk_args);
-            free(chunk_buffers);
-            free(header_buf);
-            SF_error("cexport: formatting failed\n");
-            return 920;
-        }
-    }
-
-    /* Compute file offsets */
-    size_t *offsets = (size_t *)ctools_safe_malloc2(num_chunks + 1, sizeof(size_t));
-    if (offsets == NULL) {
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
-        }
-        free(chunk_args);
-        free(chunk_buffers);
-        free(header_buf);
-        SF_error("cexport: memory allocation failed for offsets\n");
-        return 920;
-    }
-
-    offsets[0] = header_len;
-    for (size_t c = 0; c < num_chunks; c++) {
-        offsets[c + 1] = offsets[c] + chunk_args[c].bytes_written;
-    }
-    size_t total_file_size = offsets[num_chunks];
+    /* Estimate total file size for pre-sizing */
+    size_t estimated_total = header_len + (nobs * avg_row_size * 12 / 10);
 
     /* Open and pre-size file */
     cexport_io_file outfile;
@@ -569,27 +525,21 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         snprintf(msg, sizeof(msg), "cexport: cannot open file '%s': %s\n",
                 g_ctx.filename, outfile.error_message);
         SF_error(msg);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
+        for (size_t u = 0; u < wave_size; u++) {
+            if (wave_buffers[u]) free(wave_buffers[u]);
         }
-        free(chunk_args);
-        free(chunk_buffers);
         free(header_buf);
         return 603;
     }
 
-    if (cexport_io_presize(&outfile, total_file_size) != 0) {
+    if (cexport_io_presize(&outfile, estimated_total) != 0) {
         snprintf(msg, sizeof(msg), "cexport: failed to pre-size file: %s\n",
                 outfile.error_message);
         SF_error(msg);
         cexport_io_close(&outfile, 0);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
+        for (size_t u = 0; u < wave_size; u++) {
+            if (wave_buffers[u]) free(wave_buffers[u]);
         }
-        free(chunk_args);
-        free(chunk_buffers);
         free(header_buf);
         return 693;
     }
@@ -602,73 +552,88 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
                     outfile.error_message);
             SF_error(msg);
             cexport_io_close(&outfile, 0);
-            free(offsets);
-            for (size_t u = 0; u < num_chunks; u++) {
-                if (chunk_buffers[u]) free(chunk_buffers[u]);
+            for (size_t u = 0; u < wave_size; u++) {
+                if (wave_buffers[u]) free(wave_buffers[u]);
             }
-            free(chunk_args);
-            free(chunk_buffers);
             free(header_buf);
             return 693;
         }
     }
     free(header_buf);
 
-    /* Parallel offset writes */
-    write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_safe_malloc2(num_chunks, sizeof(write_chunk_args_t));
-    if (write_args == NULL) {
-        SF_error("cexport: memory allocation failed for write args\n");
-        cexport_io_close(&outfile, 0);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
+    /* Process chunks in waves of wave_size */
+    size_t file_offset = header_len;
+
+    for (size_t wave_start = 0; wave_start < num_chunks; wave_start += wave_size) {
+        size_t wave_end = wave_start + wave_size;
+        if (wave_end > num_chunks) wave_end = num_chunks;
+        size_t wave_count = wave_end - wave_start;
+
+        /* Assign reusable buffers to this wave's chunks */
+        for (size_t w = 0; w < wave_count; w++) {
+            chunk_args[wave_start + w].output_buffer = wave_buffers[w];
+            chunk_args[wave_start + w].bytes_written = 0;
+            chunk_args[wave_start + w].success = 0;
         }
-        free(chunk_args);
-        free(chunk_buffers);
-        return 920;
-    }
 
-    for (size_t c = 0; c < num_chunks; c++) {
-        write_args[c].file = &outfile;
-        write_args[c].buffer = chunk_buffers[c];
-        write_args[c].len = chunk_args[c].bytes_written;
-        write_args[c].offset = offsets[c];
-        write_args[c].success = 0;
-    }
+        /* Format wave (parallel) */
+        for (size_t w = 0; w < wave_count; w++) {
+            ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[wave_start + w]);
+        }
+        ctools_persistent_pool_wait(pool);
 
-    for (size_t c = 0; c < num_chunks; c++) {
-        ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[c]);
-    }
-    ctools_persistent_pool_wait(pool);
+        /* Check for format failures */
+        for (size_t w = 0; w < wave_count; w++) {
+            if (!chunk_args[wave_start + w].success) {
+                for (size_t u = 0; u < wave_size; u++) {
+                    if (wave_buffers[u]) free(wave_buffers[u]);
+                }
+                cexport_io_close(&outfile, 0);
+                SF_error("cexport: formatting failed\n");
+                return 920;
+            }
+        }
 
-    int write_failed = 0;
-    for (size_t c = 0; c < num_chunks; c++) {
-        if (!write_args[c].success) {
-            write_failed = 1;
-            break;
+        /* Compute offsets for this wave and write (parallel pwrite) */
+        for (size_t w = 0; w < wave_count; w++) {
+            write_args[w].file = &outfile;
+            write_args[w].buffer = wave_buffers[w];
+            write_args[w].len = chunk_args[wave_start + w].bytes_written;
+            write_args[w].offset = file_offset;
+            write_args[w].success = 0;
+            file_offset += chunk_args[wave_start + w].bytes_written;
+        }
+
+        for (size_t w = 0; w < wave_count; w++) {
+            ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[w]);
+        }
+        ctools_persistent_pool_wait(pool);
+
+        /* Check for write failures */
+        for (size_t w = 0; w < wave_count; w++) {
+            if (!write_args[w].success) {
+                for (size_t u = 0; u < wave_size; u++) {
+                    if (wave_buffers[u]) free(wave_buffers[u]);
+                }
+                cexport_io_close(&outfile, 0);
+                SF_error("cexport: write error during parallel I/O\n");
+                return 693;
+            }
         }
     }
 
-    if (cexport_io_close(&outfile, total_file_size) != 0 || write_failed) {
-        SF_error("cexport: write error during parallel I/O\n");
-        free(write_args);
-        free(offsets);
-        for (size_t u = 0; u < num_chunks; u++) {
-            if (chunk_buffers[u]) free(chunk_buffers[u]);
-        }
-        free(chunk_args);
-        free(chunk_buffers);
-        return 693;
+    size_t total_file_size = file_offset;
+
+    if (cexport_io_close(&outfile, total_file_size) != 0) {
+        SF_error("cexport: failed to close file\n");
+        ret = 693;
     }
 
-    free(write_args);
-    free(offsets);
-    for (size_t c = 0; c < num_chunks; c++) {
-        if (chunk_buffers[c]) free(chunk_buffers[c]);
+    /* Free large data buffers (arena handles metadata) */
+    for (size_t u = 0; u < wave_size; u++) {
+        if (wave_buffers[u]) free(wave_buffers[u]);
     }
-    free(chunk_args);
-    free(chunk_buffers);
-    return 0;
+    return ret;
 }
 
 /* ========================================================================
@@ -722,13 +687,17 @@ ST_retcode cexport_main(const char *args)
     }
 
     ctools_filtered_data_init(&g_ctx.filtered);
-    rc = ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
+    rc = ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF);
     if (rc != STATA_OK) {
         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
         SF_error(msg);
         cexport_context_cleanup(&g_ctx);
         return 920;
     }
+
+    /* Use filtered count: only rows that passed SF_ifobs */
+    nobs = g_ctx.filtered.data.nobs;
+    g_ctx.nobs_loaded = nobs;
 
     g_ctx.time_load = ctools_timer_seconds() - t_phase;
 

@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! ctools: C-accelerated tools for Stata
 *! Main info program for the ctools suite
 
@@ -104,7 +104,7 @@ program define ctools
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v0.9.0"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v0.9.1"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"

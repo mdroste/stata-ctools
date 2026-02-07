@@ -9,8 +9,9 @@
 #include "cimport_xlsx.h"
 #include "cimport_xlsx_zip.h"
 #include "cimport_xlsx_xml.h"
-#include "../ctools_timer.h"
+#include "../ctools_runtime.h"
 #include "../ctools_arena.h"
+#include "../ctools_threads.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -321,9 +322,6 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
             if (ctx->num_shared_strings >= ctx->shared_strings_capacity) {
                 size_t new_cap = ctx->shared_strings_capacity == 0 ?
                                  1024 : ctx->shared_strings_capacity * 2;
-                if (new_cap > XLSX_MAX_SHARED_STRINGS) {
-                    new_cap = XLSX_MAX_SHARED_STRINGS;
-                }
                 char **new_strings = (char **)realloc(ctx->shared_strings,
                                                        new_cap * sizeof(char *));
                 if (!new_strings) return false;
@@ -550,7 +548,12 @@ ST_retcode xlsx_parse_styles(XLSXContext *ctx)
 
 static XLSXParsedRow *ensure_row(XLSXContext *ctx, int row_num)
 {
-    /* Find or create row */
+    /* Fast path: check last row (rows arrive in order from XML) */
+    if (ctx->num_rows > 0 && ctx->rows[ctx->num_rows - 1].row_num == row_num) {
+        return &ctx->rows[ctx->num_rows - 1];
+    }
+
+    /* Slow path: linear scan (for out-of-order or revisited rows) */
     for (int i = 0; i < ctx->num_rows; i++) {
         if (ctx->rows[i].row_num == row_num) {
             return &ctx->rows[i];
@@ -1069,7 +1072,7 @@ ST_retcode xlsx_build_cache(XLSXContext *ctx)
                 } else if (cell->type == XLSX_CELL_NUMBER ||
                            cell->type == XLSX_CELL_DATE) {
                     /* Convert number to string */
-                    static char num_buf[64];
+                    char num_buf[64];
                     snprintf(num_buf, sizeof(num_buf), "%g", cell->value.number);
                     str = num_buf;
                 }
@@ -1219,6 +1222,33 @@ bool xlsx_parse_cellrange(const char *range_str, XLSXCellRange *range)
     }
 
     return true;
+}
+
+/* ============================================================================
+ * Parallel XLSX Store Worker
+ * ============================================================================ */
+
+typedef struct {
+    CImportColumnInfo *col;
+    CImportColumnCache *cache;
+    ST_int var;
+    ST_int stata_nobs;
+} xlsx_store_task;
+
+static void *xlsx_store_worker(void *arg)
+{
+    xlsx_store_task *task = (xlsx_store_task *)arg;
+    if (task->col->type == CIMPORT_COL_STRING) {
+        for (size_t r = 0; r < task->cache->count && (ST_int)(r + 1) <= task->stata_nobs; r++) {
+            char *str = task->cache->string_data[r] ? task->cache->string_data[r] : (char *)"";
+            SF_sstore(task->var, (ST_int)(r + 1), str);
+        }
+    } else {
+        for (size_t r = 0; r < task->cache->count && (ST_int)(r + 1) <= task->stata_nobs; r++) {
+            SF_vstore(task->var, (ST_int)(r + 1), task->cache->numeric_data[r]);
+        }
+    }
+    return NULL;
 }
 
 /* ============================================================================
@@ -1453,23 +1483,47 @@ ST_retcode xlsx_import_main(const char *args)
             return rc;
         }
 
-        /* Store data to Stata */
+        /* Store data to Stata (parallel by column) */
         ST_int nvar = SF_nvar();
         ST_int stata_nobs = SF_nobs();
+        int store_cols = ctx.num_columns < nvar ? ctx.num_columns : nvar;
 
-        for (int c = 0; c < ctx.num_columns && c < nvar; c++) {
-            CImportColumnInfo *col = &ctx.columns[c];
-            CImportColumnCache *cache = &ctx.col_cache[c];
-            ST_int var = c + 1;
-
-            if (col->type == CIMPORT_COL_STRING) {
-                for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
-                    char *str = cache->string_data[r] ? cache->string_data[r] : (char *)"";
-                    SF_sstore(var, (ST_int)(r + 1), str);
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+        if (pool && store_cols > 1) {
+            /* Parallel store: one task per column */
+            xlsx_store_task *tasks = (xlsx_store_task *)malloc(store_cols * sizeof(xlsx_store_task));
+            if (tasks) {
+                for (int c = 0; c < store_cols; c++) {
+                    tasks[c].col = &ctx.columns[c];
+                    tasks[c].cache = &ctx.col_cache[c];
+                    tasks[c].var = c + 1;
+                    tasks[c].stata_nobs = stata_nobs;
                 }
+                ctools_persistent_pool_submit_batch(pool, xlsx_store_worker,
+                                                     tasks, store_cols, sizeof(xlsx_store_task));
+                ctools_persistent_pool_wait(pool);
+                free(tasks);
             } else {
-                for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
-                    SF_vstore(var, (ST_int)(r + 1), cache->numeric_data[r]);
+                /* Fallback to sequential on allocation failure */
+                goto xlsx_store_sequential;
+            }
+        } else {
+xlsx_store_sequential:;
+            /* Sequential fallback */
+            for (int c = 0; c < store_cols; c++) {
+                CImportColumnInfo *col = &ctx.columns[c];
+                CImportColumnCache *cache = &ctx.col_cache[c];
+                ST_int var = c + 1;
+
+                if (col->type == CIMPORT_COL_STRING) {
+                    for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
+                        char *str = cache->string_data[r] ? cache->string_data[r] : (char *)"";
+                        SF_sstore(var, (ST_int)(r + 1), str);
+                    }
+                } else {
+                    for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
+                        SF_vstore(var, (ST_int)(r + 1), cache->numeric_data[r]);
+                    }
                 }
             }
         }

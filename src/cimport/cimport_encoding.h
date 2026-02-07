@@ -133,4 +133,25 @@ int cimport_latin9_to_utf8(unsigned char byte, char *out);
 int cimport_utf16_to_utf8(const char *data, size_t size, bool is_little_endian,
                           char **out_data, size_t *out_size);
 
+/*
+ * Strip invalid UTF-8 sequences from data buffer.
+ * Copies only valid UTF-8 bytes from src to dst.
+ * dst must be at least src_size bytes.
+ *
+ * @param src       Source data buffer
+ * @param src_size  Size of source data
+ * @param dst       Output buffer (must be at least src_size bytes)
+ * @return          Number of bytes written to dst
+ */
+size_t cimport_strip_invalid_utf8(const char *src, size_t src_size, char *dst);
+
+/*
+ * Check if data contains any invalid UTF-8 sequences.
+ *
+ * @param data      Data buffer
+ * @param size      Size of data buffer
+ * @return          true if invalid UTF-8 found, false if all valid
+ */
+bool cimport_has_invalid_utf8(const char *data, size_t size);
+
 #endif /* CIMPORT_ENCODING_H */

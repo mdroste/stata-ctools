@@ -3,6 +3,8 @@
  *
  * Type definitions, structures, and macros for creghdfe plugin
  * Part of the ctools Stata plugin suite
+ *
+ * FE_Factor and HDFE_State are defined in the shared ctools_hdfe_utils.h
  */
 
 #ifndef CREGHDFE_TYPES_H
@@ -17,6 +19,9 @@
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+
+/* Shared FE_Factor and HDFE_State types */
+#include "../ctools_hdfe_utils.h"
 
 /* Thread limit is managed centrally via ctools_get_max_threads() in ctools_config.h */
 
@@ -34,72 +39,8 @@
 /* Cache-friendly block size for matrix operations */
 #define BLOCK_SIZE 512
 
-/* ========================================================================
- * Fixed Effect Factor structure
- * ======================================================================== */
-
-typedef struct {
-    ST_int num_levels;           /* Number of unique levels (for df calculation) */
-    ST_int max_level;            /* Maximum level value (for array indexing) */
-    ST_int has_intercept;
-    ST_int num_slopes;
-    ST_int *levels;              /* Level assignment per obs (1-indexed) */
-    ST_double *counts;           /* Unweighted counts per level */
-    ST_double *inv_counts;       /* Precomputed 1/counts for fast division */
-    ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
-    ST_double *inv_weighted_counts; /* Precomputed 1/weighted_counts */
-    ST_double *means;
-    /* Sorted observation indices for cache-friendly projection (not currently used) */
-    ST_int *sorted_indices;      /* indices[N]: observation indices sorted by level */
-    ST_int *sorted_levels;       /* levels[N]: level values in sorted order */
-    ST_int sorted_initialized;   /* Flag: 1 if sorted format is built */
-} FE_Factor;
-
-/* ========================================================================
- * Global HDFE State structure
- * Holds all state needed for the CG solver and factor operations
- * ======================================================================== */
-
-typedef struct {
-    ST_int G;
-    ST_int N;
-    ST_int K;
-    ST_int in1;
-    ST_int in2;
-    ST_int has_weights;
-    ST_int weight_type;          /* 0=none, 1=aweight, 2=fweight, 3=pweight */
-    ST_double *weights;
-    ST_double sum_weights;       /* Sum of weights (for fweight df calculation) */
-    FE_Factor *factors;
-    ST_int maxiter;
-    ST_double tolerance;
-    ST_int verbose;
-    /* Per-thread working buffers for parallel column processing */
-    ST_double **thread_cg_r;
-    ST_double **thread_cg_u;
-    ST_double **thread_cg_v;
-    ST_double **thread_proj;      /* Not used in creghdfe but needed by cqreg/civreghdfe */
-    ST_double **thread_fe_means;  /* Per-thread means buffers for each FE */
-    ST_int num_threads;
-    /* Cached data from HDFE init for reuse in partial_out */
-    ST_int factors_initialized;  /* Flag indicating factors are ready */
-    ST_int df_a;                 /* Degrees of freedom absorbed */
-    ST_int mobility_groups;      /* Number of mobility groups (connected components) */
-} HDFE_State;
-
 /* Global state pointer - defined in creghdfe_hdfe.c */
 extern HDFE_State *g_state;
-
-/* ========================================================================
- * Union-Find (Disjoint Set Union) for connected components
- * Used to efficiently count mobility groups in bipartite graphs
- * ======================================================================== */
-
-typedef struct {
-    ST_int *parent;
-    ST_int *rank;
-    ST_int size;
-} UnionFind;
 
 /* ========================================================================
  * Hash table for factor creation

@@ -44,7 +44,7 @@
 #include "stplugin.h"
 #include "ctools_config.h"
 #include "ctools_threads.h"
-#include "ctools_cleanup.h"
+#include "ctools_runtime.h"
 
 /*
     Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes

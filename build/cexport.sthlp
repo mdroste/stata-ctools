@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.1 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cexport##syntax"}{...}
 {viewerjumpto "Description" "cexport##description"}{...}
 {viewerjumpto "Options" "cexport##options"}{...}
@@ -53,9 +53,16 @@
 {synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
 
 {syntab:Reporting}
-{synopt:{opt verbose}}display progress information{p_end}
-{synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt verbose}}display detailed progress information and timing breakdown{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+
+{syntab:Advanced Performance}
+{synopt:{opt mmap}}use memory-mapped I/O (zero-copy formatting){p_end}
+{synopt:{opt nofsync}}skip final fsync for faster writes (less durable){p_end}
+{synopt:{opt direct}}use direct I/O bypassing OS cache (for very large files){p_end}
+{synopt:{opt prefault}}pre-fault mmap pages to avoid stalls{p_end}
+{synopt:{opt crlf}}use Windows-style CRLF line endings{p_end}
+{synopt:{opt noparallel}}disable parallel I/O (for debugging){p_end}
 {synoptline}
 
 {synoptset 24 tabbed}{...}
@@ -144,17 +151,36 @@ variables. This overrides the variables' display formats. Common formats include
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information during export.
-
-{phang}
-{opt timeit} displays a timing breakdown showing data loading time, write
-time, and throughput.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-data loading and export operations. By default, {cmd:cexport} uses all available
-CPU cores as reported by OpenMP. Use this option to limit parallelism, for
-example when running multiple jobs simultaneously.
+operations. By default, {cmd:cexport} uses all available CPU cores.
+
+{dlgtab:Advanced Performance}
+
+{phang}
+{opt mmap} uses memory-mapped I/O for zero-copy formatting, which can improve
+performance for large files.
+
+{phang}
+{opt nofsync} skips the final fsync system call for faster writes. The file
+may not be fully flushed to disk when the command returns. Use when speed
+matters more than durability.
+
+{phang}
+{opt direct} uses direct I/O, bypassing the OS page cache. Useful for
+very large files to avoid evicting other data from cache.
+
+{phang}
+{opt prefault} pre-faults mmap pages to avoid page fault stalls during writing.
+
+{phang}
+{opt crlf} uses Windows-style CRLF ({cmd:\r\n}) line endings instead of the
+default Unix-style LF ({cmd:\n}).
+
+{phang}
+{opt noparallel} disables parallel I/O. Useful for debugging.
 
 
 {marker exceloptions}{...}
@@ -200,7 +226,7 @@ has no effect when creating a new file. Requires the {cmd:replace} option.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays timing information during export.
+{opt verbose} displays detailed progress information.
 
 
 {marker examples}{...}
@@ -223,8 +249,8 @@ has no effect when creating a new file. Requires the {cmd:replace} option.
 {pstd}Export without header row:{p_end}
 {phang2}{cmd:. cexport delimited using auto_noheader.csv, novarnames replace}{p_end}
 
-{pstd}Export with verbose timing output:{p_end}
-{phang2}{cmd:. cexport delimited using auto.csv, replace verbose timeit}{p_end}
+{pstd}Export with verbose output:{p_end}
+{phang2}{cmd:. cexport delimited using auto.csv, replace verbose}{p_end}
 
 {pstd}Export subset of observations:{p_end}
 {phang2}{cmd:. cexport delimited using foreign_cars.csv if foreign == 1, replace}{p_end}

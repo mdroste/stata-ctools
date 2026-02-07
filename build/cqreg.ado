@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cqreg: C-accelerated quantile regression
 *! Part of the ctools suite
 *!
@@ -25,6 +25,10 @@
 program define cqreg, eclass
     version 14.1
 
+    * Start wall clock timer (must be before any work for accurate rmsg match)
+    timer clear 99
+    timer on 99
+
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
         di as error "ctools does not support datasets exceeding 2^31 (2.147 billion) observations"
@@ -35,11 +39,15 @@ program define cqreg, eclass
     * Capture full command line before parsing
     local cmdline "cqreg `0'"
 
-    syntax varlist(min=2 fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
-        VCE(string) DENmethod(string) BWmethod(string) Verbose TIMEIT TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
+    syntax varlist(min=2 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
+        VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
 
     * Validate quantile
-    if `quantile' <= 0 | `quantile' >= 1 {
+    if `quantile' >= 1 {
+        di as error "cqreg: quantile must be between 0 and 1"
+        exit 498
+    }
+    if `quantile' <= 0 {
         di as error "cqreg: quantile must be between 0 and 1"
         exit 198
     }
@@ -56,47 +64,42 @@ program define cqreg, eclass
     * Expand factor variables to temporary numeric variables
     * This handles i.varname, c.varname, etc.
     if "`indepvars'" != "" {
-        * Step 1: Expand factor variables to temp numeric vars
+        * Expand factor variables to temp numeric vars
         fvrevar `indepvars' if `touse'
-        local indepvars_fvrevar "`r(varlist)'"
+        local __indepvars_all "`r(varlist)'"
 
-        * Step 2: Get coefficient names from fvexpand (same order as fvrevar)
-        * These names include base level notation (e.g., "1b.rep78 2.rep78 3.rep78")
+        * Get coefficient names (same count as fvrevar, one per level)
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Step 3: Remove collinear variables (including base levels of factors)
-        * This matches what Stata's estimation commands do internally
-        _rmcoll `indepvars_fvrevar' if `touse', forcedrop
-        local indepvars_expanded "`r(varlist)'"
-
-        * Step 4: Build mapping - identify which positions are base levels
-        * fvrevar and fvexpand have 1:1 positional correspondence
-        * A position is a base level if its temp var was dropped by _rmcoll
-        local n_all : word count `coef_names_all'
+        * Pre-filter base/omitted levels in sync before plugin call
+        * (base levels have b. notation; omitted have o. notation)
+        local __vars_nobase ""
+        local __names_nobase ""
         local coef_is_base ""
-        local coef_names ""
-        local plugin_pos = 1
-        forval i = 1/`n_all' {
-            local fv_var : word `i' of `indepvars_fvrevar'
-            local fv_name : word `i' of `coef_names_all'
-            * Check if this temp var is in the remaining (non-dropped) list
-            local is_kept = 0
-            foreach remaining of local indepvars_expanded {
-                if "`remaining'" == "`fv_var'" {
-                    local is_kept = 1
+        local __n_all : word count `coef_names_all'
+        forval __k = 1/`__n_all' {
+            local __vname : word `__k' of `coef_names_all'
+            local __keep = 0
+            local __parts : subinstr local __vname "#" " ", all
+            foreach __p of local __parts {
+                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
+                    local __keep = 1
                 }
             }
-            if `is_kept' {
-                * This variable was kept (not a base level)
+            if `__keep' {
+                local __vars_nobase `__vars_nobase' `: word `__k' of `__indepvars_all''
+                local __names_nobase `__names_nobase' `__vname'
                 local coef_is_base `coef_is_base' 0
-                local coef_names `coef_names' `fv_name'
             }
             else {
-                * This variable was dropped (base level or omitted)
                 local coef_is_base `coef_is_base' 1
             }
         }
+
+        * Collinearity detection is handled by the C plugin (detect_collinearity)
+        local indepvars_expanded "`__vars_nobase'"
+        local coef_names "`__names_nobase'"
 
         * Build expanded varlist for plugin (only non-base vars)
         local varlist_expanded "`depvar' `indepvars_expanded'"
@@ -105,8 +108,6 @@ program define cqreg, eclass
         local indepvars_expanded ""
         local varlist_expanded "`depvar'"
         local coef_names ""
-        local coef_names_all ""
-        local coef_is_base ""
     }
 
     local nvars : word count `varlist_expanded'
@@ -310,7 +311,7 @@ program define cqreg, eclass
     scalar __cqreg_vce_type = `vcetype'
     scalar __cqreg_bw_method = `bwmethod_num'
     scalar __cqreg_density_method = `denmethod_num'
-    scalar __cqreg_verbose = ("`verbose'" != "" | "`timeit'" != "")
+    scalar __cqreg_verbose = ("`verbose'" != "")
     scalar __cqreg_tolerance = `tolerance'
     scalar __cqreg_maxiter = `maxiter'
     scalar __cqreg_nopreprocess = `nopreprocess'
@@ -321,10 +322,6 @@ program define cqreg, eclass
     if `threads' > 0 {
         local threads_code "threads(`threads')"
     }
-
-    * Record start time
-    timer clear 99
-    timer on 99
 
     * Build varlist for plugin: depvar indepvars [fe_vars] [cluster_var]
     * Use expanded varlist (factor variables converted to temp numeric vars)
@@ -354,10 +351,6 @@ program define cqreg, eclass
         exit `reg_rc'
     }
 
-    timer off 99
-    quietly timer list 99
-    local elapsed = r(t99)
-
     * Retrieve results from scalars set by C plugin
     local N_final = __cqreg_N
     local K_keep = __cqreg_K_keep
@@ -384,75 +377,136 @@ program define cqreg, eclass
         if _rc != 0 local num_clusters = .
     }
 
-    * Build coefficient vector - including base level columns with zeros
+    * Build coefficient vector and VCE matrix
+    * K_x = number of non-base X vars sent to plugin
+    * K_keep = number of non-collinear X vars (from C plugin)
+    * Collinearity flags stored in __cqreg_collinear_1, __cqreg_collinear_2, etc.
     tempname b V b_full V_full
 
-    * Count total coefficients including base levels
-    local n_all : word count `coef_names_all'
-    local K_full = `n_all' + 1  // all coefficients plus constant
+    * Step 1: Build compact matrix (non-base vars + constant) with collinearity
+    local K_compact = `K_x' + 1
+    matrix `b' = J(1, `K_compact', 0)
+    matrix `V' = J(`K_compact', `K_compact', 0)
 
-    * First build the compact b and V from plugin (only non-base vars)
-    local K_with_cons = `K_keep' + 1
-    matrix `b' = J(1, `K_with_cons', 0)
-    forval k = 1/`K_keep' {
-        capture scalar define __tmp = __cqreg_beta_`k'
-        if _rc == 0 {
-            matrix `b'[1, `k'] = __tmp
+    * Fill in coefficients and VCE for non-collinear variables
+    if `K_keep' > 0 {
+        local kept_idx = 1
+        forval k = 1/`K_x' {
+            local is_collin = __cqreg_collinear_`k'
+            if `is_collin' == 0 {
+                * Fill coefficient
+                matrix `b'[1, `k'] = __cqreg_beta_`kept_idx'
+                * Fill VCE row/column
+                local kept_idx2 = 1
+                forval j = 1/`K_x' {
+                    local is_collin_j = __cqreg_collinear_`j'
+                    if `is_collin_j' == 0 {
+                        matrix `V'[`k', `j'] = __cqreg_V[`kept_idx', `kept_idx2']
+                        local ++kept_idx2
+                    }
+                }
+                * Cross terms with constant
+                matrix `V'[`k', `K_compact'] = __cqreg_V[`kept_idx', `K_keep'+1]
+                matrix `V'[`K_compact', `k'] = __cqreg_V[`K_keep'+1, `kept_idx']
+                local ++kept_idx
+            }
         }
-        capture scalar drop __tmp
+        * Constant variance
+        matrix `V'[`K_compact', `K_compact'] = __cqreg_V[`K_keep'+1, `K_keep'+1]
     }
-    matrix `b'[1, `K_with_cons'] = `cons'
-    matrix `V' = __cqreg_V[1..`K_with_cons', 1..`K_with_cons']
+    * Constant coefficient
+    matrix `b'[1, `K_compact'] = `cons'
 
-    * Now expand to include base level columns
-    if `n_all' > 0 & `n_all' > `K_keep' {
+    * Step 2: Expand to include base level columns (matching qreg's e(b) layout)
+    local n_all : word count `coef_names_all'
+    if `n_all' > `K_x' {
         * There are base levels to insert
+        local K_full = `n_all' + 1
         matrix `b_full' = J(1, `K_full', 0)
         matrix `V_full' = J(`K_full', `K_full', 0)
 
-        * Map plugin positions to full positions
-        local plugin_pos = 1
+        * Map compact positions to full positions
+        local compact_pos = 1
         forval i = 1/`n_all' {
             local is_base : word `i' of `coef_is_base'
             if `is_base' == 0 {
-                * Copy coefficient from plugin
-                matrix `b_full'[1, `i'] = `b'[1, `plugin_pos']
-                * Copy VCE row and column
-                local plugin_pos2 = 1
+                * Copy from compact matrix
+                matrix `b_full'[1, `i'] = `b'[1, `compact_pos']
+                * Copy VCE row/column
+                local compact_pos2 = 1
                 forval j = 1/`n_all' {
                     local is_base2 : word `j' of `coef_is_base'
                     if `is_base2' == 0 {
-                        matrix `V_full'[`i', `j'] = `V'[`plugin_pos', `plugin_pos2']
-                        local plugin_pos2 = `plugin_pos2' + 1
+                        matrix `V_full'[`i', `j'] = `V'[`compact_pos', `compact_pos2']
+                        local compact_pos2 = `compact_pos2' + 1
                     }
                 }
                 * Copy constant's row/col entries
-                matrix `V_full'[`i', `K_full'] = `V'[`plugin_pos', `K_with_cons']
-                matrix `V_full'[`K_full', `i'] = `V'[`K_with_cons', `plugin_pos']
-                local plugin_pos = `plugin_pos' + 1
+                matrix `V_full'[`i', `K_full'] = `V'[`compact_pos', `K_compact']
+                matrix `V_full'[`K_full', `i'] = `V'[`K_compact', `compact_pos']
+                local compact_pos = `compact_pos' + 1
             }
             * Base levels keep their zeros
         }
         * Copy constant coefficient and VCE diagonal
         matrix `b_full'[1, `K_full'] = `cons'
-        matrix `V_full'[`K_full', `K_full'] = `V'[`K_with_cons', `K_with_cons']
+        matrix `V_full'[`K_full', `K_full'] = `V'[`K_compact', `K_compact']
 
         * Use the full matrices
         matrix `b' = `b_full'
         matrix `V' = `V_full'
-        local K_with_cons = `K_full'
+    }
+    else {
+        local K_full = `K_compact'
     }
 
-    * Build column names for matrices - use ALL names including base levels
+    * Build column names
     local colnames ""
     if `n_all' > 0 {
-        foreach v of local coef_names_all {
-            local colnames `colnames' `v'
+        * Use coef_names_all (includes base level names)
+        * For non-base vars, check collinearity and add o. prefix if needed
+        local plugin_k = 1
+        forval i = 1/`n_all' {
+            local vname : word `i' of `coef_names_all'
+            local is_base : word `i' of `coef_is_base'
+            if `is_base' == 1 {
+                * Base level - already in coef_names_all with b. notation
+                local colnames `colnames' `vname'
+            }
+            else {
+                * Non-base var - check collinearity
+                if `K_keep' == 0 {
+                    local colnames `colnames' o.`vname'
+                }
+                else {
+                    local is_collin = __cqreg_collinear_`plugin_k'
+                    if `is_collin' == 1 {
+                        local colnames `colnames' o.`vname'
+                    }
+                    else {
+                        local colnames `colnames' `vname'
+                    }
+                }
+                local ++plugin_k
+            }
         }
     }
     else if `K_x' > 0 {
-        foreach v of local coef_names {
-            local colnames `colnames' `v'
+        * No factor variables - just use coef_names with collinearity
+        forval k = 1/`K_x' {
+            local vname : word `k' of `coef_names'
+            if `K_keep' == 0 {
+                local colnames `colnames' o.`vname'
+            }
+            else {
+                local is_collin = __cqreg_collinear_`k'
+                if `is_collin' == 1 {
+                    local colnames `colnames' o.`vname'
+                }
+                else {
+                    local colnames `colnames' `vname'
+                }
+            }
         }
     }
     local colnames `colnames' _cons
@@ -479,7 +533,7 @@ program define cqreg, eclass
     if `df_r' < 1 local df_r = 1
 
     * Store scalar results (matching qreg)
-    ereturn scalar rank = `K_with_cons'
+    ereturn scalar rank = `K_full'
     ereturn scalar sparsity = `sparsity'
     ereturn scalar bwidth = `bandwidth'
     ereturn scalar df_m = `K_keep'
@@ -544,10 +598,35 @@ program define cqreg, eclass
     * Display coefficient table
     ereturn display
 
-    * Show timing breakdown if verbose or timeit
-    if "`verbose'" != "" | "`timeit'" != "" {
+    * Stop wall clock timer (after all work, before display)
+    timer off 99
+    quietly timer list 99
+    local elapsed = r(t99)
+
+    * Show timing breakdown if verbose
+    if "`verbose'" != "" {
         * Calculate Stata overhead
         local __stata_overhead = `elapsed' - _cqreg_time_total
+
+        * Get sub-timers (may not exist in older builds)
+        capture local __time_sparsity = _cqreg_time_sparsity
+        if _rc != 0 local __time_sparsity = .
+        capture local __time_vce_matrix = _cqreg_time_vce_matrix
+        if _rc != 0 local __time_vce_matrix = .
+        capture local __ipm_iterations = _cqreg_ipm_iterations
+        if _rc != 0 local __ipm_iterations = `iterations'
+
+        * IPM sub-timers
+        capture local __time_ipm_init = _cqreg_time_ipm_init
+        if _rc != 0 local __time_ipm_init = .
+        capture local __time_ipm_iterate = _cqreg_time_ipm_iterate
+        if _rc != 0 local __time_ipm_iterate = .
+        capture local __time_ipm_crossover = _cqreg_time_ipm_crossover
+        if _rc != 0 local __time_ipm_crossover = .
+
+        * Sparsity sub-timers
+        capture local __time_sparsity_aux = _cqreg_time_sparsity_aux
+        if _rc != 0 local __time_sparsity_aux = .
 
         di as text ""
         di as text "{hline 55}"
@@ -559,7 +638,26 @@ program define cqreg, eclass
             di as text "    HDFE partial out:       " as result %8.4f _cqreg_time_hdfe " sec"
         }
         di as text "    IPM solver:             " as result %8.4f _cqreg_time_ipm " sec"
-        di as text "    VCE computation:        " as result %8.4f _cqreg_time_vce " sec"
+        if `__time_ipm_init' != . {
+            di as text "      Init (OLS warm start):" as result %8.4f `__time_ipm_init' " sec"
+            di as text "      Iterate:              " as result %8.4f `__time_ipm_iterate' " sec"
+            if `__ipm_iterations' > 0 {
+                local __per_iter = `__time_ipm_iterate' / `__ipm_iterations'
+                di as text "        (" as result `__ipm_iterations' as text " iters, " as result %6.4f `__per_iter' as text " sec/iter)"
+            }
+            di as text "      Crossover:            " as result %8.4f `__time_ipm_crossover' " sec"
+        }
+        else {
+            di as text "      (" as result `__ipm_iterations' as text " iterations)"
+        }
+        di as text "    VCE total:              " as result %8.4f _cqreg_time_vce " sec"
+        if `__time_sparsity' != . {
+            di as text "      Sparsity estimation:  " as result %8.4f `__time_sparsity' " sec"
+            if `__time_sparsity_aux' != . {
+                di as text "        Auxiliary QR solves:" as result %8.4f `__time_sparsity_aux' " sec"
+            }
+            di as text "      VCE matrix:           " as result %8.4f `__time_vce_matrix' " sec"
+        }
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cqreg_time_total " sec"
         di as text "  {hline 53}"
@@ -585,6 +683,10 @@ program define cqreg, eclass
         * Clean up timing scalars
         capture scalar drop _cqreg_time_load _cqreg_time_hdfe
         capture scalar drop _cqreg_time_ipm _cqreg_time_vce _cqreg_time_total
+        capture scalar drop _cqreg_time_ipm_init _cqreg_time_ipm_iterate _cqreg_time_ipm_crossover
+        capture scalar drop _cqreg_time_sparsity _cqreg_time_vce_matrix
+        capture scalar drop _cqreg_time_sparsity_aux
+        capture scalar drop _cqreg_ipm_iterations
         capture scalar drop _cqreg_threads_max _cqreg_openmp_enabled
     }
 
@@ -596,8 +698,9 @@ program define cqreg, eclass
     capture scalar drop __cqreg_sparsity __cqreg_bandwidth
     capture scalar drop __cqreg_iterations __cqreg_converged __cqreg_cons
     capture scalar drop __cqreg_df_a __cqreg_N_clust
-    forval k = 1/`K_keep' {
+    forval k = 1/`K_x' {
         capture scalar drop __cqreg_beta_`k'
+        capture scalar drop __cqreg_collinear_`k'
     }
     capture matrix drop __cqreg_V
 

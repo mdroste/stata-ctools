@@ -141,7 +141,7 @@ if `num_bins' == 10 {
     test_pass "discrete creates one bin per unique value"
 }
 else {
-    test_pass "discrete: `num_bins' bins (expected ~10)"
+    test_fail "discrete creates one bin per unique value" "got `num_bins' bins, expected 10"
 }
 
 /*******************************************************************************
@@ -263,7 +263,13 @@ print_section "method(binsreg) Option"
 sysuse auto, clear
 capture cbinscatter price mpg, method(binsreg) nograph
 if _rc == 0 {
-    test_pass "method(binsreg) runs"
+    capture confirm matrix e(bindata)
+    if _rc == 0 & e(N) == _N {
+        test_pass "method(binsreg) runs (N=`=e(N)')"
+    }
+    else {
+        test_fail "method(binsreg)" "bindata missing or N=`=e(N)' expected `=_N'"
+    }
 }
 else {
     test_fail "method(binsreg)" "rc=`=_rc'"
@@ -273,7 +279,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg, method(binsreg) controls(weight) nograph
 if _rc == 0 {
-    test_pass "method(binsreg) + controls"
+    if "`e(controls)'" == "weight" & e(N) == _N {
+        test_pass "method(binsreg) + controls"
+    }
+    else {
+        test_fail "method(binsreg) + controls" "controls=`e(controls)' N=`=e(N)'"
+    }
 }
 else {
     test_fail "method(binsreg) + controls" "rc=`=_rc'"
@@ -283,7 +294,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg, method(binsreg) absorb(foreign) nograph
 if _rc == 0 {
-    test_pass "method(binsreg) + absorb"
+    if "`e(absorb)'" == "foreign" & e(N) == _N {
+        test_pass "method(binsreg) + absorb"
+    }
+    else {
+        test_fail "method(binsreg) + absorb" "absorb=`e(absorb)' N=`=e(N)'"
+    }
 }
 else {
     test_fail "method(binsreg) + absorb" "rc=`=_rc'"
@@ -293,7 +309,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg, method(binsreg) controls(weight) absorb(foreign) nograph
 if _rc == 0 {
-    test_pass "method(binsreg) + controls + absorb"
+    if "`e(controls)'" == "weight" & "`e(absorb)'" == "foreign" & e(N) == _N {
+        test_pass "method(binsreg) + controls + absorb"
+    }
+    else {
+        test_fail "method(binsreg) + controls + absorb" "controls=`e(controls)' absorb=`e(absorb)' N=`=e(N)'"
+    }
 }
 else {
     test_fail "method(binsreg) + controls + absorb" "rc=`=_rc'"
@@ -529,7 +550,7 @@ if `binscatter_installed' {
     cap erase _bs_test.do
 }
 else {
-    test_pass "binscatter not installed - skipping comparison tests"
+    test_fail "binscatter comparison" "binscatter not installed - cannot validate"
 }
 
 /*******************************************************************************
@@ -559,29 +580,52 @@ if `binsreg_installed' {
     quietly binsreg y x w, nbins(10) dots(0 0) savedata(_binsreg_test) replace
     use _binsreg_test, clear
     mkmat dots_fit, mat(binsreg_y)
+    mkmat dots_x, mat(binsreg_x)
     restore
 
     cbinscatter y x, controls(w) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local min_sf = 15
+    * Compare Y values
+    local min_sf_y = 15
     forval i = 1/10 {
         local val1 = binsreg_y[`i', 1]
         local val2 = cbins[`i', 4]
         sigfigs `val1' `val2'
         local sf = r(sigfigs)
-        if `sf' < `min_sf' {
-            local min_sf = `sf'
+        if `sf' < `min_sf_y' {
+            local min_sf_y = `sf'
         }
     }
 
-    if `min_sf' >= `min_sigfigs' {
-        local sf_fmt : display %4.1f `min_sf'
-        test_pass "binsreg match: controls only (sigfigs=`sf_fmt')"
+    if `min_sf_y' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_pass "binsreg match: controls only Y (sigfigs=`sf_fmt')"
     }
     else {
-        local sf_fmt : display %4.1f `min_sf'
-        test_fail "binsreg match: controls only" "sigfigs=`sf_fmt', need `min_sigfigs'"
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_fail "binsreg match: controls only Y" "sigfigs=`sf_fmt', need `min_sigfigs'"
+    }
+
+    * Also compare X values (bin centers)
+    local min_sf_x = 15
+    forval i = 1/10 {
+        local val1 = binsreg_x[`i', 1]
+        local val2 = cbins[`i', 3]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf_x' {
+            local min_sf_x = `sf'
+        }
+    }
+
+    if `min_sf_x' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_pass "binsreg match: controls only X (sigfigs=`sf_fmt')"
+    }
+    else {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_fail "binsreg match: controls only X" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 
@@ -597,29 +641,52 @@ if `binsreg_installed' {
     quietly binsreg y x, absorb(id) nbins(10) dots(0 0) savedata(_binsreg_test) replace
     use _binsreg_test, clear
     mkmat dots_fit, mat(binsreg_y)
+    mkmat dots_x, mat(binsreg_x)
     restore
 
     cbinscatter y x, absorb(id) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local min_sf = 15
+    * Compare Y values
+    local min_sf_y = 15
     forval i = 1/10 {
         local val1 = binsreg_y[`i', 1]
         local val2 = cbins[`i', 4]
         sigfigs `val1' `val2'
         local sf = r(sigfigs)
-        if `sf' < `min_sf' {
-            local min_sf = `sf'
+        if `sf' < `min_sf_y' {
+            local min_sf_y = `sf'
         }
     }
 
-    if `min_sf' >= `min_sigfigs' {
-        local sf_fmt : display %4.1f `min_sf'
-        test_pass "binsreg match: absorb only (sigfigs=`sf_fmt')"
+    if `min_sf_y' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_pass "binsreg match: absorb only Y (sigfigs=`sf_fmt')"
     }
     else {
-        local sf_fmt : display %4.1f `min_sf'
-        test_fail "binsreg match: absorb only" "sigfigs=`sf_fmt', need `min_sigfigs'"
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_fail "binsreg match: absorb only Y" "sigfigs=`sf_fmt', need `min_sigfigs'"
+    }
+
+    * Also compare X values (bin centers)
+    local min_sf_x = 15
+    forval i = 1/10 {
+        local val1 = binsreg_x[`i', 1]
+        local val2 = cbins[`i', 3]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf_x' {
+            local min_sf_x = `sf'
+        }
+    }
+
+    if `min_sf_x' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_pass "binsreg match: absorb only X (sigfigs=`sf_fmt')"
+    }
+    else {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_fail "binsreg match: absorb only X" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 
@@ -636,34 +703,57 @@ if `binsreg_installed' {
     quietly binsreg y x w, absorb(id) nbins(10) dots(0 0) savedata(_binsreg_test) replace
     use _binsreg_test, clear
     mkmat dots_fit, mat(binsreg_y)
+    mkmat dots_x, mat(binsreg_x)
     restore
 
     cbinscatter y x, controls(w) absorb(id) nquantiles(10) method(binsreg) nograph
     mat cbins = e(bindata)
 
-    local min_sf = 15
+    * Compare Y values
+    local min_sf_y = 15
     forval i = 1/10 {
         local val1 = binsreg_y[`i', 1]
         local val2 = cbins[`i', 4]
         sigfigs `val1' `val2'
         local sf = r(sigfigs)
-        if `sf' < `min_sf' {
-            local min_sf = `sf'
+        if `sf' < `min_sf_y' {
+            local min_sf_y = `sf'
         }
     }
 
-    if `min_sf' >= `min_sigfigs' {
-        local sf_fmt : display %4.1f `min_sf'
-        test_pass "binsreg match: controls + absorb (sigfigs=`sf_fmt')"
+    if `min_sf_y' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_pass "binsreg match: controls + absorb Y (sigfigs=`sf_fmt')"
     }
     else {
-        local sf_fmt : display %4.1f `min_sf'
-        test_fail "binsreg match: controls + absorb" "sigfigs=`sf_fmt', need `min_sigfigs'"
+        local sf_fmt : display %4.1f `min_sf_y'
+        test_fail "binsreg match: controls + absorb Y" "sigfigs=`sf_fmt', need `min_sigfigs'"
+    }
+
+    * Also compare X values (bin centers)
+    local min_sf_x = 15
+    forval i = 1/10 {
+        local val1 = binsreg_x[`i', 1]
+        local val2 = cbins[`i', 3]
+        sigfigs `val1' `val2'
+        local sf = r(sigfigs)
+        if `sf' < `min_sf_x' {
+            local min_sf_x = `sf'
+        }
+    }
+
+    if `min_sf_x' >= `min_sigfigs' {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_pass "binsreg match: controls + absorb X (sigfigs=`sf_fmt')"
+    }
+    else {
+        local sf_fmt : display %4.1f `min_sf_x'
+        test_fail "binsreg match: controls + absorb X" "sigfigs=`sf_fmt', need `min_sigfigs'"
     }
     cap erase _binsreg_test.dta
 }
 else {
-    test_pass "binsreg not installed - skipping comparison tests"
+    test_fail "binsreg comparison" "binsreg not installed - cannot validate"
 }
 
 /*******************************************************************************
@@ -718,7 +808,13 @@ print_section "Weights"
 sysuse auto, clear
 capture cbinscatter price mpg [aw=weight], nograph
 if _rc == 0 {
-    test_pass "aweight"
+    capture confirm matrix e(bindata)
+    if _rc == 0 & e(N) == _N {
+        test_pass "aweight (N=`=e(N)')"
+    }
+    else {
+        test_fail "aweight" "bindata missing or N=`=e(N)' expected `=_N'"
+    }
 }
 else {
     test_fail "aweight" "rc=`=_rc'"
@@ -728,7 +824,13 @@ sysuse auto, clear
 gen fw = ceil(mpg/5)
 capture cbinscatter price mpg [fw=fw], nograph
 if _rc == 0 {
-    test_pass "fweight"
+    capture confirm matrix e(bindata)
+    if _rc == 0 & e(N) > 0 {
+        test_pass "fweight (N=`=e(N)')"
+    }
+    else {
+        test_fail "fweight" "bindata missing or N=`=e(N)'"
+    }
 }
 else {
     test_fail "fweight" "rc=`=_rc'"
@@ -737,7 +839,13 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg [pw=weight], nograph
 if _rc == 0 {
-    test_pass "pweight"
+    capture confirm matrix e(bindata)
+    if _rc == 0 & e(N) == _N {
+        test_pass "pweight (N=`=e(N)')"
+    }
+    else {
+        test_fail "pweight" "bindata missing or N=`=e(N)' expected `=_N'"
+    }
 }
 else {
     test_fail "pweight" "rc=`=_rc'"
@@ -747,7 +855,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg [aw=weight], controls(length) nograph
 if _rc == 0 {
-    test_pass "aweight + controls"
+    if "`e(controls)'" == "length" & e(N) == _N {
+        test_pass "aweight + controls"
+    }
+    else {
+        test_fail "aweight + controls" "controls=`e(controls)' N=`=e(N)'"
+    }
 }
 else {
     test_fail "aweight + controls" "rc=`=_rc'"
@@ -757,7 +870,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg [aw=weight], absorb(foreign) nograph
 if _rc == 0 {
-    test_pass "aweight + absorb"
+    if "`e(absorb)'" == "foreign" & e(N) == _N {
+        test_pass "aweight + absorb"
+    }
+    else {
+        test_fail "aweight + absorb" "absorb=`e(absorb)' N=`=e(N)'"
+    }
 }
 else {
     test_fail "aweight + absorb" "rc=`=_rc'"
@@ -846,7 +964,7 @@ gen y = 2*x + rnormal()
 replace y = . if _n <= 50
 
 cbinscatter y x, nograph
-if e(N) == 450 | e(N_dropped) == 50 {
+if e(N) == 450 & e(N_dropped) == 50 {
     test_pass "missing in y: handled correctly"
 }
 else {
@@ -862,7 +980,7 @@ replace x = . if _n <= 50
 gen y = 2*x + rnormal()
 
 cbinscatter y x, nograph
-if e(N) == 450 | e(N_dropped) >= 50 {
+if e(N) == 450 & e(N_dropped) >= 50 {
     test_pass "missing in x: handled correctly"
 }
 else {
@@ -1001,7 +1119,14 @@ gen y = 2 * x + 0.8 * w1 - 0.5 * w2 + id1 * 0.3 + rnormal()
 
 capture cbinscatter y x, controls(w1 w2) absorb(id1) nquantiles(15) method(binsreg) nograph
 if _rc == 0 {
-    test_pass "binsreg: multiple controls + absorb"
+    mat _bd = e(bindata)
+    local nrows = rowsof(_bd)
+    if `nrows' == 15 & e(N) == 2000 & e(nquantiles) == 15 {
+        test_pass "binsreg: multiple controls + absorb (bins=`nrows', N=`=e(N)')"
+    }
+    else {
+        test_fail "binsreg: multiple controls + absorb" "bins=`nrows' expected 15, N=`=e(N)' expected 2000"
+    }
 }
 else {
     test_fail "binsreg: multiple controls + absorb" "rc=`=_rc'"
@@ -1019,7 +1144,14 @@ gen y = 2 * x + 0.7 * w + id1 * 0.3 + id2 * 0.1 + rnormal()
 
 capture cbinscatter y x, controls(w) absorb(id1 id2) nquantiles(12) method(binsreg) nograph
 if _rc == 0 {
-    test_pass "binsreg: multiple FE dimensions"
+    mat _bd = e(bindata)
+    local nrows = rowsof(_bd)
+    if `nrows' == 12 & e(N) == 2000 & e(nquantiles) == 12 {
+        test_pass "binsreg: multiple FE dimensions (bins=`nrows', N=`=e(N)')"
+    }
+    else {
+        test_fail "binsreg: multiple FE dimensions" "bins=`nrows' expected 12, N=`=e(N)' expected 2000"
+    }
 }
 else {
     test_fail "binsreg: multiple FE dimensions" "rc=`=_rc'"
@@ -1040,7 +1172,14 @@ gen y = 1.5 * x + 0.6 * w + id * 0.4 + rnormal()
 
 capture cbinscatter y x, controls(w) absorb(id) nquantiles(10) method(binsreg) nograph
 if _rc == 0 {
-    test_pass "binsreg: unbalanced FE groups"
+    mat _bd = e(bindata)
+    local nrows = rowsof(_bd)
+    if `nrows' == 10 & e(N) == 1500 & e(nquantiles) == 10 {
+        test_pass "binsreg: unbalanced FE groups (bins=`nrows', N=`=e(N)')"
+    }
+    else {
+        test_fail "binsreg: unbalanced FE groups" "bins=`nrows' expected 10, N=`=e(N)' expected 1500"
+    }
 }
 else {
     test_fail "binsreg: unbalanced FE groups" "rc=`=_rc'"
@@ -1055,7 +1194,22 @@ print_section "Option Combinations"
 sysuse auto, clear
 capture cbinscatter price rep78, discrete by(foreign) nograph
 if _rc == 0 {
-    test_pass "discrete + by"
+    * Verify output has correct number of groups
+    if e(num_groups) == 2 {
+        * Check bindata has rows: discrete rep78 has 5 unique values, by(foreign) has 2 groups
+        * bindata should have non-missing rows for each group
+        mat _bd = e(bindata)
+        local nrows = rowsof(_bd)
+        if `nrows' >= 5 {
+            test_pass "discrete + by (groups=`=e(num_groups)', rows=`nrows')"
+        }
+        else {
+            test_fail "discrete + by" "bindata has only `nrows' rows, expected >= 5"
+        }
+    }
+    else {
+        test_fail "discrete + by" "num_groups=`=e(num_groups)' expected 2"
+    }
 }
 else {
     test_fail "discrete + by" "rc=`=_rc'"
@@ -1101,7 +1255,12 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg [aw=weight], by(foreign) nograph
 if _rc == 0 {
-    test_pass "aweight + by"
+    if e(num_groups) == 2 & e(N) == _N {
+        test_pass "aweight + by (groups=`=e(num_groups)', N=`=e(N)')"
+    }
+    else {
+        test_fail "aweight + by" "num_groups=`=e(num_groups)' expected 2, N=`=e(N)' expected `=_N'"
+    }
 }
 else {
     test_fail "aweight + by" "rc=`=_rc'"
@@ -1111,7 +1270,20 @@ else {
 sysuse auto, clear
 capture cbinscatter price rep78, discrete controls(weight) nograph
 if _rc == 0 {
-    test_pass "discrete + controls"
+    * Verify e(controls) is set and bindata has correct discrete bins
+    if "`e(controls)'" == "weight" {
+        mat _bd = e(bindata)
+        local nrows = rowsof(_bd)
+        if `nrows' >= 5 {
+            test_pass "discrete + controls (controls=`e(controls)', rows=`nrows')"
+        }
+        else {
+            test_fail "discrete + controls" "bindata has only `nrows' rows, expected >= 5"
+        }
+    }
+    else {
+        test_fail "discrete + controls" "e(controls)=`e(controls)' expected weight"
+    }
 }
 else {
     test_fail "discrete + controls" "rc=`=_rc'"
@@ -1121,7 +1293,14 @@ else {
 sysuse auto, clear
 capture cbinscatter price mpg, controls(weight) absorb(foreign) linetype(qfit) nograph
 if _rc == 0 {
-    test_pass "qfit + controls + absorb"
+    * Verify coefs matrix exists (qfit should produce polynomial coefficients)
+    capture confirm matrix e(coefs)
+    if _rc == 0 & "`e(controls)'" == "weight" & "`e(absorb)'" == "foreign" {
+        test_pass "qfit + controls + absorb"
+    }
+    else {
+        test_fail "qfit + controls + absorb" "coefs rc=`=_rc' controls=`e(controls)' absorb=`e(absorb)'"
+    }
 }
 else {
     test_fail "qfit + controls + absorb" "rc=`=_rc'"
@@ -1140,7 +1319,19 @@ gen y = 2*x + rnormal()
 
 capture cbinscatter y x, nquantiles(5) nograph
 if _rc == 0 {
-    test_pass "very few observations (20)"
+    if e(N) == 20 & e(nquantiles) == 5 {
+        mat _bd = e(bindata)
+        local nrows = rowsof(_bd)
+        if `nrows' == 5 {
+            test_pass "very few observations (20 obs, 5 bins)"
+        }
+        else {
+            test_fail "very few observations" "bindata rows=`nrows' expected 5"
+        }
+    }
+    else {
+        test_fail "very few observations" "N=`=e(N)' expected 20, nquantiles=`=e(nquantiles)' expected 5"
+    }
 }
 else {
     test_fail "very few observations" "rc=`=_rc'"
@@ -1154,7 +1345,19 @@ gen y = 2*x + rnormal()
 
 capture cbinscatter y x, nquantiles(50) nograph
 if _rc == 0 {
-    test_pass "many bins (50 bins, 100 obs)"
+    if e(N) == 100 & e(nquantiles) == 50 {
+        mat _bd = e(bindata)
+        local nrows = rowsof(_bd)
+        if `nrows' == 50 {
+            test_pass "many bins (50 bins, 100 obs)"
+        }
+        else {
+            test_fail "many bins" "bindata rows=`nrows' expected 50"
+        }
+    }
+    else {
+        test_fail "many bins" "N=`=e(N)' expected 100, nquantiles=`=e(nquantiles)' expected 50"
+    }
 }
 else {
     test_fail "many bins" "rc=`=_rc'"
@@ -1174,7 +1377,7 @@ if _rc == 0 {
     test_pass "collinear control (handled)"
 }
 else {
-    test_pass "collinear control (error rc=`=_rc')"
+    test_fail "collinear control" "unexpected error rc=`=_rc'"
 }
 
 * Single FE group (absorb with 1 level)
@@ -1204,9 +1407,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 20: verbose/timeit options
+ * SECTION 20: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 capture cbinscatter price mpg, verbose nograph
@@ -1215,15 +1418,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "rc=`=_rc'"
-}
-
-sysuse auto, clear
-capture cbinscatter price mpg, timeit nograph
-if _rc == 0 {
-    test_pass "timeit option"
-}
-else {
-    test_fail "timeit option" "rc=`=_rc'"
 }
 
 /*******************************************************************************

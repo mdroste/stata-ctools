@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! csample: C-accelerated random sampling for Stata
 *! Part of the ctools suite
 
@@ -59,8 +59,7 @@ program define csample
     quietly count if `touse'
     local nobs_sample = r(N)
     if `nobs_sample' == 0 {
-        di as error "csample: no observations"
-        exit 2000
+        exit 0
     }
 
     * Load plugin

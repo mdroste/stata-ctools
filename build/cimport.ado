@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cimport: C-accelerated CSV import for Stata
 *! Part of the ctools suite
 *!
@@ -82,15 +82,15 @@ program define cimport, rclass
         exit 4
     }
 
-    * Set default delimiter
-    if `"`delimiters'"' == "" {
-        local delimiters ","
+    * Set default delimiter (auto-detect if not specified, matching Stata behavior)
+    local plugin_delim "auto"
+    if `"`delimiters'"' != "" {
+        local plugin_delim `"`delimiters'"'
     }
 
     * Validate delimiter - for now only single character supported
     * For plugin: pass "tab" or "space" keyword instead of actual characters
-    local plugin_delim `"`delimiters'"'
-    if length(`"`delimiters'"') != 1 {
+    if `"`delimiters'"' != "" & length(`"`delimiters'"') != 1 {
         * Handle special cases like tab
         if `"`delimiters'"' == "tab" | `"`delimiters'"' == "\t" {
             local delimiters "	"
@@ -436,7 +436,6 @@ program define cimport, rclass
     local opt_noheader = cond(`noheader' == 1, "noheader", "")
     local opt_headerrow = cond(`headerrow' > 1, "headerrow=`headerrow'", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
-    local opt_stripquotes = cond("`stripquotes'" != "", "stripquotes", "")
     local opt_case = "case=`case'"
     local opt_bindquotes = "bindquotes=`bindquotes'"
 
@@ -521,7 +520,8 @@ program define cimport, rclass
         else if `nobs' == 0 {
             di as text "(no data rows found)"
         }
-        timer clear
+        timer clear 11
+        timer clear 99
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
@@ -575,35 +575,94 @@ program define cimport, rclass
             }
         }
 
+        * Try to create the variable; if name is reserved, fall back to v<i>
+        local orig_vname "`vname'"
+        local gen_ok = 1
         if `vtype' == 1 {
             * String variable
             if `vlen' < 1 local vlen = 1
             if `vlen' > 2045 local vlen = 2045
-            quietly gen str`vlen' `vname' = ""
+            capture quietly gen str`vlen' `vname' = ""
+            if _rc != 0 {
+                local gen_ok = 0
+            }
         }
         else {
             * Numeric variable - use optimal storage type unless asfloat/asdouble specified
             if "`asfloat'" != "" {
-                quietly gen float `vname' = .
+                capture quietly gen float `vname' = .
             }
             else if "`asdouble'" != "" {
-                quietly gen double `vname' = .
+                capture quietly gen double `vname' = .
             }
             else if `ntype' == 4 {
-                quietly gen byte `vname' = .
+                capture quietly gen byte `vname' = .
             }
             else if `ntype' == 3 {
-                quietly gen int `vname' = .
+                capture quietly gen int `vname' = .
             }
             else if `ntype' == 2 {
-                quietly gen long `vname' = .
+                capture quietly gen long `vname' = .
             }
             else if `ntype' == 1 {
-                quietly gen float `vname' = .
+                capture quietly gen float `vname' = .
             }
             else {
-                quietly gen double `vname' = .
+                capture quietly gen double `vname' = .
             }
+            if _rc != 0 {
+                local gen_ok = 0
+            }
+        }
+
+        * If gen failed (reserved keyword, etc.), use fallback name v<i>
+        if `gen_ok' == 0 {
+            local vname "v`i'"
+            * Ensure fallback name is unique
+            capture confirm variable `vname'
+            if !_rc {
+                local suffix = 1
+                local newname `vname'_`suffix'
+                while (1) {
+                    capture confirm variable `newname'
+                    if _rc {
+                        local vname `newname'
+                        continue, break
+                    }
+                    local suffix = `suffix' + 1
+                    local newname `vname'_`suffix'
+                }
+            }
+
+            if `vtype' == 1 {
+                quietly gen str`vlen' `vname' = ""
+            }
+            else {
+                if "`asfloat'" != "" {
+                    quietly gen float `vname' = .
+                }
+                else if "`asdouble'" != "" {
+                    quietly gen double `vname' = .
+                }
+                else if `ntype' == 4 {
+                    quietly gen byte `vname' = .
+                }
+                else if `ntype' == 3 {
+                    quietly gen int `vname' = .
+                }
+                else if `ntype' == 2 {
+                    quietly gen long `vname' = .
+                }
+                else if `ntype' == 1 {
+                    quietly gen float `vname' = .
+                }
+                else {
+                    quietly gen double `vname' = .
+                }
+            }
+
+            * Add variable label with original CSV header name
+            label variable `vname' "`orig_vname'"
         }
 
         local i = `i' + 1
@@ -692,17 +751,41 @@ program define cimport, rclass
     * Display summary (matching import delimited output format)
     di as text "(" as result %12.0fc _N as text " observations read)"
 
-    if "`verbose'" != "" & `elapsed' > 0 {
+    if "`verbose'" != "" {
+        * Calculate Stata overhead
+        capture local __plugin_time_total = _cimport_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __stata_overhead = `elapsed' - `__plugin_time_total'
+        if `__stata_overhead' < 0 local __stata_overhead = 0
+
         di as text ""
-        di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
-        * Get file size for throughput calculation
-        tempname fh
-        file open `fh' using `"`using'"', read binary
-        file seek `fh' eof
-        local fsize = r(loc)
-        file close `fh'
-        local mbps = (`fsize' / 1048576) / `elapsed'
-        di as text "Speed:     " as result %9.1f `mbps' as text " MB/s"
+        di as text "{hline 55}"
+        di as text "cimport timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Memory map file:        " as result %8.4f _cimport_time_mmap " sec"
+        di as text "    Parse CSV:              " as result %8.4f _cimport_time_parse " sec"
+        di as text "    Type inference:         " as result %8.4f _cimport_time_infer " sec"
+        di as text "    Cache conversion:       " as result %8.4f _cimport_time_cache " sec"
+        di as text "    Store to Stata:         " as result %8.4f _cimport_time_store " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cimport_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
+        di as text "{hline 55}"
+
+        * Throughput info
+        if `elapsed' > 0 {
+            tempname fh
+            file open `fh' using `"`using'"', read binary
+            file seek `fh' eof
+            local fsize = r(loc)
+            file close `fh'
+            local mbps = (`fsize' / 1048576) / `elapsed'
+            di as text "    Throughput:             " as result %9.1f `mbps' as text " MB/s"
+        }
 
         * Display thread diagnostics
         capture local __threads_max = _cimport_threads_max
@@ -710,13 +793,22 @@ program define cimport, rclass
             capture local __openmp_enabled = _cimport_openmp_enabled
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
-            di as text "Thread diagnostics:"
-            di as text "  OpenMP enabled:         " as result %4.0f `__openmp_enabled'
-            di as text "  Max threads available:  " as result %4.0f `__threads_max'
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
         }
+
+        * Clean up timing scalars
+        capture scalar drop _cimport_time_mmap _cimport_time_parse _cimport_time_infer
+        capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
+        capture scalar drop _cimport_threads_max _cimport_openmp_enabled
     }
 
-    timer clear
+    timer clear 11
+    timer clear 12
+    timer clear 13
+    timer clear 99
 
     * Return results
     return scalar N = _N
@@ -923,7 +1015,8 @@ program define cimport_excel, rclass
         else if `nobs' == 0 {
             di as text "(no data rows found)"
         }
-        timer clear
+        timer clear 11
+        timer clear 99
         return scalar N = 0
         return scalar k = 0
         return scalar time = `elapsed'
@@ -1040,7 +1133,10 @@ program define cimport_excel, rclass
         di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
     }
 
-    timer clear
+    timer clear 11
+    timer clear 12
+    timer clear 13
+    timer clear 99
 
     * Return results
     return scalar N = _N

@@ -75,14 +75,16 @@ sysuse auto, clear
 benchmark_qreg price mpg weight, vce(robust) testname("vce(robust)")
 
 * vce(iid) - assumes i.i.d. errors
+* Note: Stata's qreg default VCE is equivalent to cqreg's vce(iid)
 sysuse auto, clear
-capture cqreg price mpg weight, vce(iid)
-if _rc == 0 {
-    test_pass "vce(iid) accepted"
-}
-else {
-    test_fail "vce(iid)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, vce(iid)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "vce(iid): coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "vce(iid): VCE"
 
 * vce(bootstrap) - bootstrap standard errors (not supported - should fail with 198)
 sysuse auto, clear
@@ -426,42 +428,28 @@ capture benchmark_qreg y x1 x2, testname("high correlation (r~0.99)")
  ******************************************************************************/
 print_section "Extreme Quantiles"
 
-* Very low quantiles
-sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.01)
-if _rc == 0 {
-    test_pass "q=0.01 accepted"
-}
-else {
-    test_fail "q=0.01" "returned error `=_rc'"
-}
-
-sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.05)
-if _rc == 0 {
-    test_pass "q=0.05 accepted"
-}
-else {
-    test_fail "q=0.05" "returned error `=_rc'"
-}
-
-* Very high quantiles
-sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.95)
-if _rc == 0 {
-    test_pass "q=0.95 accepted"
-}
-else {
-    test_fail "q=0.95" "returned error `=_rc'"
-}
-
-sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.99)
-if _rc == 0 {
-    test_pass "q=0.99 accepted"
-}
-else {
-    test_fail "q=0.99" "returned error `=_rc'"
+* Very low/high quantiles on auto (N=74) - qreg may fail with 498
+* (insufficient observations in tails). If both fail or cqreg is more robust, that's OK.
+foreach q in 0.01 0.05 0.95 0.99 {
+    sysuse auto, clear
+    quietly capture qreg price mpg weight, quantile(`q')
+    local qreg_rc = _rc
+    quietly capture cqreg price mpg weight, quantile(`q')
+    local cqreg_rc = _rc
+    if `qreg_rc' == 0 & `cqreg_rc' == 0 {
+        * Both succeed - do full comparison
+        sysuse auto, clear
+        benchmark_qreg price mpg weight, quantile(`q') testname("auto: q=`q'")
+    }
+    else if `qreg_rc' == `cqreg_rc' {
+        test_pass "auto: q=`q' (both return rc=`qreg_rc')"
+    }
+    else if `cqreg_rc' == 0 & `qreg_rc' != 0 {
+        test_pass "auto: q=`q' (cqreg succeeds, qreg fails with rc=`qreg_rc' - more robust)"
+    }
+    else {
+        test_fail "auto: q=`q'" "unexpected: qreg rc=`qreg_rc', cqreg rc=`cqreg_rc'"
+    }
 }
 
 * Extreme quantiles with larger dataset
@@ -645,64 +633,66 @@ benchmark_qreg y x, testname("extreme range in y")
  ******************************************************************************/
 print_section "denmethod Option"
 
+* denmethod(fitted) is the default for both qreg and cqreg - compare fully
 sysuse auto, clear
-capture cqreg price mpg weight, denmethod(fitted)
-if _rc == 0 {
-    test_pass "denmethod(fitted) accepted"
-}
-else {
-    test_fail "denmethod(fitted)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, denmethod(fitted)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "denmethod(fitted): coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "denmethod(fitted): VCE"
 
+* denmethod(residual) - qreg does not expose this option, so compare coefficients
+* only (coefficients are independent of denmethod; VCE will intentionally differ)
 sysuse auto, clear
-capture cqreg price mpg weight, denmethod(residual)
-if _rc == 0 {
-    test_pass "denmethod(residual) accepted"
-}
-else {
-    test_fail "denmethod(residual)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+quietly cqreg price mpg weight, denmethod(residual)
+matrix cqreg_b = e(b)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "denmethod(residual): coefficients"
 
+* denmethod(kernel) - qreg does not expose this option, so compare coefficients only
 sysuse auto, clear
-capture cqreg price mpg weight, denmethod(kernel)
-if _rc == 0 {
-    test_pass "denmethod(kernel) accepted"
-}
-else {
-    test_fail "denmethod(kernel)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+quietly cqreg price mpg weight, denmethod(kernel)
+matrix cqreg_b = e(b)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "denmethod(kernel): coefficients"
 
 /*******************************************************************************
  * SECTION 22: bwmethod Option
  ******************************************************************************/
 print_section "bwmethod Option"
 
+* bwmethod(hsheather) is the default for both qreg and cqreg - compare fully
 sysuse auto, clear
-capture cqreg price mpg weight, bwmethod(hsheather)
-if _rc == 0 {
-    test_pass "bwmethod(hsheather) accepted"
-}
-else {
-    test_fail "bwmethod(hsheather)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, bwmethod(hsheather)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "bwmethod(hsheather): coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "bwmethod(hsheather): VCE"
 
+* bwmethod(bofinger) - qreg does not expose this option, so compare coefficients
+* only (coefficients are independent of bwmethod; VCE will intentionally differ)
 sysuse auto, clear
-capture cqreg price mpg weight, bwmethod(bofinger)
-if _rc == 0 {
-    test_pass "bwmethod(bofinger) accepted"
-}
-else {
-    test_fail "bwmethod(bofinger)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+quietly cqreg price mpg weight, bwmethod(bofinger)
+matrix cqreg_b = e(b)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "bwmethod(bofinger): coefficients"
 
+* bwmethod(chamberlain) - qreg does not expose this option, so compare coefficients only
 sysuse auto, clear
-capture cqreg price mpg weight, bwmethod(chamberlain)
-if _rc == 0 {
-    test_pass "bwmethod(chamberlain) accepted"
-}
-else {
-    test_fail "bwmethod(chamberlain)" "returned error `=_rc'"
-}
+quietly qreg price mpg weight
+matrix qreg_b = e(b)
+quietly cqreg price mpg weight, bwmethod(chamberlain)
+matrix cqreg_b = e(b)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "bwmethod(chamberlain): coefficients"
 
 /*******************************************************************************
  * SECTION 23: tolerance/maxiter Options
@@ -746,9 +736,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 24: verbose/timeit Options
+ * SECTION 24: verbose Option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 capture cqreg price mpg weight, verbose
@@ -757,15 +747,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
-}
-
-sysuse auto, clear
-capture cqreg price mpg weight, timeit
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************
@@ -996,53 +977,46 @@ print_section "Option Combinations"
 
 * quantile + vce
 sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.25) vce(robust)
-if _rc == 0 {
-    test_pass "quantile(0.25) + vce(robust)"
-}
-else {
-    test_fail "quantile + vce combo" "returned error `=_rc'"
-}
+benchmark_qreg price mpg weight, quantile(0.25) vce(robust) testname("quantile(0.25) + vce(robust)")
 
-* quantile + denmethod
+* quantile + denmethod (fitted is default for qreg, so full comparison works)
 sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.75) denmethod(fitted)
-if _rc == 0 {
-    test_pass "quantile(0.75) + denmethod(fitted)"
-}
-else {
-    test_fail "quantile + denmethod combo" "returned error `=_rc'"
-}
+quietly qreg price mpg weight, quantile(0.75)
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, quantile(0.75) denmethod(fitted)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "quantile(0.75) + denmethod(fitted): coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "quantile(0.75) + denmethod(fitted): VCE"
 
-* quantile + bwmethod
+* quantile + bwmethod (hsheather is default for qreg, so full comparison works)
 sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.10) bwmethod(hsheather)
-if _rc == 0 {
-    test_pass "quantile(0.10) + bwmethod(hsheather)"
-}
-else {
-    test_fail "quantile + bwmethod combo" "returned error `=_rc'"
-}
+quietly qreg price mpg weight, quantile(0.10)
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, quantile(0.10) bwmethod(hsheather)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "quantile(0.10) + bwmethod(hsheather): coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "quantile(0.10) + bwmethod(hsheather): VCE"
 
 * quantile + tolerance + maxiter
+* Note: benchmark_qreg does not support tolerance/maxiter; compare manually
 sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.5) tolerance(1e-8) maxiter(1000)
-if _rc == 0 {
-    test_pass "quantile + tolerance + maxiter"
-}
-else {
-    test_fail "multiple options combo" "returned error `=_rc'"
-}
+quietly qreg price mpg weight, quantile(0.5)
+matrix qreg_b = e(b)
+matrix qreg_V = e(V)
+quietly cqreg price mpg weight, quantile(0.5) tolerance(1e-8) maxiter(1000)
+matrix cqreg_b = e(b)
+matrix cqreg_V = e(V)
+assert_matrix_equal qreg_b cqreg_b $DEFAULT_SIGFIGS "quantile + tolerance + maxiter: coefficients"
+assert_matrix_equal qreg_V cqreg_V $DEFAULT_SIGFIGS "quantile + tolerance + maxiter: VCE"
 
 * Full option combo
+* Note: verbose does not affect numerical results; vce(robust) is supported by benchmark_qreg
 sysuse auto, clear
-capture cqreg price mpg weight, quantile(0.5) vce(robust) tolerance(1e-8) verbose
-if _rc == 0 {
-    test_pass "full option combination"
-}
-else {
-    test_fail "full option combo" "returned error `=_rc'"
-}
+benchmark_qreg price mpg weight, quantile(0.5) vce(robust) testname("full option combination")
 
 /*******************************************************************************
  * SECTION 31: Real-World Regression Scenarios
@@ -1494,7 +1468,7 @@ if `qreg_cols' == `cqreg_cols' {
     benchmark_qreg price i.foreign##c.mpg weight, testname("i.foreign##c.mpg: median")
 }
 else {
-    test_pass "i.foreign##c.mpg: median (dimension differs - known limitation)"
+    test_fail "i.foreign##c.mpg: median" "dimension differs: qreg=`qreg_cols' cqreg=`cqreg_cols'"
 }
 
 * Factor variables at extreme quantiles
@@ -1989,7 +1963,7 @@ if _rc == 0 {
         benchmark_qreg invest L_mvalue kstock i.company, testname("L.mvalue + i.company: median")
     }
     else {
-        test_pass "L.mvalue + i.company: median (dimension differs - known limitation)"
+        test_fail "L.mvalue + i.company: median" "dimension differs: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
 
     webuse grunfeld, clear
@@ -2007,7 +1981,7 @@ if _rc == 0 {
         benchmark_qreg invest L_mvalue kstock i.company, quantile(0.75) testname("L.mvalue + i.company: q=0.75")
     }
     else {
-        test_pass "L.mvalue + i.company: q=0.75 (dimension differs - known limitation)"
+        test_fail "L.mvalue + i.company: q=0.75" "dimension differs: qreg=`qreg_cols' cqreg=`cqreg_cols'"
     }
 }
 

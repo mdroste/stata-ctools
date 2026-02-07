@@ -240,21 +240,4 @@ ST_retcode compute_xtx_weighted(
     ST_double *XtX
 );
 
-/*
- * Cholesky decomposition (in-place)
- */
-ST_retcode cholesky_decompose(
-    ST_double *A,
-    ST_int K
-);
-
-/*
- * Solve Cholesky system: solve A*x = b where A = L*L'
- */
-ST_retcode cholesky_solve(
-    const ST_double *L,
-    ST_int K,
-    ST_double *b
-);
-
 #endif /* CBINSCATTER_RESID_H */

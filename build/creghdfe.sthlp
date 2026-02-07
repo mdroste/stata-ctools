@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "creghdfe##syntax"}{...}
 {viewerjumpto "Description" "creghdfe##description"}{...}
 {viewerjumpto "Options" "creghdfe##options"}{...}
@@ -41,9 +41,12 @@
 {synopt:{opt nostand:ardize}}do not standardize variables before iteration{p_end}
 
 {syntab:Residuals}
-{synopt:{opt resid}}create residual variable named {cmd:_creghdfe_resid}{p_end}
+{synopt:{opt resid}}create residual variable named {cmd:_reghdfe_resid}{p_end}
 {synopt:{opt resid2(newvar)}}create residual variable with specified name{p_end}
 {synopt:{opt resid:uals(newvar)}}alias for {opt resid2()}{p_end}
+
+{syntab:Advanced}
+{synopt:{opt quad}}use quad-precision accumulation in CG solver{p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information and timing{p_end}
@@ -52,14 +55,14 @@
 
 {pstd}
 {it:weight}s are allowed; {opt aweight}s, {opt fweight}s, and {opt pweight}s are supported.
+Note: {opt pweight}s automatically imply {opt vce(robust)}.
 
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:creghdfe} is a high-performance replacement for {help reghdfe:reghdfe}
-(if installed) that uses a C plugin with optimized fixed effects absorption.
+{cmd:creghdfe} is a high-performance replacement for {cmd:reghdfe} (v6.13.1) by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe"}) that uses a C plugin with optimized fixed effects absorption.
 It estimates linear regression models with multiple high-dimensional fixed effects.
 
 {pstd}
@@ -114,18 +117,23 @@ demeaning algorithm. The default is {cmd:10000}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations including fixed effects absorption and OLS computation. By default,
-{cmd:creghdfe} uses all available CPU cores as reported by OpenMP. Use this
-option to limit parallelism, for example when running multiple jobs simultaneously.
+operations. By default, {cmd:creghdfe} uses all available CPU cores.
 
 {phang}
 {opt nostandardize} specifies that variables should not be standardized
 before the iterative algorithm. This may affect convergence speed.
 
+{dlgtab:Advanced}
+
+{phang}
+{opt quad} uses quad-precision (double-double) accumulation in the conjugate
+gradient solver for improved numerical accuracy. This is slower but may help
+with ill-conditioned problems.
+
 {dlgtab:Residuals}
 
 {phang}
-{opt resid} stores residuals in a new variable named {cmd:_creghdfe_resid}.
+{opt resid} stores residuals in a new variable named {cmd:_reghdfe_resid}.
 
 {phang}
 {opt resid2(newvar)} stores residuals in a new variable with the specified name.
@@ -137,11 +145,7 @@ compatibility with {help reghdfe:reghdfe}.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information during estimation,
-including timing for each stage of the computation.
-
-{phang}
-{opt timeit} displays timing breakdown for the estimation.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker examples}{...}

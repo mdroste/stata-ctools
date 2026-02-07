@@ -24,15 +24,6 @@ IntHashTable *hash_create(ST_int expected_size);
 void hash_destroy(IntHashTable *ht);
 ST_int hash_insert_or_get(IntHashTable *ht, ST_int key);
 
-/* ========================================================================
- * Union-Find functions
- * ======================================================================== */
-
-UnionFind *uf_create(ST_int size);
-void uf_destroy(UnionFind *uf);
-ST_int uf_find(UnionFind *uf, ST_int x);
-void uf_union(UnionFind *uf, ST_int x, ST_int y);
-
 /* Count connected components in a bipartite graph */
 ST_int count_connected_components(
     const ST_int *fe1_levels,

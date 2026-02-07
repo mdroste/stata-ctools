@@ -293,6 +293,7 @@ static inline void apply_perm_gather_double_simd(double * CTOOLS_RESTRICT new_da
     Scalar gather with multi-level prefetching.
     Used on ARM64 and non-AVX2 x86 platforms.
 */
+#ifndef CTOOLS_TYPES_AVX2
 static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_data,
                                                     const double * CTOOLS_RESTRICT old_data,
                                                     const perm_idx_t * CTOOLS_RESTRICT perm,
@@ -312,6 +313,7 @@ static inline void apply_perm_gather_double_scalar(double * CTOOLS_RESTRICT new_
         new_data[i] = old_data[perm[i]];
     }
 }
+#endif /* !CTOOLS_TYPES_AVX2 */
 
 /* ============================================================================
    Non-Temporal Store Variants for Large Datasets

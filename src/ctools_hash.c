@@ -1,12 +1,16 @@
 /*
  * ctools_hash.c
- * Unified hash table implementations for ctools
+ * Hash tables and label utilities for ctools
  *
  * Extracted from cencode_impl.c and cdecode_impl.c for code reuse.
  */
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
+#include "stplugin.h"
+#include "ctools_types.h"
 #include "ctools_hash.h"
 
 /* ============================================================================
@@ -359,4 +363,219 @@ const char *ctools_int_hash_lookup(ctools_int_hash_table *ht, int key)
     }
 
     return NULL;  /* Not found */
+}
+
+/* ============================================================================
+ * Label Escape / Unescape
+ * ============================================================================ */
+
+void ctools_label_unescape(const char *src, char *dst, size_t max_len)
+{
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j < max_len; i++) {
+        if (src[i] == '\\' && src[i + 1]) {
+            i++;
+            if (src[i] == '|') {
+                dst[j++] = '|';
+            } else if (src[i] == '\\') {
+                dst[j++] = '\\';
+            } else if (src[i] == '"') {
+                dst[j++] = '"';
+            } else {
+                /* Unknown escape — pass through the escaped char */
+                dst[j++] = src[i];
+            }
+        } else {
+            dst[j++] = src[i];
+        }
+    }
+    dst[j] = '\0';
+}
+
+size_t ctools_label_escape(const char *src, char *dst, size_t dst_size)
+{
+    size_t pos = 0;
+    for (const char *p = src; *p && pos < dst_size - 2; p++) {
+        if (*p == '"' || *p == '\\' || *p == '|') {
+            dst[pos++] = '\\';
+        }
+        dst[pos++] = *p;
+    }
+    dst[pos] = '\0';
+    return pos;
+}
+
+/* ============================================================================
+ * Label File Parsing (cdecode)
+ * ============================================================================ */
+
+int ctools_label_parse_file(const char *filepath,
+                            ctools_int_hash_table *ht,
+                            int *max_label_len)
+{
+    if (!filepath || *filepath == '\0') {
+        return 0;  /* No file is OK */
+    }
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) {
+        return -1;
+    }
+
+    if (max_label_len) {
+        *max_label_len = 0;
+    }
+
+    char line[CTOOLS_MAX_LABEL_LEN + 32];
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Remove trailing newline */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+
+        if (len == 0) continue;
+
+        /* Find the pipe separator between value and label */
+        char *pipe = strchr(line, '|');
+        if (!pipe) continue;
+
+        *pipe = '\0';
+        int value;
+        if (!ctools_safe_atoi(line, &value)) {
+            fclose(fp);
+            return -1;  /* Invalid value in labels file */
+        }
+        char *label = pipe + 1;
+
+        /* Unescape the label */
+        char unescaped[CTOOLS_MAX_LABEL_LEN + 1];
+        ctools_label_unescape(label, unescaped, CTOOLS_MAX_LABEL_LEN);
+
+        /* Track max length */
+        if (max_label_len) {
+            int lbl_len = (int)strlen(unescaped);
+            if (lbl_len > *max_label_len) {
+                *max_label_len = lbl_len;
+            }
+        }
+
+        /* Insert into hash table */
+        if (ctools_int_hash_insert(ht, value, unescaped) != 0) {
+            fclose(fp);
+            return -1;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+/* ============================================================================
+ * Label String Parsing (cencode noextend path)
+ * ============================================================================ */
+
+int ctools_label_parse_string(const char *str,
+                              ctools_str_hash_table *ht)
+{
+    if (!str || *str == '\0') return 0;
+
+    size_t len = strlen(str);
+    char *buf = malloc(len + 1);
+    if (!buf) return -1;
+    memcpy(buf, str, len + 1);
+
+    char *pos = buf;
+    while (*pos) {
+        /* Parse value */
+        char *pipe = strchr(pos, '|');
+        if (!pipe) break;
+        *pipe = '\0';
+        int value;
+        if (!ctools_safe_atoi(pos, &value)) {
+            free(buf);
+            return -1;
+        }
+        pos = pipe + 1;
+
+        /* Find end of string (|| or end of buffer) */
+        char *end = strstr(pos, "||");
+        if (end) {
+            *end = '\0';
+        }
+
+        /* Unescape the string in-place */
+        char unescaped[CTOOLS_MAX_LABEL_LEN + 1];
+        ctools_label_unescape(pos, unescaped, CTOOLS_MAX_LABEL_LEN);
+
+        /* Insert into hash table */
+        if (ctools_str_hash_insert_value(ht, unescaped, value) < 0) {
+            free(buf);
+            return -1;
+        }
+
+        if (end) {
+            pos = end + 2;  /* Skip || */
+        } else {
+            break;
+        }
+    }
+
+    free(buf);
+    return 0;
+}
+
+/* ============================================================================
+ * Label Serialization (cencode)
+ * ============================================================================ */
+
+int ctools_label_serialize_macros(const char **strings, const int *codes,
+                                  size_t n_labels, const char *prefix)
+{
+    char *macro_buf = malloc(CTOOLS_MACRO_CHUNK_SIZE + CTOOLS_LABEL_BUF_SIZE);
+    if (!macro_buf) return -1;
+
+    macro_buf[0] = '\0';
+    size_t macro_pos = 0;
+    size_t chunk = 0;
+    size_t labels_in_chunk = 0;
+    char macro_name[64];
+
+    for (size_t i = 0; i < n_labels; i++) {
+        int code = codes[i];
+        const char *str = strings[i];
+
+        char escaped[CTOOLS_LABEL_BUF_SIZE];
+        ctools_label_escape(str, escaped, sizeof(escaped));
+
+        char entry[CTOOLS_LABEL_BUF_SIZE + 32];
+        int entry_len = snprintf(entry, sizeof(entry), "%s%d|%s",
+                                 (labels_in_chunk > 0) ? "||" : "",
+                                 code, escaped);
+
+        if (macro_pos + (size_t)entry_len >= CTOOLS_MACRO_CHUNK_SIZE) {
+            snprintf(macro_name, sizeof(macro_name), "%s_%zu", prefix, chunk);
+            SF_macro_save(macro_name, macro_buf);
+
+            chunk++;
+            labels_in_chunk = 0;
+            macro_pos = 0;
+            macro_buf[0] = '\0';
+
+            entry_len = snprintf(entry, sizeof(entry), "%d|%s", code, escaped);
+        }
+
+        memcpy(macro_buf + macro_pos, entry, (size_t)entry_len + 1);
+        macro_pos += (size_t)entry_len;
+        labels_in_chunk++;
+    }
+
+    if (labels_in_chunk > 0) {
+        snprintf(macro_name, sizeof(macro_name), "%s_%zu", prefix, chunk);
+        SF_macro_save(macro_name, macro_buf);
+    }
+
+    free(macro_buf);
+    return (int)(chunk + 1);
 }

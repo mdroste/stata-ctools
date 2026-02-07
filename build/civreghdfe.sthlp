@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}
@@ -32,6 +32,7 @@
 {synopt:{opt a:bsorb(varlist)}}categorical variables to absorb as fixed effects{p_end}
 
 {syntab:Estimators}
+{synopt:{opt b0(matname)}}initial values matrix for CUE estimation{p_end}
 {synopt:{opt liml}}use limited-information maximum likelihood (LIML){p_end}
 {synopt:{opt fuller(#)}}use Fuller's modified LIML with parameter {it:#}{p_end}
 {synopt:{opt kclass(#)}}use k-class estimator with {it:k} = {it:#}{p_end}
@@ -52,6 +53,7 @@
 {synopt:{opt kernel(string)}}kernel type for HAC: {opt bartlett}, {opt parzen}, {opt quadraticspectral}, {opt truncated}, {opt tukey}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with {it:#} lags (for panel data){p_end}
 {synopt:{opt center}}center score vectors before HAC outer product computation{p_end}
+{synopt:{opt kiefer}}Kiefer (sandwich) SEs for panel data (requires tsset){p_end}
 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
@@ -64,8 +66,7 @@
 {synopt:{opt ff:irst}}report full first-stage statistics (partial R², F-stat){p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
 {synopt:{opt coviv}}display covariance matrix of IV estimators{p_end}
-{synopt:{opt v:erbose}}display progress information{p_end}
-{synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
 
 {syntab:Display}
 {synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
@@ -101,6 +102,7 @@
 {synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}
 {synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
+{synopt:{opt noret:urn}}skip all result storage (faster for scripted use){p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
@@ -165,6 +167,11 @@ when overidentified.
 coefficients and the optimal weighting matrix, providing better finite-sample
 properties than two-step GMM.
 
+{phang}
+{opt b0(matname)} specifies a matrix of initial coefficient values for iterative
+estimators like CUE. The matrix must be conformable with the coefficient vector.
+If not specified, 2SLS estimates are used as starting values.
+
 {dlgtab:VCE/SE}
 
 {phang}
@@ -210,6 +217,11 @@ is requested, the Newey-West optimal bandwidth floor(4*(N/100)^(2/9)) is used.
 are robust to very general forms of cross-sectional and temporal dependence
 in panel data. The Bartlett kernel is used by default.
 
+{phang}
+{opt kiefer} requests Kiefer sandwich standard errors for panel data. The data
+must be {help tsset} with both panel and time variables. This option cannot be
+combined with {opt vce(robust)} or {opt vce(cluster)}.
+
 {dlgtab:Estimation Settings}
 
 {phang}
@@ -221,9 +233,7 @@ solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations including HDFE absorption and matrix computations. By default,
-{cmd:civreghdfe} uses all available CPU cores as reported by OpenMP. Use this
-option to limit parallelism, for example when running multiple jobs simultaneously.
+operations. By default, {cmd:civreghdfe} uses all available CPU cores.
 
 {phang}
 {opt noconstant} suppresses the constant term. Note that with absorbed fixed
@@ -232,8 +242,8 @@ effects, the constant is typically absorbed anyway.
 {dlgtab:Reporting}
 
 {phang}
-{opt first} reports first-stage regression statistics including F-statistics
-for testing instrument strength for each endogenous variable.
+{opt first} requests that first-stage statistics be computed. Use {opt ffirst}
+to display a formatted first-stage summary table.
 
 {phang}
 {opt ffirst} reports full first-stage regression summary statistics in a
@@ -251,10 +261,7 @@ variable directly on all instruments).
 {opt coviv} displays the covariance matrix of the IV estimators.
 
 {phang}
-{opt verbose} displays detailed progress information during computation.
-
-{phang}
-{opt timeit} displays a timing breakdown of computational phases.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {dlgtab:Display}
 
@@ -302,10 +309,12 @@ endogenous. Results are stored in {cmd:e(cstat)}, {cmd:e(cstat_df)}, and {cmd:e(
 {phang}
 {opt endogtest(varlist)} requests the endogeneity test for the specified endogenous
 regressors. The test evaluates whether the specified variables can be treated as
-exogenous. This uses a Durbin-Wu-Hausman style augmented regression test applied
-to the subset of variables specified. Under H0 (that the specified regressors are
-exogenous), the test statistic ~ chi-sq(df) where df = number of tested regressors.
-A large test statistic (small p-value) supports treating these as endogenous.
+exogenous. This uses a difference-in-Sargan (C-statistic) approach: the tested
+endogenous variables are reclassified as exogenous, and the difference in
+overidentification statistics between the restricted and unrestricted models
+is computed. Under H0 (that the specified regressors are exogenous), the test
+statistic ~ chi-sq(df) where df = number of tested regressors. A large test
+statistic (small p-value) supports treating these as endogenous.
 Results are stored in {cmd:e(endogtest)}, {cmd:e(endogtest_df)}, and {cmd:e(endogtest_p)}.
 
 {phang}
@@ -353,6 +362,11 @@ using {cmd:estimates store}. The results are stored with a prefix (default:
 {phang}
 {opt saverfprefix(string)} specifies the prefix to use when storing reduced-form
 results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
+
+{phang}
+{opt noreturn} skips all result retrieval and e() posting after estimation.
+This is useful for scripted workflows where only side effects (e.g., residuals)
+are needed, avoiding the overhead of transferring results back to Stata.
 
 
 {marker examples}{...}
