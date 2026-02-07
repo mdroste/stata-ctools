@@ -361,32 +361,47 @@ static ST_retcode cmerge_load_using(const char *args)
 
         t_sort = ctools_timer_ms() - t_sort_start;
 
-        /* Apply same permutation to keepusing */
+        /* Validate permutation indices once (debug builds only) */
+#ifndef NDEBUG
+        for (size_t i = 0; i < nobs; i++) {
+            if (perm[i] >= nobs) {
+                free(perm);
+                free(sort_vars);
+                ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
+                SF_error("cmerge: Invalid permutation index\n");
+                return 459;
+            }
+        }
+#endif
+
+        /* Apply same permutation to keepusing (parallel across variables) */
         double t_apply_perm_start = ctools_timer_ms();
         if (n_keepusing > 0 && g_using_cache.keepusing.data.vars != NULL) {
+            int perm_alloc_failed = 0;
+
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            #endif
             for (int v = 0; v < n_keepusing; v++) {
+                int local_failed;
+                #ifdef _OPENMP
+                #pragma omp atomic read
+                #endif
+                local_failed = perm_alloc_failed;
+                if (local_failed) continue;
+
                 stata_variable *var = &g_using_cache.keepusing.data.vars[v];
                 if (var->type == STATA_TYPE_DOUBLE) {
                     double *new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
                     if (!new_data) {
-                        free(perm);
-                        free(sort_vars);
-                        ctools_filtered_data_free(&g_using_cache.keys);
-                        ctools_filtered_data_free(&g_using_cache.keepusing);
-                        SF_error("cmerge: Memory allocation failed in permutation\n");
-                        return 920;
+                        #ifdef _OPENMP
+                        #pragma omp atomic write
+                        #endif
+                        perm_alloc_failed = 1;
+                        continue;
                     }
                     for (size_t i = 0; i < nobs; i++) {
-                        /* Bounds check on permutation index */
-                        if (perm[i] >= nobs) {
-                            ctools_aligned_free(new_data);
-                            free(perm);
-                            free(sort_vars);
-                            ctools_filtered_data_free(&g_using_cache.keys);
-                            ctools_filtered_data_free(&g_using_cache.keepusing);
-                            SF_error("cmerge: Invalid permutation index\n");
-                            return 459;
-                        }
                         new_data[i] = var->data.dbl[perm[i]];
                     }
                     ctools_aligned_free(var->data.dbl);
@@ -394,29 +409,27 @@ static ST_retcode cmerge_load_using(const char *args)
                 } else {
                     char **new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
                     if (!new_data) {
-                        free(perm);
-                        free(sort_vars);
-                        ctools_filtered_data_free(&g_using_cache.keys);
-                        ctools_filtered_data_free(&g_using_cache.keepusing);
-                        SF_error("cmerge: Memory allocation failed in permutation\n");
-                        return 920;
+                        #ifdef _OPENMP
+                        #pragma omp atomic write
+                        #endif
+                        perm_alloc_failed = 1;
+                        continue;
                     }
                     for (size_t i = 0; i < nobs; i++) {
-                        /* Bounds check on permutation index */
-                        if (perm[i] >= nobs) {
-                            ctools_aligned_free(new_data);
-                            free(perm);
-                            free(sort_vars);
-                            ctools_filtered_data_free(&g_using_cache.keys);
-                            ctools_filtered_data_free(&g_using_cache.keepusing);
-                            SF_error("cmerge: Invalid permutation index\n");
-                            return 459;
-                        }
                         new_data[i] = var->data.str[perm[i]];
                     }
                     ctools_aligned_free(var->data.str);
                     var->data.str = new_data;
                 }
+            }
+
+            if (perm_alloc_failed) {
+                free(perm);
+                free(sort_vars);
+                ctools_filtered_data_free(&g_using_cache.keys);
+                ctools_filtered_data_free(&g_using_cache.keepusing);
+                SF_error("cmerge: Memory allocation failed in permutation\n");
+                return 920;
             }
         }
         t_apply_perm = ctools_timer_ms() - t_apply_perm_start;
@@ -765,18 +778,18 @@ static ST_retcode cmerge_execute(const char *args)
         for (size_t i = 0; i < max_nobs; i++) {
             if (i < m_nobs && i < u_nobs) {
                 /* Both master and using have this row - matched */
-                output_specs[i].master_sorted_row = (int64_t)i;
-                output_specs[i].using_sorted_row = (int64_t)i;
+                output_specs[i].master_sorted_row = (int32_t)i;
+                output_specs[i].using_sorted_row = (int32_t)i;
                 output_specs[i].merge_result = MERGE_RESULT_BOTH;
             } else if (i < m_nobs) {
                 /* Only master has this row */
-                output_specs[i].master_sorted_row = (int64_t)i;
+                output_specs[i].master_sorted_row = (int32_t)i;
                 output_specs[i].using_sorted_row = -1;
                 output_specs[i].merge_result = MERGE_RESULT_MASTER_ONLY;
             } else {
                 /* Only using has this row */
                 output_specs[i].master_sorted_row = -1;
-                output_specs[i].using_sorted_row = (int64_t)i;
+                output_specs[i].using_sorted_row = (int32_t)i;
                 output_specs[i].merge_result = MERGE_RESULT_USING_ONLY;
             }
         }
@@ -849,7 +862,7 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 4: Build master_orig_row mapping using _orig_row variable
      * =================================================================== */
 
-    int64_t *master_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int64_t));
+    int32_t *master_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int32_t));
     if (!master_orig_rows) {
         free(output_specs);
         if (sort_perm) free(sort_perm);
@@ -877,7 +890,7 @@ static ST_retcode cmerge_execute(const char *args)
     for (size_t i = 0; i < output_nobs; i++) {
         if (output_specs[i].master_sorted_row >= 0) {
             size_t sorted_idx = (size_t)output_specs[i].master_sorted_row;
-            master_orig_rows[i] = (int64_t)orig_row_data[sorted_idx] - 1;  /* 0-based */
+            master_orig_rows[i] = (int32_t)(orig_row_data[sorted_idx] - 1);  /* 0-based */
         } else {
             master_orig_rows[i] = -1;  /* Using-only */
         }
@@ -915,7 +928,7 @@ static ST_retcode cmerge_execute(const char *args)
         cmerge_radix_sort_order_pairs(pairs, output_nobs);
 
         cmerge_output_spec_t *new_specs = ctools_safe_malloc2(output_nobs, sizeof(cmerge_output_spec_t));
-        int64_t *new_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int64_t));
+        int32_t *new_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int32_t));
         if (!new_specs || !new_orig_rows) {
             free(pairs);
             if (new_specs) free(new_specs);
@@ -959,14 +972,19 @@ static ST_retcode cmerge_execute(const char *args)
          * - Master sorted row must equal output position
          * - Original row (before sort) must also equal output position */
         if (is_identity_permutation) {
-            int64_t sorted_row = output_specs[i].master_sorted_row;
-            if (sorted_row < 0 || sorted_row != (int64_t)i) {
+            int32_t sorted_row = output_specs[i].master_sorted_row;
+            if (sorted_row < 0 || sorted_row != (int32_t)i) {
                 is_identity_permutation = 0;
-            } else if (master_orig_rows[i] != (int64_t)i) {
+            } else if (master_orig_rows[i] != (int32_t)i) {
                 is_identity_permutation = 0;
             }
         }
     }
+
+    /* Fast path: if permutation is identity and no using-only rows, master data
+     * is already correct in Stata - skip Steps 6-7 entirely (no alloc/copy/store) */
+    int skip_master_store = (is_identity_permutation && n_using_only == 0
+                             && output_nobs == master_nobs);
 
     /* ===================================================================
      * Step 6: Create output data structure with permuted data
@@ -1030,6 +1048,15 @@ static ST_retcode cmerge_execute(const char *args)
     /* Create output data structure (overflow-safe allocation) */
     stata_data output_data;
     stata_data_init(&output_data);
+    double t_permute = 0.0;
+    double t_store = 0.0;
+
+    if (skip_master_store) {
+        /* Identity permutation fast path: master data is already correct in Stata.
+         * Skip output buffer allocation, permutation, and store entirely. */
+        output_data.vars = NULL;
+    } else {
+
     output_data.nobs = output_nobs;
     output_data.nvars = n_output_vars;
     size_t vars_alloc_size;
@@ -1124,7 +1151,7 @@ static ST_retcode cmerge_execute(const char *args)
 
                 /* Use master_sorted_row to index into sorted master_data */
                 for (size_t i = 0; i < output_nobs; i++) {
-                    int64_t sorted_row = output_specs[i].master_sorted_row;
+                    int32_t sorted_row = output_specs[i].master_sorted_row;
                     if (sorted_row >= 0) {
                         /* Bounds check: sorted_row must be valid index into master data */
                         if ((size_t)sorted_row >= master_nobs_bound) {
@@ -1133,7 +1160,7 @@ static ST_retcode cmerge_execute(const char *args)
                             dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
                         }
                     } else if (using_key_data != NULL) {
-                        int64_t using_row = output_specs[i].using_sorted_row;
+                        int32_t using_row = output_specs[i].using_sorted_row;
                         /* Bounds check for using data */
                         if (using_row >= 0 && (size_t)using_row < using_nobs_bound) {
                             dst_var->data.dbl[i] = using_key_data[using_row];
@@ -1179,13 +1206,13 @@ static ST_retcode cmerge_execute(const char *args)
 
                 /* Use master_sorted_row to index into sorted master_data */
                 for (size_t i = 0; i < output_nobs; i++) {
-                    int64_t sorted_row = output_specs[i].master_sorted_row;
+                    int32_t sorted_row = output_specs[i].master_sorted_row;
                     /* Bounds check: sorted_row must be valid index into master data */
                     if (sorted_row >= 0 && (size_t)sorted_row < master_nobs_bound &&
                         src_var->data.str[sorted_row]) {
                         dst_var->data.str[i] = cmerge_arena_strdup(var_arena, src_var->data.str[sorted_row]);
                     } else if (using_key_data != NULL) {
-                        int64_t using_row = output_specs[i].using_sorted_row;
+                        int32_t using_row = output_specs[i].using_sorted_row;
                         /* Bounds check for using data */
                         if (using_row >= 0 && (size_t)using_row < using_nobs_bound &&
                             using_key_data[using_row]) {
@@ -1231,7 +1258,7 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    double t_permute = ctools_timer_ms() - t_start;
+    t_permute = ctools_timer_ms() - t_start;
 
     /* ===================================================================
      * Step 7: Store output data using parallel I/O
@@ -1269,7 +1296,9 @@ static ST_retcode cmerge_execute(const char *args)
         return rc;
     }
 
-    double t_store = ctools_timer_ms() - t_start;
+    t_store = ctools_timer_ms() - t_start;
+
+    } /* end if (!skip_master_store) */
 
     /* ===================================================================
      * Step 8: Write _merge variable
@@ -1322,7 +1351,7 @@ static ST_retcode cmerge_execute(const char *args)
 
             /* Submit all keepusing writes to thread pool */
             ctools_persistent_pool *pool = ctools_get_global_pool();
-            if (pool != NULL && n_keepusing >= 2) {
+            if (pool != NULL && n_keepusing >= 1) {
                 ctools_persistent_pool_submit_batch(pool, cmerge_write_keepusing_var_thread,
                                                      ku_args_array, n_keepusing,
                                                      sizeof(cmerge_keepusing_write_args_t));
@@ -1346,19 +1375,21 @@ static ST_retcode cmerge_execute(const char *args)
     double t_cleanup_start = ctools_timer_ms();
 
     /* Free output data - per-variable arenas free all strings in O(blocks) */
-    for (size_t vi = 0; vi < n_output_vars; vi++) {
-        if (output_data.vars[vi].type == STATA_TYPE_STRING) {
-            if (output_data.vars[vi]._arena) {
-                cmerge_arena_free((cmerge_string_arena *)output_data.vars[vi]._arena);
+    if (output_data.vars) {
+        for (size_t vi = 0; vi < n_output_vars; vi++) {
+            if (output_data.vars[vi].type == STATA_TYPE_STRING) {
+                if (output_data.vars[vi]._arena) {
+                    cmerge_arena_free((cmerge_string_arena *)output_data.vars[vi]._arena);
+                }
+                if (output_data.vars[vi].data.str) {
+                    free(output_data.vars[vi].data.str);
+                }
+            } else if (output_data.vars[vi].data.dbl) {
+                ctools_aligned_free(output_data.vars[vi].data.dbl);
             }
-            if (output_data.vars[vi].data.str) {
-                free(output_data.vars[vi].data.str);
-            }
-        } else if (output_data.vars[vi].data.dbl) {
-            ctools_aligned_free(output_data.vars[vi].data.dbl);
         }
+        ctools_aligned_free(output_data.vars);
     }
-    ctools_aligned_free(output_data.vars);
 
     free(output_var_indices);
     free(output_var_stata_idx);

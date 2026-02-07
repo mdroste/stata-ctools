@@ -294,73 +294,91 @@ ST_retcode cdestring_main(const char *args)
     memset(var_converted, 0, nvars * sizeof(int));
     memset(var_failed, 0, nvars * sizeof(int));
 
-    /* Process each variable: parallel over observations.
-     * Note: All observations are valid (passed if/in filter). */
-    for (int v = 0; v < nvars; v++) {
-        char **str_data = filtered.data.vars[v].data.str;
-        double *res = results[v];
-        int local_converted = 0;
-        int local_failed = 0;
+    /* Transposed loop: single OMP region with outer loop over observations,
+     * inner loop over variables. This gives one fork/join barrier instead of
+     * nvars barriers, and keeps per-observation data cache-hot across variables. */
+    int need_work_buf = (opts.ignore_len > 0 || opts.percent);
 
-        #pragma omp parallel for reduction(+:local_converted,local_failed) schedule(static)
+    #pragma omp parallel
+    {
+        /* Thread-local per-variable counters */
+        int tl_converted[CDESTRING_MAX_VARS];
+        int tl_failed[CDESTRING_MAX_VARS];
+        memset(tl_converted, 0, nvars * sizeof(int));
+        memset(tl_failed, 0, nvars * sizeof(int));
+
+        #pragma omp for schedule(static)
         for (size_t i = 0; i < nobs; i++) {
-            const char *src = str_data[i];
+            for (int v = 0; v < nvars; v++) {
+                const char *src = filtered.data.vars[v].data.str[i];
 
-            /* Empty or NULL string -> missing */
-            if (src == NULL || src[0] == '\0') {
-                res[i] = SV_missval;
-                local_converted++;
-                continue;
-            }
-
-            /* Work on a thread-local copy for in-place modifications */
-            char work_buf[CDESTRING_STR_BUF_SIZE + 1];
-            int len = (int)strlen(src);
-            if (len > CDESTRING_STR_BUF_SIZE) len = CDESTRING_STR_BUF_SIZE;
-            memcpy(work_buf, src, len);
-            work_buf[len] = '\0';
-
-            /* Strip ignored characters */
-            if (opts.ignore_len > 0) {
-                len = strip_ignored_chars(work_buf, len);
-            }
-
-            /* Strip percent sign */
-            int has_percent = 0;
-            if (opts.percent) {
-                has_percent = strip_percent(work_buf, &len);
-            }
-
-            /* Empty after stripping -> missing */
-            if (len == 0) {
-                res[i] = SV_missval;
-                local_converted++;
-                continue;
-            }
-
-            /* Parse the number */
-            double val;
-            int parsed = ctools_parse_double_with_separators(
-                work_buf, len, &val, SV_missval, dec_sep, grp_sep);
-
-            if (parsed) {
-                if (opts.percent && has_percent && val != SV_missval) {
-                    val /= 100.0;
+                /* Empty or NULL string -> missing */
+                if (src == NULL || src[0] == '\0') {
+                    results[v][i] = SV_missval;
+                    tl_converted[v]++;
+                    continue;
                 }
-                res[i] = val;
-                local_converted++;
-            } else {
-                res[i] = SV_missval;
-                if (opts.force) {
-                    local_converted++;
+
+                double val;
+                int parsed;
+
+                if (need_work_buf) {
+                    /* Slow path: copy to work_buf for in-place stripping */
+                    char work_buf[CDESTRING_STR_BUF_SIZE + 1];
+                    int len = (int)strlen(src);
+                    if (len > CDESTRING_STR_BUF_SIZE) len = CDESTRING_STR_BUF_SIZE;
+                    memcpy(work_buf, src, len);
+                    work_buf[len] = '\0';
+
+                    if (opts.ignore_len > 0) {
+                        len = strip_ignored_chars(work_buf, len);
+                    }
+
+                    int has_percent = 0;
+                    if (opts.percent) {
+                        has_percent = strip_percent(work_buf, &len);
+                    }
+
+                    if (len == 0) {
+                        results[v][i] = SV_missval;
+                        tl_converted[v]++;
+                        continue;
+                    }
+
+                    parsed = ctools_parse_double_with_separators(
+                        work_buf, len, &val, SV_missval, dec_sep, grp_sep);
+
+                    if (parsed && opts.percent && has_percent && val != SV_missval) {
+                        val /= 100.0;
+                    }
                 } else {
-                    local_failed++;
+                    /* Fast path: parse directly from source string */
+                    parsed = ctools_parse_double_with_separators(
+                        src, (int)strlen(src), &val, SV_missval, dec_sep, grp_sep);
+                }
+
+                if (parsed) {
+                    results[v][i] = val;
+                    tl_converted[v]++;
+                } else {
+                    results[v][i] = SV_missval;
+                    if (opts.force) {
+                        tl_converted[v]++;
+                    } else {
+                        tl_failed[v]++;
+                    }
                 }
             }
         }
 
-        var_converted[v] = local_converted;
-        var_failed[v] = local_failed;
+        /* Aggregate thread-local counters */
+        #pragma omp critical
+        {
+            for (int v = 0; v < nvars; v++) {
+                var_converted[v] += tl_converted[v];
+                var_failed[v] += tl_failed[v];
+            }
+        }
     }
 
     t_convert = ctools_timer_seconds();

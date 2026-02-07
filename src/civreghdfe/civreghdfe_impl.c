@@ -260,6 +260,14 @@ static ST_retcode do_iv_regression(void)
 
     /* Drop observations with missing values */
     ST_int *valid_mask = (ST_int *)calloc(N_total, sizeof(ST_int));
+    if (!valid_mask) {
+        SF_error("civreghdfe: Memory allocation failed for valid_mask\n");
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids); free(cluster2_ids);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 920;
+    }
     ST_int N_valid = 0;
 
     for (i = 0; i < N_total; i++) {
@@ -314,15 +322,12 @@ static ST_retcode do_iv_regression(void)
         return 2001;
     }
 
-    /* Compact data to remove invalid observations - cast to size_t to prevent 32-bit overflow */
-    ST_double *y_c = (ST_double *)malloc((size_t)N_valid * sizeof(ST_double));
-    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)malloc((size_t)N_valid * K_endog * sizeof(ST_double)) : NULL;
-    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)malloc((size_t)N_valid * K_exog * sizeof(ST_double)) : NULL;
-    ST_double *Z_c = (ST_double *)malloc((size_t)N_valid * K_iv * sizeof(ST_double));
-    ST_double *weights_c = has_weights ? (ST_double *)malloc((size_t)N_valid * sizeof(ST_double)) : NULL;
-    ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
-    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc((size_t)N_valid * sizeof(ST_int)) : NULL;
-    ST_int **fe_levels_c = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
+    /* Fused compaction: compact FE levels first (needed for singleton detection),
+     * then run singleton detection, then compact all data in one pass.
+     * This avoids two separate O(N×K) data compaction passes. */
+
+    /* Step 1: Compact only FE levels for singleton detection */
+    ST_int **fe_levels_c = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
     int fe_c_alloc_failed = 0;
     if (fe_levels_c) {
         for (ST_int g = 0; g < G; g++) {
@@ -332,16 +337,10 @@ static ST_retcode do_iv_regression(void)
     } else {
         fe_c_alloc_failed = 1;
     }
-
-    /* Check all allocations */
-    if (!y_c || !Z_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c) ||
-        (has_weights && !weights_c) || (has_cluster && !cluster_ids_c) ||
-        (has_cluster2 && !cluster2_ids_c) || fe_c_alloc_failed) {
-        SF_error("civreghdfe: Memory allocation failed for compacted arrays\n");
-        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
-        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+    if (fe_c_alloc_failed) {
+        SF_error("civreghdfe: Memory allocation failed for FE compaction\n");
         if (fe_levels_c) {
-            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            for (ST_int g = 0; g < G; g++) if (fe_levels_c[g]) free(fe_levels_c[g]);
             free(fe_levels_c);
         }
         free(y); free(X_endog); free(X_exog); free(Z);
@@ -350,107 +349,110 @@ static ST_retcode do_iv_regression(void)
         free(fe_levels);
         return 920;
     }
-
-    ST_int idx = 0;
-    for (ST_int i = 0; i < N_total; i++) {
-        if (!valid_mask[i]) continue;
-
-        y_c[idx] = y[i];
-
-        for (ST_int k = 0; k < K_endog; k++) {
-            X_endog_c[k * N_valid + idx] = X_endog[k * N_total + i];
+    {
+        ST_int idx = 0;
+        for (ST_int ii = 0; ii < N_total; ii++) {
+            if (!valid_mask[ii]) continue;
+            for (ST_int g = 0; g < G; g++)
+                fe_levels_c[g][idx] = fe_levels[g][ii];
+            idx++;
         }
-        for (ST_int k = 0; k < K_exog; k++) {
-            X_exog_c[k * N_valid + idx] = X_exog[k * N_total + i];
-        }
-        for (ST_int k = 0; k < K_iv; k++) {
-            Z_c[k * N_valid + idx] = Z[k * N_total + i];
-        }
-        for (ST_int g = 0; g < G; g++) {
-            fe_levels_c[g][idx] = fe_levels[g][i];
-        }
-        if (has_weights) weights_c[idx] = weights[i];
-        if (has_cluster) cluster_ids_c[idx] = cluster_ids[i];
-        if (has_cluster2) cluster2_ids_c[idx] = cluster2_ids[i];
-
-        idx++;
     }
+
+    /* End missing value check/compact timing, start singleton timing */
+    double t_missing = ctools_timer_seconds() - t_missing_start;
+    double t_singleton_start = ctools_timer_seconds();
+
+    /* Step 2: Singleton detection on compacted FE levels */
+    ST_int *singleton_mask = (ST_int *)malloc((size_t)N_valid * sizeof(ST_int));
+    if (!singleton_mask) {
+        SF_error("civreghdfe: Memory allocation failed for singleton mask\n");
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 920;
+    }
+    ST_int num_singletons_total = ctools_remove_singletons(
+        fe_levels_c, G, N_valid, singleton_mask, 100, verbose
+    );
+
+    /* Step 3: Build combined index mapping original obs → final position.
+     * Combine valid_mask and singleton_mask into one compaction pass. */
+    ST_int N = N_valid - num_singletons_total;
+
+    /* Allocate final arrays */
+    ST_double *y_c = (ST_double *)malloc((size_t)N * sizeof(ST_double));
+    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)malloc((size_t)N * K_endog * sizeof(ST_double)) : NULL;
+    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)malloc((size_t)N * K_exog * sizeof(ST_double)) : NULL;
+    ST_double *Z_c = (ST_double *)malloc((size_t)N * K_iv * sizeof(ST_double));
+    ST_double *weights_c = has_weights ? (ST_double *)malloc((size_t)N * sizeof(ST_double)) : NULL;
+    ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc((size_t)N * sizeof(ST_int)) : NULL;
+    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc((size_t)N * sizeof(ST_int)) : NULL;
+
+    if (!y_c || !Z_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c) ||
+        (has_weights && !weights_c) || (has_cluster && !cluster_ids_c) ||
+        (has_cluster2 && !cluster2_ids_c)) {
+        SF_error("civreghdfe: Memory allocation failed for compacted arrays\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        free(singleton_mask);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        free(y); free(X_endog); free(X_exog); free(Z);
+        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+        free(fe_levels);
+        return 920;
+    }
+
+    /* Single fused compaction pass: skip invalid AND singleton observations */
+    {
+        ST_int valid_idx = 0;  /* Index into singleton_mask (N_valid-sized) */
+        ST_int out_idx = 0;    /* Index into final arrays (N-sized) */
+        for (ST_int ii = 0; ii < N_total; ii++) {
+            if (!valid_mask[ii]) continue;
+            /* valid_idx tracks position in the N_valid-sized arrays */
+            if (!singleton_mask[valid_idx]) {
+                valid_idx++;
+                continue;
+            }
+            y_c[out_idx] = y[ii];
+            for (ST_int k = 0; k < K_endog; k++)
+                X_endog_c[k * N + out_idx] = X_endog[k * N_total + ii];
+            for (ST_int k = 0; k < K_exog; k++)
+                X_exog_c[k * N + out_idx] = X_exog[k * N_total + ii];
+            for (ST_int k = 0; k < K_iv; k++)
+                Z_c[k * N + out_idx] = Z[k * N_total + ii];
+            if (has_weights) weights_c[out_idx] = weights[ii];
+            if (has_cluster) cluster_ids_c[out_idx] = cluster_ids[ii];
+            if (has_cluster2) cluster2_ids_c[out_idx] = cluster2_ids[ii];
+            out_idx++;
+            valid_idx++;
+        }
+    }
+
+    /* Compact FE levels from the already-compacted fe_levels_c using singleton_mask */
+    if (num_singletons_total > 0) {
+        for (ST_int g = 0; g < G; g++) {
+            ST_int *new_levels = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+            if (new_levels) {
+                ctools_compact_array_int(fe_levels_c[g], new_levels, singleton_mask, N_valid, N);
+                free(fe_levels_c[g]);
+                fe_levels_c[g] = new_levels;
+            }
+        }
+    }
+
+    free(singleton_mask);
 
     /* Free original arrays */
     free(y); free(X_endog); free(X_exog); free(Z);
     free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
     for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
     free(fe_levels);
-
-    ST_int N = N_valid;
-
-    /* End missing value check/compact timing, start singleton timing */
-    double t_missing = ctools_timer_seconds() - t_missing_start;
-    double t_singleton_start = ctools_timer_seconds();
-
-    /* Singleton detection using shared utility from ctools_hdfe_utils */
-    ST_int *singleton_mask = (ST_int *)malloc((size_t)N * sizeof(ST_int));
-    if (!singleton_mask) {
-        SF_error("civreghdfe: Memory allocation failed for singleton mask\n");
-        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
-        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
-        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-        free(fe_levels_c);
-        return 920;
-    }
-    ST_int num_singletons_total = ctools_remove_singletons(
-        fe_levels_c, G, N, singleton_mask, 100, verbose
-    );
-
-    /* Compact data if singletons were found */
-    if (num_singletons_total > 0) {
-        ST_int N_after = N - num_singletons_total;
-
-        /* Allocate compacted arrays - cast to size_t to prevent 32-bit overflow */
-        ST_double *y_new = (ST_double *)malloc((size_t)N_after * sizeof(ST_double));
-        ST_double *X_endog_new = (K_endog > 0) ? (ST_double *)malloc((size_t)N_after * K_endog * sizeof(ST_double)) : NULL;
-        ST_double *X_exog_new = (K_exog > 0) ? (ST_double *)malloc((size_t)N_after * K_exog * sizeof(ST_double)) : NULL;
-        ST_double *Z_new = (ST_double *)malloc((size_t)N_after * K_iv * sizeof(ST_double));
-        ST_double *weights_new = has_weights ? (ST_double *)malloc((size_t)N_after * sizeof(ST_double)) : NULL;
-        ST_int *cluster_ids_new = has_cluster ? (ST_int *)malloc((size_t)N_after * sizeof(ST_int)) : NULL;
-        ST_int *cluster2_ids_new = has_cluster2 ? (ST_int *)malloc((size_t)N_after * sizeof(ST_int)) : NULL;
-        ST_int **fe_levels_new = (ST_int **)malloc((size_t)G * sizeof(ST_int *));
-        for (ST_int g = 0; g < G; g++) {
-            fe_levels_new[g] = (ST_int *)malloc((size_t)N_after * sizeof(ST_int));
-        }
-
-        /* Compact using shared utilities */
-        ctools_compact_array_double(y_c, y_new, singleton_mask, N, N_after);
-        if (K_endog > 0) ctools_compact_matrix_double(X_endog_c, X_endog_new, singleton_mask, N, N_after, K_endog);
-        if (K_exog > 0) ctools_compact_matrix_double(X_exog_c, X_exog_new, singleton_mask, N, N_after, K_exog);
-        ctools_compact_matrix_double(Z_c, Z_new, singleton_mask, N, N_after, K_iv);
-        if (has_weights) ctools_compact_array_double(weights_c, weights_new, singleton_mask, N, N_after);
-        if (has_cluster) ctools_compact_array_int(cluster_ids_c, cluster_ids_new, singleton_mask, N, N_after);
-        if (has_cluster2) ctools_compact_array_int(cluster2_ids_c, cluster2_ids_new, singleton_mask, N, N_after);
-        for (ST_int g = 0; g < G; g++) {
-            ctools_compact_array_int(fe_levels_c[g], fe_levels_new[g], singleton_mask, N, N_after);
-        }
-
-        /* Free old arrays and swap in new ones */
-        free(y_c); y_c = y_new;
-        if (X_endog_c) free(X_endog_c);
-        X_endog_c = X_endog_new;
-        if (X_exog_c) free(X_exog_c);
-        X_exog_c = X_exog_new;
-        free(Z_c); Z_c = Z_new;
-        if (weights_c) free(weights_c);
-        weights_c = weights_new;
-        if (cluster_ids_c) free(cluster_ids_c);
-        cluster_ids_c = cluster_ids_new;
-        if (cluster2_ids_c) free(cluster2_ids_c);
-        cluster2_ids_c = cluster2_ids_new;
-        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
-        free(fe_levels_c);
-        fe_levels_c = fe_levels_new;
-
-        N = N_after;
-    }
-    free(singleton_mask);
 
     /* Check we still have enough observations */
     if (N < K_total + K_iv + 1) {
@@ -469,6 +471,14 @@ static ST_retcode do_iv_regression(void)
     /* Initialize HDFE state (reuse creghdfe infrastructure) */
     /* This requires setting up FE_Factor structures */
     HDFE_State *state = (HDFE_State *)calloc(1, sizeof(HDFE_State));
+    if (!state) {
+        SF_error("civreghdfe: Memory allocation failed for HDFE state\n");
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 920;
+    }
     state->G = G;
     state->N = N;
     state->K = 1 + K_endog + K_exog + K_iv;  /* Total columns to demean */
@@ -483,6 +493,15 @@ static ST_retcode do_iv_regression(void)
 
     /* Set up factors */
     state->factors = (FE_Factor *)calloc(G, sizeof(FE_Factor));
+    if (!state->factors) {
+        SF_error("civreghdfe: Memory allocation failed for FE factors\n");
+        free(state);
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+        free(fe_levels_c);
+        return 920;
+    }
     for (ST_int g = 0; g < G; g++) {
         /* Find max level value for remapping */
         ST_int max_level = 0;
@@ -540,6 +559,9 @@ static ST_retcode do_iv_regression(void)
         }
 
         free(remap);
+
+        /* Build sorted permutation for cache-friendly scatter-gather */
+        ctools_build_sorted_permutation(&state->factors[g], N);
 
     }
 
@@ -648,6 +670,20 @@ static ST_retcode do_iv_regression(void)
 
         /* Get column offsets for partial variables in all_data */
         ST_int *partial_col_offsets = (ST_int *)malloc(n_partial * sizeof(ST_int));
+
+        if (!P_cur || !PtP || !PtP_inv || !Ptx || !coef || !old_data || !partial_col_offsets) {
+            SF_error("civreghdfe: Memory allocation failed for FWL workspace\n");
+            free(P_cur); free(PtP); free(PtP_inv); free(Ptx);
+            free(coef); free(old_data); free(partial_col_offsets);
+            free(all_data); free(partial_indices); free(is_partial);
+            free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            free(fe_levels_c);
+            ctools_hdfe_state_cleanup(state);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
         for (ST_int pi = 0; pi < n_partial; pi++) {
             ST_int exog_idx = partial_indices[pi] - 1;  /* 0-based index in X_exog */
             partial_col_offsets[pi] = 1 + K_endog + exog_idx;  /* Column in all_data */
@@ -945,16 +981,53 @@ static ST_retcode do_iv_regression(void)
             return 920;
         }
 
-        /* Compute X'X where X = [X_exog_dem, X_endog_dem] */
-        /* Use fast_dot for each pair since data is in separate arrays */
-        for (ST_int i = 0; i < K_total; i++) {
-            const ST_double *xi = (i < K_exog) ? X_exog_dem + i * N
-                                                : X_endog_dem + (i - K_exog) * N;
-            for (ST_int j = 0; j < K_total; j++) {
-                const ST_double *xj = (j < K_exog) ? X_exog_dem + j * N
-                                                    : X_endog_dem + (j - K_exog) * N;
-                XtX[j * K_total + i] = fast_dot(xi, xj, N);
+        /* Compute X'X where X = [X_exog_dem, X_endog_dem] using block matmul.
+         * XtX (K_total x K_total) has blocks:
+         *   [Xe'Xe  Xe'Xn]
+         *   [Xn'Xe  Xn'Xn]
+         * Use ctools_matmul_atb for each block (OpenMP + SIMD) instead of
+         * K_total² individual fast_dot calls. */
+        if (K_exog > 0 && K_endog > 0) {
+            /* Both exog and endog present — compute 3 blocks (4th by symmetry) */
+            ST_double *blk_ee = (ST_double *)malloc(K_exog * K_exog * sizeof(ST_double));
+            ST_double *blk_en = (ST_double *)malloc(K_exog * K_endog * sizeof(ST_double));
+            ST_double *blk_nn = (ST_double *)malloc(K_endog * K_endog * sizeof(ST_double));
+            if (blk_ee && blk_en && blk_nn) {
+                ctools_matmul_atb(X_exog_dem, X_exog_dem, N, K_exog, K_exog, blk_ee);
+                ctools_matmul_atb(X_exog_dem, X_endog_dem, N, K_exog, K_endog, blk_en);
+                ctools_matmul_atb(X_endog_dem, X_endog_dem, N, K_endog, K_endog, blk_nn);
+
+                /* Place blocks into K_total x K_total XtX (column-major) */
+                for (ST_int jj = 0; jj < K_exog; jj++)
+                    for (ST_int ii = 0; ii < K_exog; ii++)
+                        XtX[jj * K_total + ii] = blk_ee[jj * K_exog + ii];
+                for (ST_int jj = 0; jj < K_endog; jj++)
+                    for (ST_int ii = 0; ii < K_exog; ii++) {
+                        XtX[(K_exog + jj) * K_total + ii] = blk_en[jj * K_exog + ii];
+                        XtX[ii * K_total + (K_exog + jj)] = blk_en[jj * K_exog + ii];
+                    }
+                for (ST_int jj = 0; jj < K_endog; jj++)
+                    for (ST_int ii = 0; ii < K_endog; ii++)
+                        XtX[(K_exog + jj) * K_total + (K_exog + ii)] = blk_nn[jj * K_endog + ii];
+            } else {
+                /* Fallback: element-wise */
+                for (ST_int ii = 0; ii < K_total; ii++) {
+                    const ST_double *xi = (ii < K_exog) ? X_exog_dem + ii * N
+                                                        : X_endog_dem + (ii - K_exog) * N;
+                    for (ST_int jj = ii; jj < K_total; jj++) {
+                        const ST_double *xj = (jj < K_exog) ? X_exog_dem + jj * N
+                                                            : X_endog_dem + (jj - K_exog) * N;
+                        ST_double val = fast_dot(xi, xj, N);
+                        XtX[jj * K_total + ii] = val;
+                        XtX[ii * K_total + jj] = val;
+                    }
+                }
             }
+            free(blk_ee); free(blk_en); free(blk_nn);
+        } else if (K_exog > 0) {
+            ctools_matmul_atb(X_exog_dem, X_exog_dem, N, K_exog, K_exog, XtX);
+        } else {
+            ctools_matmul_atb(X_endog_dem, X_endog_dem, N, K_endog, K_endog, XtX);
         }
 
         ST_int num_chol_collinear = detect_collinearity(XtX, K_total, is_collinear_x, verbose);

@@ -23,11 +23,15 @@ typedef enum {
     CIMPORT_BINDQUOTES_STRICT = 1   /* Respect quotes: fields can span lines */
 } CImportBindQuotesMode;
 
-/* Field reference - offset and length into memory-mapped file */
+/* Field reference - offset and length into memory-mapped file.
+ * High bit of length serves as quote flag to avoid redundant SIMD scans. */
 typedef struct {
     uint64_t offset;
-    uint32_t length;
+    uint32_t length;   /* Bit 31 = has_quote flag, bits 0-30 = actual length */
 } CImportFieldRef;
+
+#define CIMPORT_FIELD_QUOTED_FLAG 0x80000000u
+#define CIMPORT_FIELD_LENGTH(f) ((f).length & 0x7FFFFFFFu)
 
 /* Parsed row - number of fields plus flexible array of field refs */
 typedef struct {
@@ -70,17 +74,23 @@ const char *cimport_find_next_row(const char *ptr, const char *end, char quote, 
 /*
  * Parse a row into field references (fast, zero-copy).
  *
- * @param start      Start of row
- * @param end        End of row (typically next newline)
- * @param delim      Delimiter character
- * @param quote      Quote character
- * @param fields     Output array for field references
- * @param max_fields Maximum fields to parse
- * @param file_base  Base pointer for offset calculation
- * @return           Number of fields parsed
+ * @param start              Start of row (or full buffer for fused mode)
+ * @param end                End of buffer
+ * @param delim              Delimiter character
+ * @param quote              Quote character
+ * @param fields             Output array for field references
+ * @param max_fields         Maximum fields to parse
+ * @param file_base          Base pointer for offset calculation
+ * @param bindquotes         Quote binding mode (LOOSE: \n always terminates row;
+ *                           STRICT: \n inside quotes is part of field)
+ * @param next_row_out       If non-NULL, set to start of next row (past \n) or end
+ * @param had_unmatched_quote If non-NULL, set to true if row ended inside quotes
+ * @return                   Number of fields parsed
  */
 int cimport_parse_row_fast(const char *start, const char *end, char delim, char quote,
-                           CImportFieldRef *fields, int max_fields, const char *file_base);
+                           CImportFieldRef *fields, int max_fields, const char *file_base,
+                           CImportBindQuotesMode bindquotes,
+                           const char **next_row_out, bool *had_unmatched_quote);
 
 /* Check if field contains quote character (fast 8-byte unrolled check) */
 bool cimport_field_contains_quote(const char *src, int len, char quote);

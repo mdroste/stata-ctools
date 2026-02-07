@@ -218,4 +218,45 @@ int ctools_label_parse_string(const char *str,
 int ctools_label_serialize_macros(const char **strings, const int *codes,
                                   size_t n_labels, const char *prefix);
 
+/*
+ * Parse a Stata `label save` format file directly.
+ * Lines have format: label define <name> <value> `"text"', modify
+ *
+ * These functions parse label save files, eliminating the need
+ * for intermediate file formats or Mata preprocessing.
+ */
+
+/*
+ * Parse into int->string hash table (for cdecode).
+ * If max_label_len is non-NULL, tracks the maximum label length.
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_parse_stata_file_int(const char *filepath,
+                                       ctools_int_hash_table *ht,
+                                       int *max_label_len);
+
+/*
+ * Parse into string->int hash table (for cencode noextend).
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_parse_stata_file_str(const char *filepath,
+                                       ctools_str_hash_table *ht);
+
+/*
+ * Scan for max label length only, without building a hash table.
+ * Used by cdecode_scan for pre-flight maxlen detection.
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_scan_stata_file(const char *filepath, int *max_label_len);
+
+/*
+ * Write label entries as a Stata .do file with `label define` commands.
+ * Used by cencode to pass new labels back to the .ado file.
+ * Format: label define <name> <code> `"text"'[, add]
+ * Returns 0 on success, -1 on error.
+ */
+int ctools_label_write_stata_file(const char **strings, const int *codes,
+                                   size_t n_labels, const char *label_name,
+                                   const char *filepath);
+
 #endif /* CTOOLS_HASH_H */

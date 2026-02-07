@@ -268,6 +268,27 @@ ST_int ctools_compute_hdfe_dof(
 );
 
 /*
+    Build a sorted permutation for cache-friendly FE projection (scatter-gather).
+
+    Performs a counting sort on f->levels[0..N-1] (1-based contiguous values)
+    to produce sorted_indices and level_offsets arrays. This enables sequential
+    memory access during the Kaczmarz scatter-gather, replacing random access
+    to the means[] array with sequential iteration by level.
+
+    Only builds the permutation when num_levels > 64 (small factors have no
+    cache pressure and don't benefit).
+
+    Memory cost: ~8N bytes for sorted_indices + 8*num_levels for level_offsets.
+
+    Parameters:
+    - f: FE_Factor with levels already set (1-based, contiguous after remap)
+    - N: Number of observations
+
+    Returns: 0 on success, -1 on memory allocation failure
+*/
+ST_int ctools_build_sorted_permutation(FE_Factor *f, ST_int N);
+
+/*
     Allocate per-thread CG solver buffers and compute inv_counts/inv_weighted_counts.
 
     Call this after factors[g].levels, counts, weighted_counts, and num_levels

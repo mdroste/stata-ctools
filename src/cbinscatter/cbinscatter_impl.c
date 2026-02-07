@@ -31,6 +31,20 @@
 
 /* Use SF_is_missing() from stplugin.h for missing value checks */
 
+/* Local argsort for rank computation (used by binsreg-hdfe bin assignment) */
+static const ST_double *impl_sort_values;
+
+static int impl_compare_indices(const void *a, const void *b) {
+    ST_int ia = *(const ST_int *)a;
+    ST_int ib = *(const ST_int *)b;
+    ST_double va = impl_sort_values[ia];
+    ST_double vb = impl_sort_values[ib];
+    if (va < vb) return -1;
+    if (va > vb) return 1;
+    /* Stable tie-breaking by index */
+    return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
+}
+
 /* ========================================================================
  * Type Initialization and Cleanup
  * ======================================================================== */
@@ -390,28 +404,37 @@ static ST_retcode load_data(
         }
     }
 
-    /* Compact data using valid indices (streaming compaction) */
+    /* Compact data using valid indices (streaming compaction).
+     * IMPORTANT: Multi-column arrays (controls, fe_vars) must be compacted
+     * column-by-column to avoid cross-column overwrites. When compacting
+     * column j+1 with stride N_valid, the destination range can overlap with
+     * column j's source range (stride N), corrupting unread source data. */
     if (N_valid < N && N_valid > 0) {
+        /* Compact y, x, by_groups, weights (single-column, always safe) */
         for (ST_int k = 0; k < N_valid; k++) {
             ST_int src = valid_idx[k];
             if (src != k) {
                 y[k] = y[src];
                 x[k] = x[src];
-                if (controls) {
-                    for (j = 0; j < config->num_controls; j++) {
-                        controls[j * N_valid + k] = controls[j * N + src];
-                    }
+                if (by_groups) by_groups[k] = by_groups[src];
+                if (weights) weights[k] = weights[src];
+            }
+        }
+        /* Compact controls column-by-column.
+         * Cannot skip when src == k because destination stride (N_valid) differs
+         * from source stride (N), so j*N_valid+k != j*N+k for j > 0. */
+        if (controls) {
+            for (j = 0; j < config->num_controls; j++) {
+                for (ST_int k = 0; k < N_valid; k++) {
+                    controls[j * N_valid + k] = controls[j * N + valid_idx[k]];
                 }
-                if (fe_vars) {
-                    for (j = 0; j < config->num_absorb; j++) {
-                        fe_vars[j * N_valid + k] = fe_vars[j * N + src];
-                    }
-                }
-                if (by_groups) {
-                    by_groups[k] = by_groups[src];
-                }
-                if (weights) {
-                    weights[k] = weights[src];
+            }
+        }
+        /* Compact fe_vars column-by-column */
+        if (fe_vars) {
+            for (j = 0; j < config->num_absorb; j++) {
+                for (ST_int k = 0; k < N_valid; k++) {
+                    fe_vars[j * N_valid + k] = fe_vars[j * N + valid_idx[k]];
                 }
             }
         }
@@ -495,6 +518,7 @@ static ST_retcode do_compute_bins(void) {
     ST_int *fe_vars = NULL;
     ST_int *by_groups = NULL;
     ST_double *weights = NULL;
+    ST_int *group_sizes = NULL;
     ST_int N, N_valid;
 
     cbinscatter_results_init(&results);
@@ -618,20 +642,29 @@ static ST_retcode do_compute_bins(void) {
         goto cleanup;
     }
 
+    /* Pre-compute group sizes in one O(N) pass instead of O(N*G) */
+    group_sizes = (ST_int *)calloc(num_groups, sizeof(ST_int));
+    if (!group_sizes) {
+        rc = CBINSCATTER_ERR_MEMORY;
+        goto cleanup;
+    }
+    if (config.has_by) {
+        for (ST_int i = 0; i < N_valid; i++) {
+            ST_int g_id = by_groups[i] - 1;
+            if (g_id >= 0 && g_id < num_groups) {
+                group_sizes[g_id]++;
+            }
+        }
+    } else {
+        group_sizes[0] = N_valid;
+    }
+
     /* Process each by-group */
     for (ST_int g = 0; g < num_groups; g++) {
         ByGroupResult *group = &results.groups[g];
         group->by_group_id = g + 1;
 
-        /* Count observations in this group */
-        ST_int n_group = 0;
-        if (config.has_by) {
-            for (ST_int i = 0; i < N_valid; i++) {
-                if (by_groups[i] == g + 1) n_group++;
-            }
-        } else {
-            n_group = N_valid;
-        }
+        ST_int n_group = group_sizes[g];
 
         if (n_group < 2) {
             group->num_bins = 0;
@@ -721,20 +754,25 @@ static ST_retcode do_compute_bins(void) {
                 goto cleanup;
             }
 
-            /* Assign observations to bins using rank-based percentile assignment */
-            for (ST_int i = 0; i < n_group; i++) {
-                /* Count how many x values are less than this one */
-                ST_int rank = 0;
-                for (ST_int k = 0; k < n_group; k++) {
-                    if (x_group[k] < x_group[i] || (x_group[k] == x_group[i] && k < i)) {
-                        rank++;
-                    }
-                }
-                /* Assign to bin based on rank percentile */
-                ST_int bin_num = (rank * group->num_bins) / n_group;
-                if (bin_num >= group->num_bins) bin_num = group->num_bins - 1;
-                bin_ids[i] = bin_num + 1;  /* 1-based */
+            /* Assign observations to bins using O(n log n) argsort */
+            ST_int *rank_idx = (ST_int *)malloc(n_group * sizeof(ST_int));
+            if (!rank_idx) {
+                free(bin_ids);
+                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                rc = CBINSCATTER_ERR_MEMORY;
+                goto cleanup;
             }
+            for (ST_int i = 0; i < n_group; i++) rank_idx[i] = i;
+            impl_sort_values = x_group;
+            qsort(rank_idx, n_group, sizeof(ST_int), impl_compare_indices);
+
+            /* Assign bins based on rank in sorted order */
+            for (ST_int r = 0; r < n_group; r++) {
+                ST_int bin_num = (r * group->num_bins) / n_group;
+                if (bin_num >= group->num_bins) bin_num = group->num_bins - 1;
+                bin_ids[rank_idx[r]] = bin_num + 1;  /* 1-based */
+            }
+            free(rank_idx);
 
             /* Apply FWL-based HDFE adjustment */
             rc = adjust_bins_binsreg_hdfe(y_group, c_group, fe_group, bin_ids, w_group,
@@ -756,6 +794,9 @@ static ST_retcode do_compute_bins(void) {
 
         if (rc != CBINSCATTER_OK) goto cleanup;
     }
+
+    free(group_sizes);
+    group_sizes = NULL;
 
     t_bins = ctools_timer_seconds();
 
@@ -794,6 +835,7 @@ cleanup:
     free(fe_vars);
     free(by_groups);
     free(weights);
+    free(group_sizes);
     cbinscatter_results_free(&results);
 
     return rc;

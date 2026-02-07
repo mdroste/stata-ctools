@@ -182,6 +182,7 @@ ST_retcode ivest_init_context(
 
     /* Compute X'P_Z y = (Z'X)' * (Z'Z)^-1 * Z'y */
     ST_double *ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
+    if (!ZtZ_inv_Zty) return 920;
     for (i = 0; i < K_iv; i++) {
         ST_double sum = 0.0;
         for (k = 0; k < K_iv; k++) {
@@ -673,6 +674,10 @@ static ST_double cue_objective(
 
         /* Compute g'W^{-1}g */
         ST_double *temp = (ST_double *)calloc(K_iv, sizeof(ST_double));
+        if (!temp) {
+            free(g); free(ZOmegaZ); free(ZOmegaZ_inv);
+            return 1e30;
+        }
         for (i = 0; i < K_iv; i++) {
             for (j = 0; j < K_iv; j++) {
                 temp[i] += ZOmegaZ_inv[j * K_iv + i] * g[j];
@@ -1574,6 +1579,17 @@ ST_retcode ivest_compute_2sls(
     }
 
     ST_double *XkX_inv = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    if (!XkX_inv) {
+        SF_error("civreghdfe: Memory allocation failed for XkX_inv\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+        if (gmm_hessian_inv) free(gmm_hessian_inv);
+        if (XtX) free(XtX);
+        if (Xty) free(Xty);
+        free(XkX); free(Xky);
+        return 198;
+    }
     invert_from_cholesky(XkX_copy, K_total, XkX_inv);
 
     /* Compute RSS (needed for Sargan test; VCE helper computes its own internally) */

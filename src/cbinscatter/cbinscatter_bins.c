@@ -304,24 +304,18 @@ ST_retcode compute_bins_single_group(
             goto cleanup;
         }
 
-        /* Pass 1: Find min/max - must skip missing values for initialization */
+        /* Combined pass: Find min/max and build histogram simultaneously.
+         * First find min/max, then re-scan to build histogram (cannot build
+         * histogram without knowing min/max for the scale factor).
+         * Optimization: split first-valid search from min/max loop. */
         ST_double x_min = 0, x_max = 0;
-        int found_valid = 0;
-        for (i = 0; i < N; i++) {
-            if (!SF_is_missing(x[i])) {
-                if (!found_valid) {
-                    x_min = x[i];
-                    x_max = x[i];
-                    found_valid = 1;
-                } else {
-                    if (x[i] < x_min) x_min = x[i];
-                    if (x[i] > x_max) x_max = x[i];
-                }
-            }
-        }
 
-        /* Handle all-missing case */
-        if (!found_valid) {
+        /* Find first valid value */
+        i = 0;
+        while (i < N && SF_is_missing(x[i])) i++;
+
+        if (i >= N) {
+            /* All-missing case */
             for (i = 0; i < N; i++) {
                 bin_ids[i] = 0;
             }
@@ -329,6 +323,15 @@ ST_retcode compute_bins_single_group(
             free(cum_hist);
             free(bucket_to_bin);
             goto compute_stats;
+        }
+
+        x_min = x_max = x[i];
+        for (i++; i < N; i++) {
+            if (!SF_is_missing(x[i])) {
+                ST_double xi = x[i];
+                if (xi < x_min) x_min = xi;
+                else if (xi > x_max) x_max = xi;
+            }
         }
 
         ST_double range = x_max - x_min;
@@ -345,7 +348,7 @@ ST_retcode compute_bins_single_group(
 
         ST_double scale = (HISTOGRAM_BUCKETS - 1) / range;
 
-        /* Pass 2: Build histogram */
+        /* Build histogram */
         for (i = 0; i < N; i++) {
             if (!SF_is_missing(x[i])) {
                 ST_int bucket = (ST_int)((x[i] - x_min) * scale);
@@ -447,24 +450,13 @@ ST_retcode compute_bins_single_group(
             goto cleanup;
         }
 
-        /* Pass 1: Find min/max - must skip missing values for initialization */
+        /* Find min/max with optimized first-valid search */
         ST_double x_min = 0, x_max = 0;
-        int found_valid = 0;
-        for (i = 0; i < N; i++) {
-            if (!SF_is_missing(x[i])) {
-                if (!found_valid) {
-                    x_min = x[i];
-                    x_max = x[i];
-                    found_valid = 1;
-                } else {
-                    if (x[i] < x_min) x_min = x[i];
-                    if (x[i] > x_max) x_max = x[i];
-                }
-            }
-        }
 
-        /* Handle all-missing case */
-        if (!found_valid) {
+        i = 0;
+        while (i < N && SF_is_missing(x[i])) i++;
+
+        if (i >= N) {
             for (i = 0; i < N; i++) {
                 bin_ids[i] = 0;
             }
@@ -472,6 +464,15 @@ ST_retcode compute_bins_single_group(
             free(cum_weights);
             free(bucket_to_bin);
             goto compute_stats;
+        }
+
+        x_min = x_max = x[i];
+        for (i++; i < N; i++) {
+            if (!SF_is_missing(x[i])) {
+                ST_double xi = x[i];
+                if (xi < x_min) x_min = xi;
+                else if (xi > x_max) x_max = xi;
+            }
         }
 
         ST_double range = x_max - x_min;
@@ -728,12 +729,17 @@ ST_retcode compute_quantile_cutpoints(
         cutpoints[0] = x_sorted[0];
         cutpoints[nquantiles] = x_sorted[N - 1];
 
-        /* Use binary search on cumulative weights for O(N + nq*log(N)) */
+        /* Use binary search on cumulative weights for O(N + nq*log(N)).
+         * Kahan summation for numerical stability with unbalanced weights. */
         ST_double *cum_w = (ST_double *)malloc(N * sizeof(ST_double));
         if (cum_w) {
-            cum_w[0] = w_sorted[0];
-            for (idx = 1; idx < N; idx++) {
-                cum_w[idx] = cum_w[idx - 1] + w_sorted[idx];
+            ST_double kahan_sum = 0.0, kahan_c = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                ST_double y_val = w_sorted[idx] - kahan_c;
+                ST_double t = kahan_sum + y_val;
+                kahan_c = (t - kahan_sum) - y_val;
+                kahan_sum = t;
+                cum_w[idx] = kahan_sum;
             }
 
             for (q = 1; q < nquantiles; q++) {

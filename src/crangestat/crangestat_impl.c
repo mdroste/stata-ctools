@@ -637,7 +637,11 @@ static double compute_stat_with_prefix(stat_type type, const prefix_arrays *pa,
         }
     }
 
-    if (n == 0) return SV_missval;
+    if (n == 0) {
+        /* For count, 0 valid observations = count of 0, not missing */
+        if (type == STAT_COUNT) return 0.0;
+        return SV_missval;
+    }
 
     switch (type) {
         case STAT_COUNT:
@@ -982,7 +986,7 @@ static double compute_window_stat_simple(stat_type type, const double *data,
             m2 /= (double)n;
             m4 /= (double)n;
             if (m2 <= 0.0) return SV_missval;
-            return (m4 / (m2 * m2)) - 3.0;
+            return m4 / (m2 * m2);
         }
 
         default:

@@ -151,7 +151,7 @@ int64_t cmerge_sorted_join(
             ENSURE_CAPACITY(remaining);
             for (size_t i = 0; i < remaining; i++) {
                 specs[count].master_sorted_row = -1;
-                specs[count].using_sorted_row = (int64_t)(u_idx + i);
+                specs[count].using_sorted_row = (int32_t)(u_idx + i);
                 specs[count].merge_result = MERGE_RESULT_USING_ONLY;
                 count++;
             }
@@ -162,7 +162,7 @@ int64_t cmerge_sorted_join(
             size_t remaining = m_nobs - m_idx;
             ENSURE_CAPACITY(remaining);
             for (size_t i = 0; i < remaining; i++) {
-                specs[count].master_sorted_row = (int64_t)(m_idx + i);
+                specs[count].master_sorted_row = (int32_t)(m_idx + i);
                 specs[count].using_sorted_row = -1;
                 specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
                 count++;
@@ -181,7 +181,7 @@ int64_t cmerge_sorted_join(
             if (cmp < 0) {
                 /* Master only */
                 ENSURE_CAPACITY(1);
-                specs[count].master_sorted_row = (int64_t)m_idx;
+                specs[count].master_sorted_row = (int32_t)m_idx;
                 specs[count].using_sorted_row = -1;
                 specs[count].merge_result = MERGE_RESULT_MASTER_ONLY;
                 count++;
@@ -191,7 +191,7 @@ int64_t cmerge_sorted_join(
                 /* Using only */
                 ENSURE_CAPACITY(1);
                 specs[count].master_sorted_row = -1;
-                specs[count].using_sorted_row = (int64_t)u_idx;
+                specs[count].using_sorted_row = (int32_t)u_idx;
                 specs[count].merge_result = MERGE_RESULT_USING_ONLY;
                 count++;
                 u_idx++;
@@ -233,8 +233,8 @@ int64_t cmerge_sorted_join(
                 /* Generate output based on merge type */
                 switch (merge_type) {
                     case MERGE_1_1:
-                        specs[count].master_sorted_row = (int64_t)m_start;
-                        specs[count].using_sorted_row = (int64_t)u_start;
+                        specs[count].master_sorted_row = (int32_t)m_start;
+                        specs[count].using_sorted_row = (int32_t)u_start;
                         specs[count].merge_result = MERGE_RESULT_BOTH;
                         count++;
                         break;
@@ -242,8 +242,8 @@ int64_t cmerge_sorted_join(
                     case MERGE_M_1:
                         /* Multiple master rows map to one using row */
                         for (size_t i = 0; i < m_count; i++) {
-                            specs[count].master_sorted_row = (int64_t)(m_start + i);
-                            specs[count].using_sorted_row = (int64_t)u_start;
+                            specs[count].master_sorted_row = (int32_t)(m_start + i);
+                            specs[count].using_sorted_row = (int32_t)u_start;
                             specs[count].merge_result = MERGE_RESULT_BOTH;
                             count++;
                         }
@@ -252,8 +252,8 @@ int64_t cmerge_sorted_join(
                     case MERGE_1_M:
                         /* One master row maps to multiple using rows */
                         for (size_t i = 0; i < u_count; i++) {
-                            specs[count].master_sorted_row = (int64_t)m_start;
-                            specs[count].using_sorted_row = (int64_t)(u_start + i);
+                            specs[count].master_sorted_row = (int32_t)m_start;
+                            specs[count].using_sorted_row = (int32_t)(u_start + i);
                             specs[count].merge_result = MERGE_RESULT_BOTH;
                             count++;
                         }
@@ -271,8 +271,8 @@ int64_t cmerge_sorted_join(
                                 /* For using: use row i if available, else use last row */
                                 size_t ui = (i < u_count) ? i : (u_count - 1);
 
-                                specs[count].master_sorted_row = (int64_t)(m_start + mi);
-                                specs[count].using_sorted_row = (int64_t)(u_start + ui);
+                                specs[count].master_sorted_row = (int32_t)(m_start + mi);
+                                specs[count].using_sorted_row = (int32_t)(u_start + ui);
                                 specs[count].merge_result = MERGE_RESULT_BOTH;
                                 count++;
                             }

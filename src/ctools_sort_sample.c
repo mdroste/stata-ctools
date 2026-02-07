@@ -553,9 +553,10 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
         thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
-    /* Check allocation success */
+    /* Check allocation success - with dynamic scheduling any thread can process
+     * any bucket, so all thread_temps must be valid */
     for (int t = 0; t < num_threads; t++) {
-        if (thread_temps[t] == NULL && bucket_sizes[t] > 0) {
+        if (thread_temps[t] == NULL) {
             rc = STATA_ERR_MEMORY;
             goto cleanup;
         }
@@ -885,53 +886,80 @@ static stata_retcode sample_apply_permutation(stata_data *data)
 {
     size_t nvars = data->nvars;
     size_t nobs = data->nobs;
-    int all_success = 1;
+    perm_idx_t *perm = data->sort_order;
 
-    if (nvars == 0) {
+    if (nvars == 0 || nobs == 0) {
         return STATA_OK;
     }
 
-    /* Apply permutation to each variable in parallel */
+    /* Phase 1: Allocate all new buffers before modifying any data.
+     * This ensures that if any allocation fails, no data is corrupted. */
+    void **new_buffers = (void **)calloc(nvars, sizeof(void *));
+    if (!new_buffers) return STATA_ERR_MEMORY;
+
+    int all_success = 1;
+
     #pragma omp parallel for schedule(dynamic, 1)
     for (size_t j = 0; j < nvars; j++) {
         stata_variable *var = &data->vars[j];
-        perm_idx_t *perm = data->sort_order;
+        if (var->type == STATA_TYPE_DOUBLE) {
+            new_buffers[j] = ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
+        } else {
+            new_buffers[j] = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
+        }
+        if (!new_buffers[j]) {
+            #pragma omp atomic write
+            all_success = 0;
+        }
+    }
 
+    if (!all_success) {
+        for (size_t j = 0; j < nvars; j++) {
+            if (new_buffers[j]) ctools_aligned_free(new_buffers[j]);
+        }
+        free(new_buffers);
+        return STATA_ERR_MEMORY;
+    }
+
+    /* Phase 2: Copy permuted data into new buffers */
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
         if (var->type == STATA_TYPE_DOUBLE) {
             double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_aligned_alloc(64, nobs * sizeof(double));
-            if (new_data == NULL) {
-                #pragma omp atomic write
-                all_success = 0;
-            } else {
-                for (size_t i = 0; i < nobs; i++) {
-                    new_data[i] = old_data[perm[i]];
-                }
-                ctools_aligned_free(old_data);
-                var->data.dbl = new_data;
+            double *new_data = (double *)new_buffers[j];
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
             }
         } else {
             char **old_data = var->data.str;
-            char **new_data = (char **)ctools_aligned_alloc(CACHE_LINE_SIZE, nobs * sizeof(char *));
-            if (new_data == NULL) {
-                #pragma omp atomic write
-                all_success = 0;
-            } else {
-                for (size_t i = 0; i < nobs; i++) {
-                    new_data[i] = old_data[perm[i]];
-                }
-                ctools_aligned_free(old_data);
-                var->data.str = new_data;
+            char **new_data = (char **)new_buffers[j];
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
             }
         }
     }
+
+    /* Phase 3: Swap pointers and free old data */
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+        if (var->type == STATA_TYPE_DOUBLE) {
+            ctools_aligned_free(var->data.dbl);
+            var->data.dbl = (double *)new_buffers[j];
+        } else {
+            ctools_aligned_free(var->data.str);
+            var->data.str = (char **)new_buffers[j];
+        }
+    }
+
+    free(new_buffers);
 
     /* Reset sort order */
     for (size_t j = 0; j < nobs; j++) {
         data->sort_order[j] = (perm_idx_t)j;
     }
 
-    return all_success ? STATA_OK : STATA_ERR_MEMORY;
+    return STATA_OK;
 }
 
 /* ============================================================================

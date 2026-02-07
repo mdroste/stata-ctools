@@ -207,7 +207,9 @@ static void radix_sort_numeric(perm_idx_t * IPS4O_RESTRICT order,
         size_t i = 0;
         /* Unrolled counting loop */
         for (; i + 4 <= len; i += 4) {
-            IPS4O_PREFETCH(&keys[src[i + IPS4O_PREFETCH_DISTANCE]]);
+            if (i + IPS4O_PREFETCH_DISTANCE < len) {
+                IPS4O_PREFETCH(&keys[src[i + IPS4O_PREFETCH_DISTANCE]]);
+            }
             counts[(keys[src[i]] >> shift) & 0xFF]++;
             counts[(keys[src[i + 1]] >> shift) & 0xFF]++;
             counts[(keys[src[i + 2]] >> shift) & 0xFF]++;
@@ -932,48 +934,69 @@ static stata_retcode ips4o_apply_permutation(stata_data *data)
     if (nvars == 0 || nobs == 0) return STATA_OK;
 
 #ifdef _OPENMP
+    {
+    /* Phase 1: Allocate all new buffers before modifying any data.
+     * This ensures that if any allocation fails, no data is corrupted. */
+    void **new_buffers = (void **)calloc(nvars, sizeof(void *));
+    if (!new_buffers) return STATA_ERR_MEMORY;
+
     int success = 1;
 
     #pragma omp parallel for schedule(dynamic, 1)
     for (size_t j = 0; j < nvars; j++) {
-        if (!success) continue;
-
         stata_variable *var = &data->vars[j];
-
         if (var->type == STATA_TYPE_DOUBLE) {
-            double *old_data = var->data.dbl;
-            double *new_data = (double *)ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
-            if (!new_data) {
-                #pragma omp atomic write
-                success = 0;
-                continue;
-            }
-
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
-
-            ctools_aligned_free(old_data);
-            var->data.dbl = new_data;
+            new_buffers[j] = ctools_safe_aligned_alloc2(64, nobs, sizeof(double));
         } else {
-            char **old_data = var->data.str;
-            char **new_data = (char **)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
-            if (!new_data) {
-                #pragma omp atomic write
-                success = 0;
-                continue;
-            }
-
-            for (size_t i = 0; i < nobs; i++) {
-                new_data[i] = old_data[perm[i]];
-            }
-
-            ctools_aligned_free(old_data);
-            var->data.str = new_data;
+            new_buffers[j] = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(char *));
+        }
+        if (!new_buffers[j]) {
+            #pragma omp atomic write
+            success = 0;
         }
     }
 
-    if (!success) return STATA_ERR_MEMORY;
+    if (!success) {
+        for (size_t j = 0; j < nvars; j++) {
+            if (new_buffers[j]) ctools_aligned_free(new_buffers[j]);
+        }
+        free(new_buffers);
+        return STATA_ERR_MEMORY;
+    }
+
+    /* Phase 2: Copy permuted data into new buffers */
+    #pragma omp parallel for schedule(dynamic, 1)
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+        if (var->type == STATA_TYPE_DOUBLE) {
+            double *old_data = var->data.dbl;
+            double *new_data = (double *)new_buffers[j];
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+        } else {
+            char **old_data = var->data.str;
+            char **new_data = (char **)new_buffers[j];
+            for (size_t i = 0; i < nobs; i++) {
+                new_data[i] = old_data[perm[i]];
+            }
+        }
+    }
+
+    /* Phase 3: Swap pointers and free old data */
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+        if (var->type == STATA_TYPE_DOUBLE) {
+            ctools_aligned_free(var->data.dbl);
+            var->data.dbl = (double *)new_buffers[j];
+        } else {
+            ctools_aligned_free(var->data.str);
+            var->data.str = (char **)new_buffers[j];
+        }
+    }
+
+    free(new_buffers);
+    }
 #else
     for (size_t j = 0; j < nvars; j++) {
         stata_variable *var = &data->vars[j];

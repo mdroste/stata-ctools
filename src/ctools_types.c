@@ -6,10 +6,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#include <float.h>
 #include "ctools_types.h"
 #include "ctools_config.h"
 #include "ctools_threads.h"
 #include "ctools_arena.h"
+#include "ctools_eisel_lemire.h"
 
 /* SIMD intrinsics for gather operations */
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -144,19 +146,44 @@ int ctools_uint64_to_str(uint64_t val, char *buf)
         return 1;
     }
 
-    char tmp[24];
-    int len = 0;
-
-    while (val > 0) {
-        tmp[len++] = '0' + (val % 10);
-        val /= 10;
+    /* Determine number of digits using binary search */
+    int len;
+    if (val < 10000000000ULL) {
+        if (val < 100000) {
+            if (val < 100) { len = (val < 10) ? 1 : 2; }
+            else { len = (val < 1000) ? 3 : (val < 10000) ? 4 : 5; }
+        } else {
+            if (val < 10000000) { len = (val < 1000000) ? 6 : 7; }
+            else { len = (val < 100000000) ? 8 : (val < 1000000000ULL) ? 9 : 10; }
+        }
+    } else {
+        if (val < 1000000000000000ULL) {
+            if (val < 1000000000000ULL) { len = (val < 100000000000ULL) ? 11 : 12; }
+            else { len = (val < 10000000000000ULL) ? 13 : (val < 100000000000000ULL) ? 14 : 15; }
+        } else {
+            if (val < 100000000000000000ULL) { len = (val < 10000000000000000ULL) ? 16 : 17; }
+            else { len = (val < 1000000000000000000ULL) ? 18 : (val < 10000000000000000000ULL) ? 19 : 20; }
+        }
     }
 
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
     buf[len] = '\0';
+
+    /* Write digits from right to left directly into output buffer */
+    char *p = buf + len;
+    while (val >= 100) {
+        int idx = (int)(val % 100) * 2;
+        val /= 100;
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx + 1];
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx];
+    }
+    if (val >= 10) {
+        int idx = (int)val * 2;
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx + 1];
+        *(--p) = CTOOLS_DIGIT_PAIRS[idx];
+    } else {
+        *(--p) = '0' + (int)val;
+    }
+
     return len;
 }
 
@@ -171,38 +198,8 @@ int ctools_int64_to_str(int64_t val, char *buf)
 
 int ctools_uint64_to_str_fast(uint64_t val, char *buf)
 {
-    if (val == 0) {
-        buf[0] = '0';
-        buf[1] = '\0';
-        return 1;
-    }
-
-    char tmp[24];
-    int len = 0;
-
-    /* Process two digits at a time using lookup table */
-    while (val >= 100) {
-        int idx = (val % 100) * 2;
-        val /= 100;
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx + 1];
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx];
-    }
-
-    /* Handle remaining 1-2 digits */
-    if (val >= 10) {
-        int idx = (int)val * 2;
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx + 1];
-        tmp[len++] = CTOOLS_DIGIT_PAIRS[idx];
-    } else {
-        tmp[len++] = '0' + (int)val;
-    }
-
-    /* Reverse into output buffer */
-    for (int i = 0; i < len; i++) {
-        buf[i] = tmp[len - 1 - i];
-    }
-    buf[len] = '\0';
-    return len;
+    /* Now identical to ctools_uint64_to_str which already uses digit pairs */
+    return ctools_uint64_to_str(val, buf);
 }
 
 /* ===========================================================================
@@ -724,20 +721,21 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
 
     if (p >= end) return false;
 
-    /* Parse mantissa */
+    /* Parse mantissa digits into uint64 */
     uint64_t mantissa = 0;
     int decimal_pos = -1;
     int digit_count = 0;
     int total_digits = 0;
     bool has_digits = false;
+    int exponent = 0;
 
     while (p < end) {
         char c = *p;
         if (c >= '0' && c <= '9') {
             has_digits = true;
             total_digits++;
-            if (digit_count < 18) {
-                mantissa = mantissa * 10 + (c - '0');
+            if (digit_count < 19) {
+                mantissa = mantissa * 10 + (uint64_t)(c - '0');
                 digit_count++;
             }
             p++;
@@ -745,10 +743,8 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
             decimal_pos = total_digits;
             p++;
         } else if (c == 'e' || c == 'E') {
-            /* Scientific notation */
             p++;
             if (p >= end) return false;
-
             bool exp_negative = false;
             if (*p == '-') {
                 exp_negative = true;
@@ -757,34 +753,14 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
                 p++;
             }
 
-            int exponent = 0;
             while (p < end && *p >= '0' && *p <= '9') {
-                exponent = exponent * 10 + (*p - '0');
+                if (exponent < 10000) /* prevent overflow in exponent accumulator */
+                    exponent = exponent * 10 + (*p - '0');
                 p++;
             }
 
             if (exp_negative) exponent = -exponent;
-
-            double value = (double)mantissa;
-            int decimal_shift = (decimal_pos >= 0) ? (total_digits - decimal_pos) : 0;
-            int extra_digits = (total_digits > 18) ? (total_digits - 18) : 0;
-            if (decimal_pos >= 0 && decimal_pos < total_digits) {
-                extra_digits -= (total_digits - decimal_pos);
-                if (extra_digits < 0) extra_digits = 0;
-            }
-
-            int final_exp = exponent - decimal_shift + extra_digits;
-
-            if (final_exp > 0 && final_exp <= 22) {
-                value *= ctools_pow10_table[final_exp];
-            } else if (final_exp < 0 && final_exp >= -22) {
-                value /= ctools_pow10_table[-final_exp];
-            } else if (final_exp != 0) {
-                value *= pow(10.0, final_exp);
-            }
-
-            *result = negative ? -value : value;
-            return (p == end);
+            break;
         } else {
             break;
         }
@@ -793,31 +769,58 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
     if (!has_digits) return false;
     if (p != end) return false;
 
-    double value = (double)mantissa;
-
-    /* Apply decimal shift */
-    if (decimal_pos >= 0) {
-        int decimal_digits = total_digits - decimal_pos;
-        if (total_digits > 18 && decimal_pos < 18) {
-            decimal_digits -= (total_digits - 18);
-            if (decimal_digits < 0) decimal_digits = 0;
-        }
-        if (decimal_digits > 0 && decimal_digits <= 22) {
-            value /= ctools_pow10_table[decimal_digits];
-        } else if (decimal_digits > 22) {
-            value /= pow(10.0, decimal_digits);
-        }
-    } else if (total_digits > 18) {
-        int extra = total_digits - 18;
-        if (extra <= 22) {
-            value *= ctools_pow10_table[extra];
-        } else {
-            value *= pow(10.0, extra);
-        }
+    /* Handle zero mantissa */
+    if (mantissa == 0) {
+        *result = negative ? -0.0 : 0.0;
+        return true;
     }
 
-    *result = negative ? -value : value;
-    return true;
+    /* Compute the effective decimal exponent:
+     * mantissa * 10^(exponent - decimal_shift + extra_digits) */
+    int decimal_shift = (decimal_pos >= 0) ? (total_digits - decimal_pos) : 0;
+    int extra_digits = (total_digits > 19) ? (total_digits - 19) : 0;
+    if (decimal_pos >= 0 && decimal_pos < total_digits) {
+        int frac_digits = total_digits - decimal_pos;
+        extra_digits -= frac_digits;
+        if (extra_digits < 0) extra_digits = 0;
+    }
+    int final_exp = exponent - decimal_shift + extra_digits;
+
+    /* Eisel-Lemire fast path: handles ~99% of inputs exactly */
+    if (digit_count <= 19 && eisel_lemire_compute(mantissa, final_exp, negative, result)) {
+        return true;
+    }
+
+    /* Fallback: use strtod for ambiguous / very long inputs */
+    {
+        /* p was advanced past the parsed portion; use the trimmed range */
+        const char *start = str;
+        while (start < end && (*start == ' ' || *start == '\t')) start++;
+
+        /* strtod needs a null-terminated string. If the input isn't
+         * null-terminated at 'end', copy to a small buffer. */
+        int trimmed_len = (int)(end - start);
+        char stack_buf[128];
+        char *buf;
+        bool allocated = false;
+
+        if (trimmed_len < (int)sizeof(stack_buf)) {
+            buf = stack_buf;
+        } else {
+            buf = (char *)malloc(trimmed_len + 1);
+            if (!buf) return false;
+            allocated = true;
+        }
+        memcpy(buf, start, trimmed_len);
+        buf[trimmed_len] = '\0';
+
+        char *endptr;
+        *result = strtod(buf, &endptr);
+        bool ok = (endptr == buf + trimmed_len);
+
+        if (allocated) free(buf);
+        return ok;
+    }
 }
 
 /*

@@ -46,6 +46,7 @@
 #include "cimport_context.h"
 #include "cimport_mmap.h"
 #include "cimport_xlsx.h"
+#include "ctools_threads.h"
 
 /* High-resolution timing */
 /* Timer: use ctools_timer_ms() directly from ctools_timer.h */
@@ -198,10 +199,10 @@ static int cimport_parse_header(CImportContext *ctx) {
                                           ctx->skip_rows, ctx->quote_char, ctx->bindquotes);
     }
 
-    const char *end = cimport_find_next_row(header_start, ctx->file_data + ctx->file_size, ctx->quote_char, ctx->bindquotes);
-
-    ctx->num_columns = cimport_parse_row_fast(header_start, end, ctx->delimiter, ctx->quote_char,
-                                               fields, CTOOLS_MAX_COLUMNS, ctx->file_data);
+    ctx->num_columns = cimport_parse_row_fast(header_start, ctx->file_data + ctx->file_size,
+                                               ctx->delimiter, ctx->quote_char,
+                                               fields, CTOOLS_MAX_COLUMNS, ctx->file_data,
+                                               ctx->bindquotes, NULL, NULL);
 
     if (ctx->num_columns <= 0) {
         snprintf(ctx->error_message, sizeof(ctx->error_message), "No columns found in header");
@@ -325,40 +326,50 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         if (col->type != CIMPORT_COL_NUMERIC) continue;
 
         size_t sample_count = 0;
-        size_t max_samples = 1000;
+        /* Scale samples with file size: min(total_rows, max(1000, total/100)) */
+        size_t max_samples = total_data_rows / 100;
+        if (max_samples < 1000) max_samples = 1000;
+        if (max_samples > total_data_rows) max_samples = total_data_rows;
         size_t sample_step = (total_data_rows > max_samples) ? (total_data_rows / max_samples) : 1;
-        size_t row_idx = 0;
+        size_t global_row = 0;
 
         for (int c = 0; c < ctx->num_chunks && sample_count < max_samples; c++) {
             CImportParsedChunk *chunk = &ctx->chunks[c];
             size_t start_row = (c == 0 && ctx->has_header) ? 1 : 0;
+            if (chunk->num_rows <= start_row) {
+                continue;
+            }
+            size_t chunk_data_rows = chunk->num_rows - start_row;
 
-            for (size_t r = start_row; r < chunk->num_rows && sample_count < max_samples; r++) {
-                if (row_idx % sample_step == 0) {
-                    CImportParsedRow *row = chunk->rows[r];
-                    if (col_idx < row->num_fields) {
-                        CImportFieldRef *field = &row->fields[col_idx];
-                        double val;
-                        bool is_int;
+            /* Stride directly to sampled rows instead of iterating every row */
+            size_t first = (global_row % sample_step == 0) ? 0
+                           : (sample_step - global_row % sample_step);
 
-                        if (cimport_analyze_numeric_with_sep(ctx->file_data, field, ctx->quote_char,
-                                                             ctx->decimal_separator, ctx->group_separator,
-                                                             &val, &is_int)) {
-                            if (!is_int) {
-                                col->is_integer = false;
-                            }
-                            if (val < col->min_value) {
-                                col->min_value = val;
-                            }
-                            if (val > col->max_value) {
-                                col->max_value = val;
-                            }
-                            sample_count++;
+            for (size_t offset = first; offset < chunk_data_rows && sample_count < max_samples;
+                 offset += sample_step) {
+                CImportParsedRow *row = chunk->rows[start_row + offset];
+                if (col_idx < row->num_fields) {
+                    CImportFieldRef *field = &row->fields[col_idx];
+                    double val;
+                    bool is_int;
+
+                    if (cimport_analyze_numeric_with_sep(ctx->file_data, field, ctx->quote_char,
+                                                         ctx->decimal_separator, ctx->group_separator,
+                                                         &val, &is_int)) {
+                        if (!is_int) {
+                            col->is_integer = false;
                         }
+                        if (val < col->min_value) {
+                            col->min_value = val;
+                        }
+                        if (val > col->max_value) {
+                            col->max_value = val;
+                        }
+                        sample_count++;
                     }
                 }
-                row_idx++;
             }
+            global_row += chunk_data_rows;
         }
     }
 
@@ -515,24 +526,24 @@ static void *cimport_parse_chunk_parallel(void *arg) {
     const char *end = task->end;
 
     while (ptr < end && atomic_load(&ctx->error_code) == 0) {
-        const char *row_end = cimport_find_next_row(ptr, end, ctx->quote_char, ctx->bindquotes);
-        if (row_end > end) row_end = end;
-
-        int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
-                                                 field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
+        const char *next_row;
+        bool had_unmatched;
+        int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
+                                                 field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data,
+                                                 ctx->bindquotes, &next_row, &had_unmatched);
 
         /* Handle empty lines based on emptylines mode */
-        bool is_empty_row = (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0));
+        bool is_empty_row = (num_fields == 0 || (num_fields == 1 && CIMPORT_FIELD_LENGTH(field_buf[0]) == 0));
         if (is_empty_row && ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP) {
-            ptr = row_end;
+            ptr = next_row;
             continue;
         }
 
         bool is_header_row = (ctx->has_header && task->chunk_id == 0 && chunk->num_rows == 0);
 
-        /* Check for unmatched quotes in LOOSE mode and record warning */
+        /* Check for unmatched quotes in LOOSE mode (derived from parser state) */
         if (ctx->bindquotes == CIMPORT_BINDQUOTES_LOOSE && !is_header_row) {
-            if (cimport_row_has_unmatched_quote(ptr, row_end, ctx->quote_char)) {
+            if (had_unmatched) {
                 size_t approx_row = chunk->num_rows + 1;
                 if (task->chunk_id > 0) {
                     approx_row += task->chunk_id * (ctx->file_size / ctx->num_chunks / 50);
@@ -546,21 +557,22 @@ static void *cimport_parse_chunk_parallel(void *arg) {
                 CImportColumnParseStats *stats = &chunk->col_stats[f];
                 CImportFieldRef *field = &field_buf[f];
 
-                if ((int)field->length > stats->max_field_len) {
-                    stats->max_field_len = field->length;
+                uint32_t flen = CIMPORT_FIELD_LENGTH(*field);
+                if ((int)flen > stats->max_field_len) {
+                    stats->max_field_len = flen;
                 }
 
-                if (field->length > 0) {
+                if (flen > 0) {
                     const char *src = ctx->file_data + field->offset;
 
-                    /* Track quotes for cache optimization */
+                    /* Track quotes for cache optimization (use flag from parser) */
                     if (!stats->has_quotes) {
-                        if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                        if (field->length & CIMPORT_FIELD_QUOTED_FLAG)
                             stats->has_quotes = true;
                     }
 
                     if (!stats->seen_string) {
-                        if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
+                        if (!cimport_field_looks_numeric_sep(src, flen, ctx->decimal_separator, ctx->group_separator)) {
                             stats->seen_string = true;
                         }
                     }
@@ -607,7 +619,7 @@ static void *cimport_parse_chunk_parallel(void *arg) {
             chunk->max_fields_in_chunk = num_fields;
         }
 
-        ptr = row_end;
+        ptr = next_row;
     }
 
     return NULL;
@@ -731,12 +743,21 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->has_header = has_header;
     ctx->skip_rows = skip_rows;
     ctx->bindquotes = bindquotes;
-    ctx->filename = strdup(filename);
-    if (ctx->filename == NULL) {
-        return NULL;
-    }
     ctx->verbose = verbose;
     atomic_init(&ctx->error_code, 0);
+
+    /* Take ownership of force lists immediately so cimport_free_context always
+     * handles them, preventing double-free if we fail and the caller also frees. */
+    ctx->force_numeric_cols = force_numeric_cols;
+    ctx->num_force_numeric = num_force_numeric;
+    ctx->force_string_cols = force_string_cols;
+    ctx->num_force_string = num_force_string;
+
+    ctx->filename = strdup(filename);
+    if (ctx->filename == NULL) {
+        cimport_free_context(ctx);
+        return NULL;
+    }
 
     /* Initialize new options */
     ctx->numeric_type_mode = numeric_type_mode;
@@ -744,10 +765,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->group_separator = group_sep;
     ctx->emptylines_mode = emptylines_mode;
     ctx->max_quoted_rows = max_quoted_rows;
-    ctx->force_numeric_cols = force_numeric_cols;
-    ctx->num_force_numeric = num_force_numeric;
-    ctx->force_string_cols = force_string_cols;
-    ctx->num_force_string = num_force_string;
 
     /* Initialize encoding */
     ctx->requested_encoding = requested_encoding;
@@ -787,22 +804,33 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     {
         CImportEncodingDetection detection;
         int bom_skip = 0;
+        bool ascii_fast_path = false;
 
-        if (requested_encoding != CIMPORT_ENC_UNKNOWN) {
-            /* User specified encoding */
-            ctx->encoding = requested_encoding;
-            /* Still check for BOM to skip it */
-            detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
-            if (detection.encoding == CIMPORT_ENC_UTF8_BOM ||
-                detection.encoding == CIMPORT_ENC_UTF16LE ||
-                detection.encoding == CIMPORT_ENC_UTF16BE) {
+        /* ASCII fast-path: if no user-specified encoding, check if all bytes
+         * are ASCII using SIMD. If so, skip all encoding detection/conversion. */
+        if (requested_encoding == CIMPORT_ENC_UNKNOWN &&
+            cimport_is_ascii_simd(ctx->file_data, ctx->file_size)) {
+            ctx->encoding = CIMPORT_ENC_ASCII;
+            ascii_fast_path = true;
+        }
+
+        if (!ascii_fast_path) {
+            if (requested_encoding != CIMPORT_ENC_UNKNOWN) {
+                /* User specified encoding */
+                ctx->encoding = requested_encoding;
+                /* Still check for BOM to skip it */
+                detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
+                if (detection.encoding == CIMPORT_ENC_UTF8_BOM ||
+                    detection.encoding == CIMPORT_ENC_UTF16LE ||
+                    detection.encoding == CIMPORT_ENC_UTF16BE) {
+                    bom_skip = detection.bom_length;
+                }
+            } else {
+                /* Auto-detect encoding */
+                detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
+                ctx->encoding = detection.encoding;
                 bom_skip = detection.bom_length;
             }
-        } else {
-            /* Auto-detect encoding */
-            detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
-            ctx->encoding = detection.encoding;
-            bom_skip = detection.bom_length;
         }
 
         if (verbose) {
@@ -811,47 +839,50 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             cimport_display_msg(msg);
         }
 
-        /* Convert to UTF-8 if needed */
-        if (cimport_encoding_needs_conversion(ctx->encoding) || bom_skip > 0) {
-            char *utf8_data = NULL;
-            size_t utf8_size = 0;
+        if (!ascii_fast_path) {
+            /* Convert to UTF-8 if needed */
+            if (cimport_encoding_needs_conversion(ctx->encoding) || bom_skip > 0) {
+                char *utf8_data = NULL;
+                size_t utf8_size = 0;
 
-            if (cimport_convert_to_utf8(ctx->file_data, ctx->file_size, ctx->encoding,
-                                         bom_skip, &utf8_data, &utf8_size) == 0) {
-                ctx->converted_data = utf8_data;
-                ctx->converted_size = utf8_size;
-                /* Update file_data to point to converted data */
-                ctx->file_data = ctx->converted_data;
-                ctx->file_size = ctx->converted_size;
-            } else {
-                if (verbose) {
-                    cimport_display_msg("Warning: Encoding conversion failed, using raw data\n");
+                if (cimport_convert_to_utf8(ctx->file_data, ctx->file_size, ctx->encoding,
+                                             bom_skip, &utf8_data, &utf8_size) == 0) {
+                    ctx->converted_data = utf8_data;
+                    ctx->converted_size = utf8_size;
+                    /* Update file_data to point to converted data */
+                    ctx->file_data = ctx->converted_data;
+                    ctx->file_size = ctx->converted_size;
+                } else {
+                    if (verbose) {
+                        cimport_display_msg("Warning: Encoding conversion failed, using raw data\n");
+                    }
+                }
+            } else if (bom_skip > 0) {
+                /* UTF-8 with BOM - just skip the BOM */
+                ctx->file_data += bom_skip;
+                ctx->file_size -= bom_skip;
+            }
+
+            /* Strip invalid UTF-8 sequences (matches Stata's behavior of ignoring
+             * invalid bytes when encoding is UTF-8) */
+            if (!cimport_encoding_needs_conversion(ctx->encoding) &&
+                cimport_has_invalid_utf8(ctx->file_data, ctx->file_size)) {
+                char *cleaned = (char *)malloc(ctx->file_size);
+                if (cleaned) {
+                    size_t cleaned_size = cimport_strip_invalid_utf8(
+                        ctx->file_data, ctx->file_size, cleaned);
+                    /* Free any previous converted data */
+                    if (ctx->converted_data && ctx->converted_data != cleaned) {
+                        free(ctx->converted_data);
+                    }
+                    ctx->converted_data = cleaned;
+                    ctx->converted_size = cleaned_size;
+                    ctx->file_data = ctx->converted_data;
+                    ctx->file_size = ctx->converted_size;
                 }
             }
-        } else if (bom_skip > 0) {
-            /* UTF-8 with BOM - just skip the BOM */
-            ctx->file_data += bom_skip;
-            ctx->file_size -= bom_skip;
         }
-
-        /* Strip invalid UTF-8 sequences (matches Stata's behavior of ignoring
-         * invalid bytes when encoding is UTF-8) */
-        if (!cimport_encoding_needs_conversion(ctx->encoding) &&
-            cimport_has_invalid_utf8(ctx->file_data, ctx->file_size)) {
-            char *cleaned = (char *)malloc(ctx->file_size);
-            if (cleaned) {
-                size_t cleaned_size = cimport_strip_invalid_utf8(
-                    ctx->file_data, ctx->file_size, cleaned);
-                /* Free any previous converted data */
-                if (ctx->converted_data && ctx->converted_data != cleaned) {
-                    free(ctx->converted_data);
-                }
-                ctx->converted_data = cleaned;
-                ctx->converted_size = cleaned_size;
-                ctx->file_data = ctx->converted_data;
-                ctx->file_size = ctx->converted_size;
-            }
-        }
+        /* ASCII fast-path: no BOM, no conversion, no UTF-8 validation needed */
     }
     t_end = ctools_timer_ms();
     ctx->time_encoding = t_end - t_start;
@@ -890,7 +921,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
 
     t_start = ctools_timer_ms();
 
-    size_t min_chunk_size = 4 * 1024 * 1024;
+    size_t min_chunk_size = 1 * 1024 * 1024;
     int num_chunks = ctx->num_threads;
 
     if (ctx->file_size < min_chunk_size * 2) {
@@ -929,22 +960,24 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
 
         while (ptr < end) {
-            const char *row_end = cimport_find_next_row(ptr, end, ctx->quote_char, ctx->bindquotes);
-
-            int num_fields = cimport_parse_row_fast(ptr, row_end, ctx->delimiter, ctx->quote_char,
-                                                     field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data);
+            const char *next_row;
+            bool had_unmatched;
+            int num_fields = cimport_parse_row_fast(ptr, end, ctx->delimiter, ctx->quote_char,
+                                                     field_buf, CTOOLS_MAX_COLUMNS, ctx->file_data,
+                                                     ctx->bindquotes, &next_row, &had_unmatched);
 
             /* Handle empty lines based on emptylines mode */
-            bool is_empty_row = (num_fields == 0 || (num_fields == 1 && field_buf[0].length == 0));
+            bool is_empty_row = (num_fields == 0 || (num_fields == 1 && CIMPORT_FIELD_LENGTH(field_buf[0]) == 0));
             if (is_empty_row && ctx->emptylines_mode == CIMPORT_EMPTYLINES_SKIP) {
-                ptr = row_end;
+                ptr = next_row;
                 continue;
             }
 
             bool is_header_row = (ctx->has_header && chunk->num_rows == 0);
 
+            /* Check for unmatched quotes in LOOSE mode (derived from parser state) */
             if (ctx->bindquotes == CIMPORT_BINDQUOTES_LOOSE && !is_header_row) {
-                if (cimport_row_has_unmatched_quote(ptr, row_end, ctx->quote_char)) {
+                if (had_unmatched) {
                     size_t row_num = chunk->num_rows + 1;
                     cimport_record_unmatched_quote(ctx, row_num);
                 }
@@ -954,21 +987,22 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                     CImportColumnParseStats *stats = &chunk->col_stats[f];
                     CImportFieldRef *field = &field_buf[f];
 
-                    if ((int)field->length > stats->max_field_len) {
-                        stats->max_field_len = field->length;
+                    uint32_t flen = CIMPORT_FIELD_LENGTH(*field);
+                    if ((int)flen > stats->max_field_len) {
+                        stats->max_field_len = flen;
                     }
 
-                    if (field->length > 0) {
+                    if (flen > 0) {
                         const char *src = ctx->file_data + field->offset;
 
-                        /* Track quotes for cache optimization */
+                        /* Track quotes for cache optimization (use flag from parser) */
                         if (!stats->has_quotes) {
-                            if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                            if (field->length & CIMPORT_FIELD_QUOTED_FLAG)
                                 stats->has_quotes = true;
                         }
 
                         if (!stats->seen_string) {
-                            if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
+                            if (!cimport_field_looks_numeric_sep(src, flen, ctx->decimal_separator, ctx->group_separator)) {
                                 stats->seen_string = true;
                             }
                         }
@@ -1001,7 +1035,7 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                 chunk->max_fields_in_chunk = num_fields;
             }
 
-            ptr = row_end;
+            ptr = next_row;
         }
     } else {
         /* Skip rows if requested (for varnames(N) where N > 1) */
@@ -1029,7 +1063,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
         boundaries[num_chunks] = ctx->file_size;
 
-        pthread_t threads[CIMPORT_MAX_THREADS];
         CImportChunkParseTask tasks[CIMPORT_MAX_THREADS];
 
         for (int i = 0; i < num_chunks; i++) {
@@ -1038,12 +1071,23 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             tasks[i].start = ctx->file_data + boundaries[i];
             tasks[i].end = ctx->file_data + boundaries[i + 1];
             tasks[i].chunk = &ctx->chunks[i];
-
-            pthread_create(&threads[i], NULL, cimport_parse_chunk_parallel, &tasks[i]);
         }
 
-        for (int i = 0; i < num_chunks; i++) {
-            pthread_join(threads[i], NULL);
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+        if (pool != NULL) {
+            ctools_persistent_pool_submit_batch(pool, cimport_parse_chunk_parallel,
+                                                 tasks, num_chunks,
+                                                 sizeof(CImportChunkParseTask));
+            ctools_persistent_pool_wait(pool);
+        } else {
+            /* Fallback: raw pthreads */
+            pthread_t threads[CIMPORT_MAX_THREADS];
+            for (int i = 0; i < num_chunks; i++) {
+                pthread_create(&threads[i], NULL, cimport_parse_chunk_parallel, &tasks[i]);
+            }
+            for (int i = 0; i < num_chunks; i++) {
+                pthread_join(threads[i], NULL);
+            }
         }
 
         free(boundaries);
@@ -1117,18 +1161,19 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                         CImportColumnParseStats *stats = &new_stats[f];
                         CImportFieldRef *field = &row->fields[f];
 
-                        if ((int)field->length > stats->max_field_len) {
-                            stats->max_field_len = field->length;
+                        uint32_t flen = CIMPORT_FIELD_LENGTH(*field);
+                        if ((int)flen > stats->max_field_len) {
+                            stats->max_field_len = flen;
                         }
 
-                        if (field->length > 0) {
+                        if (flen > 0) {
                             const char *src = ctx->file_data + field->offset;
                             if (!stats->has_quotes) {
-                                if (cimport_field_contains_quote(src, field->length, ctx->quote_char))
+                                if (field->length & CIMPORT_FIELD_QUOTED_FLAG)
                                     stats->has_quotes = true;
                             }
                             if (!stats->seen_string) {
-                                if (!cimport_field_looks_numeric_sep(src, field->length,
+                                if (!cimport_field_looks_numeric_sep(src, flen,
                                         ctx->decimal_separator, ctx->group_separator)) {
                                     stats->seen_string = true;
                                 }
@@ -1186,6 +1231,12 @@ static void *cimport_build_cache_worker(void *arg) {
                 CImportParsedChunk *chunk = &ctx->chunks[c];
                 size_t start_row = (c == 0 && ctx->has_header) ? 1 : 0;
 
+                /* Per-chunk quote check: skip per-field SIMD scan if
+                 * this chunk has no quotes for this column */
+                bool chunk_has_quotes = col->column_has_quotes &&
+                    chunk->col_stats && col_idx < chunk->num_col_stats &&
+                    chunk->col_stats[col_idx].has_quotes;
+
                 for (size_t r = start_row; r < chunk->num_rows; r++) {
                     CImportParsedRow *row = chunk->rows[r];
                     char *str;
@@ -1193,23 +1244,33 @@ static void *cimport_build_cache_worker(void *arg) {
                     if (col_idx < row->num_fields) {
                         CImportFieldRef *field = &row->fields[col_idx];
                         const char *src = ctx->file_data + field->offset;
+                        bool field_has_quote = (field->length & CIMPORT_FIELD_QUOTED_FLAG) != 0;
 
-                        int len;
-                        if (!col->column_has_quotes) {
-                            /* Fast path: entire column is quote-free */
-                            len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN);
-                        } else if (!cimport_field_contains_quote(src, field->length, ctx->quote_char)) {
-                            len = cimport_extract_field_unquoted(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN);
+                        if (!chunk_has_quotes || !field_has_quote) {
+                            /* Fast path: no quotes in this field.
+                             * Copy directly from mmap to arena (single copy). */
+                            int src_len = CIMPORT_FIELD_LENGTH(*field);
+                            while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
+                                src_len--;
+                            }
+                            int copy_len = (src_len < CTOOLS_MAX_STRING_LEN) ? src_len : CTOOLS_MAX_STRING_LEN - 1;
+                            str = ctools_arena_alloc(&cache->string_arena, copy_len + 1);
+                            if (str) {
+                                memcpy(str, src, copy_len);
+                                str[copy_len] = '\0';
+                            } else {
+                                str = "";
+                            }
                         } else {
-                            len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN, ctx->quote_char);
-                        }
-                        field_buf[len] = '\0';
-
-                        str = ctools_arena_alloc(&cache->string_arena, len + 1);
-                        if (str) {
-                            memcpy(str, field_buf, len + 1);
-                        } else {
-                            str = "";
+                            /* Field has quotes — extract with quote handling */
+                            int len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN, ctx->quote_char);
+                            field_buf[len] = '\0';
+                            str = ctools_arena_alloc(&cache->string_arena, len + 1);
+                            if (str) {
+                                memcpy(str, field_buf, len + 1);
+                            } else {
+                                str = "";
+                            }
                         }
                     } else {
                         str = ctools_arena_alloc(&cache->string_arena, 1);
@@ -1243,7 +1304,7 @@ static void *cimport_build_cache_worker(void *arg) {
                         CImportFieldRef *field = &row->fields[col_idx];
                         const char *src = ctx->file_data + field->offset;
 
-                        if (!ctools_parse_double_with_separators(src, field->length, &val, missing,
+                        if (!ctools_parse_double_with_separators(src, CIMPORT_FIELD_LENGTH(*field), &val, missing,
                                                                   ctx->decimal_separator, ctx->group_separator)) {
                             val = missing;
                         }
@@ -1286,7 +1347,8 @@ static void cimport_build_column_cache(CImportContext *ctx) {
             cache->string_data = ctools_safe_calloc2(ctx->total_rows, sizeof(char *));
             cache->numeric_data = NULL;
         } else {
-            cache->numeric_data = ctools_safe_malloc2(ctx->total_rows, sizeof(double));
+            /* Skip numeric column cache — parsed directly during SPI store */
+            cache->numeric_data = NULL;
             cache->string_data = NULL;
         }
         cache->count = 0;
@@ -1300,11 +1362,9 @@ static void cimport_build_column_cache(CImportContext *ctx) {
         CImportCacheBuildTask task = {ctx, 0, ctx->num_columns, 0};
         cimport_build_cache_worker(&task);
     } else {
-        pthread_t threads[CIMPORT_MAX_THREADS];
         CImportCacheBuildTask tasks[CIMPORT_MAX_THREADS];
 
         int cols_per_thread = (ctx->num_columns + num_threads - 1) / num_threads;
-        int threads_created = 0;
 
         for (int t = 0; t < num_threads; t++) {
             tasks[t].ctx = ctx;
@@ -1312,16 +1372,28 @@ static void cimport_build_column_cache(CImportContext *ctx) {
             tasks[t].col_end = (t + 1) * cols_per_thread;
             if (tasks[t].col_end > ctx->num_columns) tasks[t].col_end = ctx->num_columns;
             tasks[t].thread_id = t;
-
-            if (pthread_create(&threads[t], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
-                threads_created++;
-            } else {
-                cimport_build_cache_worker(&tasks[t]);
-            }
         }
 
-        for (int t = 0; t < threads_created; t++) {
-            pthread_join(threads[t], NULL);
+        ctools_persistent_pool *pool = ctools_get_global_pool();
+        if (pool != NULL) {
+            ctools_persistent_pool_submit_batch(pool, cimport_build_cache_worker,
+                                                 tasks, num_threads,
+                                                 sizeof(CImportCacheBuildTask));
+            ctools_persistent_pool_wait(pool);
+        } else {
+            /* Fallback: raw pthreads */
+            pthread_t threads[CIMPORT_MAX_THREADS];
+            int threads_created = 0;
+            for (int t = 0; t < num_threads; t++) {
+                if (pthread_create(&threads[t], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
+                    threads_created++;
+                } else {
+                    cimport_build_cache_worker(&tasks[t]);
+                }
+            }
+            for (int t = 0; t < threads_created; t++) {
+                pthread_join(threads[t], NULL);
+            }
         }
     }
 
@@ -1389,7 +1461,6 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
                                    CImportNumericTypeMode numeric_type_mode, char decimal_sep, char group_sep,
                                    CImportEmptyLinesMode emptylines_mode, int max_quoted_rows,
                                    CImportEncoding requested_encoding) {
-    char msg[512];
     char macro_val[65536];
 
     cimport_clear_cached_context();
@@ -1405,8 +1476,8 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
                                        force_num, num_force_num, force_str, num_force_str);
 
     if (!g_cimport_ctx) {
-        free(force_num);
-        free(force_str);
+        /* cimport_parse_csv took ownership of force_num/force_str and freed them
+         * on failure via cimport_free_context, so do NOT free them here. */
         return 601;
     }
 
@@ -1466,16 +1537,101 @@ static ST_retcode cimport_do_scan(const char *filename, char delimiter, bool has
     /* Display warnings for malformed data (like Stata) */
     cimport_display_warnings(ctx);
 
-    snprintf(msg, sizeof(msg), "Scanned %zu rows, %d columns\n", ctx->total_rows, ctx->num_columns);
-    cimport_display_msg(msg);
-
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  [C timing] mmap: %.2f ms, parse: %.2f ms, type_infer: %.2f ms\n",
-                 ctx->time_mmap, ctx->time_parse, ctx->time_type_infer);
-        cimport_display_msg(msg);
-    }
+    /* Timing data saved to scalars for verbose table in .ado */
 
     return 0;
+}
+
+/* ============================================================================
+ * Parallel SPI Store Workers
+ * ============================================================================ */
+
+typedef struct {
+    CImportColumnInfo *col;
+    CImportColumnCache *cache;
+    ST_int var;
+    /* For direct numeric store (cache-less path) */
+    CImportContext *ctx;
+    int col_idx;
+    size_t rows_stored;     /* output: number of rows stored */
+} CImportSPIStoreTask;
+
+/* String SPI store worker (uses pre-built string cache) */
+static void *cimport_spi_store_worker(void *arg) {
+    CImportSPIStoreTask *task = (CImportSPIStoreTask *)arg;
+    CImportColumnCache *cache = task->cache;
+    ST_int var = task->var;
+    size_t nrows = cache->count;
+    task->rows_stored = nrows;
+
+    char **strings = cache->string_data;
+
+    for (size_t p = 0; p < 16 && p < nrows; p++) {
+        __builtin_prefetch(strings[p], 0, 0);
+    }
+
+    size_t i = 0;
+    size_t nrows_aligned = nrows & ~(size_t)3;
+
+    for (; i < nrows_aligned; i += 4) {
+        if (i + 16 < nrows) {
+            __builtin_prefetch(&strings[i + 16], 0, 0);
+            __builtin_prefetch(strings[i + 12], 0, 0);
+            __builtin_prefetch(strings[i + 13], 0, 0);
+            __builtin_prefetch(strings[i + 14], 0, 0);
+            __builtin_prefetch(strings[i + 15], 0, 0);
+        }
+
+        SF_sstore(var, (ST_int)(i + 1), strings[i]);
+        SF_sstore(var, (ST_int)(i + 2), strings[i + 1]);
+        SF_sstore(var, (ST_int)(i + 3), strings[i + 2]);
+        SF_sstore(var, (ST_int)(i + 4), strings[i + 3]);
+    }
+
+    for (; i < nrows; i++) {
+        SF_sstore(var, (ST_int)(i + 1), strings[i]);
+    }
+
+    return NULL;
+}
+
+/* Numeric SPI store worker — parse directly from chunks, no cache */
+static void *cimport_spi_store_numeric_direct(void *arg) {
+    CImportSPIStoreTask *task = (CImportSPIStoreTask *)arg;
+    CImportContext *ctx = task->ctx;
+    ST_int var = task->var;
+    int col_idx = task->col_idx;
+    double missing = SV_missval;
+
+    size_t row_idx = 0;
+
+    for (int c = 0; c < ctx->num_chunks; c++) {
+        CImportParsedChunk *chunk = &ctx->chunks[c];
+        size_t start_row = (c == 0 && ctx->has_header) ? 1 : 0;
+
+        for (size_t r = start_row; r < chunk->num_rows; r++) {
+            CImportParsedRow *row = chunk->rows[r];
+            double val;
+
+            if (col_idx < row->num_fields) {
+                CImportFieldRef *field = &row->fields[col_idx];
+                const char *src = ctx->file_data + field->offset;
+
+                if (!ctools_parse_double_with_separators(src, CIMPORT_FIELD_LENGTH(*field), &val, missing,
+                                                          ctx->decimal_separator, ctx->group_separator)) {
+                    val = missing;
+                }
+            } else {
+                val = missing;
+            }
+
+            SF_vstore(var, (ST_int)(row_idx + 1), val);
+            row_idx++;
+        }
+    }
+
+    task->rows_stored = row_idx;
+    return NULL;
 }
 
 /* ============================================================================
@@ -1505,8 +1661,7 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
                                            force_num, num_force_num, force_str, num_force_str);
         ctx = g_cimport_ctx;
         if (!ctx) {
-            free(force_num);
-            free(force_str);
+            /* cimport_parse_csv took ownership of force_num/force_str */
             return 601;
         }
         cimport_display_warnings(ctx);
@@ -1523,16 +1678,11 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
     }
 
     double t_load_start = ctools_timer_ms();
-    long total_fields = 0;
 
     ST_int stata_nvars = SF_nvars();
     ST_int stata_nobs = SF_nobs();
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  [debug] SF_nvars()=%d, SF_nobs()=%d, ctx->num_columns=%d, ctx->total_rows=%zu\n",
-                 stata_nvars, stata_nobs, ctx->num_columns, ctx->total_rows);
-        cimport_display_msg(msg);
-    }
+    (void)verbose; /* verbose timing reported via scalars */
 
     if (stata_nvars < ctx->num_columns) {
         snprintf(msg, sizeof(msg), "Error: Stata has %d variables but CSV has %d columns\n",
@@ -1550,92 +1700,66 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
         return 198;
     }
 
-    for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
-        CImportColumnInfo *col = &ctx->columns[col_idx];
-        CImportColumnCache *cache = &ctx->col_cache[col_idx];
-        ST_int var = col_idx + 1;
-        size_t nrows = cache->count;
-
-        if (col->type == CIMPORT_COL_STRING) {
-            char **strings = cache->string_data;
-
-            for (size_t p = 0; p < 16 && p < nrows; p++) {
-                __builtin_prefetch(strings[p], 0, 0);
-            }
-
-            size_t i = 0;
-            size_t nrows_aligned = nrows & ~(size_t)3;
-
-            for (; i < nrows_aligned; i += 4) {
-                if (i + 16 < nrows) {
-                    __builtin_prefetch(&strings[i + 16], 0, 0);
-                    __builtin_prefetch(strings[i + 12], 0, 0);
-                    __builtin_prefetch(strings[i + 13], 0, 0);
-                    __builtin_prefetch(strings[i + 14], 0, 0);
-                    __builtin_prefetch(strings[i + 15], 0, 0);
-                }
-
-                SF_sstore(var, (ST_int)(i + 1), strings[i]);
-                SF_sstore(var, (ST_int)(i + 2), strings[i + 1]);
-                SF_sstore(var, (ST_int)(i + 3), strings[i + 2]);
-                SF_sstore(var, (ST_int)(i + 4), strings[i + 3]);
-            }
-
-            for (; i < nrows; i++) {
-                SF_sstore(var, (ST_int)(i + 1), strings[i]);
-            }
-            total_fields += nrows;
-        } else {
-            double *values = cache->numeric_data;
-
-            __builtin_prefetch(values, 0, 0);
-            __builtin_prefetch(values + 8, 0, 0);
-            __builtin_prefetch(values + 16, 0, 0);
-            __builtin_prefetch(values + 24, 0, 0);
-
-            size_t i = 0;
-            size_t nrows_aligned = nrows & ~(size_t)7;
-
-            for (; i < nrows_aligned; i += 8) {
-                __builtin_prefetch(values + i + 32, 0, 0);
-                __builtin_prefetch(values + i + 40, 0, 0);
-
-                SF_vstore(var, (ST_int)(i + 1), values[i]);
-                SF_vstore(var, (ST_int)(i + 2), values[i + 1]);
-                SF_vstore(var, (ST_int)(i + 3), values[i + 2]);
-                SF_vstore(var, (ST_int)(i + 4), values[i + 3]);
-                SF_vstore(var, (ST_int)(i + 5), values[i + 4]);
-                SF_vstore(var, (ST_int)(i + 6), values[i + 5]);
-                SF_vstore(var, (ST_int)(i + 7), values[i + 6]);
-                SF_vstore(var, (ST_int)(i + 8), values[i + 7]);
-            }
-
-            for (; i < nrows; i++) {
-                SF_vstore(var, (ST_int)(i + 1), values[i]);
-            }
-            total_fields += nrows;
+    /* Parallel SPI store: route string cols through cache, numerics direct */
+    {
+        CImportSPIStoreTask *store_tasks = ctools_safe_malloc2(ctx->num_columns, sizeof(CImportSPIStoreTask));
+        if (!store_tasks) {
+            cimport_clear_cached_context();
+            return 459;
         }
+
+        for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
+            store_tasks[col_idx].col = &ctx->columns[col_idx];
+            store_tasks[col_idx].cache = &ctx->col_cache[col_idx];
+            store_tasks[col_idx].var = col_idx + 1;
+            store_tasks[col_idx].ctx = ctx;
+            store_tasks[col_idx].col_idx = col_idx;
+            store_tasks[col_idx].rows_stored = 0;
+        }
+
+        /* Use persistent pool or sequential dispatch.
+         * String columns use cimport_spi_store_worker (cache-based).
+         * Numeric columns use cimport_spi_store_numeric_direct (cache-less). */
+        ctools_persistent_pool *pool = (ctx->num_columns >= 2) ? ctools_get_global_pool() : NULL;
+
+        if (pool != NULL) {
+            /* Submit all tasks — need to dispatch to correct worker per column.
+             * Since pool expects homogeneous workers, run in two batches or
+             * use a dispatcher. Use sequential dispatch for simplicity since
+             * the pool handles parallelism internally. */
+            for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
+                if (ctx->columns[col_idx].type == CIMPORT_COL_STRING) {
+                    ctools_persistent_pool_submit(pool, cimport_spi_store_worker, &store_tasks[col_idx]);
+                } else {
+                    ctools_persistent_pool_submit(pool, cimport_spi_store_numeric_direct, &store_tasks[col_idx]);
+                }
+            }
+            ctools_persistent_pool_wait(pool);
+        } else {
+            for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
+                if (ctx->columns[col_idx].type == CIMPORT_COL_STRING) {
+                    cimport_spi_store_worker(&store_tasks[col_idx]);
+                } else {
+                    cimport_spi_store_numeric_direct(&store_tasks[col_idx]);
+                }
+            }
+        }
+
+        free(store_tasks);
     }
 
     double t_load_end = ctools_timer_ms();
     double time_spi = t_load_end - t_load_start;
 
-    snprintf(msg, sizeof(msg), "Loaded %zu observations\n", ctx->total_rows);
-    cimport_display_msg(msg);
+    /* Timing data saved to scalars for verbose table in .ado */
 
-    if (verbose) {
-        snprintf(msg, sizeof(msg), "  [C timing] SPI store: %.2f ms (%ld fields, %.0f fields/sec)\n",
-                 time_spi, total_fields, total_fields / (time_spi / 1000.0));
-        cimport_display_msg(msg);
-    }
-
-    /* Save timing and thread diagnostics to Stata scalars */
-    SF_scal_save("_cimport_time_mmap", ctx->time_mmap);
-    SF_scal_save("_cimport_time_parse", ctx->time_parse);
-    SF_scal_save("_cimport_time_infer", ctx->time_type_infer);
-    SF_scal_save("_cimport_time_cache", ctx->time_cache);
-    SF_scal_save("_cimport_time_store", time_spi);
-    SF_scal_save("_cimport_time_total", ctx->time_mmap + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi);
+    /* Save timing and thread diagnostics to Stata scalars (convert ms to seconds) */
+    SF_scal_save("_cimport_time_mmap", ctx->time_mmap / 1000.0);
+    SF_scal_save("_cimport_time_parse", ctx->time_parse / 1000.0);
+    SF_scal_save("_cimport_time_infer", ctx->time_type_infer / 1000.0);
+    SF_scal_save("_cimport_time_cache", ctx->time_cache / 1000.0);
+    SF_scal_save("_cimport_time_store", time_spi / 1000.0);
+    SF_scal_save("_cimport_time_total", (ctx->time_mmap + ctx->time_parse + ctx->time_type_infer + ctx->time_cache + time_spi) / 1000.0);
     CTOOLS_SAVE_THREAD_INFO("_cimport");
 
     cimport_clear_cached_context();
@@ -1791,6 +1915,6 @@ ST_retcode cimport_main(const char *args) {
 
 void cimport_cleanup_cache(void)
 {
-    /* Reuse existing cleanup function */
     cimport_clear_cached_context();
+    xlsx_clear_cached_context();
 }

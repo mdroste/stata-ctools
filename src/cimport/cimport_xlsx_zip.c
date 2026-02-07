@@ -145,3 +145,118 @@ void *xlsx_zip_extract_file(xlsx_zip_archive *archive, const char *filename,
 
     return xlsx_zip_extract_to_heap(archive, idx, out_size);
 }
+
+/* ============================================================================
+ * Fast Extraction (libdeflate-accelerated)
+ * ============================================================================ */
+
+#include "libdeflate/libdeflate.h"
+
+void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
+                            size_t *out_size)
+{
+    if (!archive) return NULL;
+
+    mz_uint num_files = mz_zip_reader_get_num_files(&archive->zip);
+    if (file_index >= num_files) return NULL;
+
+    /* Get file stats */
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(&archive->zip, (mz_uint)file_index, &stat))
+        return NULL;
+
+    size_t uncomp_size = (size_t)stat.m_uncomp_size;
+    size_t comp_size = (size_t)stat.m_comp_size;
+
+    if (stat.m_method == 0) {
+        /* STORE method — no compression, use standard extraction */
+        return xlsx_zip_extract_to_heap(archive, file_index, out_size);
+    }
+
+    if (stat.m_method != MZ_DEFLATED) {
+        /* Unknown method — fall back to miniz */
+        return xlsx_zip_extract_to_heap(archive, file_index, out_size);
+    }
+
+    /* Extract raw compressed data using miniz */
+    void *comp_buf = mz_zip_reader_extract_to_heap(&archive->zip,
+                                                     (mz_uint)file_index,
+                                                     &comp_size,
+                                                     MZ_ZIP_FLAG_COMPRESSED_DATA);
+    if (!comp_buf) {
+        /* Fall back to standard miniz extraction */
+        return xlsx_zip_extract_to_heap(archive, file_index, out_size);
+    }
+
+    /* Allocate output buffer */
+    void *uncomp_buf = malloc(uncomp_size + 1);  /* +1 for potential NUL */
+    if (!uncomp_buf) {
+        free(comp_buf);
+        return NULL;
+    }
+
+    /* Decompress with libdeflate */
+    struct libdeflate_decompressor *d = libdeflate_alloc_decompressor();
+    if (!d) {
+        free(comp_buf);
+        free(uncomp_buf);
+        return xlsx_zip_extract_to_heap(archive, file_index, out_size);
+    }
+
+    size_t actual_size = 0;
+    enum libdeflate_result result = libdeflate_deflate_decompress(
+        d, comp_buf, comp_size, uncomp_buf, uncomp_size, &actual_size);
+    libdeflate_free_decompressor(d);
+    free(comp_buf);
+
+    if (result != LIBDEFLATE_SUCCESS) {
+        free(uncomp_buf);
+        /* Fall back to miniz on decompression failure */
+        return xlsx_zip_extract_to_heap(archive, file_index, out_size);
+    }
+
+    if (out_size) *out_size = actual_size;
+    return uncomp_buf;
+}
+
+/* ============================================================================
+ * Streaming Extraction
+ * ============================================================================ */
+
+struct xlsx_zip_stream {
+    mz_zip_reader_extract_iter_state *iter;
+};
+
+xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index)
+{
+    if (!archive) return NULL;
+
+    mz_uint num_files = mz_zip_reader_get_num_files(&archive->zip);
+    if (file_index >= num_files) return NULL;
+
+    xlsx_zip_stream *stream = (xlsx_zip_stream *)malloc(sizeof(xlsx_zip_stream));
+    if (!stream) return NULL;
+
+    stream->iter = mz_zip_reader_extract_iter_new(&archive->zip, (mz_uint)file_index, 0);
+    if (!stream->iter) {
+        free(stream);
+        return NULL;
+    }
+
+    return stream;
+}
+
+size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size)
+{
+    if (!stream || !stream->iter || !buffer || buffer_size == 0) return 0;
+    return mz_zip_reader_extract_iter_read(stream->iter, buffer, buffer_size);
+}
+
+void xlsx_zip_stream_close(xlsx_zip_stream *stream)
+{
+    if (!stream) return;
+    if (stream->iter) {
+        mz_zip_reader_extract_iter_free(stream->iter);
+    }
+    free(stream);
+}

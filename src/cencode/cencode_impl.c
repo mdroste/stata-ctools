@@ -90,22 +90,21 @@ ST_retcode cencode_main(const char *args)
     ctools_parse_string_option(args, "label", label_name, sizeof(label_name));
     noextend = ctools_parse_bool_option(args, "noextend");
 
-    /* existing= can be very long (up to 31KB); extract from original args */
-    char *existing_labels_str = NULL;
-    const char *existing_ptr = strstr(args, "existing=");
-    if (existing_ptr) {
-        existing_labels_str = (char *)(existing_ptr + 9);
-    }
+    char existfile[1024] = "";
+    ctools_parse_string_option(args, "existfile", existfile, sizeof(existfile));
 
-    /* Build existing labels hash table if noextend with existing labels */
+    char labelfile[1024] = "";
+    ctools_parse_string_option(args, "labelfile", labelfile, sizeof(labelfile));
+
+    /* Build existing labels hash table from label save file (noextend path) */
     ctools_str_hash_table existing_ht;
     int have_existing = 0;
-    if (noextend && existing_labels_str && *existing_labels_str) {
+    if (noextend && existfile[0] != '\0') {
         if (ctools_str_hash_init(&existing_ht, CENCODE_HASH_INIT_SIZE) != 0) {
             SF_error("cencode: memory allocation failed for existing labels\n");
             return 920;
         }
-        if (ctools_label_parse_string(existing_labels_str, &existing_ht) != 0) {
+        if (ctools_label_parse_stata_file_str(existfile, &existing_ht) != 0) {
             ctools_str_hash_free(&existing_ht);
             SF_error("cencode: failed to parse existing labels\n");
             return 920;
@@ -154,8 +153,7 @@ ST_retcode cencode_main(const char *args)
         ctools_filtered_data_free(&filtered);
         if (have_existing) ctools_str_hash_free(&existing_ht);
         SF_scal_save("_cencode_n_unique", 0);
-        SF_scal_save("_cencode_n_chunks", 1);
-        SF_macro_save("_cencode_labels_0", "");
+        /* (no label file or macros needed for this early-return path) */
         SF_scal_save("_cencode_time_parse", time_parse);
         SF_scal_save("_cencode_time_load", ctools_timer_seconds() - t_parse);
         SF_scal_save("_cencode_time_collect", 0);
@@ -254,8 +252,7 @@ ST_retcode cencode_main(const char *args)
 
         /* No new labels to define - using existing */
         SF_scal_save("_cencode_n_unique", 0);  /* Signal no new labels needed */
-        SF_scal_save("_cencode_n_chunks", 1);
-        SF_macro_save("_cencode_labels_0", "");
+        /* (no label file or macros needed for this early-return path) */
 
         SF_scal_save("_cencode_time_parse", time_parse);
         SF_scal_save("_cencode_time_load", time_load);
@@ -282,8 +279,7 @@ ST_retcode cencode_main(const char *args)
             SF_vstore(gen_idx, (ST_int)obs_map[i], SV_missval);
         }
         SF_scal_save("_cencode_n_unique", 0);
-        SF_scal_save("_cencode_n_chunks", 1);
-        SF_macro_save("_cencode_labels_0", "");
+        /* (no label file or macros needed for this early-return path) */
 
         free(obs_codes);
         ctools_filtered_data_free(&filtered);
@@ -383,48 +379,46 @@ ST_retcode cencode_main(const char *args)
     double time_encode = t_encode - t_sort;
 
     /* ========================================================================
-     * Store label mapping in Stata macros via ctools_label_serialize_macros
+     * Write label definitions to .do file for the .ado to run
      * ======================================================================== */
 
     SF_scal_save("_cencode_n_unique", (double)n_unique);
 
-    /* Build arrays for serialization */
-    const char **label_strings = malloc(n_unique * sizeof(const char *));
-    int *label_codes = malloc(n_unique * sizeof(int));
-    if (!label_strings || !label_codes) {
+    if (labelfile[0] != '\0') {
+        /* Build arrays for file writing */
+        const char **label_strings = malloc(n_unique * sizeof(const char *));
+        int *label_codes = malloc(n_unique * sizeof(int));
+        if (!label_strings || !label_codes) {
+            free(label_strings);
+            free(label_codes);
+            free(code_map);
+            free(sorted_strings);
+            ctools_filtered_data_free(&filtered);
+            ctools_str_hash_free(&ht);
+            SF_error("cencode: memory allocation failed\n");
+            return 920;
+        }
+
+        for (size_t i = 0; i < n_unique; i++) {
+            label_strings[i] = sorted_strings[i].str;
+            label_codes[i] = sorted_strings[i].final_code;
+        }
+
+        if (ctools_label_write_stata_file(label_strings, label_codes,
+                                           n_unique, label_name,
+                                           labelfile) != 0) {
+            free(label_strings);
+            free(label_codes);
+            free(code_map);
+            free(sorted_strings);
+            ctools_filtered_data_free(&filtered);
+            ctools_str_hash_free(&ht);
+            SF_error("cencode: failed to write label file\n");
+            return 920;
+        }
+
         free(label_strings);
         free(label_codes);
-        free(code_map);
-        free(sorted_strings);
-        ctools_filtered_data_free(&filtered);
-        ctools_str_hash_free(&ht);
-        SF_error("cencode: memory allocation failed\n");
-        return 920;
-    }
-
-    for (size_t i = 0; i < n_unique; i++) {
-        label_strings[i] = sorted_strings[i].str;
-        label_codes[i] = sorted_strings[i].final_code;
-    }
-
-    int n_chunks = ctools_label_serialize_macros(label_strings, label_codes,
-                                                  n_unique, "_cencode_labels");
-    free(label_strings);
-    free(label_codes);
-
-    if (n_chunks < 0) {
-        free(code_map);
-        free(sorted_strings);
-        ctools_filtered_data_free(&filtered);
-        ctools_str_hash_free(&ht);
-        SF_error("cencode: failed to serialize labels\n");
-        return 920;
-    }
-
-    SF_scal_save("_cencode_n_chunks", (double)n_chunks);
-
-    if (label_name[0] != '\0') {
-        SF_macro_save("_cencode_label_name", label_name);
     }
 
     t_labels = ctools_timer_seconds();

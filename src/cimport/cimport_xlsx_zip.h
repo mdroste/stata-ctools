@@ -87,6 +87,45 @@ void *xlsx_zip_extract_file(xlsx_zip_archive *archive, const char *filename,
                             size_t *out_size);
 
 /* ============================================================================
+ * Streaming Extraction (for large files like worksheets)
+ * ============================================================================ */
+
+/*
+ * Opaque streaming reader handle.
+ * Wraps miniz's iterative extraction API for chunk-by-chunk decompression.
+ */
+typedef struct xlsx_zip_stream xlsx_zip_stream;
+
+/*
+ * Open a streaming reader for the file at the given index.
+ * Returns NULL on failure.
+ */
+xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index);
+
+/*
+ * Read up to buffer_size bytes from the stream.
+ * Returns the number of bytes read, or 0 on EOF/error.
+ */
+size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size);
+
+/*
+ * Close the stream and free resources.
+ */
+void xlsx_zip_stream_close(xlsx_zip_stream *stream);
+
+/* ============================================================================
+ * Fast Extraction (libdeflate-accelerated)
+ * ============================================================================ */
+
+/*
+ * Extract a file to a newly allocated buffer using libdeflate for inflate.
+ * 2-4x faster than miniz for large files. Falls back to miniz on error.
+ * Same interface as xlsx_zip_extract_to_heap().
+ */
+void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
+                            size_t *out_size);
+
+/* ============================================================================
  * Common XLSX Archive Paths
  * ============================================================================ */
 

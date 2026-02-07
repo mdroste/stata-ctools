@@ -27,10 +27,12 @@ typedef enum {
     MERGE_RESULT_BOTH = 3
 } cmerge_result_t;
 
-/* Output specification for each row in merged output */
+/* Output specification for each row in merged output.
+ * Uses int32_t for row indices since Stata max obs is INT32_MAX.
+ * This halves the struct size (24 -> 12 bytes) for better cache density. */
 typedef struct {
-    int64_t master_sorted_row;  /* Row index in sorted master (-1 if using-only) */
-    int64_t using_sorted_row;   /* Row index in sorted using (-1 if master-only) */
+    int32_t master_sorted_row;  /* Row index in sorted master (-1 if using-only) */
+    int32_t using_sorted_row;   /* Row index in sorted using (-1 if master-only) */
     int8_t merge_result;        /* 1=master only, 2=using only, 3=matched */
 } cmerge_output_spec_t;
 

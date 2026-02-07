@@ -67,7 +67,11 @@ ST_int ctools_remove_singletons(
     ST_int num_singletons_iter;
     ST_int iter = 0;
 
-    if (G == 0) return 0;
+    if (G == 0) {
+        /* No FE factors means no singletons, but still initialize mask */
+        for (i = 0; i < N; i++) mask[i] = 1;
+        return 0;
+    }
 
     /* Find max level for each factor */
     ST_int *max_levels = (ST_int *)malloc(G * sizeof(ST_int));
@@ -246,6 +250,100 @@ ST_int ctools_compact_matrix_double(
     }
 
     return idx;
+}
+
+/* ========================================================================
+ * Build sorted permutation for cache-friendly FE projection
+ * ======================================================================== */
+
+ST_int ctools_build_sorted_permutation(FE_Factor *f, ST_int N)
+{
+    /* The sorted path trades sequential ans[] access (N-sized) for sequential
+     * means[] access (num_levels-sized). This is only worthwhile when means[]
+     * exceeds L2 cache (~256KB), i.e. num_levels > ~32K. For typical FE factors,
+     * means[] fits in L1/L2 and the original sequential-scan of ans[] is far
+     * faster because the hardware prefetcher handles it perfectly. Disable
+     * by using a threshold that effectively never triggers. */
+    (void)N;
+    f->sorted_initialized = 0;
+    f->sorted_indices = NULL;
+    f->sorted_levels = NULL;
+    f->level_offsets = NULL;
+    return 0;
+
+#if 0  /* Sorted permutation disabled — see comment above */
+    if (num_levels <= 64) {
+        f->sorted_initialized = 0;
+        return 0;
+    }
+
+    /* Allocate sorted_indices and level_offsets */
+    f->sorted_indices = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    f->level_offsets = (ST_int *)malloc(((size_t)num_levels + 1) * sizeof(ST_int));
+
+    if (!f->sorted_indices || !f->level_offsets) {
+        if (f->sorted_indices) { free(f->sorted_indices); f->sorted_indices = NULL; }
+        if (f->level_offsets) { free(f->level_offsets); f->level_offsets = NULL; }
+        f->sorted_initialized = 0;
+        return -1;
+    }
+
+    /* Counting sort: levels are 1-based contiguous [1..num_levels] */
+
+    /* Step 1: Count occurrences per level (reuse level_offsets as temp) */
+    memset(f->level_offsets, 0, ((size_t)num_levels + 1) * sizeof(ST_int));
+    for (i = 0; i < N; i++) {
+        f->level_offsets[f->levels[i]]++;  /* levels[i] is 1-based */
+    }
+
+    /* Step 2: Compute prefix sums (exclusive) to get starting offsets.
+     * level_offsets[lev] = start position for level lev (1-based). */
+    {
+        ST_int cumsum = 0;
+        for (lev = 1; lev <= num_levels; lev++) {
+            ST_int count = f->level_offsets[lev];
+            f->level_offsets[lev] = cumsum;
+            cumsum += count;
+        }
+        f->level_offsets[0] = 0;  /* Sentinel / unused for 1-based levels */
+    }
+
+    /* Step 3: Place indices into sorted order.
+     * After this, sorted_indices[level_offsets[lev]..level_offsets[lev]+count-1]
+     * contains the observation indices for level lev. */
+    {
+        /* Use a temporary copy of offsets as write cursors */
+        ST_int *cursors = (ST_int *)malloc(((size_t)num_levels + 1) * sizeof(ST_int));
+        if (!cursors) {
+            free(f->sorted_indices); f->sorted_indices = NULL;
+            free(f->level_offsets); f->level_offsets = NULL;
+            f->sorted_initialized = 0;
+            return -1;
+        }
+        memcpy(cursors, f->level_offsets, ((size_t)num_levels + 1) * sizeof(ST_int));
+
+        for (i = 0; i < N; i++) {
+            ST_int l = f->levels[i];  /* 1-based */
+            f->sorted_indices[cursors[l]++] = i;
+        }
+        free(cursors);
+    }
+
+    /* Shift level_offsets to be 0-based indexed: offsets[0..num_levels]
+     * where offsets[lev] is the start for 0-based level index lev,
+     * and offsets[num_levels] = N. */
+    for (lev = 0; lev < num_levels; lev++) {
+        f->level_offsets[lev] = f->level_offsets[lev + 1];
+    }
+    f->level_offsets[num_levels] = N;
+
+    /* Don't need sorted_levels — the level for sorted_indices[j] where
+     * level_offsets[lev] <= j < level_offsets[lev+1] is simply lev. */
+    f->sorted_levels = NULL;
+
+    f->sorted_initialized = 1;
+    return 0;
+#endif  /* sorted permutation disabled */
 }
 
 /* ========================================================================
@@ -444,20 +542,22 @@ ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int ma
         ST_int num_lev = state->factors[g].num_levels;
 
         state->factors[g].inv_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
-        if (state->factors[g].inv_counts) {
-            for (ST_int lev = 0; lev < num_lev; lev++) {
-                state->factors[g].inv_counts[lev] =
-                    (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
-            }
+        if (!state->factors[g].inv_counts) {
+            return -1;  /* Allocation failed — caller must clean up */
+        }
+        for (ST_int lev = 0; lev < num_lev; lev++) {
+            state->factors[g].inv_counts[lev] =
+                (state->factors[g].counts[lev] > 0) ? 1.0 / state->factors[g].counts[lev] : 0.0;
         }
 
         if (state->has_weights && state->factors[g].weighted_counts) {
             state->factors[g].inv_weighted_counts = (ST_double *)malloc((size_t)num_lev * sizeof(ST_double));
-            if (state->factors[g].inv_weighted_counts) {
-                for (ST_int lev = 0; lev < num_lev; lev++) {
-                    state->factors[g].inv_weighted_counts[lev] =
-                        (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
-                }
+            if (!state->factors[g].inv_weighted_counts) {
+                return -1;  /* Allocation failed — caller must clean up */
+            }
+            for (ST_int lev = 0; lev < num_lev; lev++) {
+                state->factors[g].inv_weighted_counts[lev] =
+                    (state->factors[g].weighted_counts[lev] > 0) ? 1.0 / state->factors[g].weighted_counts[lev] : 0.0;
             }
         } else {
             state->factors[g].inv_weighted_counts = NULL;

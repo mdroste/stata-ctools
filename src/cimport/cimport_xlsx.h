@@ -11,6 +11,7 @@
 
 #include "stplugin.h"
 #include "cimport_context.h"
+#include "../ctools_arena.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -82,6 +83,7 @@ typedef struct {
     XLSXCell *cells;
     int num_cells;
     int capacity;
+    bool cells_from_arena; /* true if cells allocated from arena (don't free individually) */
 } XLSXParsedRow;
 
 /* ============================================================================
@@ -105,18 +107,42 @@ typedef struct XLSXContext {
     char *shared_strings_pool;      /* Memory pool for string data */
     size_t shared_strings_pool_size;
     size_t shared_strings_pool_used;
+    uint32_t *shared_string_lengths; /* Pre-computed lengths for O(1) lookup */
 
     /* Date format detection (style indices that are dates) */
     bool *date_styles;
     int num_styles;
 
-    /* Parsed worksheet data */
+    /* Arena for parse-phase allocations (inline strings) */
+    ctools_arena parse_arena;
+
+    /* Arena for cell allocations (replaces per-row realloc) */
+    ctools_arena cells_arena;
+
+    /* Dimension info from <dimension> element (0 if absent) */
+    int dimension_rows;       /* Total rows from dimension ref */
+    int dimension_cols;       /* Total columns from dimension ref */
+
+    /* Parsed worksheet data (row-major, used as fallback when dimension unknown) */
     XLSXParsedRow *rows;
     int num_rows;
     int rows_capacity;
     int max_col;              /* Maximum column index seen (0-based) */
     int min_row;              /* Minimum row number (1-based) */
     int max_row;              /* Maximum row number (1-based) */
+
+    /* Column-major storage (used when dimension is known) */
+    double **cm_numeric;      /* cm_numeric[col][row] — values or (double)ss_index */
+    uint8_t **cm_types;       /* cm_types[col][row] — XLSXCellType per cell */
+    int *cm_styles;           /* cm_styles[flat_idx] — style index for date detection (or NULL) */
+    size_t cm_num_rows;       /* Number of data rows allocated */
+    int cm_num_cols;          /* Number of columns allocated */
+    int cm_data_start_row;    /* 1-based row number where data starts */
+    bool cm_active;           /* true if column-major path is active */
+
+    /* Inline type inference stats (populated during worksheet parse) */
+    CImportColumnInfo *col_stats;
+    int col_stats_capacity;
 
     /* Column metadata (reuse CImportColumnInfo from CSV) */
     CImportColumnInfo *columns;
@@ -156,6 +182,12 @@ typedef struct XLSXContext {
  * Options: sheet=name, cellrange=A1:D100, firstrow, allstring, case=lower, verbose
  */
 ST_retcode xlsx_import_main(const char *args);
+
+/*
+ * Clear the cached XLSX context (if any).
+ * Called from cimport_cleanup_cache() and internally after load completes.
+ */
+void xlsx_clear_cached_context(void);
 
 /*
  * Initialize XLSX context with default values.

@@ -196,7 +196,9 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             return 1;
         }
         for (i = 0; i < N_orig; i++) {
-            factors[g].counts[factors[g].levels[i] - 1]++;
+            if (mask[i]) {
+                factors[g].counts[factors[g].levels[i] - 1]++;
+            }
         }
     }
 

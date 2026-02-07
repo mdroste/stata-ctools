@@ -144,7 +144,9 @@ static int vce_sort_by_cluster(const ST_int *cluster_ids, ST_int N, ST_int num_c
     if (!counts) return -1;
 
     for (i = 0; i < N; i++) {
-        counts[cluster_ids[i]]++;
+        ST_int c = cluster_ids[i];
+        if (c < 0 || c >= num_clusters) { free(counts); return -1; }
+        counts[c]++;
     }
 
     /* Compute prefix sums to get starting positions */
@@ -177,6 +179,9 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
     ST_int N = d->N;
     ST_int K = d->K;
 
+    /* Zero V on entry so any early return leaves a known state (zero SE) */
+    memset(V, 0, K * K * sizeof(ST_double));
+
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;
     if (d->normalize_weights && d->weights != NULL && (d->weight_type == 1 || d->weight_type == 3)) {
@@ -204,7 +209,8 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
      * - No weights:      w_i = e_i^2
      * - fweight:          w_i = e_i^2 * fw_i
      * - aw/pw normalized: w_i = (e_i * w_norm_i)^2
-     * - aw/pw raw (IV):   w_i = (w_i * e_i)^2    [but actually w_i * e_i^2] */
+     * - aw/pw raw (IV):   w_i = (w_i * e_i)^2    [but actually w_i * e_i^2]
+     * Symmetric: accumulate upper triangle, then mirror. */
     for (idx = 0; idx < N; idx++) {
         ST_double w_i;
         ST_double e = d->resid[idx];
@@ -222,11 +228,17 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
         }
 
         for (j = 0; j < K; j++) {
-            ST_double xj = d->X_eff[j * N + idx];
-            for (k = 0; k < K; k++) {
-                ST_double xk = d->X_eff[k * N + idx];
-                meat[j * K + k] += w_i * xj * xk;
+            ST_double wxj = w_i * d->X_eff[j * N + idx];
+            meat[j * K + j] += wxj * d->X_eff[j * N + idx];
+            for (k = j + 1; k < K; k++) {
+                meat[j * K + k] += wxj * d->X_eff[k * N + idx];
             }
+        }
+    }
+    /* Mirror upper triangle to lower */
+    for (j = 0; j < K; j++) {
+        for (k = j + 1; k < K; k++) {
+            meat[k * K + j] = meat[j * K + k];
         }
     }
 
@@ -253,6 +265,9 @@ void ctools_vce_cluster(const ctools_vce_data *d,
     ST_int i, k, idx;
     ST_int N = d->N;
     ST_int K = d->K;
+
+    /* Zero V on entry so any early return leaves a known state (zero SE) */
+    memset(V, 0, K * K * sizeof(ST_double));
 
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;
@@ -320,10 +335,12 @@ void ctools_vce_cluster(const ctools_vce_data *d,
             }
         }
 
-        /* Accumulate outer product ecX * ecX' into meat */
+        /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
         for (ST_int jj = 0; jj < K; jj++) {
-            for (ST_int kk = 0; kk < K; kk++) {
-                meat[jj * K + kk] += ecX[jj] * ecX[kk];
+            ST_double ecXj = ecX[jj];
+            meat[jj * K + jj] += ecXj * ecXj;
+            for (ST_int kk = jj + 1; kk < K; kk++) {
+                meat[jj * K + kk] += ecXj * ecX[kk];
             }
         }
     }
@@ -332,6 +349,13 @@ void ctools_vce_cluster(const ctools_vce_data *d,
     free(sort_perm);
     free(boundaries);
     if (w_norm) free(w_norm);
+
+    /* Mirror upper triangle to lower */
+    for (ST_int jj = 0; jj < K; jj++) {
+        for (ST_int kk = jj + 1; kk < K; kk++) {
+            meat[kk * K + jj] = meat[jj * K + kk];
+        }
+    }
 
     /* V = D * meat * D * dof_adj */
     ctools_matmul_ab(d->D, meat, K, K, K, temp);

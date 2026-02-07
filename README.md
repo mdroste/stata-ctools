@@ -11,7 +11,7 @@
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
 ![Version](https://img.shields.io/badge/version-0.9.1_(February_2026)-blue)
 
-**This project is pre-release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
+**This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
@@ -19,21 +19,22 @@
 
 | Stata command | Replaced with | Description | Typical speedup |
 | --- | --- | --- | ---: |
-| `import` | `cimport` | Import text-delimited and Excel data | **30x** |
-| `export` | `cexport` | Export text-delimited and Excel data | **25x** |
+| `import` | `cimport` | Import text-delimited and Excel data | **10-30x** |
+| `export` | `cexport` | Export text-delimited and Excel data | **10-30x** |
 | `sort` | `csort` | Sort dataset | **1-5x** |
 | `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
-| `sample` | `csample` | Resampling without replacement | **2-5x** |
-| `bsample` | `cbsample` | Resampling with replacement | **2-5x** |
-| `encode` | `cencode` | Recast string as labeled numeric | **10-20x** |
-| `decode` | `cdecode` | Recast labeled numeric as string | **10-20x** |
-| `destring` | `cdestring` | Recast string as numeric type | **10-20x** |
+| `sample` | `csample` | Resampling without replacement | **3-4x** |
+| `bsample` | `cbsample` | Resampling with replacement | **3-4x** |
+| `encode` | `cencode` | Recast string as labeled numeric | **2-10x** |
+| `decode` | `cdecode` | Recast labeled numeric as string | **2-10x** |
+| `destring` | `cdestring` | Recast string as numeric type | **5-20x** |
+| `qreg` | `cqreg` | Quantile regression | **2-4x** |
 | `gstats winsor` | `cwinsor` | Winsorize variables | **2-10x** |
-| `rangestat` | `crangestat` | Range statistics of variables | **10-50x** |
-| `binscatter` | `cbinscatter` | Binned scatter plots | **10-40x** |
+| `rangestat` | `crangestat` | Range statistics of variables | **20-100x** |
+| `psmatch2` | `cpsmatch` | Propensity score matching | **10-30x** |
+| `binscatter` | `cbinscatter` | Binned scatter plots | **10-30x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
-| `qreg` | `cqreg` | Quantile regression | **2-4x** |
 
 Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.MD](FEATURES.MD) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
 

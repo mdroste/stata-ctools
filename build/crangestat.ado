@@ -1,4 +1,4 @@
-*! version 0.9.1 06Feb2026
+*! version 1.0.1 07Feb2026
 *! crangestat: C-accelerated range statistics for Stata
 *! Part of the ctools suite
 
@@ -157,7 +157,7 @@ program define crangestat
 
         if `stat_code' == -1 {
             di as error "crangestat: unknown statistic '`stat_name''"
-            exit 198
+            exit 3499
         }
 
         * Parse variable specification: [newvar=]varname

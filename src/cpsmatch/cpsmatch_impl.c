@@ -83,7 +83,6 @@ typedef struct {
 /* Match result for a single observation */
 typedef struct {
     size_t *match_ids;      /* Array of matched control indices (0-based) */
-    double *match_dists;    /* Array of distances to matches */
     double *match_weights;  /* Array of weights for matches */
     int n_matches;          /* Number of matches found */
     int on_support;         /* 1 if on common support, 0 otherwise */
@@ -144,6 +143,71 @@ typedef struct {
     size_t idx;
     double dist;
 } idx_dist_pair;
+
+/* ============================================================================
+ * Per-thread reusable workspace to eliminate per-match malloc/free
+ * ============================================================================ */
+
+#define MATCH_WORKSPACE_INITIAL_CAP 256
+
+typedef struct {
+    idx_dist_pair *candidates;   /* NN: candidate pairs during search */
+    size_t candidates_cap;
+    size_t *match_ids;           /* Output: matched control indices */
+    double *match_weights;       /* Output: match weights */
+    size_t match_cap;
+} match_workspace;
+
+static void match_workspace_init(match_workspace *ws, size_t initial_cap)
+{
+    ws->candidates = malloc(initial_cap * sizeof(idx_dist_pair));
+    ws->candidates_cap = ws->candidates ? initial_cap : 0;
+    ws->match_ids = malloc(initial_cap * sizeof(size_t));
+    ws->match_weights = malloc(initial_cap * sizeof(double));
+    ws->match_cap = (ws->match_ids && ws->match_weights) ? initial_cap : 0;
+}
+
+static void match_workspace_free(match_workspace *ws)
+{
+    free(ws->candidates);
+    free(ws->match_ids);
+    free(ws->match_weights);
+    ws->candidates = NULL;
+    ws->match_ids = NULL;
+    ws->match_weights = NULL;
+    ws->candidates_cap = 0;
+    ws->match_cap = 0;
+}
+
+static int match_workspace_ensure_candidates(match_workspace *ws, size_t needed)
+{
+    if (needed <= ws->candidates_cap) return 0;
+    size_t new_cap = ws->candidates_cap;
+    while (new_cap < needed) new_cap *= 2;
+    idx_dist_pair *p = realloc(ws->candidates, new_cap * sizeof(idx_dist_pair));
+    if (!p) return -1;
+    ws->candidates = p;
+    ws->candidates_cap = new_cap;
+    return 0;
+}
+
+static int match_workspace_ensure_match(match_workspace *ws, size_t needed)
+{
+    if (needed <= ws->match_cap) return 0;
+    size_t new_cap = ws->match_cap;
+    while (new_cap < needed) new_cap *= 2;
+    size_t *p1 = realloc(ws->match_ids, new_cap * sizeof(size_t));
+    double *p2 = realloc(ws->match_weights, new_cap * sizeof(double));
+    if (!p1 || !p2) {
+        if (p1) ws->match_ids = p1;
+        if (p2) ws->match_weights = p2;
+        return -1;
+    }
+    ws->match_ids = p1;
+    ws->match_weights = p2;
+    ws->match_cap = new_cap;
+    return 0;
+}
 
 static int compare_by_dist(const void *a, const void *b)
 {
@@ -458,16 +522,13 @@ static int find_nearest_neighbors(
 
     /* Allocate result arrays */
     result->match_ids = malloc(max_select * sizeof(size_t));
-    result->match_dists = malloc(max_select * sizeof(double));
     result->match_weights = malloc(max_select * sizeof(double));
 
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+    if (!result->match_ids || !result->match_weights) {
         free(candidates);
         free(result->match_ids);
-        free(result->match_dists);
         free(result->match_weights);
         result->match_ids = NULL;
-        result->match_dists = NULL;
         result->match_weights = NULL;
         return -1;
     }
@@ -475,7 +536,6 @@ static int find_nearest_neighbors(
     double total_weight = 0.0;
     for (int i = 0; i < max_select; i++) {
         result->match_ids[n_selected] = control_indices[candidates[i].idx];
-        result->match_dists[n_selected] = candidates[i].dist;
         result->match_weights[n_selected] = 1.0;
         total_weight += 1.0;
 
@@ -513,6 +573,7 @@ static int find_nearest_neighbors_fast(
     int n_neighbors,
     double caliper,
     int handle_ties,
+    match_workspace *ws,
     match_result *result)
 {
     if (n_controls == 0) {
@@ -527,12 +588,10 @@ static int find_nearest_neighbors_fast(
     /* For k-NN, we need to find k nearest neighbors around insert_pos
      * Use two pointers expanding outward from insert_pos */
 
-    /* Pre-allocate for max possible matches (n_neighbors + ties) */
-    int max_alloc = n_neighbors * 2 + 10;  /* Some extra for ties */
-    if (max_alloc > (int)n_controls) max_alloc = (int)n_controls;
-
-    idx_dist_pair *candidates = malloc(max_alloc * sizeof(idx_dist_pair));
-    if (!candidates) return -1;
+    /* Ensure workspace has room for initial candidates */
+    size_t initial_cap = (size_t)n_neighbors * 2 + 10;
+    if (initial_cap > n_controls) initial_cap = n_controls;
+    if (match_workspace_ensure_candidates(ws, initial_cap) != 0) return -1;
 
     int n_candidates = 0;
 
@@ -549,8 +608,8 @@ static int find_nearest_neighbors_fast(
             if (caliper > 0.0 && dist_left > caliper) {
                 left = -1;  /* No more valid on left */
             } else {
-                candidates[n_candidates].idx = sorted_controls[left].orig_idx;
-                candidates[n_candidates].dist = dist_left;
+                ws->candidates[n_candidates].idx = sorted_controls[left].orig_idx;
+                ws->candidates[n_candidates].dist = dist_left;
                 n_candidates++;
                 left--;
             }
@@ -558,8 +617,8 @@ static int find_nearest_neighbors_fast(
             if (caliper > 0.0 && dist_right > caliper) {
                 right = n_controls;  /* No more valid on right */
             } else {
-                candidates[n_candidates].idx = sorted_controls[right].orig_idx;
-                candidates[n_candidates].dist = dist_right;
+                ws->candidates[n_candidates].idx = sorted_controls[right].orig_idx;
+                ws->candidates[n_candidates].dist = dist_right;
                 n_candidates++;
                 right++;
             }
@@ -569,13 +628,12 @@ static int find_nearest_neighbors_fast(
     if (n_candidates == 0) {
         result->n_matches = 0;
         result->on_support = 0;
-        free(candidates);
         return 0;
     }
 
     /* Handle ties: include all observations at the same distance as the k-th */
     if (handle_ties && n_candidates >= n_neighbors) {
-        double last_dist = candidates[n_candidates - 1].dist;
+        double last_dist = ws->candidates[n_candidates - 1].dist;
 
         /* Continue expanding to find ties */
         while (left >= 0 || right < n_controls) {
@@ -585,25 +643,20 @@ static int find_nearest_neighbors_fast(
             double min_dist = (dist_left < dist_right) ? dist_left : dist_right;
             if (min_dist > last_dist + 1e-12) break;  /* No more ties */
 
-            /* Reallocate if needed */
-            if (n_candidates >= max_alloc) {
-                max_alloc *= 2;
-                idx_dist_pair *new_candidates = realloc(candidates, max_alloc * sizeof(idx_dist_pair));
-                if (!new_candidates) {
-                    free(candidates);
+            /* Grow workspace if needed */
+            if ((size_t)n_candidates >= ws->candidates_cap) {
+                if (match_workspace_ensure_candidates(ws, (size_t)n_candidates + 1) != 0)
                     return -1;
-                }
-                candidates = new_candidates;
             }
 
             if (dist_left <= dist_right && dist_left <= last_dist + 1e-12) {
-                candidates[n_candidates].idx = sorted_controls[left].orig_idx;
-                candidates[n_candidates].dist = dist_left;
+                ws->candidates[n_candidates].idx = sorted_controls[left].orig_idx;
+                ws->candidates[n_candidates].dist = dist_left;
                 n_candidates++;
                 left--;
             } else if (dist_right <= last_dist + 1e-12) {
-                candidates[n_candidates].idx = sorted_controls[right].orig_idx;
-                candidates[n_candidates].dist = dist_right;
+                ws->candidates[n_candidates].idx = sorted_controls[right].orig_idx;
+                ws->candidates[n_candidates].dist = dist_right;
                 n_candidates++;
                 right++;
             } else {
@@ -612,33 +665,21 @@ static int find_nearest_neighbors_fast(
         }
     }
 
-    /* Allocate result arrays */
-    result->match_ids = malloc(n_candidates * sizeof(size_t));
-    result->match_dists = malloc(n_candidates * sizeof(double));
-    result->match_weights = malloc(n_candidates * sizeof(double));
-
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
-        free(candidates);
-        free(result->match_ids);
-        free(result->match_dists);
-        free(result->match_weights);
-        result->match_ids = NULL;
-        result->match_dists = NULL;
-        result->match_weights = NULL;
-        return -1;
-    }
+    /* Ensure workspace match buffers are large enough */
+    if (match_workspace_ensure_match(ws, (size_t)n_candidates) != 0) return -1;
 
     double total_weight = (double)n_candidates;
     for (int i = 0; i < n_candidates; i++) {
-        result->match_ids[i] = control_indices[candidates[i].idx];
-        result->match_dists[i] = candidates[i].dist;
-        result->match_weights[i] = 1.0 / total_weight;
+        ws->match_ids[i] = control_indices[ws->candidates[i].idx];
+        ws->match_weights[i] = 1.0 / total_weight;
     }
 
+    /* Point result at workspace buffers (no ownership transfer) */
+    result->match_ids = ws->match_ids;
+    result->match_weights = ws->match_weights;
     result->n_matches = n_candidates;
     result->on_support = 1;
 
-    free(candidates);
     return 0;
 }
 
@@ -693,22 +734,18 @@ static int find_radius_matches_fast(
         result->n_matches = 0;
         result->on_support = 0;
         result->match_ids = NULL;
-        result->match_dists = NULL;
         result->match_weights = NULL;
         return 0;
     }
 
     /* Allocate result arrays */
     result->match_ids = malloc(info.n_matches * sizeof(size_t));
-    result->match_dists = malloc(info.n_matches * sizeof(double));
     result->match_weights = malloc(info.n_matches * sizeof(double));
 
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+    if (!result->match_ids || !result->match_weights) {
         free(result->match_ids);
-        free(result->match_dists);
         free(result->match_weights);
         result->match_ids = NULL;
-        result->match_dists = NULL;
         result->match_weights = NULL;
         return -1;
     }
@@ -718,7 +755,6 @@ static int find_radius_matches_fast(
     for (size_t i = info.start; i < info.end; i++) {
         size_t idx = i - info.start;
         result->match_ids[idx] = control_indices[sorted_controls[i].orig_idx];
-        result->match_dists[idx] = fabs(pscore_treated - sorted_controls[i].pscore);
         result->match_weights[idx] = weight;
     }
 
@@ -740,6 +776,7 @@ static int find_kernel_matches_fast(
     double bandwidth,
     kernel_type_t kernel,
     double caliper,
+    match_workspace *ws,
     match_result *result)
 {
     if (n_controls == 0 || bandwidth <= 0.0) {
@@ -770,7 +807,11 @@ static int find_kernel_matches_fast(
         return 0;
     }
 
-    /* First pass: count and compute total weight */
+    /* Ensure workspace can hold max possible matches */
+    size_t range_size = end - start;
+    if (match_workspace_ensure_match(ws, range_size) != 0) return -1;
+
+    /* Single pass: fill match buffers and accumulate total weight */
     int n_matches = 0;
     double total_weight = 0.0;
 
@@ -781,8 +822,10 @@ static int find_kernel_matches_fast(
         double u = dist / bandwidth;
         double w = apply_kernel(u, kernel);
         if (w > 0.0) {
-            n_matches++;
+            ws->match_ids[n_matches] = control_indices[sorted_controls[i].orig_idx];
+            ws->match_weights[n_matches] = w;
             total_weight += w;
+            n_matches++;
         }
     }
 
@@ -792,37 +835,14 @@ static int find_kernel_matches_fast(
         return 0;
     }
 
-    /* Allocate result arrays */
-    result->match_ids = malloc(n_matches * sizeof(size_t));
-    result->match_dists = malloc(n_matches * sizeof(double));
-    result->match_weights = malloc(n_matches * sizeof(double));
-
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
-        free(result->match_ids);
-        free(result->match_dists);
-        free(result->match_weights);
-        result->match_ids = NULL;
-        result->match_dists = NULL;
-        result->match_weights = NULL;
-        return -1;
+    /* Normalize weights in-place */
+    for (int i = 0; i < n_matches; i++) {
+        ws->match_weights[i] /= total_weight;
     }
 
-    /* Second pass: fill arrays */
-    int idx = 0;
-    for (size_t i = start; i < end; i++) {
-        double dist = fabs(pscore_treated - sorted_controls[i].pscore);
-        if (caliper > 0.0 && dist > caliper) continue;
-
-        double u = dist / bandwidth;
-        double w = apply_kernel(u, kernel);
-        if (w > 0.0) {
-            result->match_ids[idx] = control_indices[sorted_controls[i].orig_idx];
-            result->match_dists[idx] = dist;
-            result->match_weights[idx] = w / total_weight;
-            idx++;
-        }
-    }
-
+    /* Point result at workspace buffers (no ownership transfer) */
+    result->match_ids = ws->match_ids;
+    result->match_weights = ws->match_weights;
     result->n_matches = n_matches;
     result->on_support = 1;
 
@@ -874,15 +894,12 @@ static int find_kernel_matches(
 
     /* Allocate result arrays */
     result->match_ids = malloc(n_matches * sizeof(size_t));
-    result->match_dists = malloc(n_matches * sizeof(double));
     result->match_weights = malloc(n_matches * sizeof(double));
 
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+    if (!result->match_ids || !result->match_weights) {
         free(result->match_ids);
-        free(result->match_dists);
         free(result->match_weights);
         result->match_ids = NULL;
-        result->match_dists = NULL;
         result->match_weights = NULL;
         return -1;
     }
@@ -897,7 +914,6 @@ static int find_kernel_matches(
         double w = apply_kernel(u, kernel);
         if (w > 0.0) {
             result->match_ids[idx] = control_indices[i];
-            result->match_dists[idx] = dist;
             result->match_weights[idx] = w;
             total_weight += w;
             idx++;
@@ -953,15 +969,12 @@ static int find_radius_matches(
 
     /* Allocate result arrays */
     result->match_ids = malloc(n_matches * sizeof(size_t));
-    result->match_dists = malloc(n_matches * sizeof(double));
     result->match_weights = malloc(n_matches * sizeof(double));
 
-    if (!result->match_ids || !result->match_dists || !result->match_weights) {
+    if (!result->match_ids || !result->match_weights) {
         free(result->match_ids);
-        free(result->match_dists);
         free(result->match_weights);
         result->match_ids = NULL;
-        result->match_dists = NULL;
         result->match_weights = NULL;
         return -1;
     }
@@ -972,7 +985,6 @@ static int find_radius_matches(
         double dist = fabs(pscore_treated - control_pscores[i]);
         if (dist <= radius) {
             result->match_ids[idx] = control_indices[i];
-            result->match_dists[idx] = dist;
             result->match_weights[idx] = 1.0 / n_matches;  /* Equal weights */
             idx++;
         }
@@ -1158,12 +1170,6 @@ ST_retcode cpsmatch_main(const char *args)
     double *out_match = malloc(n_filtered * sizeof(double));
     double *out_support = malloc(n_filtered * sizeof(double));
 
-    /* Initialize to missing */
-    for (size_t i = 0; i < n_filtered; i++) {
-        out_match[i] = SV_missval;
-        out_support[i] = SV_missval;
-    }
-
     if (!out_weight || !out_match || !out_support) {
         ctools_filtered_data_free(&filtered);
         free(treated_idx);
@@ -1176,6 +1182,12 @@ ST_retcode cpsmatch_main(const char *args)
         free(out_support);
         SF_error("cpsmatch: memory allocation failed\n");
         return 920;
+    }
+
+    /* Initialize to missing */
+    for (size_t i = 0; i < n_filtered; i++) {
+        out_match[i] = SV_missval;
+        out_support[i] = SV_missval;
     }
 
     /* Caliper is always in absolute units (propensity score scale) for psmatch2 compatibility */
@@ -1466,23 +1478,33 @@ ST_retcode cpsmatch_main(const char *args)
 
         /* Optimized parallel matching using fast O(log n) algorithms */
 
-        /* For radius matching, use thread-local weight buffers to reduce atomic contention */
-        if (opts.method == MATCH_RADIUS) {
-            double radius = (caliper > 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
+        /* Get number of threads */
+        int n_threads = 1;
+        #ifdef _OPENMP
+        n_threads = omp_get_max_threads();
+        #endif
 
-            /* Get number of threads */
-            int n_threads = 1;
-            #ifdef _OPENMP
-            n_threads = omp_get_max_threads();
-            #endif
+        /* Allocate thread-local weight buffers (shared by all methods) */
+        double **thread_weights = malloc(n_threads * sizeof(double *));
+        if (thread_weights) {
+            for (int i = 0; i < n_threads; i++) {
+                thread_weights[i] = calloc(n_filtered, sizeof(double));
+            }
+        }
 
-            /* Allocate thread-local weight buffers - sized by n_filtered */
-            double **thread_weights = malloc(n_threads * sizeof(double *));
-            if (thread_weights) {
+        /* Allocate per-thread workspaces (for NN/kernel only) */
+        match_workspace *thread_ws = NULL;
+        if (opts.method != MATCH_RADIUS) {
+            thread_ws = malloc(n_threads * sizeof(match_workspace));
+            if (thread_ws) {
                 for (int i = 0; i < n_threads; i++) {
-                    thread_weights[i] = calloc(n_filtered, sizeof(double));
+                    match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
                 }
             }
+        }
+
+        if (opts.method == MATCH_RADIUS) {
+            double radius = (caliper > 0.0) ? caliper : CPSMATCH_DEFAULT_CALIPER;
 
             #pragma omp parallel reduction(+:n_matched_treated, n_off_support)
             {
@@ -1541,89 +1563,112 @@ ST_retcode cpsmatch_main(const char *args)
                     }
                 }
             }
+        } else {
+            /* NN and kernel matching with thread-local weights and workspaces */
+            #pragma omp parallel reduction(+:n_matched_treated, n_off_support)
+            {
+                int tid = 0;
+                #ifdef _OPENMP
+                tid = omp_get_thread_num();
+                #endif
 
-            /* Merge thread-local buffers in parallel - sized by n_filtered */
-            if (thread_weights) {
-                #pragma omp parallel for schedule(static)
-                for (size_t j = 0; j < n_filtered; j++) {
-                    double sum = 0.0;
-                    for (int i = 0; i < n_threads; i++) {
-                        if (thread_weights[i]) {
-                            sum += thread_weights[i][j];
+                double *local_weights = (thread_weights && thread_weights[tid]) ? thread_weights[tid] : out_weight;
+                int use_local = (thread_weights && thread_weights[tid]) ? 1 : 0;
+                match_workspace *ws = (thread_ws) ? &thread_ws[tid] : NULL;
+
+                #pragma omp for schedule(dynamic, 64)
+                for (size_t t = 0; t < n_treated; t++) {
+                    size_t obs_idx = treated_idx[t];
+                    double ps = treated_pscore[t];
+
+                    /* Check common support */
+                    if (opts.common_support) {
+                        if (ps < common_min || ps > common_max) {
+                            out_support[obs_idx] = 0.0;
+                            n_off_support++;
+                            continue;
                         }
                     }
-                    out_weight[j] += sum;
+                    out_support[obs_idx] = 1.0;
+
+                    match_result result;
+                    memset(&result, 0, sizeof(result));
+
+                    int match_rc = 0;
+
+                    switch (opts.method) {
+                        case MATCH_NEAREST:
+                            match_rc = find_nearest_neighbors_fast(
+                                ps, sorted_controls, control_idx, n_controls,
+                                opts.n_neighbors, caliper, opts.ties, ws, &result);
+                            break;
+
+                        case MATCH_KERNEL:
+                            match_rc = find_kernel_matches_fast(
+                                ps, sorted_controls, control_idx, n_controls,
+                                opts.bandwidth, opts.kernel, caliper, ws, &result);
+                            break;
+
+                        default:
+                            match_rc = find_nearest_neighbors_fast(
+                                ps, sorted_controls, control_idx, n_controls,
+                                opts.n_neighbors, caliper, opts.ties, ws, &result);
+                            break;
+                    }
+
+                    if (match_rc == 0 && result.n_matches > 0) {
+                        n_matched_treated++;
+
+                        /* Store first match ID - use obs_map for Stata observation number */
+                        out_match[obs_idx] = (double)obs_map[result.match_ids[0]];
+
+                        /* Accumulate weights using thread-local buffer (no atomics) */
+                        for (int m = 0; m < result.n_matches; m++) {
+                            size_t match_filtered_idx = result.match_ids[m];
+                            if (use_local) {
+                                local_weights[match_filtered_idx] += result.match_weights[m];
+                            } else {
+                                #pragma omp atomic
+                                out_weight[match_filtered_idx] += result.match_weights[m];
+                            }
+                        }
+
+                        /* Weight for treated observation = 1 */
+                        if (use_local) {
+                            local_weights[obs_idx] = 1.0;
+                        } else {
+                            out_weight[obs_idx] = 1.0;
+                        }
+                    }
+                    /* No free needed - workspace owns the buffers */
                 }
-                /* Free thread-local buffers */
+            }
+        }
+
+        /* Shared merge phase: reduce thread_weights into out_weight */
+        if (thread_weights) {
+            #pragma omp parallel for schedule(static)
+            for (size_t j = 0; j < n_filtered; j++) {
+                double sum = 0.0;
                 for (int i = 0; i < n_threads; i++) {
-                    free(thread_weights[i]);
-                }
-                free(thread_weights);
-            }
-        } else {
-            /* General path for NN and kernel matching */
-            #pragma omp parallel for reduction(+:n_matched_treated, n_off_support) schedule(dynamic)
-            for (size_t t = 0; t < n_treated; t++) {
-                size_t obs_idx = treated_idx[t];
-                double ps = treated_pscore[t];
-
-                /* Check common support */
-                if (opts.common_support) {
-                    if (ps < common_min || ps > common_max) {
-                        out_support[obs_idx] = 0.0;
-                        n_off_support++;
-                        continue;
+                    if (thread_weights[i]) {
+                        sum += thread_weights[i][j];
                     }
                 }
-                out_support[obs_idx] = 1.0;
-
-                match_result result;
-                memset(&result, 0, sizeof(result));
-
-                int match_rc = 0;
-
-                switch (opts.method) {
-                    case MATCH_NEAREST:
-                        match_rc = find_nearest_neighbors_fast(
-                            ps, sorted_controls, control_idx, n_controls,
-                            opts.n_neighbors, caliper, opts.ties, &result);
-                        break;
-
-                    case MATCH_KERNEL:
-                        match_rc = find_kernel_matches_fast(
-                            ps, sorted_controls, control_idx, n_controls,
-                            opts.bandwidth, opts.kernel, caliper, &result);
-                        break;
-
-                    default:
-                        match_rc = find_nearest_neighbors_fast(
-                            ps, sorted_controls, control_idx, n_controls,
-                            opts.n_neighbors, caliper, opts.ties, &result);
-                        break;
-                }
-
-                if (match_rc == 0 && result.n_matches > 0) {
-                    n_matched_treated++;
-
-                    /* Store first match ID - use obs_map for Stata observation number */
-                    out_match[obs_idx] = (double)obs_map[result.match_ids[0]];
-
-                    /* Accumulate weights for matched controls (indexed by filtered position) */
-                    for (int m = 0; m < result.n_matches; m++) {
-                        size_t match_filtered_idx = result.match_ids[m];
-                        #pragma omp atomic
-                        out_weight[match_filtered_idx] += result.match_weights[m];
-                    }
-
-                    /* Weight for treated observation = 1 */
-                    out_weight[obs_idx] = 1.0;
-                }
-
-                /* Free match result */
-                free(result.match_ids);
-                free(result.match_dists);
-                free(result.match_weights);
+                out_weight[j] += sum;
             }
+            for (int i = 0; i < n_threads; i++) {
+                free(thread_weights[i]);
+            }
+            free(thread_weights);
+        }
+
+        /* Free per-thread workspaces */
+        if (thread_ws) {
+            for (int i = 0; i < n_threads; i++) {
+                match_workspace_free(&thread_ws[i]);
+            }
+            free(thread_ws);
         }
 
         free(sorted_controls);

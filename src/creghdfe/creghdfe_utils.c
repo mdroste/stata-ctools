@@ -66,10 +66,14 @@ void hash_destroy(IntHashTable *ht)
     }
 }
 
-/* Insert or get existing level for a key. Returns the level (1-indexed) */
+/* Insert or get existing level for a key. Returns the level (1-indexed),
+ * or -1 if the table is full (prevents infinite loop on overload). */
 ST_int hash_insert_or_get(IntHashTable *ht, ST_int key)
 {
     ST_int idx = hash_int(key, ht->capacity);
+
+    /* Prevent infinite loop: probe at most capacity slots */
+    ST_int probes = 0;
 
     /* Linear probing */
     while (ht->keys[idx] != HASH_EMPTY) {
@@ -77,6 +81,14 @@ ST_int hash_insert_or_get(IntHashTable *ht, ST_int key)
             return ht->values[idx];  /* Already exists */
         }
         idx = (idx + 1) % ht->capacity;
+        if (++probes >= ht->capacity) {
+            return -1;  /* Table full — should not happen with correct sizing */
+        }
+    }
+
+    /* Check load factor before inserting */
+    if (ht->size >= ht->capacity - 1) {
+        return -1;  /* Table full */
     }
 
     /* Insert new key */
@@ -261,7 +273,9 @@ int sort_by_cluster(const ST_int *cluster_ids, ST_int N, ST_int num_clusters,
     }
 
     for (ST_int i = 0; i < N; i++) {
-        counts[cluster_ids[i]]++;
+        ST_int c = cluster_ids[i];
+        if (c < 0 || c >= num_clusters) { free(counts); return -1; }
+        counts[c]++;
     }
 
     /* Compute prefix sums to get starting positions */

@@ -64,6 +64,10 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
 
     memset(means, 0, num_levels * sizeof(ST_double));
 
+    /* Scatter: accumulate ans into means by FE level.
+     * Sequential scan of ans[] is critical — hardware prefetcher handles N-sized
+     * arrays perfectly. Random access to means[] is fine since it's num_levels-sized
+     * and typically fits in L1/L2 cache. */
     if (weights == NULL) {
         for (i = 0; i < N; i++) {
             means[levels[i] - 1] += ans[i];
@@ -88,6 +92,7 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
         }
     }
 
+    /* Gather: subtract FE means from ans */
     for (i = 0; i < N; i++) {
         ans[i] -= means[levels[i] - 1];
     }
@@ -250,6 +255,11 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
 
     (void)N;  /* N is stored in S->N */
     (void)num_threads;  /* Use S->num_threads or OpenMP default */
+
+    /* G=0 short-circuit: no FE factors, nothing to partial out */
+    if (S->G == 0) {
+        return 0;
+    }
 
     /* G=1 short-circuit: direct demean, no CG iteration */
     if (S->G == 1) {

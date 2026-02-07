@@ -29,9 +29,13 @@
 /* SIMD support for scatter operations and non-temporal stores */
 #if defined(__x86_64__) || defined(_M_X64)
     #include <immintrin.h>
-    /* AVX-512 scatter available with __AVX512F__ */
+    /* AVX-512 scatter: compile-time or runtime detection (see below) */
     #ifdef __AVX512F__
         #define HAVE_AVX512_SCATTER 1
+    #endif
+    /* Runtime AVX-512 detection on GCC/Clang without compile-time -mavx512f */
+    #if !defined(HAVE_AVX512_SCATTER) && (defined(__GNUC__) || defined(__clang__))
+        #define HAVE_AVX512_RUNTIME 1
     #endif
     /* Non-temporal stores via SSE2 (always available on x86-64) */
     #define HAVE_NT_STORE 1
@@ -94,6 +98,44 @@ static inline void scatter_8_doubles_avx512(
     /* Scatter: base[indices[i]] = values[i] for i=0..7 */
     /* Scale of 8 because each double is 8 bytes */
     _mm512_i32scatter_pd(base, idx, vals, 8);
+}
+#endif
+
+#ifdef HAVE_AVX512_RUNTIME
+/*
+    Runtime-dispatched AVX-512 scatter: compiled with target attribute so it
+    can coexist in a binary built with -mavx2. Dispatched via function pointer
+    after checking __builtin_cpu_supports("avx512f") at init time.
+*/
+__attribute__((target("avx512f")))
+static void scatter_8_avx512_rt(
+    double *base,
+    const perm_idx_t *indices,
+    const double *values)
+{
+    __m256i idx = _mm256_loadu_si256((const __m256i *)indices);
+    __m512d vals = _mm512_loadu_pd(values);
+    _mm512_i32scatter_pd(base, idx, vals, 8);
+}
+
+static void scatter_8_scalar(
+    double *base,
+    const perm_idx_t *indices,
+    const double *values)
+{
+    for (int i = 0; i < 8; i++) base[indices[i]] = values[i];
+}
+
+typedef void (*scatter_fn_t)(double *, const perm_idx_t *, const double *);
+static scatter_fn_t scatter_fn = NULL;
+
+static void init_scatter_fn(void)
+{
+    if (scatter_fn) return;
+    if (__builtin_cpu_supports("avx512f"))
+        scatter_fn = scatter_8_avx512_rt;
+    else
+        scatter_fn = scatter_8_scalar;
 }
 #endif
 
@@ -341,6 +383,10 @@ stata_retcode csort_stream_apply_permutation(
         return STATA_OK;
     }
 
+#ifdef HAVE_AVX512_RUNTIME
+    init_scatter_fn();
+#endif
+
     /* Build inverse permutation once (shared across all variables) */
     t_phase = ctools_timer_seconds();
 
@@ -476,6 +522,10 @@ stata_retcode csort_stream_apply_permutation(
                        Two scatter calls for 16 values. */
                     scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch_vals[0]);
                     scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch_vals[8]);
+#elif defined(HAVE_AVX512_RUNTIME)
+                    /* Runtime-dispatched AVX-512 or scalar fallback */
+                    scatter_fn(num_buf, &inv_perm[i + 0], &batch_vals[0]);
+                    scatter_fn(num_buf, &inv_perm[i + 8], &batch_vals[8]);
 #else
                     /* Scalar fallback: Prefetch destinations then scatter */
                     CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
@@ -572,6 +622,12 @@ stata_retcode csort_stream_apply_permutation(
     double *num_buf = NULL;
     if (n_numeric > 0) {
         num_buf = (double *)ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, nobs, sizeof(double));
+        if (!num_buf) {
+            free(numeric_vars);
+            free(string_vars);
+            ctools_aligned_free(inv_perm);
+            return STATA_ERR_MEMORY;
+        }
     }
     if (num_buf) {
         for (v = 0; v < n_numeric; v++) {
@@ -592,6 +648,10 @@ stata_retcode csort_stream_apply_permutation(
                 /* AVX-512: Scatter 8 doubles at a time */
                 scatter_8_doubles_avx512(num_buf, &inv_perm[i + 0], &batch_vals[0]);
                 scatter_8_doubles_avx512(num_buf, &inv_perm[i + 8], &batch_vals[8]);
+#elif defined(HAVE_AVX512_RUNTIME)
+                /* Runtime-dispatched AVX-512 or scalar fallback */
+                scatter_fn(num_buf, &inv_perm[i + 0], &batch_vals[0]);
+                scatter_fn(num_buf, &inv_perm[i + 8], &batch_vals[8]);
 #else
                 /* Scalar fallback: Prefetch destinations then scatter */
                 CTOOLS_PREFETCH_W(&num_buf[inv_perm[i + 0]]);
@@ -668,16 +728,30 @@ stata_retcode csort_stream_apply_permutation(
     }
     #endif
 
-    /* Process string variables (sequentially - strings are harder to parallelize) */
+    /* Process string variables (parallel - each var has independent arena/buffers) */
     t_phase = ctools_timer_seconds();
 
-    for (v = 0; v < n_string; v++) {
-        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs_map) != 0) {
-            #ifdef _OPENMP
-            success = 0;
-            #endif
+    #ifdef _OPENMP
+    {
+        int string_threads = omp_get_max_threads();
+        if (string_threads > (int)n_string) string_threads = (int)n_string;
+        if (string_threads < 1) string_threads = 1;
+
+        #pragma omp parallel for schedule(static) num_threads(string_threads)
+        for (int sv = 0; sv < (int)n_string; sv++) {
+            if (stream_permute_string_var((ST_int)string_vars[sv], inv_perm, nobs, obs_map) != 0) {
+                #pragma omp atomic write
+                success = 0;
+            }
         }
     }
+    #else
+    for (v = 0; v < n_string; v++) {
+        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs_map) != 0) {
+            /* error */
+        }
+    }
+    #endif
 
     t_string = ctools_timer_seconds() - t_phase;
 
@@ -896,6 +970,10 @@ stata_retcode csort_stream_sort(
     }
     #endif
 
+    /* Take ownership of obs_map before freeing key_filtered, since
+     * ctools_filtered_data_free would free it but we still need it for
+     * stream-permuting non-key variables. */
+    key_filtered.obs_map = NULL;  /* Prevent free */
     ctools_filtered_data_free(&key_filtered);
     stata_data_init(&key_filtered.data);
 
@@ -944,6 +1022,7 @@ cleanup:
     free(local_sort_vars);
     free(nonkey_var_indices);
     ctools_aligned_free(saved_perm);
+    if (obs_map) ctools_aligned_free(obs_map);  /* We took ownership from key_filtered */
     ctools_filtered_data_free(&key_filtered);
 
     local_timings.total_time = ctools_timer_seconds() - t_start;

@@ -1,4 +1,4 @@
-*! version 0.9.1 06Feb2026
+*! version 1.0.1 07Feb2026
 *! cexport: C-accelerated delimited text export for Stata
 *! Part of the ctools suite
 *!
@@ -61,99 +61,42 @@ program define cexport, rclass
     }
 
     * Parse the rest with export delimited-style syntax
-    * Try with 'using' first, then without (allows both syntaxes)
-    capture syntax [varlist] using/ [if] [in], [Delimiter(string) NOVARNames QUOTE ///
+    * Support both "using filename" and just "filename" (like export delimited does)
+    syntax [anything] [using/] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
         NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL THReads(integer 0)]
-    if _rc {
-        * 'using' not found - parse filename from positional arguments
-        * Strategy: find the token that looks like a filename (has a dot/extension)
-        * Everything before it is the varlist, everything after is if/in/options
 
-        * First, separate positional args from options (everything after comma)
-        local rest `"`0'"'
-        local positional ""
-        local options_part ""
-        local found_comma = 0
-
-        * Split on comma to separate positional args from options
-        gettoken chunk rest : rest, parse(",")
-        while `"`chunk'"' != "" & `"`chunk'"' != "," {
-            local positional `"`positional' `chunk'"'
-            gettoken chunk rest : rest, parse(",")
-        }
-        if `"`chunk'"' == "," {
-            local options_part `"`rest'"'
-        }
-        local positional = strtrim(`"`positional'"')
-
-        * Now scan positional args to find filename (token with a dot)
-        * Work backwards: filename is typically last positional arg before if/in
-        local filename ""
-        local varlist_tokens ""
-        local in_if_in = 0
-
-        * Tokenize positional arguments
-        local tokens `"`positional'"'
-        local token_list ""
-        local ntokens = 0
-
-        while `"`tokens'"' != "" {
-            gettoken tok tokens : tokens
-            if `"`tok'"' != "" {
-                local ntokens = `ntokens' + 1
-                local token`ntokens' `"`tok'"'
+    * Handle filename - can come from using/ or as last positional argument
+    if `"`using'"' == "" & `"`anything'"' != "" {
+        * No 'using' keyword: extract filename (token with dot) from anything
+        local __tokens `"`anything'"'
+        local __filename ""
+        local __varlist ""
+        while `"`__tokens'"' != "" {
+            gettoken __tok __tokens : __tokens
+            if strpos(`"`__tok'"', ".") > 0 {
+                local __filename `"`__tok'"'
+            }
+            else {
+                local __varlist `"`__varlist' `__tok'"'
             }
         }
-
-        * Find filename: scan for token with extension (contains dot, not "if"/"in")
-        * Prefer the last such token (in case varnames have dots, which is rare)
-        local filename_idx = 0
-        forvalues i = 1/`ntokens' {
-            local tok `"`token`i''"'
-            * Skip if/in keywords
-            if lower(`"`tok'"') == "if" | lower(`"`tok'"') == "in" {
-                continue
-            }
-            * Check if token looks like a filename (contains a dot)
-            if strpos(`"`tok'"', ".") > 0 {
-                local filename_idx = `i'
-            }
-        }
-
-        if `filename_idx' == 0 {
-            di as error "cexport: filename required (must have file extension)"
+        if `"`__filename'"' == "" {
+            di as error "cexport delimited: filename required"
             di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
             exit 198
         }
-
-        * Build varlist from tokens before filename
-        local varlist_tokens ""
-        forvalues i = 1/`=`filename_idx'-1' {
-            local varlist_tokens `"`varlist_tokens' `token`i''"'
-        }
-        local varlist_tokens = strtrim(`"`varlist_tokens'"')
-
-        * Get filename
-        local filename `"`token`filename_idx''"'
-
-        * Build if/in part from tokens after filename
-        local if_in_tokens ""
-        forvalues i = `=`filename_idx'+1'/`ntokens' {
-            local if_in_tokens `"`if_in_tokens' `token`i''"'
-        }
-        local if_in_tokens = strtrim(`"`if_in_tokens'"')
-
-        * Reconstruct 0 for syntax parsing: varlist if_in, options
-        local 0 `"`varlist_tokens' `if_in_tokens'"'
-        if `"`options_part'"' != "" {
-            local 0 `"`0', `options_part'"'
-        }
-
-        local using `"`filename'"'
-        syntax [varlist] [if] [in], [Delimiter(string) NOVARNames QUOTE ///
-            NOQUOTEif REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
-            MMAP NOFSYNC DIRECT PREFAULT CRLF NOPARALLEL]
+        local using `"`__filename'"'
+        local anything `"`__varlist'"'
+    }
+    if `"`using'"' == "" {
+        di as error "cexport delimited: filename required"
+        di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
+        exit 198
+    }
+    * Resolve varlist from anything
+    if strtrim(`"`anything'"') != "" {
+        unab varlist : `anything'
     }
 
     * Mark sample
@@ -496,88 +439,41 @@ program define cexport_excel, rclass
         exit 920
     }
 
-    * Try with 'using' first, then without (allows both syntaxes)
-    capture syntax [varlist] using/ [if] [in], [SHEET(string) FIRSTrow(string) ///
+    * Support both "using filename" and just "filename" (like export excel does)
+    syntax [anything] [using/] [if] [in], [SHEET(string) FIRSTrow(string) ///
         REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
         CELL(string) MISSING(string) KEEPCELLfmt]
-    if _rc {
-        * 'using' not found - parse filename from positional arguments
-        local rest `"`0'"'
-        local positional ""
-        local options_part ""
 
-        * Split on comma to separate positional args from options
-        gettoken chunk rest : rest, parse(",")
-        while `"`chunk'"' != "" & `"`chunk'"' != "," {
-            local positional `"`positional' `chunk'"'
-            gettoken chunk rest : rest, parse(",")
-        }
-        if `"`chunk'"' == "," {
-            local options_part `"`rest'"'
-        }
-        local positional = strtrim(`"`positional'"')
-
-        * Scan positional args to find filename (token with .xlsx extension)
-        local filename ""
-        local varlist_tokens ""
-        local tokens `"`positional'"'
-        local ntokens = 0
-
-        while `"`tokens'"' != "" {
-            gettoken tok tokens : tokens
-            if `"`tok'"' != "" {
-                local ntokens = `ntokens' + 1
-                local token`ntokens' `"`tok'"'
+    * Handle filename - can come from using/ or as last positional argument
+    if `"`using'"' == "" & `"`anything'"' != "" {
+        local __tokens `"`anything'"'
+        local __filename ""
+        local __varlist ""
+        while `"`__tokens'"' != "" {
+            gettoken __tok __tokens : __tokens
+            if strpos(`"`__tok'"', ".") > 0 {
+                local __filename `"`__tok'"'
+            }
+            else {
+                local __varlist `"`__varlist' `__tok'"'
             }
         }
-
-        * Find filename: scan for token with .xlsx extension
-        local filename_idx = 0
-        forvalues i = 1/`ntokens' {
-            local tok `"`token`i''"'
-            * Skip if/in keywords
-            if lower(`"`tok'"') == "if" | lower(`"`tok'"') == "in" {
-                continue
-            }
-            * Check if token ends with .xlsx
-            if substr(lower(`"`tok'"'), -5, 5) == ".xlsx" {
-                local filename_idx = `i'
-            }
-        }
-
-        if `filename_idx' == 0 {
-            di as error "cexport excel: filename required (must have .xlsx extension)"
+        if `"`__filename'"' == "" {
+            di as error "cexport excel: filename required"
             di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
             exit 198
         }
-
-        * Build varlist from tokens before filename
-        local varlist_tokens ""
-        forvalues i = 1/`=`filename_idx'-1' {
-            local varlist_tokens `"`varlist_tokens' `token`i''"'
-        }
-        local varlist_tokens = strtrim(`"`varlist_tokens'"')
-
-        * Get filename
-        local filename `"`token`filename_idx''"'
-
-        * Build if/in part from tokens after filename
-        local if_in_tokens ""
-        forvalues i = `=`filename_idx'+1'/`ntokens' {
-            local if_in_tokens `"`if_in_tokens' `token`i''"'
-        }
-        local if_in_tokens = strtrim(`"`if_in_tokens'"')
-
-        * Reconstruct 0 for syntax parsing
-        local 0 `"`varlist_tokens' `if_in_tokens'"'
-        if `"`options_part'"' != "" {
-            local 0 `"`0', `options_part'"'
-        }
-
-        local using `"`filename'"'
-        syntax [varlist] [if] [in], [SHEET(string) FIRSTrow(string) ///
-            REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
-            CELL(string) MISSING(string) KEEPCELLfmt]
+        local using `"`__filename'"'
+        local anything `"`__varlist'"'
+    }
+    if `"`using'"' == "" {
+        di as error "cexport excel: filename required"
+        di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
+        exit 198
+    }
+    * Resolve varlist from anything
+    if strtrim(`"`anything'"') != "" {
+        unab varlist : `anything'
     }
 
     * Mark sample

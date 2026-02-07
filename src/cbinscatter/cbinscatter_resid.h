@@ -226,6 +226,42 @@ ST_retcode combined_residualize_y_only(
 );
 
 /* ========================================================================
+ * Batch HDFE Residualization
+ * ======================================================================== */
+
+/*
+ * Residualize multiple variables simultaneously using HDFE.
+ * More efficient than calling hdfe_residualize_y_only in a loop because
+ * FE level arrays are traversed once per sweep instead of once per variable.
+ *
+ * Parameters:
+ *   vars        - K_vars pointers to N-length arrays, each modified in-place
+ *   K_vars      - number of variables to residualize
+ *   fe_vars     - fixed effect variables (N x G), integer levels
+ *   N           - number of observations
+ *   G           - number of FE groups
+ *   weights     - observation weights (NULL if unweighted)
+ *   weight_type - 0=none, 1=aweight, 2=fweight, 3=pweight
+ *   maxiter     - maximum iterations
+ *   tolerance   - convergence tolerance
+ *   verbose     - print iteration info
+ *   dropped     - output: number of singleton observations dropped
+ */
+ST_retcode hdfe_residualize_batch(
+    ST_double **vars,
+    ST_int K_vars,
+    const ST_int *fe_vars,
+    ST_int N,
+    ST_int G,
+    const ST_double *weights,
+    ST_int weight_type,
+    ST_int maxiter,
+    ST_double tolerance,
+    ST_int verbose,
+    ST_int *dropped
+);
+
+/* ========================================================================
  * Helper Functions
  * ======================================================================== */
 

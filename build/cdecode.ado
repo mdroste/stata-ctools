@@ -1,4 +1,4 @@
-*! version 0.9.1 06Feb2026
+*! version 1.0.1 07Feb2026
 *! cdecode: C-accelerated numeric to string decoding for Stata
 *! Part of the ctools suite
 *!
@@ -14,100 +14,6 @@
 *! ctools extensions (not in Stata's decode):
 *!   - varlist support: decode multiple numeric variables at once
 *!   - replace option: replace original variables with decoded versions
-
-* Mata function to parse label save file and write labels to output file
-* This avoids Stata's command line length limits when there are many labels
-capture mata: mata drop _cdecode_parse_labels_to_file()
-mata:
-void _cdecode_parse_labels_to_file(string scalar filename, string scalar lblname, string scalar outfile)
-{
-    real scalar fh_in, fh_out, val, lbl_len, max_label_len
-    string scalar line, prefix, rest, lbl, lbl_escaped, entry
-    string scalar open_cq, close_cq
-    real scalar prefix_len, open_pos, close_pos, space_pos
-
-    // Compound quote markers: `" and "'
-    open_cq = char(96) + char(34)   // `"
-    close_cq = char(34) + char(39)  // "'
-
-    max_label_len = 0
-
-    fh_in = fopen(filename, "r")
-    if (fh_in < 0) {
-        errprintf("cdecode: could not open label file\n")
-        exit(error(601))
-    }
-
-    fh_out = fopen(outfile, "w")
-    if (fh_out < 0) {
-        fclose(fh_in)
-        errprintf("cdecode: could not open output file\n")
-        exit(error(601))
-    }
-
-    while ((line = fget(fh_in)) != J(0,0,"")) {
-        // Line format: label define lblname VALUE `"TEXT"', modify
-        prefix = "label define " + lblname + " "
-        prefix_len = strlen(prefix)
-
-        if (substr(line, 1, prefix_len) != prefix) {
-            continue
-        }
-
-        rest = substr(line, prefix_len + 1, .)
-
-        // Extract value (first token before space)
-        space_pos = strpos(rest, " ")
-        if (space_pos == 0) continue
-        val = strtoreal(substr(rest, 1, space_pos - 1))
-        rest = strtrim(substr(rest, space_pos + 1, .))
-
-        // Find compound quotes `"..."'
-        open_pos = strpos(rest, open_cq)
-        close_pos = strpos(rest, close_cq)
-
-        if (open_pos > 0 && close_pos > open_pos) {
-            // Extract text between compound quotes
-            lbl = substr(rest, open_pos + 2, close_pos - open_pos - 2)
-        }
-        else if (substr(rest, 1, 1) == char(34)) {
-            // Simple quote format: "text", modify
-            // Find closing quote before ", modify"
-            close_pos = strpos(substr(rest, 2, .), char(34))
-            if (close_pos > 0) {
-                lbl = substr(rest, 2, close_pos - 1)
-            }
-            else {
-                continue
-            }
-        }
-        else {
-            continue
-        }
-
-        // Escape special characters: \ -> \\, | -> \|, " -> \"
-        lbl_escaped = subinstr(lbl, "\", "\\", .)
-        lbl_escaped = subinstr(lbl_escaped, "|", "\|", .)
-        lbl_escaped = subinstr(lbl_escaped, char(34), "\" + char(34), .)
-
-        // Track max length
-        lbl_len = strlen(lbl)
-        if (lbl_len > max_label_len) {
-            max_label_len = lbl_len
-        }
-
-        // Write entry to file (value|label on each line)
-        entry = strofreal(val) + "|" + lbl_escaped
-        fput(fh_out, entry)
-    }
-
-    fclose(fh_in)
-    fclose(fh_out)
-
-    // Return max label length to Stata
-    st_local("max_label_len", strofreal(max_label_len))
-}
-end
 
 program define cdecode, rclass
     version 14.1
@@ -193,63 +99,65 @@ program define cdecode, rclass
     * Mark sample
     marksample touse
 
-    * Load the platform-appropriate ctools plugin
-    local __os = c(os)
-    local __machine = c(machine_type)
-    local __is_mac = 0
-    if "`__os'" == "MacOSX" {
-        local __is_mac = 1
-    }
-    else if strpos(lower("`__machine'"), "mac") > 0 {
-        local __is_mac = 1
-    }
-
-    local __plugin = ""
-    if "`__os'" == "Windows" {
-        local __plugin "ctools_windows.plugin"
-    }
-    else if `__is_mac' {
-        local __is_arm = 0
-        if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-            local __is_arm = 1
+    * Load the platform-appropriate ctools plugin if not already loaded
+    capture program list ctools_plugin
+    if _rc != 0 {
+        local __os = c(os)
+        local __machine = c(machine_type)
+        local __is_mac = 0
+        if "`__os'" == "MacOSX" {
+            local __is_mac = 1
         }
-        if `__is_arm' == 0 {
-            tempfile __archfile
-            quietly shell uname -m > "`__archfile'" 2>&1
-            tempname __fh
-            file open `__fh' using "`__archfile'", read text
-            file read `__fh' __archline
-            file close `__fh'
-            capture erase "`__archfile'"
-            if strpos("`__archline'", "arm64") > 0 {
+        else if strpos(lower("`__machine'"), "mac") > 0 {
+            local __is_mac = 1
+        }
+
+        local __plugin = ""
+        if "`__os'" == "Windows" {
+            local __plugin "ctools_windows.plugin"
+        }
+        else if `__is_mac' {
+            local __is_arm = 0
+            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
                 local __is_arm = 1
             }
+            if `__is_arm' == 0 {
+                tempfile __archfile
+                quietly shell uname -m > "`__archfile'" 2>&1
+                tempname __fh
+                file open `__fh' using "`__archfile'", read text
+                file read `__fh' __archline
+                file close `__fh'
+                capture erase "`__archfile'"
+                if strpos("`__archline'", "arm64") > 0 {
+                    local __is_arm = 1
+                }
+            }
+            if `__is_arm' {
+                local __plugin "ctools_mac_arm.plugin"
+            }
+            else {
+                local __plugin "ctools_mac_x86.plugin"
+            }
         }
-        if `__is_arm' {
-            local __plugin "ctools_mac_arm.plugin"
+        else if "`__os'" == "Unix" {
+            local __plugin "ctools_linux.plugin"
         }
         else {
-            local __plugin "ctools_mac_x86.plugin"
+            local __plugin "ctools.plugin"
+        }
+
+        capture program ctools_plugin, plugin using("`__plugin'")
+        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
+            capture program ctools_plugin, plugin using("ctools.plugin")
+        }
+        if _rc != 0 & _rc != 110 {
+            di as error "cdecode: Could not load ctools plugin"
+            exit 601
         }
     }
-    else if "`__os'" == "Unix" {
-        local __plugin "ctools_linux.plugin"
-    }
-    else {
-        local __plugin "ctools.plugin"
-    }
-
-    capture program ctools_plugin, plugin using("`__plugin'")
-    if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-        capture program ctools_plugin, plugin using("ctools.plugin")
-    }
-    if _rc != 0 & _rc != 110 {
-        di as error "cdecode: Could not load ctools plugin"
-        exit 601
-    }
-
-    * Reset _rc
-    capture confirm number 1
+    * Reset _rc (plugin load may leave _rc=110 for already-loaded plugin)
+    capture confirm number 0
 
     * Build threads option
     local threads_code ""
@@ -276,43 +184,20 @@ program define cdecode, rclass
         * Get value label name attached to source variable
         local lblname : value label `srcvar'
 
-        * Get variable index for source
-        unab allvars : *
-        local var_idx = 0
-        local idx = 1
-        foreach v of local allvars {
-            if ("`v'" == "`srcvar'") {
-                local var_idx = `idx'
-                continue, break
-            }
-            local ++idx
-        }
-
-        if `var_idx' == 0 {
-            di as error "cdecode: could not find variable `srcvar'"
-            exit 111
-        }
-
-        * =====================================================================
-        * Extract value labels and encode for C plugin
-        * =====================================================================
-
-        * Use label save to preserve trailing spaces in labels
+        * Save labels to temp file (Stata's label save format)
         tempfile __lblfile
         quietly label save `lblname' using `__lblfile', replace
-
-        * Create temp file for labels
-        tempfile __labelsfile
-
-        * Parse the label save file using Mata for reliable string handling
-        mata: _cdecode_parse_labels_to_file("`__lblfile'", "`lblname'", "`__labelsfile'")
 
         * Determine string variable width
         if `maxlength' > 0 {
             local strwidth = `maxlength'
         }
         else {
-            local strwidth = `max_label_len'
+            * Scan label file in C to get max label length (no Mata needed)
+            plugin call ctools_plugin `srcvar' `if' `in', ///
+                "cdecode_scan `threads_code' labelsfile=`__lblfile'"
+            local strwidth = _cdecode_maxlen
+            capture scalar drop _cdecode_maxlen
             if `strwidth' < 1 {
                 local strwidth = 1
             }
@@ -326,16 +211,13 @@ program define cdecode, rclass
         * Create the destination string variable
         quietly generate str`strwidth' `destvar' = ""
 
-        * Build maxlen option
-        local maxlen_code "maxlen=`strwidth'"
-
-        * Call the C plugin
+        * Call the C plugin to decode
         if `__do_timing' {
             timer off 91
             timer on 92
         }
         plugin call ctools_plugin `srcvar' `destvar' `if' `in', ///
-            `"cdecode `threads_code' `maxlen_code' labelsfile=`__labelsfile'"'
+            `"cdecode `threads_code' maxlen=`strwidth' labelsfile=`__lblfile'"'
         if `__do_timing' {
             timer off 92
             timer on 93

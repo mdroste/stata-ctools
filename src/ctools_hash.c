@@ -579,3 +579,230 @@ int ctools_label_serialize_macros(const char **strings, const int *codes,
     free(macro_buf);
     return (int)(chunk + 1);
 }
+
+/* ============================================================================
+ * Stata `label save` File Parsing
+ *
+ * Parses files produced by Stata's `label save` command, which have lines like:
+ *   label define lblname 1 `"Label Text"', modify
+ *   label define lblname 2 "Simple", modify
+ * ============================================================================ */
+
+/*
+ * Parse a single line from a Stata `label save` format file.
+ * Returns 1 if successfully parsed, 0 if line doesn't match.
+ */
+static int ctools_parse_label_save_line(const char *line, int *out_value,
+                                         char *out_label, int *out_label_len)
+{
+    /* Must start with "label define " */
+    if (strncmp(line, "label define ", 13) != 0) return 0;
+    const char *p = line + 13;
+
+    /* Skip label name */
+    while (*p && *p != ' ') p++;
+    if (!*p) return 0;
+    while (*p == ' ') p++;
+
+    /* Parse integer value */
+    char *endptr;
+    long val = strtol(p, &endptr, 10);
+    if (endptr == p) return 0;
+    *out_value = (int)val;
+
+    p = endptr;
+    while (*p == ' ') p++;
+
+    /* Try compound quotes: `"..."' */
+    if (p[0] == '`' && p[1] == '"') {
+        p += 2;
+        const char *close = strstr(p, "\"'");
+        if (!close) return 0;
+
+        size_t len = (size_t)(close - p);
+        if (len > CTOOLS_MAX_LABEL_LEN) len = CTOOLS_MAX_LABEL_LEN;
+        memcpy(out_label, p, len);
+        out_label[len] = '\0';
+        *out_label_len = (int)len;
+        return 1;
+    }
+
+    /* Try simple quotes: "..." */
+    if (*p == '"') {
+        p++;
+        const char *close = strchr(p, '"');
+        if (!close) return 0;
+
+        size_t len = (size_t)(close - p);
+        if (len > CTOOLS_MAX_LABEL_LEN) len = CTOOLS_MAX_LABEL_LEN;
+        memcpy(out_label, p, len);
+        out_label[len] = '\0';
+        *out_label_len = (int)len;
+        return 1;
+    }
+
+    return 0;
+}
+
+int ctools_label_parse_stata_file_int(const char *filepath,
+                                       ctools_int_hash_table *ht,
+                                       int *max_label_len)
+{
+    if (!filepath || *filepath == '\0') return 0;
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) return -1;
+
+    if (max_label_len) *max_label_len = 0;
+
+    char line[CTOOLS_MAX_LABEL_LEN + 256];
+    char label[CTOOLS_MAX_LABEL_LEN + 1];
+    int value, label_len;
+
+    while (fgets(line, sizeof(line), fp)) {
+        /* Strip trailing newline */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        if (ctools_parse_label_save_line(line, &value, label, &label_len)) {
+            if (ctools_int_hash_insert(ht, value, label) != 0) {
+                fclose(fp);
+                return -1;
+            }
+            if (max_label_len && label_len > *max_label_len)
+                *max_label_len = label_len;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+int ctools_label_parse_stata_file_str(const char *filepath,
+                                       ctools_str_hash_table *ht)
+{
+    if (!filepath || *filepath == '\0') return 0;
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) return -1;
+
+    char line[CTOOLS_MAX_LABEL_LEN + 256];
+    char label[CTOOLS_MAX_LABEL_LEN + 1];
+    int value, label_len;
+
+    while (fgets(line, sizeof(line), fp)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        if (ctools_parse_label_save_line(line, &value, label, &label_len)) {
+            if (ctools_str_hash_insert_value(ht, label, value) < 0) {
+                fclose(fp);
+                return -1;
+            }
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+int ctools_label_scan_stata_file(const char *filepath, int *max_label_len)
+{
+    if (!filepath || *filepath == '\0') return 0;
+
+    FILE *fp = fopen(filepath, "r");
+    if (!fp) return -1;
+
+    if (max_label_len) *max_label_len = 0;
+
+    char line[CTOOLS_MAX_LABEL_LEN + 256];
+    char label[CTOOLS_MAX_LABEL_LEN + 1];
+    int value, label_len;
+
+    while (fgets(line, sizeof(line), fp)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r'))
+            line[--len] = '\0';
+
+        if (ctools_parse_label_save_line(line, &value, label, &label_len)) {
+            if (max_label_len && label_len > *max_label_len)
+                *max_label_len = label_len;
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}
+
+/* Check if a string contains control characters that Stata's .do parser
+ * can't handle (tab expands to spaces, newline breaks the line) */
+static int label_string_needs_escape(const char *s)
+{
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        if (*p < 32) return 1;
+    }
+    return 0;
+}
+
+/* Write a string expression using char() for control characters.
+ * Output: `"seg1"' + char(9) + `"seg2"' + char(10) + `"seg3"'
+ * For use in: local __lbl_tmp = <this expression> */
+static void write_escaped_string_expr(FILE *fp, const char *s)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    const unsigned char *seg_start = p;
+    int first = 1;
+
+    for (;; p++) {
+        if (*p == '\0' || *p < 32) {
+            /* Write accumulated safe segment */
+            if (p > seg_start) {
+                if (!first) fprintf(fp, " + ");
+                fprintf(fp, "`\"");
+                fwrite(seg_start, 1, (size_t)(p - seg_start), fp);
+                fprintf(fp, "\"'");
+                first = 0;
+            }
+            if (*p == '\0') break;
+            /* Write char(N) for the control character */
+            if (!first) fprintf(fp, " + ");
+            fprintf(fp, "char(%d)", (int)*p);
+            first = 0;
+            seg_start = p + 1;
+        }
+    }
+    if (first) {
+        /* Empty string */
+        fprintf(fp, "`\"\"'");
+    }
+}
+
+int ctools_label_write_stata_file(const char **strings, const int *codes,
+                                   size_t n_labels, const char *label_name,
+                                   const char *filepath)
+{
+    FILE *fp = fopen(filepath, "w");
+    if (!fp) return -1;
+
+    for (size_t i = 0; i < n_labels; i++) {
+        const char *add = (i == 0) ? "" : ", add";
+
+        if (!label_string_needs_escape(strings[i])) {
+            /* Simple case: no control characters */
+            fprintf(fp, "label define %s %d `\"%s\"'%s\n",
+                    label_name, codes[i], strings[i], add);
+        } else {
+            /* Escaped case: use local + char() to preserve control chars */
+            fprintf(fp, "local __lbl_tmp = ");
+            write_escaped_string_expr(fp, strings[i]);
+            fprintf(fp, "\n");
+            fprintf(fp, "label define %s %d `\"`__lbl_tmp'\"'%s\n",
+                    label_name, codes[i], add);
+        }
+    }
+
+    fclose(fp);
+    return 0;
+}

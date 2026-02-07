@@ -43,6 +43,10 @@ char ctools_static_empty_string[] = "";
 /* Create a new block with given capacity */
 static CToolsArenaBlock *ctools_arena_new_block(size_t capacity)
 {
+    /* Check for overflow: sizeof(CToolsArenaBlock) + capacity must not wrap */
+    if (capacity > SIZE_MAX - sizeof(CToolsArenaBlock)) {
+        return NULL;
+    }
     CToolsArenaBlock *block = (CToolsArenaBlock *)malloc(
         sizeof(CToolsArenaBlock) + capacity);
     if (block == NULL) {

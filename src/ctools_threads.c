@@ -248,6 +248,9 @@ int ctools_persistent_pool_submit_batch(ctools_persistent_pool *pool,
     for (i = 0; i < count; i++) {
         void *arg = (args != NULL) ? (void *)(arg_ptr + i * arg_size) : NULL;
         if (ctools_persistent_pool_submit(pool, func, arg) != 0) {
+            /* Drain already-submitted items before returning to prevent
+             * use-after-free if the caller frees args on error. */
+            ctools_persistent_pool_wait(pool);
             return -1;
         }
     }
