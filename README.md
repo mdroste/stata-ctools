@@ -85,6 +85,8 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 - All ctools programs follow a basic structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. *This means that ctools programs require more memory than the programs they replace.* In addition, some commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance,  `csort`'s runtime is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
 - The default options for `csort` and `cmerge` require a lot of memory. For `csort`, you probably require 2-3 times as much memory as your dataset. For `csort`, you can reduce this memory overhead with the optional argument `streaming`, which reads variables a handful at a time rather than all at once (at a modest cost to runtime).
 
+## Issues
+- [ ] Precision of accumulated scalar statistics (e.g. total/model/residual sum of squares) associated with regression output (cqreg, creghdfe, civredhfe): only matches replacement to ~7 significant digits.
 
 ## Authorship
 
