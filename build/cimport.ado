@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cimport: C-accelerated CSV import for Stata
 *! Part of the ctools suite
 *!
@@ -436,7 +436,6 @@ program define cimport, rclass
     local opt_noheader = cond(`noheader' == 1, "noheader", "")
     local opt_headerrow = cond(`headerrow' > 1, "headerrow=`headerrow'", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
-    local opt_stripquotes = cond("`stripquotes'" != "", "stripquotes", "")
     local opt_case = "case=`case'"
     local opt_bindquotes = "bindquotes=`bindquotes'"
 
@@ -751,17 +750,41 @@ program define cimport, rclass
     * Display summary (matching import delimited output format)
     di as text "(" as result %12.0fc _N as text " observations read)"
 
-    if "`verbose'" != "" & `elapsed' > 0 {
+    if "`verbose'" != "" {
+        * Calculate Stata overhead
+        capture local __plugin_time_total = _cimport_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __stata_overhead = `elapsed' - `__plugin_time_total'
+        if `__stata_overhead' < 0 local __stata_overhead = 0
+
         di as text ""
-        di as text "Time:      " as result %9.3f `elapsed' as text " seconds"
-        * Get file size for throughput calculation
-        tempname fh
-        file open `fh' using `"`using'"', read binary
-        file seek `fh' eof
-        local fsize = r(loc)
-        file close `fh'
-        local mbps = (`fsize' / 1048576) / `elapsed'
-        di as text "Speed:     " as result %9.1f `mbps' as text " MB/s"
+        di as text "{hline 55}"
+        di as text "cimport timing breakdown:"
+        di as text "{hline 55}"
+        di as text "  C plugin internals:"
+        di as text "    Memory map file:        " as result %8.4f _cimport_time_mmap " sec"
+        di as text "    Parse CSV:              " as result %8.4f _cimport_time_parse " sec"
+        di as text "    Type inference:         " as result %8.4f _cimport_time_infer " sec"
+        di as text "    Cache conversion:       " as result %8.4f _cimport_time_cache " sec"
+        di as text "    Store to Stata:         " as result %8.4f _cimport_time_store " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cimport_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `elapsed' " sec"
+        di as text "{hline 55}"
+
+        * Throughput info
+        if `elapsed' > 0 {
+            tempname fh
+            file open `fh' using `"`using'"', read binary
+            file seek `fh' eof
+            local fsize = r(loc)
+            file close `fh'
+            local mbps = (`fsize' / 1048576) / `elapsed'
+            di as text "    Throughput:             " as result %9.1f `mbps' as text " MB/s"
+        }
 
         * Display thread diagnostics
         capture local __threads_max = _cimport_threads_max
@@ -769,10 +792,16 @@ program define cimport, rclass
             capture local __openmp_enabled = _cimport_openmp_enabled
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
-            di as text "Thread diagnostics:"
-            di as text "  OpenMP enabled:         " as result %4.0f `__openmp_enabled'
-            di as text "  Max threads available:  " as result %4.0f `__threads_max'
+            di as text "  Thread diagnostics:"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
         }
+
+        * Clean up timing scalars
+        capture scalar drop _cimport_time_mmap _cimport_time_parse _cimport_time_infer
+        capture scalar drop _cimport_time_cache _cimport_time_store _cimport_time_total
+        capture scalar drop _cimport_threads_max _cimport_openmp_enabled
     }
 
     timer clear

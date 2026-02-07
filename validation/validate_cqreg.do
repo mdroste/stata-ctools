@@ -736,9 +736,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 24: verbose/timeit Options
+ * SECTION 24: verbose Option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 capture cqreg price mpg weight, verbose
@@ -747,15 +747,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
-}
-
-sysuse auto, clear
-capture cqreg price mpg weight, timeit
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************

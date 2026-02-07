@@ -8,17 +8,7 @@
 #include "../ctools_types.h"
 #include "stplugin.h"
 
-/* SIMD headers - prefer AVX2 > SSE2 > NEON */
-#if defined(__AVX2__)
-    #include <immintrin.h>
-    #define CIMPORT_USE_AVX2 1
-#elif defined(__SSE2__)
-    #include <emmintrin.h>
-    #define CIMPORT_USE_SSE2 1
-#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
-    #include <arm_neon.h>
-    #define CIMPORT_USE_NEON 1
-#endif
+#include "../ctools_simd.h"
 
 /* ============================================================================
  * Utility Functions
@@ -42,7 +32,7 @@ bool cimport_row_has_unmatched_quote(const char *start, const char *end, char qu
  * SIMD-Accelerated Scanning
  * ============================================================================ */
 
-#if CIMPORT_USE_AVX2
+#if CTOOLS_HAS_AVX2
 const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const __m256i v_newline = _mm256_set1_epi8('\n');
@@ -94,7 +84,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
     return end;
 }
 
-#elif CIMPORT_USE_SSE2
+#elif CTOOLS_HAS_SSE2
 const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const __m128i v_newline = _mm_set1_epi8('\n');
@@ -124,7 +114,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
     return end;
 }
 
-#elif CIMPORT_USE_NEON
+#elif CTOOLS_HAS_NEON
 const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const uint8x16_t v_newline = vdupq_n_u8('\n');
@@ -278,7 +268,7 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
 
 bool cimport_field_contains_quote(const char *src, int len, char quote)
 {
-#if CIMPORT_USE_AVX2
+#if CTOOLS_HAS_AVX2
     /* AVX2: Scan 32 bytes at a time */
     const __m256i v_quote = _mm256_set1_epi8(quote);
 
@@ -303,7 +293,7 @@ bool cimport_field_contains_quote(const char *src, int len, char quote)
         src += 16;
         len -= 16;
     }
-#elif CIMPORT_USE_SSE2
+#elif CTOOLS_HAS_SSE2
     /* SSE2: Scan 16 bytes at a time */
     const __m128i v_quote = _mm_set1_epi8(quote);
 
@@ -316,7 +306,7 @@ bool cimport_field_contains_quote(const char *src, int len, char quote)
         src += 16;
         len -= 16;
     }
-#elif CIMPORT_USE_NEON
+#elif CTOOLS_HAS_NEON
     /* NEON: Scan 16 bytes at a time */
     const uint8x16_t v_quote = vdupq_n_u8(quote);
 
@@ -452,11 +442,6 @@ int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field
  * Type Detection
  * ============================================================================ */
 
-bool cimport_field_looks_numeric(const char *src, int len)
-{
-    return cimport_field_looks_numeric_sep(src, len, '.', '\0');
-}
-
 bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, char grp_sep)
 {
     /* Skip leading whitespace */
@@ -520,12 +505,6 @@ bool cimport_field_looks_numeric_sep(const char *src, int len, char dec_sep, cha
 
     /* Must have consumed all input and seen at least one digit */
     return (p == end) && has_digits;
-}
-
-bool cimport_analyze_numeric_fast(const char *file_base, CImportFieldRef *field, char quote,
-                                   double *out_value, bool *out_is_integer)
-{
-    return cimport_analyze_numeric_with_sep(file_base, field, quote, '.', '\0', out_value, out_is_integer);
 }
 
 bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *field, char quote,

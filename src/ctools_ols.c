@@ -93,27 +93,6 @@ ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv)
 }
 
 /* ========================================================================
- * Combined solve: compute inverse of SPD matrix A using Cholesky
- * ======================================================================== */
-
-ST_int ctools_invert_spd(ST_double *A, ST_int n, ST_double *A_inv)
-{
-    ST_double *L = (ST_double *)ctools_safe_malloc3((size_t)n, (size_t)n, sizeof(ST_double));
-    if (!L) return -1;
-
-    memcpy(L, A, (size_t)n * (size_t)n * sizeof(ST_double));
-
-    if (ctools_cholesky(L, n) != 0) {
-        free(L);
-        return -1;
-    }
-
-    ST_int rc = ctools_invert_from_cholesky(L, n, A_inv);
-    free(L);
-    return rc;
-}
-
-/* ========================================================================
  * Solve linear system Ax = b using Cholesky decomposition
  * ======================================================================== */
 
@@ -406,7 +385,8 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
 {
     ST_int i, j, k, num_collinear;
     ST_double *L, sum, diag_elem;
-    const ST_double tol = 1e-14;
+    const ST_double abs_tol = 1e-14;
+    const ST_double rel_tol = 1e-10;
 
     (void)verbose;  /* Unused for now */
 
@@ -421,14 +401,21 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
 
     /* Modified Cholesky that detects collinearity */
     for (k = 0; k < K; k++) {
+        /* Save original diagonal before subtraction for relative check */
+        ST_double orig_diag = L[k * K + k];
+
         /* Compute L[k,k] */
         sum = L[k * K + k];
         for (j = 0; j < k; j++) {
             sum -= L[k * K + j] * L[k * K + j];
         }
 
-        /* Check if diagonal is effectively zero (collinear) */
-        if (sum < tol) {
+        /* Check if diagonal is effectively zero (collinear)
+         * Use both absolute and relative tolerance to handle varying scales.
+         * Absolute: catches zero-variance columns
+         * Relative: catches collinearity where floating-point cancellation
+         *   leaves a residual of O(N * eps * diag), which can exceed abs_tol */
+        if (sum < abs_tol || (orig_diag > 0 && sum / orig_diag < rel_tol)) {
             is_collinear[k] = 1;
             L[k * K + k] = 0.0;
             for (i = k + 1; i < K; i++) {

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "csort##syntax"}{...}
 {viewerjumpto "Description" "csort##description"}{...}
 {viewerjumpto "Options" "csort##options"}{...}
@@ -28,6 +28,7 @@
 {syntab:Options}
 {synopt:{opt alg:orithm(name)}}sorting algorithm (see below){p_end}
 {synopt:{opt str:eam(#)}}streaming mode, loading {it:#} variables at a time (1-16){p_end}
+{synopt:{opt nostr:eam}}disable automatic streaming for wide datasets{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synopt:{opt nosort:edby}}do not set Stata's sortedby attribute{p_end}
 {synopt:{opt v:erbose}}display timing breakdown{p_end}
@@ -78,10 +79,14 @@ parallelization. For example, {cmd:stream(4)} processes 4 variables simultaneous
 using approximately 4× the buffer memory of {cmd:stream(1)}.
 
 {phang}
+{opt nostream} disables automatic streaming mode. By default, {cmd:csort}
+automatically enables streaming for datasets with many variables to reduce
+memory usage. Use {opt nostream} to force all variables to be loaded into C
+memory simultaneously.
+
+{phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:csort} uses all available CPU cores as reported by
-OpenMP. Use this option to limit parallelism, for example when running multiple
-jobs simultaneously or to reduce resource usage.
+operations. By default, {cmd:csort} uses all available CPU cores.
 
 {phang}
 {opt nosortedby} prevents {cmd:csort} from setting Stata's internal {it:sortedby}
@@ -92,8 +97,7 @@ sorted (e.g., for intermediate operations). Note: commands that rely on Stata's
 {it:sortedby} attribute (like {cmd:by:}) will not recognize the sort order.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent in each phase of
-the sort: loading data to C, sorting, and storing data back to Stata.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker algorithms}{...}

@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cmerge: Optimized C-accelerated merge for Stata datasets
 *! Part of the ctools suite
 *!
@@ -116,7 +116,6 @@ program define cmerge, rclass
             Verbose ///
             NOLabel ///
             NONotes ///
-            TIMEit ///
             UPDATE ///
             REPLACE ///
             PRESERVE_order(integer 0) ///
@@ -141,7 +140,6 @@ program define cmerge, rclass
             Verbose ///
             NOLabel ///
             NONotes ///
-            TIMEit ///
             UPDATE ///
             REPLACE ///
             PRESERVE_order(integer 0) ///
@@ -303,7 +301,7 @@ program define cmerge, rclass
     }
 
     * Initialize timing (like csort)
-    local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
+    local __do_timing = ("`verbose'" != "")
     if `__do_timing' {
         timer clear 90
         timer clear 91

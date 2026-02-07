@@ -54,94 +54,15 @@ ST_double cqreg_ipm_get_objective(const cqreg_ipm_state *ipm, ST_double q);
 void cqreg_ipm_get_residuals(const cqreg_ipm_state *ipm, ST_double *residuals);
 
 /* ============================================================================
- * Internal Functions (exposed for testing)
+ * Internal Functions
  * ============================================================================ */
 
-/*
- * Initialize primal and dual variables for IPM.
- * Uses a simple heuristic based on least squares solution.
- */
 void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
                           const ST_double *y,
                           const ST_double *X,
                           ST_double q);
 
-/*
- * Compute primal and dual residuals.
- */
-void cqreg_ipm_compute_residuals(cqreg_ipm_state *ipm,
-                                 const ST_double *y,
-                                 const ST_double *X,
-                                 ST_double q);
-
-/*
- * Check convergence based on residuals and duality gap.
- * Returns: 1 if converged, 0 otherwise.
- */
-ST_int cqreg_ipm_check_convergence(cqreg_ipm_state *ipm);
-
-/*
- * Compute diagonal scaling matrix D.
- * D[i] = 1 / (lambda_u[i]/u[i] + lambda_v[i]/v[i])
- */
-void cqreg_ipm_compute_scaling(cqreg_ipm_state *ipm);
-
-/*
- * Form and factorize normal equations.
- * Computes X' * D * X and its Cholesky factorization.
- * Returns: 0 on success, -1 if Cholesky fails.
- */
-ST_int cqreg_ipm_form_normal_equations(cqreg_ipm_state *ipm, const ST_double *X);
-
-/*
- * Compute affine scaling direction (predictor step).
- */
-void cqreg_ipm_affine_direction(cqreg_ipm_state *ipm,
-                                const ST_double *X,
-                                const ST_double *y,
-                                ST_double q);
-
-/*
- * Compute combined (predictor-corrector) direction.
- */
-void cqreg_ipm_combined_direction(cqreg_ipm_state *ipm,
-                                  const ST_double *X,
-                                  const ST_double *y,
-                                  ST_double q,
-                                  ST_double sigma);
-
-/*
- * Compute step length maintaining positivity of u, v, lambda_u, lambda_v.
- * Returns: maximum step length in (0, 1].
- */
-ST_double cqreg_ipm_step_length(cqreg_ipm_state *ipm, ST_int affine);
-
-/*
- * Update variables: x = x + alpha * delta_x.
- */
-void cqreg_ipm_update_variables(cqreg_ipm_state *ipm, ST_double alpha);
-
-/*
- * Compute complementarity: sum(u .* lambda_u + v .* lambda_v)
- */
 ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm);
-
-/* ============================================================================
- * IRLS Alternative Solver
- * ============================================================================ */
-
-/*
- * Solve quantile regression using Iteratively Reweighted Least Squares.
- * Simpler and more robust than IPM for small/medium datasets.
- *
- * Parameters: Same as cqreg_ipm_solve()
- * Returns: Number of iterations on success, negative on failure.
- */
-ST_int cqreg_irls_solve(cqreg_ipm_state *ipm,
-                        const ST_double *y,
-                        const ST_double *X,
-                        ST_double q,
-                        ST_double *beta);
 
 /* ============================================================================
  * Preprocessing Solver (Chernozhukov et al. 2020)

@@ -1,14 +1,15 @@
   ```
-   ██████╗████████╗ ██████╗  ██████╗ ██╗     ███████╗
-  ██╔════╝╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝  Fast drop-in replacements
-  ██║        ██║   ██║   ██║██║   ██║██║     ███████╗  for various Stata programs
-  ██║        ██║   ██║   ██║██║   ██║██║     ╚════██║
-  ╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║  
-   ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+   █████╗██████╗ █████╗  █████╗ ██╗   ██████╗
+  ██╔═══╝╚═██╔═╝██╔══██╗██╔══██╗██║   ██╔═══╝
+  ██║      ██║  ██║  ██║██║  ██║██║   ██████╗
+  ██║      ██║  ██║  ██║██║  ██║██║   ╚═══██║
+  ╚█████╗  ██║  ╚█████╔╝╚█████╔╝█████╗██████║
+   ╚════╝  ╚═╝   ╚════╝  ╚════╝╚════╝╚═════╝
+   Fast drop-in replacements for Stata
   ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-0.9.0_(February_2026)-blue)
+![Version](https://img.shields.io/badge/version-0.9.1_(February_2026)-blue)
 
 **This project is pre-release. It has not been exhaustively tested. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 

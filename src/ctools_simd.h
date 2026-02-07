@@ -34,17 +34,27 @@
 #if defined(__AVX2__)
     #include <immintrin.h>
     #define CTOOLS_HAS_AVX2 1
+    #define CTOOLS_HAS_SSE2 1       /* AVX2 implies SSE2 */
     #define CTOOLS_HAS_NEON 0
     #define CTOOLS_SIMD_WIDTH 4     /* doubles per vector */
     #define CTOOLS_SIMD_BYTES 32    /* bytes per vector */
+#elif defined(__SSE2__)
+    #include <emmintrin.h>
+    #define CTOOLS_HAS_AVX2 0
+    #define CTOOLS_HAS_SSE2 1
+    #define CTOOLS_HAS_NEON 0
+    #define CTOOLS_SIMD_WIDTH 2     /* doubles per vector */
+    #define CTOOLS_SIMD_BYTES 16    /* bytes per vector */
 #elif defined(__aarch64__) || defined(_M_ARM64)
     #include <arm_neon.h>
     #define CTOOLS_HAS_AVX2 0
+    #define CTOOLS_HAS_SSE2 0
     #define CTOOLS_HAS_NEON 1
     #define CTOOLS_SIMD_WIDTH 2     /* doubles per vector */
     #define CTOOLS_SIMD_BYTES 16    /* bytes per vector */
 #else
     #define CTOOLS_HAS_AVX2 0
+    #define CTOOLS_HAS_SSE2 0
     #define CTOOLS_HAS_NEON 0
     #define CTOOLS_SIMD_WIDTH 1
     #define CTOOLS_SIMD_BYTES 8
@@ -77,18 +87,6 @@ static inline double ctools_hsum_avx2(__m256d v)
     __m128d vresult = _mm_add_sd(vsum, vshuf);
 
     return _mm_cvtsd_f64(vresult);
-}
-
-/*
- * ctools_hsum_avx2_array - Horizontal sum via array (alternative)
- *
- * Sometimes faster for single reduction, avoids shuffle latency.
- */
-static inline double ctools_hsum_avx2_array(__m256d v)
-{
-    double arr[4];
-    _mm256_storeu_pd(arr, v);
-    return (arr[0] + arr[2]) + (arr[1] + arr[3]);
 }
 
 /*
@@ -614,6 +612,21 @@ static inline void ctools_simd_axpby(double *y, const double *x,
         float64x2_t valpha = vdupq_n_f64(alpha);
         float64x2_t vbeta  = vdupq_n_f64(beta);
 
+        for (; i + 4 <= n; i += 4) {
+            float64x2_t vy0 = vld1q_f64(&y[i]);
+            float64x2_t vx0 = vld1q_f64(&x[i]);
+            float64x2_t vy1 = vld1q_f64(&y[i + 2]);
+            float64x2_t vx1 = vld1q_f64(&x[i + 2]);
+
+            float64x2_t vax0 = vmulq_f64(valpha, vx0);
+            float64x2_t vax1 = vmulq_f64(valpha, vx1);
+            vy0 = vfmaq_f64(vax0, vbeta, vy0);
+            vy1 = vfmaq_f64(vax1, vbeta, vy1);
+
+            vst1q_f64(&y[i], vy0);
+            vst1q_f64(&y[i + 2], vy1);
+        }
+
         for (; i + 2 <= n; i += 2) {
             float64x2_t vy = vld1q_f64(&y[i]);
             float64x2_t vx = vld1q_f64(&x[i]);
@@ -630,6 +643,321 @@ static inline void ctools_simd_axpby(double *y, const double *x,
     for (; i < n; i++) {
         y[i] = alpha * x[i] + beta * y[i];
     }
+}
+
+/*
+ * ctools_simd_fused_axpy2_dot - Fused y -= alpha*u, r -= alpha*v, return r·r
+ *
+ * Performs three operations in a single pass over N doubles:
+ *   y[i] -= alpha * u[i]
+ *   r[i] -= alpha * v[i]
+ *   sum  += r[i] * r[i]   (after update)
+ *
+ * Returns the dot product r·r (after the axpy update).
+ * Saves 2 full passes over N compared to separate axpy+axpy+dot.
+ */
+static inline double ctools_simd_fused_axpy2_dot(double *y, const double *u,
+                                                  double *r, const double *v,
+                                                  double alpha, size_t n)
+{
+    double dot = 0.0;
+    size_t i = 0;
+
+#if CTOOLS_HAS_AVX2
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        __m256d valpha = _mm256_set1_pd(alpha);
+        __m256d vdot0 = _mm256_setzero_pd();
+        __m256d vdot1 = _mm256_setzero_pd();
+
+        for (; i + 8 <= n; i += 8) {
+            /* Load */
+            __m256d vy0 = _mm256_loadu_pd(&y[i]);
+            __m256d vu0 = _mm256_loadu_pd(&u[i]);
+            __m256d vr0 = _mm256_loadu_pd(&r[i]);
+            __m256d vv0 = _mm256_loadu_pd(&v[i]);
+            __m256d vy1 = _mm256_loadu_pd(&y[i + 4]);
+            __m256d vu1 = _mm256_loadu_pd(&u[i + 4]);
+            __m256d vr1 = _mm256_loadu_pd(&r[i + 4]);
+            __m256d vv1 = _mm256_loadu_pd(&v[i + 4]);
+
+            /* y -= alpha * u */
+            #ifdef __FMA__
+            vy0 = _mm256_fnmadd_pd(valpha, vu0, vy0);
+            vy1 = _mm256_fnmadd_pd(valpha, vu1, vy1);
+            #else
+            vy0 = _mm256_sub_pd(vy0, _mm256_mul_pd(valpha, vu0));
+            vy1 = _mm256_sub_pd(vy1, _mm256_mul_pd(valpha, vu1));
+            #endif
+
+            /* r -= alpha * v */
+            #ifdef __FMA__
+            vr0 = _mm256_fnmadd_pd(valpha, vv0, vr0);
+            vr1 = _mm256_fnmadd_pd(valpha, vv1, vr1);
+            #else
+            vr0 = _mm256_sub_pd(vr0, _mm256_mul_pd(valpha, vv0));
+            vr1 = _mm256_sub_pd(vr1, _mm256_mul_pd(valpha, vv1));
+            #endif
+
+            /* Store */
+            _mm256_storeu_pd(&y[i], vy0);
+            _mm256_storeu_pd(&y[i + 4], vy1);
+            _mm256_storeu_pd(&r[i], vr0);
+            _mm256_storeu_pd(&r[i + 4], vr1);
+
+            /* Accumulate r·r */
+            #ifdef __FMA__
+            vdot0 = _mm256_fmadd_pd(vr0, vr0, vdot0);
+            vdot1 = _mm256_fmadd_pd(vr1, vr1, vdot1);
+            #else
+            vdot0 = _mm256_add_pd(vdot0, _mm256_mul_pd(vr0, vr0));
+            vdot1 = _mm256_add_pd(vdot1, _mm256_mul_pd(vr1, vr1));
+            #endif
+        }
+
+        for (; i + 4 <= n; i += 4) {
+            __m256d vy = _mm256_loadu_pd(&y[i]);
+            __m256d vu = _mm256_loadu_pd(&u[i]);
+            __m256d vr = _mm256_loadu_pd(&r[i]);
+            __m256d vv = _mm256_loadu_pd(&v[i]);
+
+            #ifdef __FMA__
+            vy = _mm256_fnmadd_pd(valpha, vu, vy);
+            vr = _mm256_fnmadd_pd(valpha, vv, vr);
+            #else
+            vy = _mm256_sub_pd(vy, _mm256_mul_pd(valpha, vu));
+            vr = _mm256_sub_pd(vr, _mm256_mul_pd(valpha, vv));
+            #endif
+
+            _mm256_storeu_pd(&y[i], vy);
+            _mm256_storeu_pd(&r[i], vr);
+
+            #ifdef __FMA__
+            vdot0 = _mm256_fmadd_pd(vr, vr, vdot0);
+            #else
+            vdot0 = _mm256_add_pd(vdot0, _mm256_mul_pd(vr, vr));
+            #endif
+        }
+
+        __m256d vtotal = _mm256_add_pd(vdot0, vdot1);
+        dot = ctools_hsum_avx2(vtotal);
+    }
+#elif CTOOLS_HAS_NEON
+    if (n >= 4) {
+        float64x2_t valpha = vdupq_n_f64(alpha);
+        float64x2_t vdot0 = vdupq_n_f64(0.0);
+        float64x2_t vdot1 = vdupq_n_f64(0.0);
+
+        for (; i + 4 <= n; i += 4) {
+            float64x2_t vy0 = vld1q_f64(&y[i]);
+            float64x2_t vu0 = vld1q_f64(&u[i]);
+            float64x2_t vr0 = vld1q_f64(&r[i]);
+            float64x2_t vv0 = vld1q_f64(&v[i]);
+            float64x2_t vy1 = vld1q_f64(&y[i + 2]);
+            float64x2_t vu1 = vld1q_f64(&u[i + 2]);
+            float64x2_t vr1 = vld1q_f64(&r[i + 2]);
+            float64x2_t vv1 = vld1q_f64(&v[i + 2]);
+
+            /* y -= alpha * u (fnma: result = acc - a * b) */
+            vy0 = vfmsq_f64(vy0, valpha, vu0);
+            vy1 = vfmsq_f64(vy1, valpha, vu1);
+
+            /* r -= alpha * v */
+            vr0 = vfmsq_f64(vr0, valpha, vv0);
+            vr1 = vfmsq_f64(vr1, valpha, vv1);
+
+            vst1q_f64(&y[i], vy0);
+            vst1q_f64(&y[i + 2], vy1);
+            vst1q_f64(&r[i], vr0);
+            vst1q_f64(&r[i + 2], vr1);
+
+            /* Accumulate r·r */
+            vdot0 = vfmaq_f64(vdot0, vr0, vr0);
+            vdot1 = vfmaq_f64(vdot1, vr1, vr1);
+        }
+
+        for (; i + 2 <= n; i += 2) {
+            float64x2_t vy = vld1q_f64(&y[i]);
+            float64x2_t vu = vld1q_f64(&u[i]);
+            float64x2_t vr = vld1q_f64(&r[i]);
+            float64x2_t vv = vld1q_f64(&v[i]);
+
+            vy = vfmsq_f64(vy, valpha, vu);
+            vr = vfmsq_f64(vr, valpha, vv);
+
+            vst1q_f64(&y[i], vy);
+            vst1q_f64(&r[i], vr);
+
+            vdot0 = vfmaq_f64(vdot0, vr, vr);
+        }
+
+        float64x2_t vtotal = vaddq_f64(vdot0, vdot1);
+        dot = ctools_hsum_neon(vtotal);
+    }
+#endif
+
+    /* Scalar tail */
+    for (; i < n; i++) {
+        y[i] -= alpha * u[i];
+        r[i] -= alpha * v[i];
+        dot += r[i] * r[i];
+    }
+
+    return dot;
+}
+
+/*
+ * ctools_simd_fused_axpy2_wdot - Fused weighted variant
+ *
+ * Performs y -= alpha*u, r -= alpha*v, returns sum(w[i] * r[i] * r[i]).
+ */
+static inline double ctools_simd_fused_axpy2_wdot(double *y, const double *u,
+                                                    double *r, const double *v,
+                                                    const double *w,
+                                                    double alpha, size_t n)
+{
+    double dot = 0.0;
+    size_t i = 0;
+
+#if CTOOLS_HAS_AVX2
+    if (n >= CTOOLS_SIMD_THRESHOLD) {
+        __m256d valpha = _mm256_set1_pd(alpha);
+        __m256d vdot0 = _mm256_setzero_pd();
+        __m256d vdot1 = _mm256_setzero_pd();
+
+        for (; i + 8 <= n; i += 8) {
+            __m256d vy0 = _mm256_loadu_pd(&y[i]);
+            __m256d vu0 = _mm256_loadu_pd(&u[i]);
+            __m256d vr0 = _mm256_loadu_pd(&r[i]);
+            __m256d vv0 = _mm256_loadu_pd(&v[i]);
+            __m256d vw0 = _mm256_loadu_pd(&w[i]);
+            __m256d vy1 = _mm256_loadu_pd(&y[i + 4]);
+            __m256d vu1 = _mm256_loadu_pd(&u[i + 4]);
+            __m256d vr1 = _mm256_loadu_pd(&r[i + 4]);
+            __m256d vv1 = _mm256_loadu_pd(&v[i + 4]);
+            __m256d vw1 = _mm256_loadu_pd(&w[i + 4]);
+
+            #ifdef __FMA__
+            vy0 = _mm256_fnmadd_pd(valpha, vu0, vy0);
+            vy1 = _mm256_fnmadd_pd(valpha, vu1, vy1);
+            vr0 = _mm256_fnmadd_pd(valpha, vv0, vr0);
+            vr1 = _mm256_fnmadd_pd(valpha, vv1, vr1);
+            #else
+            vy0 = _mm256_sub_pd(vy0, _mm256_mul_pd(valpha, vu0));
+            vy1 = _mm256_sub_pd(vy1, _mm256_mul_pd(valpha, vu1));
+            vr0 = _mm256_sub_pd(vr0, _mm256_mul_pd(valpha, vv0));
+            vr1 = _mm256_sub_pd(vr1, _mm256_mul_pd(valpha, vv1));
+            #endif
+
+            _mm256_storeu_pd(&y[i], vy0);
+            _mm256_storeu_pd(&y[i + 4], vy1);
+            _mm256_storeu_pd(&r[i], vr0);
+            _mm256_storeu_pd(&r[i + 4], vr1);
+
+            /* Accumulate w * r * r */
+            __m256d vwr0 = _mm256_mul_pd(vw0, vr0);
+            __m256d vwr1 = _mm256_mul_pd(vw1, vr1);
+            #ifdef __FMA__
+            vdot0 = _mm256_fmadd_pd(vwr0, vr0, vdot0);
+            vdot1 = _mm256_fmadd_pd(vwr1, vr1, vdot1);
+            #else
+            vdot0 = _mm256_add_pd(vdot0, _mm256_mul_pd(vwr0, vr0));
+            vdot1 = _mm256_add_pd(vdot1, _mm256_mul_pd(vwr1, vr1));
+            #endif
+        }
+
+        for (; i + 4 <= n; i += 4) {
+            __m256d vy = _mm256_loadu_pd(&y[i]);
+            __m256d vu = _mm256_loadu_pd(&u[i]);
+            __m256d vr = _mm256_loadu_pd(&r[i]);
+            __m256d vv = _mm256_loadu_pd(&v[i]);
+            __m256d vw = _mm256_loadu_pd(&w[i]);
+
+            #ifdef __FMA__
+            vy = _mm256_fnmadd_pd(valpha, vu, vy);
+            vr = _mm256_fnmadd_pd(valpha, vv, vr);
+            #else
+            vy = _mm256_sub_pd(vy, _mm256_mul_pd(valpha, vu));
+            vr = _mm256_sub_pd(vr, _mm256_mul_pd(valpha, vv));
+            #endif
+
+            _mm256_storeu_pd(&y[i], vy);
+            _mm256_storeu_pd(&r[i], vr);
+
+            __m256d vwr = _mm256_mul_pd(vw, vr);
+            #ifdef __FMA__
+            vdot0 = _mm256_fmadd_pd(vwr, vr, vdot0);
+            #else
+            vdot0 = _mm256_add_pd(vdot0, _mm256_mul_pd(vwr, vr));
+            #endif
+        }
+
+        __m256d vtotal = _mm256_add_pd(vdot0, vdot1);
+        dot = ctools_hsum_avx2(vtotal);
+    }
+#elif CTOOLS_HAS_NEON
+    if (n >= 4) {
+        float64x2_t valpha = vdupq_n_f64(alpha);
+        float64x2_t vdot0 = vdupq_n_f64(0.0);
+        float64x2_t vdot1 = vdupq_n_f64(0.0);
+
+        for (; i + 4 <= n; i += 4) {
+            float64x2_t vy0 = vld1q_f64(&y[i]);
+            float64x2_t vu0 = vld1q_f64(&u[i]);
+            float64x2_t vr0 = vld1q_f64(&r[i]);
+            float64x2_t vv0 = vld1q_f64(&v[i]);
+            float64x2_t vw0 = vld1q_f64(&w[i]);
+            float64x2_t vy1 = vld1q_f64(&y[i + 2]);
+            float64x2_t vu1 = vld1q_f64(&u[i + 2]);
+            float64x2_t vr1 = vld1q_f64(&r[i + 2]);
+            float64x2_t vv1 = vld1q_f64(&v[i + 2]);
+            float64x2_t vw1 = vld1q_f64(&w[i + 2]);
+
+            vy0 = vfmsq_f64(vy0, valpha, vu0);
+            vy1 = vfmsq_f64(vy1, valpha, vu1);
+            vr0 = vfmsq_f64(vr0, valpha, vv0);
+            vr1 = vfmsq_f64(vr1, valpha, vv1);
+
+            vst1q_f64(&y[i], vy0);
+            vst1q_f64(&y[i + 2], vy1);
+            vst1q_f64(&r[i], vr0);
+            vst1q_f64(&r[i + 2], vr1);
+
+            float64x2_t vwr0 = vmulq_f64(vw0, vr0);
+            float64x2_t vwr1 = vmulq_f64(vw1, vr1);
+            vdot0 = vfmaq_f64(vdot0, vwr0, vr0);
+            vdot1 = vfmaq_f64(vdot1, vwr1, vr1);
+        }
+
+        for (; i + 2 <= n; i += 2) {
+            float64x2_t vy = vld1q_f64(&y[i]);
+            float64x2_t vu = vld1q_f64(&u[i]);
+            float64x2_t vr = vld1q_f64(&r[i]);
+            float64x2_t vv = vld1q_f64(&v[i]);
+            float64x2_t vw = vld1q_f64(&w[i]);
+
+            vy = vfmsq_f64(vy, valpha, vu);
+            vr = vfmsq_f64(vr, valpha, vv);
+
+            vst1q_f64(&y[i], vy);
+            vst1q_f64(&r[i], vr);
+
+            float64x2_t vwr = vmulq_f64(vw, vr);
+            vdot0 = vfmaq_f64(vdot0, vwr, vr);
+        }
+
+        float64x2_t vtotal = vaddq_f64(vdot0, vdot1);
+        dot = ctools_hsum_neon(vtotal);
+    }
+#endif
+
+    /* Scalar tail */
+    for (; i < n; i++) {
+        y[i] -= alpha * u[i];
+        r[i] -= alpha * v[i];
+        dot += w[i] * r[i] * r[i];
+    }
+
+    return dot;
 }
 
 #endif /* CTOOLS_SIMD_H */

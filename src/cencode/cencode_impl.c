@@ -19,7 +19,6 @@
 #include "ctools_types.h"
 #include "ctools_runtime.h"
 #include "ctools_config.h"
-#include "ctools_arena.h"
 #include "ctools_hash.h"
 #include "ctools_parse.h"
 #include "cencode_impl.h"
@@ -58,7 +57,6 @@ ST_retcode cencode_main(const char *args)
     char label_name[256] = "";
     int noextend = 0;
     size_t nobs;
-    ST_retcode rc = 0;
 
     /*
      * cencode is called with ALL dataset variables in the varlist:
@@ -196,8 +194,6 @@ ST_retcode cencode_main(const char *args)
         SF_error("cencode: memory allocation failed for observation codes\n");
         return 920;
     }
-    memset(obs_codes, 0, nobs * sizeof(int));  /* 0 = missing/empty */
-
     int collect_error = 0;
 
     /* Process filtered observations - no if_mask check needed since data is pre-filtered */
@@ -243,20 +239,12 @@ ST_retcode cencode_main(const char *args)
      * ======================================================================== */
 
     if (have_existing) {
-        /* Build double array from obs_codes and write via ctools_store_filtered */
-        double *values = malloc(nobs * sizeof(double));
-        if (!values) {
-            free(obs_codes);
-            ctools_filtered_data_free(&filtered);
-            ctools_str_hash_free(&existing_ht);
-            SF_error("cencode: memory allocation failed\n");
-            return 920;
-        }
+        /* Write codes directly to Stata — no intermediate double array needed */
         for (size_t i = 0; i < nobs; i++) {
-            values[i] = (obs_codes[i] > 0) ? (double)obs_codes[i] : SV_missval;
+            int code = obs_codes[i];
+            double val = (code > 0) ? (double)code : SV_missval;
+            SF_vstore(gen_idx, (ST_int)obs_map[i], val);
         }
-        ctools_store_filtered(values, nobs, gen_idx, obs_map);
-        free(values);
 
         free(obs_codes);
         ctools_filtered_data_free(&filtered);
@@ -289,19 +277,9 @@ ST_retcode cencode_main(const char *args)
     size_t n_unique = ht.count;
 
     if (n_unique == 0) {
-        /* All values were empty/missing - write all missing using ctools_store_filtered */
-        double *values = malloc(nobs * sizeof(double));
-        if (values) {
-            for (size_t i = 0; i < nobs; i++) {
-                values[i] = SV_missval;
-            }
-            ctools_store_filtered(values, nobs, gen_idx, obs_map);
-            free(values);
-        } else {
-            /* Fallback: write one at a time */
-            for (size_t i = 0; i < nobs; i++) {
-                SF_vstore(gen_idx, (ST_int)obs_map[i], SV_missval);
-            }
+        /* All values were empty/missing - write all missing directly */
+        for (size_t i = 0; i < nobs; i++) {
+            SF_vstore(gen_idx, (ST_int)obs_map[i], SV_missval);
         }
         SF_scal_save("_cencode_n_unique", 0);
         SF_scal_save("_cencode_n_chunks", 1);
@@ -392,22 +370,12 @@ ST_retcode cencode_main(const char *args)
      * via ctools_store_filtered
      * ======================================================================== */
 
-    double *values = malloc(nobs * sizeof(double));
-    if (!values) {
-        free(code_map);
-        free(sorted_strings);
-        free(obs_codes);
-        ctools_filtered_data_free(&filtered);
-        ctools_str_hash_free(&ht);
-        SF_error("cencode: memory allocation failed\n");
-        return 920;
-    }
+    /* Write encoded values directly to Stata — no intermediate double array needed */
     for (size_t i = 0; i < nobs; i++) {
         int orig_code = obs_codes[i];
-        values[i] = (orig_code > 0) ? (double)code_map[orig_code] : SV_missval;
+        double val = (orig_code > 0) ? (double)code_map[orig_code] : SV_missval;
+        SF_vstore(gen_idx, (ST_int)obs_map[i], val);
     }
-    ctools_store_filtered(values, nobs, gen_idx, obs_map);
-    free(values);
 
     free(obs_codes);
 
@@ -481,5 +449,5 @@ ST_retcode cencode_main(const char *args)
 
     CTOOLS_SAVE_THREAD_INFO("_cencode");
 
-    return rc;
+    return 0;
 }

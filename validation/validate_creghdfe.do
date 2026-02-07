@@ -219,9 +219,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 10: verbose/timeit options
+ * SECTION 10: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 capture creghdfe price mpg weight, absorb(foreign) verbose
@@ -230,15 +230,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
-}
-
-sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) timeit
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************

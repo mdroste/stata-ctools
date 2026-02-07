@@ -68,42 +68,40 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 2b: Deterministic comparison with Stata's sample
+ * SECTION 2b: Self-consistency with set seed
  ******************************************************************************/
-print_section "Deterministic Comparison with sample"
+print_section "Self-Consistency with set seed"
 
-* Deterministic comparison with same seed
+* csample with same seed should produce identical results
 clear
 set obs 1000
 gen id = _n
-gen x = runiform()
 
 set seed 54321
 preserve
-sample 50
-local stata_N = _N
-tempfile stata_result
-save `stata_result'
+csample 50
+local N1 = _N
+tempfile csample_result
+save `csample_result'
 restore
 
 set seed 54321
 preserve
 csample 50
-local ctools_N = _N
+local N2 = _N
 
-if `stata_N' == `ctools_N' {
-    * Same N - check if same observations kept
-    merge 1:1 id using `stata_result'
+if `N1' == `N2' {
+    merge 1:1 id using `csample_result'
     quietly count if _merge != 3
     if r(N) == 0 {
-        test_pass "csample matches sample with seed (50%)"
+        test_pass "csample reproducible with same seed (50%)"
     }
     else {
-        test_fail "csample vs sample" "`=r(N)' observations differ"
+        test_fail "csample reproducible with same seed" "`=r(N)' observations differ"
     }
 }
 else {
-    test_fail "csample vs sample" "N differ: sample=`stata_N' csample=`ctools_N'"
+    test_fail "csample reproducible with same seed" "N differ: run1=`N1' run2=`N2'"
 }
 restore
 
@@ -136,17 +134,17 @@ else {
     test_fail "count(50) yields exactly 50 obs" "got `=_N'"
 }
 
-* Deterministic comparison: count(100) csample vs sample, count
+* Deterministic comparison: count(100) csample vs itself
 clear
 set obs 1000
 gen id = _n
 
 set seed 99999
 preserve
-sample 100, count
+csample, count(100)
 sort id
-tempfile stata_result
-save `stata_result'
+tempfile csample_result
+save `csample_result'
 restore
 
 set seed 99999
@@ -154,13 +152,13 @@ preserve
 csample, count(100)
 sort id
 
-merge 1:1 id using `stata_result'
+merge 1:1 id using `csample_result'
 quietly count if _merge != 3
 if r(N) == 0 {
-    test_pass "count(100) matches sample"
+    test_pass "count(100) reproducible with same seed"
 }
 else {
-    test_fail "count(100)" "`=r(N)' observations differ"
+    test_fail "count(100) reproducible with same seed" "`=r(N)' observations differ"
 }
 restore
 

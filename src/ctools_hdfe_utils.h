@@ -31,9 +31,10 @@ typedef struct {
     ST_double *weighted_counts;  /* Sum of weights per level (NULL if no weights) */
     ST_double *inv_weighted_counts; /* Precomputed 1/weighted_counts */
     ST_double *means;
-    /* Sorted observation indices for cache-friendly projection (not currently used) */
+    /* Sorted observation indices for cache-friendly projection */
     ST_int *sorted_indices;      /* indices[N]: observation indices sorted by level */
     ST_int *sorted_levels;       /* levels[N]: level values in sorted order */
+    ST_int *level_offsets;       /* offsets[num_levels+1]: start position per level in sorted arrays */
     ST_int sorted_initialized;   /* Flag: 1 if sorted format is built */
 } FE_Factor;
 
@@ -114,25 +115,6 @@ ST_int ctools_remove_singletons(
     ST_int *mask,
     ST_int max_iter,
     ST_int verbose
-);
-
-/*
-    Remap FE levels to contiguous 1-based indices.
-
-    After singleton removal, FE levels may have gaps. This function
-    remaps them to 1, 2, 3, ..., num_levels for efficient array indexing.
-
-    Parameters:
-    - levels: FE level array (N x 1), modified in place
-    - N: Number of observations
-    - num_levels: Output - number of unique levels after remapping
-
-    Returns: 0 on success, -1 on memory allocation failure
-*/
-ST_int ctools_remap_fe_levels(
-    ST_int *levels,
-    ST_int N,
-    ST_int *num_levels
 );
 
 /*
@@ -294,13 +276,17 @@ ST_int ctools_compute_hdfe_dof(
     2. Allocates thread_cg_r/u/v (and optionally thread_proj)
     3. Allocates thread_fe_means
 
+    Only min(num_threads, max_columns) buffer sets are allocated, since the CG
+    solver parallelizes over columns and never uses more threads than columns.
+
     Parameters:
     - state: HDFE_State with factors already initialized (levels, counts, num_levels set)
     - alloc_proj: 1 to allocate thread_proj buffers (needed by civreghdfe/cqreg), 0 to skip
+    - max_columns: maximum number of columns that will be partialled out (K)
 
     Returns: 0 on success, -1 on memory allocation failure
 */
-ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj);
+ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int max_columns);
 
 /*
     Free all dynamically allocated memory in an HDFE_State.

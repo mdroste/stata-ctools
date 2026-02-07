@@ -132,47 +132,6 @@ ST_int ctools_remove_singletons(
 }
 
 /*
-    Remap FE levels to contiguous 1-based indices.
-*/
-ST_int ctools_remap_fe_levels(
-    ST_int *levels,
-    ST_int N,
-    ST_int *num_levels
-)
-{
-    ST_int i;
-
-    /* Find max level */
-    ST_int max_level = 0;
-    for (i = 0; i < N; i++) {
-        if (levels[i] > max_level) max_level = levels[i];
-    }
-
-    /* Create remap array */
-    ST_int *remap = (ST_int *)calloc(max_level + 1, sizeof(ST_int));
-    if (!remap) return -1;
-
-    /* First pass: assign contiguous IDs starting from 1 */
-    ST_int next_level = 1;
-    for (i = 0; i < N; i++) {
-        ST_int old_level = levels[i];
-        if (remap[old_level] == 0) {
-            remap[old_level] = next_level++;
-        }
-    }
-
-    *num_levels = next_level - 1;
-
-    /* Second pass: remap in place */
-    for (i = 0; i < N; i++) {
-        levels[i] = remap[levels[i]];
-    }
-
-    free(remap);
-    return 0;
-}
-
-/*
     Remap cluster IDs to contiguous 1-based indices.
 */
 ST_int ctools_remap_cluster_ids(
@@ -461,12 +420,24 @@ ST_int ctools_compute_hdfe_dof(
     Allocate per-thread CG solver buffers and compute inv_counts/inv_weighted_counts.
     Caller must set state->num_threads, state->N, state->G, state->has_weights,
     and state->factors[g].{num_levels, counts, weighted_counts} before calling.
+
+    Only min(num_threads, max_columns) N-sized buffer sets are allocated, since the
+    CG solver parallelizes over columns and never uses more threads than columns.
+    This also caps state->num_threads so the OMP pragmas in partial_out_columns
+    don't launch more threads than we have buffers for.
 */
-ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj)
+ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int max_columns)
 {
     ST_int G = state->G;
     ST_int N = state->N;
     ST_int num_threads = state->num_threads;
+
+    /* Cap threads to number of columns — the CG solver parallelizes over columns,
+       so we never need more buffer sets than columns to partial out */
+    if (max_columns > 0 && num_threads > max_columns) {
+        num_threads = max_columns;
+        state->num_threads = num_threads;
+    }
 
     /* Compute inv_counts and inv_weighted_counts for each factor */
     for (ST_int g = 0; g < G; g++) {
@@ -547,6 +518,7 @@ void ctools_hdfe_state_cleanup(HDFE_State *state)
             if (state->factors[g].means) free(state->factors[g].means);
             if (state->factors[g].sorted_indices) free(state->factors[g].sorted_indices);
             if (state->factors[g].sorted_levels) free(state->factors[g].sorted_levels);
+            if (state->factors[g].level_offsets) free(state->factors[g].level_offsets);
         }
         free(state->factors);
         state->factors = NULL;

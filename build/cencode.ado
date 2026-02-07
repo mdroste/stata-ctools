@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cencode: C-accelerated string encoding for Stata
 *! Part of the ctools suite
 *!
@@ -247,7 +247,7 @@ program define cencode, rclass
         * Build noextend option and extract existing label mappings if needed
         local noextend_code ""
         local existing_code ""
-        if "`extend'" == "noextend" {
+        if "`noextend'" != "" {
             local noextend_code "noextend"
             * Check if the label already exists and extract its mappings
             capture label list `this_label'
@@ -291,7 +291,7 @@ program define cencode, rclass
         if `n_unique' > 0 {
             * Check if label already exists
             local label_exists = 0
-            if "`extend'" == "noextend" {
+            if "`noextend'" != "" {
                 capture label list `this_label'
                 if _rc == 0 {
                     local label_exists = 1
@@ -368,30 +368,49 @@ program define cencode, rclass
         quietly timer list 90
         local __time_total = r(t90)
 
+        * Calculate Stata overhead
+        capture local __plugin_time_total = _cencode_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __stata_overhead = `__time_total' - `__plugin_time_total'
+        if `__stata_overhead' < 0 local __stata_overhead = 0
+
         di as text ""
         di as text "{hline 55}"
         di as text "cencode timing breakdown:"
         di as text "{hline 55}"
-        di as text "  Variables encoded:        " as result `n_vars'
-        di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
+        di as text "  C plugin internals:"
+        di as text "    Argument parsing:       " as result %8.4f _cencode_time_parse " sec"
+        di as text "    Data load:              " as result %8.4f _cencode_time_load " sec"
+        di as text "    Collect unique values:  " as result %8.4f _cencode_time_collect " sec"
+        di as text "    Sort:                   " as result %8.4f _cencode_time_sort " sec"
+        di as text "    Encode:                 " as result %8.4f _cencode_time_encode " sec"
+        di as text "    Apply labels:           " as result %8.4f _cencode_time_labels " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cencode_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
+        di as text ""
+        di as text "  Variables encoded:        " as result `n_vars'
 
         * Display thread diagnostics
-        capture confirm scalar __cencode_threads_max
+        capture local __threads_max = _cencode_threads_max
         if _rc == 0 {
-            local __threads_max = scalar(__cencode_threads_max)
-            capture local __openmp_enabled = scalar(__cencode_openmp_enabled)
+            capture local __openmp_enabled = _cencode_openmp_enabled
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
             di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
-
-            * Clean up scalars
-            capture scalar drop __cencode_threads_max
-            capture scalar drop __cencode_openmp_enabled
         }
+
+        * Clean up timing scalars
+        capture scalar drop _cencode_time_parse _cencode_time_load _cencode_time_collect
+        capture scalar drop _cencode_time_sort _cencode_time_encode _cencode_time_labels _cencode_time_total
+        capture scalar drop _cencode_threads_max _cencode_openmp_enabled
     }
 
     * Clean up any remaining scalars

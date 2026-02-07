@@ -11,6 +11,7 @@
 #include "../ctools_threads.h"
 #include "../ctools_runtime.h"
 #include "../ctools_arena.h"
+#include "../ctools_types.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,9 +27,6 @@
 #define MAX_SHEET_NAME 31
 #define MAX_CELL_CONTENT 32767
 #define INITIAL_XML_SIZE (1024 * 1024)  /* 1MB initial XML buffer */
-
-/* Excel date epoch: days from 1899-12-30 to 1960-01-01 (Stata epoch) */
-#define EXCEL_STATA_DATE_OFFSET 21916
 
 /* Context for XLSX export */
 typedef struct {
@@ -73,7 +71,7 @@ static void xlsx_context_init(XLSXExportContext *ctx);
 static void xlsx_context_free(XLSXExportContext *ctx);
 static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args);
 static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx);
-static ST_retcode xlsx_write_file(XLSXExportContext *ctx);
+static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *filtered);
 static void xlsx_escape_xml(const char *src, char *dst, size_t dst_size);
 static void xlsx_col_to_letters(int col, char *letters);
 
@@ -194,17 +192,6 @@ static void xlsx_col_to_letters(int col, char *letters) {
         letters[j] = buf[i - 1 - j];
     }
     letters[i] = '\0';
-}
-
-/* Convert Excel letters (A, B, ..., Z, AA, AB, ...) to column number (1-based)
- * Note: Currently unused but retained for future cell range parsing. */
-static int xlsx_letters_to_col(const char *letters) __attribute__((unused));
-static int xlsx_letters_to_col(const char *letters) {
-    int col = 0;
-    for (int i = 0; letters[i] && isalpha((unsigned char)letters[i]); i++) {
-        col = col * 26 + (toupper((unsigned char)letters[i]) - 'A' + 1);
-    }
-    return col;
 }
 
 /* Parse cell reference (e.g., "B5") into column and row numbers (1-based) */
@@ -380,11 +367,11 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
  * ============================================================================ */
 
 static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx) {
-    /* Get number of observations and variables from Stata
-     * Note: First variable passed to plugin is touse (for if/in filtering)
-     * Actual data variables start at index 2, so nvars = SF_nvars() - 1 */
+    /* Get number of observations and variables from Stata.
+     * The ado passes `if `touse'' so touse is not in the varlist;
+     * SF_nvars() returns the actual data variable count. */
     ctx->nobs = SF_nobs();
-    ctx->nvars = SF_nvars() - 1;  /* Subtract touse variable */
+    ctx->nvars = SF_nvars();
 
     if (ctx->nvars <= 0) {
         snprintf(ctx->error_message, sizeof(ctx->error_message),
@@ -461,15 +448,6 @@ static bool strbuf_init(StringBuffer *sb, size_t initial_cap) {
     return sb->data != NULL;
 }
 
-/* Note: Currently unused but retained for completeness. */
-static void strbuf_free(StringBuffer *sb) __attribute__((unused));
-static void strbuf_free(StringBuffer *sb) {
-    free(sb->data);
-    sb->data = NULL;
-    sb->len = 0;
-    sb->capacity = 0;
-}
-
 static void strbuf_append(StringBuffer *sb, const char *str) {
     if (!sb->data) return;
     size_t slen = strlen(str);
@@ -494,13 +472,60 @@ static void strbuf_appendf(StringBuffer *sb, const char *fmt, ...) {
     strbuf_append(sb, buf);
 }
 
-/* Generate worksheet XML with data */
-static char *xlsx_gen_worksheet_xml(XLSXExportContext *ctx, size_t *out_len) {
+/* Ensure buffer has at least 'need' bytes available beyond current length */
+static void strbuf_ensure(StringBuffer *sb, size_t need) {
+    if (!sb->data) return;
+    if (sb->len + need + 1 > sb->capacity) {
+        size_t new_cap = sb->capacity * 2;
+        if (new_cap < sb->len + need + 1) new_cap = sb->len + need + 1024;
+        char *new_data = realloc(sb->data, new_cap);
+        if (!new_data) return;
+        sb->data = new_data;
+        sb->capacity = new_cap;
+    }
+}
+
+/* Append string with known length (avoids strlen) */
+static void strbuf_append_n(StringBuffer *sb, const char *str, size_t slen) {
+    if (!sb->data) return;
+    strbuf_ensure(sb, slen);
+    memcpy(sb->data + sb->len, str, slen);
+    sb->len += slen;
+    sb->data[sb->len] = '\0';
+}
+
+/* Write int64 directly into buffer (avoids snprintf) */
+static void strbuf_append_int64(StringBuffer *sb, long long val) {
+    char buf[24];
+    int len = snprintf(buf, sizeof(buf), "%lld", val);
+    if (len > 0) strbuf_append_n(sb, buf, (size_t)len);
+}
+
+/* Write double directly into buffer with specified format */
+static void strbuf_append_double(StringBuffer *sb, double val, int precision) {
+    char buf[64];
+    int len;
+    if (precision == 0) {
+        len = snprintf(buf, sizeof(buf), "%.0f", val);
+    } else {
+        len = snprintf(buf, sizeof(buf), "%.15g", val);
+    }
+    if (len > 0) strbuf_append_n(sb, buf, (size_t)len);
+}
+
+/* Generate worksheet XML with data from bulk-loaded in-memory arrays.
+ * filtered->data.vars[j] contains data for variable j (0-based, data vars only).
+ * filtered->data.nobs is the number of filtered observations. */
+static char *xlsx_gen_worksheet_xml(XLSXExportContext *ctx,
+                                     ctools_filtered_data *filtered,
+                                     size_t *out_len) {
     StringBuffer sb;
     if (!strbuf_init(&sb, INITIAL_XML_SIZE)) {
         *out_len = 0;
         return NULL;
     }
+
+    size_t nobs_filtered = filtered->data.nobs;
 
     /* XML header */
     strbuf_append(&sb, "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n");
@@ -510,35 +535,34 @@ static char *xlsx_gen_worksheet_xml(XLSXExportContext *ctx, size_t *out_len) {
     char start_col_letters[8], end_col_letters[8];
     xlsx_col_to_letters(ctx->start_col, start_col_letters);
     xlsx_col_to_letters(ctx->start_col + ctx->nvars - 1, end_col_letters);
-    ST_int total_rows = ctx->nobs + (ctx->firstrow ? 1 : 0);
-    ST_int end_row = ctx->start_row + total_rows - 1;
+    long long total_rows = (long long)nobs_filtered + (ctx->firstrow ? 1 : 0);
+    long long end_row = (long long)ctx->start_row + total_rows - 1;
     strbuf_appendf(&sb, "  <dimension ref=\"%s%d:%s%lld\"/>\n",
-                  start_col_letters, ctx->start_row, end_col_letters, (long long)end_row);
+                  start_col_letters, ctx->start_row, end_col_letters, end_row);
 
     /* Sheet data */
     strbuf_append(&sb, "  <sheetData>\n");
 
-    ST_int row_num = ctx->start_row;  /* Start at specified row */
+    long long row_num = ctx->start_row;  /* Start at specified row */
 
     /* Header row if firstrow option */
     if (ctx->firstrow) {
-        strbuf_appendf(&sb, "    <row r=\"%lld\">\n", (long long)row_num);
+        strbuf_appendf(&sb, "    <row r=\"%lld\">\n", row_num);
         for (ST_int j = 0; j < ctx->nvars; j++) {
             char col_letters[8];
-            xlsx_col_to_letters(ctx->start_col + j, col_letters);  /* Offset column */
+            xlsx_col_to_letters(ctx->start_col + j, col_letters);
 
             char escaped_name[256];
             xlsx_escape_xml(ctx->varnames[j], escaped_name, sizeof(escaped_name));
 
             strbuf_appendf(&sb, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
-                          col_letters, (long long)row_num, escaped_name);
+                          col_letters, row_num, escaped_name);
         }
         strbuf_append(&sb, "    </row>\n");
         row_num++;
     }
 
-    /* Data rows */
-    char strbuf_data[MAX_CELL_CONTENT + 1];
+    /* Data rows - read from in-memory arrays instead of SPI calls */
     char escaped[MAX_CELL_CONTENT * 6 + 1];
 
     /* Prepare escaped missing value if specified */
@@ -547,74 +571,100 @@ static char *xlsx_gen_worksheet_xml(XLSXExportContext *ctx, size_t *out_len) {
         xlsx_escape_xml(ctx->missing_value, escaped_missing, sizeof(escaped_missing));
     }
 
-    /* Note: First variable (index 1) is touse marker from marksample
-     * touse = 1 means include, 0 means exclude
-     * Actual data variables start at index 2 */
+    /* Pre-compute column letters for all variables (avoids per-row recomputation) */
+    char (*col_letters_arr)[8] = (char (*)[8])malloc(ctx->nvars * 8);
+    size_t *col_letters_len = (size_t *)malloc(ctx->nvars * sizeof(size_t));
+    if (col_letters_arr && col_letters_len) {
+        for (ST_int j = 0; j < ctx->nvars; j++) {
+            xlsx_col_to_letters(ctx->start_col + j, col_letters_arr[j]);
+            col_letters_len[j] = strlen(col_letters_arr[j]);
+        }
+    }
 
-    for (ST_int i = 1; i <= ctx->nobs; i++) {
-        /* Check if observation is selected via touse variable (var index 1) */
-        ST_double touse_val;
-        if (SF_vdata(1, i, &touse_val) || touse_val == 0) continue;
+    /* Pre-compute escaped missing length */
+    size_t escaped_missing_len = ctx->missing_value ? strlen(escaped_missing) : 0;
 
-        strbuf_appendf(&sb, "    <row r=\"%lld\">\n", (long long)row_num);
+    for (size_t i = 0; i < nobs_filtered; i++) {
+        /* "    <row r=\"" + int + "\">\n" */
+        strbuf_append_n(&sb, "    <row r=\"", 12);
+        strbuf_append_int64(&sb, row_num);
+        strbuf_append_n(&sb, "\">\n", 3);
 
         for (ST_int j = 0; j < ctx->nvars; j++) {
-            char col_letters[8];
-            xlsx_col_to_letters(ctx->start_col + j, col_letters);  /* Offset column */
+            const char *col_l = col_letters_arr ? col_letters_arr[j] : "A";
+            size_t col_l_len = col_letters_arr ? col_letters_len[j] : 1;
 
             int vartype = ctx->vartypes[j];
-            /* Variable index is j+2 because touse is at index 1 */
-            ST_int var_idx = j + 2;
 
             if (vartype == 0) {
                 /* String variable */
-                ST_retcode rc = SF_sdata(var_idx, i, strbuf_data);
-                if (rc || strbuf_data[0] == '\0') {
-                    /* Missing/empty string */
+                const char *str = filtered->data.vars[j].data.str[i];
+                if (!str || str[0] == '\0') {
                     if (ctx->missing_value) {
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
-                                      col_letters, (long long)row_num, escaped_missing);
+                        /* "      <c r=\"" + col + row + "\" t=\"inlineStr\"><is><t>" + missing + "</t></is></c>\n" */
+                        strbuf_append_n(&sb, "      <c r=\"", 12);
+                        strbuf_append_n(&sb, col_l, col_l_len);
+                        strbuf_append_int64(&sb, row_num);
+                        strbuf_append_n(&sb, "\" t=\"inlineStr\"><is><t>", 23);
+                        strbuf_append_n(&sb, escaped_missing, escaped_missing_len);
+                        strbuf_append_n(&sb, "</t></is></c>\n", 14);
                     } else {
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\"/>\n",
-                                      col_letters, (long long)row_num);
+                        strbuf_append_n(&sb, "      <c r=\"", 12);
+                        strbuf_append_n(&sb, col_l, col_l_len);
+                        strbuf_append_int64(&sb, row_num);
+                        strbuf_append_n(&sb, "\"/>\n", 4);
                     }
                 } else {
-                    xlsx_escape_xml(strbuf_data, escaped, sizeof(escaped));
-                    strbuf_appendf(&sb, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
-                                  col_letters, (long long)row_num, escaped);
+                    xlsx_escape_xml(str, escaped, sizeof(escaped));
+                    size_t esc_len = strlen(escaped);
+                    strbuf_append_n(&sb, "      <c r=\"", 12);
+                    strbuf_append_n(&sb, col_l, col_l_len);
+                    strbuf_append_int64(&sb, row_num);
+                    strbuf_append_n(&sb, "\" t=\"inlineStr\"><is><t>", 23);
+                    strbuf_append_n(&sb, escaped, esc_len);
+                    strbuf_append_n(&sb, "</t></is></c>\n", 14);
                 }
             } else {
                 /* Numeric variable */
-                ST_double val;
-                ST_retcode rc = SF_vdata(var_idx, i, &val);
+                double val = filtered->data.vars[j].data.dbl[i];
 
-                if (rc || SF_is_missing(val)) {
-                    /* Missing numeric */
+                if (SF_is_missing(val)) {
                     if (ctx->missing_value) {
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\" t=\"inlineStr\"><is><t>%s</t></is></c>\n",
-                                      col_letters, (long long)row_num, escaped_missing);
+                        strbuf_append_n(&sb, "      <c r=\"", 12);
+                        strbuf_append_n(&sb, col_l, col_l_len);
+                        strbuf_append_int64(&sb, row_num);
+                        strbuf_append_n(&sb, "\" t=\"inlineStr\"><is><t>", 23);
+                        strbuf_append_n(&sb, escaped_missing, escaped_missing_len);
+                        strbuf_append_n(&sb, "</t></is></c>\n", 14);
                     } else {
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\"/>\n",
-                                      col_letters, (long long)row_num);
+                        strbuf_append_n(&sb, "      <c r=\"", 12);
+                        strbuf_append_n(&sb, col_l, col_l_len);
+                        strbuf_append_int64(&sb, row_num);
+                        strbuf_append_n(&sb, "\"/>\n", 4);
                     }
                 } else {
-                    /* Format number */
+                    strbuf_append_n(&sb, "      <c r=\"", 12);
+                    strbuf_append_n(&sb, col_l, col_l_len);
+                    strbuf_append_int64(&sb, row_num);
                     if (val == floor(val) && fabs(val) < 1e15) {
-                        /* Integer - no decimal point */
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\"><v>%.0f</v></c>\n",
-                                      col_letters, (long long)row_num, val);
+                        strbuf_append_n(&sb, "\"><v>", 5);
+                        strbuf_append_double(&sb, val, 0);
+                        strbuf_append_n(&sb, "</v></c>\n", 9);
                     } else {
-                        /* Float - use full precision */
-                        strbuf_appendf(&sb, "      <c r=\"%s%lld\"><v>%.15g</v></c>\n",
-                                      col_letters, (long long)row_num, val);
+                        strbuf_append_n(&sb, "\"><v>", 5);
+                        strbuf_append_double(&sb, val, 15);
+                        strbuf_append_n(&sb, "</v></c>\n", 9);
                     }
                 }
             }
         }
 
-        strbuf_append(&sb, "    </row>\n");
+        strbuf_append_n(&sb, "    </row>\n", 11);
         row_num++;
     }
+
+    free(col_letters_arr);
+    free(col_letters_len);
 
     strbuf_append(&sb, "  </sheetData>\n");
     strbuf_append(&sb, "</worksheet>");
@@ -633,7 +683,7 @@ static const char *SHARED_STRINGS_XML =
  * XLSX File Writing
  * ============================================================================ */
 
-static ST_retcode xlsx_write_file(XLSXExportContext *ctx) {
+static ST_retcode xlsx_write_file(XLSXExportContext *ctx, ctools_filtered_data *filtered) {
     mz_zip_archive zip;
     memset(&zip, 0, sizeof(zip));
 
@@ -722,7 +772,7 @@ static ST_retcode xlsx_write_file(XLSXExportContext *ctx) {
 
     /* Generate and add worksheet */
     size_t sheet_len;
-    char *sheet_xml = xlsx_gen_worksheet_xml(ctx, &sheet_len);
+    char *sheet_xml = xlsx_gen_worksheet_xml(ctx, filtered, &sheet_len);
     if (!sheet_xml) {
         mz_zip_writer_end(&zip);
         snprintf(ctx->error_message, sizeof(ctx->error_message),
@@ -805,8 +855,39 @@ ST_retcode cexport_xlsx_main(const char *args) {
 
     double t_meta = ctools_timer_seconds();
 
-    /* Write XLSX file */
-    rc = xlsx_write_file(&ctx);
+    /* Bulk load data from Stata into memory (parallel).
+     * The ado passes `if `touse'' to the plugin call, so SF_ifobs()
+     * filters correctly. We only need to load data variables (1..nvars). */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+
+    {
+        int *var_indices = (int *)malloc(ctx.nvars * sizeof(int));
+        if (!var_indices) {
+            SF_error("cexport xlsx: memory allocation failed for var indices\n");
+            xlsx_context_free(&ctx);
+            return 920;
+        }
+        for (ST_int j = 0; j < ctx.nvars; j++) {
+            var_indices[j] = j + 1;
+        }
+
+        rc = ctools_data_load(&filtered, var_indices, ctx.nvars, 0, 0, CTOOLS_LOAD_CHECK_IF);
+        free(var_indices);
+
+        if (rc != 0) {
+            SF_error("cexport xlsx: failed to bulk load data\n");
+            ctools_filtered_data_free(&filtered);
+            xlsx_context_free(&ctx);
+            return 920;
+        }
+    }
+
+    double t_load = ctools_timer_seconds();
+
+    /* Write XLSX file using in-memory data */
+    rc = xlsx_write_file(&ctx, &filtered);
+    ctools_filtered_data_free(&filtered);
     if (rc) {
         SF_error(ctx.error_message);
         xlsx_context_free(&ctx);
@@ -820,7 +901,9 @@ ST_retcode cexport_xlsx_main(const char *args) {
         char msg[256];
         snprintf(msg, sizeof(msg), "Metadata load: %.3f sec\n", t_meta - t_start);
         SF_display(msg);
-        snprintf(msg, sizeof(msg), "Write XLSX: %.3f sec\n", t_end - t_meta);
+        snprintf(msg, sizeof(msg), "Data load: %.3f sec\n", t_load - t_meta);
+        SF_display(msg);
+        snprintf(msg, sizeof(msg), "Write XLSX: %.3f sec\n", t_end - t_load);
         SF_display(msg);
         snprintf(msg, sizeof(msg), "Total: %.3f sec\n", t_end - t_start);
         SF_display(msg);

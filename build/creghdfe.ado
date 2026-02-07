@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! creghdfe: C-accelerated high-dimensional fixed effects regression
 *! Part of the ctools suite
 *!
@@ -29,11 +29,11 @@ program define creghdfe, eclass
     timer clear 98
     timer on 98
 
-    syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose TIMEit ///
+    syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose ///
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
         DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
 
-    local __do_timing = ("`verbose'" != "" | "`timeit'" != "")
+    local __do_timing = ("`verbose'" != "")
 
     * Handle residuals() as alias for resid2()
     if "`residuals'" != "" & "`resid2'" == "" {
@@ -135,25 +135,37 @@ program define creghdfe, eclass
 
     * Expand factor variables to temporary numeric variables
     if "`indepvars'" != "" {
-        * Step 1: Expand factor variables to temp numeric vars
+        * Expand factor variables to temp numeric vars
         fvrevar `indepvars' if `touse'
-        local indepvars_fvrevar "`r(varlist)'"
+        local __indepvars_all "`r(varlist)'"
 
-        * Step 2: Remove collinear variables (including base levels of factors)
-        _rmcoll `indepvars_fvrevar' if `touse', forcedrop
-        local indepvars_expanded "`r(varlist)'"
-
-        * Step 3: Get proper coefficient names using fvexpand
+        * Get coefficient names (same count as fvrevar, one per level)
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Filter out base levels (those with 'b' or 'o' notation)
-        local coef_names ""
-        foreach v of local coef_names_all {
-            if !regexm("`v'", "^[0-9]+b\.") & !regexm("`v'", "^o\.") & "`v'" != "" {
-                local coef_names `coef_names' `v'
+        * Pre-filter base/omitted levels in sync before _rmcoll
+        * (reduces _rmcoll input size; keep if ANY #-component is non-base)
+        local __vars_nobase ""
+        local __names_nobase ""
+        local __n_all : word count `coef_names_all'
+        forval __k = 1/`__n_all' {
+            local __vname : word `__k' of `coef_names_all'
+            local __keep = 0
+            local __parts : subinstr local __vname "#" " ", all
+            foreach __p of local __parts {
+                if !regexm("`__p'", "b\.") & !regexm("`__p'", "o\.") {
+                    local __keep = 1
+                }
+            }
+            if `__keep' {
+                local __vars_nobase `__vars_nobase' `: word `__k' of `__indepvars_all''
+                local __names_nobase `__names_nobase' `__vname'
             }
         }
+
+        * Collinearity detection is handled by the C plugin (detect_collinearity)
+        local indepvars_expanded "`__vars_nobase'"
+        local coef_names "`__names_nobase'"
 
         * Build expanded varlist for plugin
         local varlist_expanded "`depvar' `indepvars_expanded'"

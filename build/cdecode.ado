@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cdecode: C-accelerated numeric to string decoding for Stata
 *! Part of the ctools suite
 *!
@@ -25,14 +25,12 @@ void _cdecode_parse_labels_to_file(string scalar filename, string scalar lblname
     string scalar line, prefix, rest, lbl, lbl_escaped, entry
     string scalar open_cq, close_cq
     real scalar prefix_len, open_pos, close_pos, space_pos
-    real scalar first_entry
 
     // Compound quote markers: `" and "'
     open_cq = char(96) + char(34)   // `"
     close_cq = char(34) + char(39)  // "'
 
     max_label_len = 0
-    first_entry = 1
 
     fh_in = fopen(filename, "r")
     if (fh_in < 0) {
@@ -100,13 +98,7 @@ void _cdecode_parse_labels_to_file(string scalar filename, string scalar lblname
 
         // Write entry to file (value|label on each line)
         entry = strofreal(val) + "|" + lbl_escaped
-        if (first_entry) {
-            fput(fh_out, entry)
-            first_entry = 0
-        }
-        else {
-            fput(fh_out, entry)
-        }
+        fput(fh_out, entry)
     }
 
     fclose(fh_in)
@@ -272,11 +264,9 @@ program define cdecode, rclass
         if `__do_replace' {
             tempvar __tempgen
             local destvar "`__tempgen'"
-            local __final_name "`srcvar'"
         }
         else {
             local destvar : word `i' of `generate'
-            local __final_name "`destvar'"
         }
 
         * Get value label name attached to source variable
@@ -332,18 +322,6 @@ program define cdecode, rclass
         * Create the destination string variable
         quietly generate str`strwidth' `destvar' = ""
 
-        * Get index of new variable
-        unab allvars : *
-        local gen_idx = 0
-        local idx = 1
-        foreach v of local allvars {
-            if ("`v'" == "`destvar'") {
-                local gen_idx = `idx'
-                continue, break
-            }
-            local ++idx
-        }
-
         * Build maxlen option
         local maxlen_code "maxlen=`strwidth'"
 
@@ -374,29 +352,43 @@ program define cdecode, rclass
         quietly timer list 90
         local __time_total = r(t90)
 
+        * Calculate Stata overhead
+        capture local __plugin_time_total = _cdecode_time_total
+        if _rc != 0 local __plugin_time_total = 0
+        local __stata_overhead = `__time_total' - `__plugin_time_total'
+        if `__stata_overhead' < 0 local __stata_overhead = 0
+
         di as text ""
         di as text "{hline 55}"
         di as text "cdecode timing breakdown:"
         di as text "{hline 55}"
-        di as text "  Variables decoded:        " as result `n_vars'
-        di as text "  Wall clock total:         " as result %8.4f `__time_total' " sec"
+        di as text "  C plugin internals:"
+        di as text "    Argument parsing:       " as result %8.4f _cdecode_time_parse " sec"
+        di as text "    Decode:                 " as result %8.4f _cdecode_time_decode " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cdecode_time_total " sec"
+        di as text "  {hline 53}"
+        di as text "  Stata overhead:           " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
+        di as text ""
+        di as text "  Variables decoded:        " as result `n_vars'
 
         * Display thread diagnostics
-        capture confirm scalar __cdecode_threads_max
+        capture local __threads_max = _cdecode_threads_max
         if _rc == 0 {
-            local __threads_max = scalar(__cdecode_threads_max)
-            capture local __openmp_enabled = scalar(__cdecode_openmp_enabled)
+            capture local __openmp_enabled = _cdecode_openmp_enabled
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
             di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
             di as text "    Max threads available:  " as result %8.0f `__threads_max'
             di as text "{hline 55}"
-
-            * Clean up scalars
-            capture scalar drop __cdecode_threads_max
-            capture scalar drop __cdecode_openmp_enabled
         }
+
+        * Clean up timing scalars
+        capture scalar drop _cdecode_time_parse _cdecode_time_decode _cdecode_time_total
+        capture scalar drop _cdecode_threads_max _cdecode_openmp_enabled
     }
 end

@@ -98,15 +98,12 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_fuller", &dval); fuller_alpha = dval;
 
     /* HAC parameters */
-    ST_int kernel_type = 0, bw = 0, dkraay = 0, kiefer = 0, dkraay_T = 0, hac_panel = 0;
+    ST_int kernel_type = 0, bw = 0, kiefer = 0, dkraay_T = 0, hac_panel = 0;
     SF_scal_use("__civreghdfe_kernel", &dval); kernel_type = (ST_int)dval;
     SF_scal_use("__civreghdfe_bw", &dval); bw = (ST_int)dval;
-    SF_scal_use("__civreghdfe_dkraay", &dval); dkraay = (ST_int)dval;
     SF_scal_use("__civreghdfe_kiefer", &dval); kiefer = (ST_int)dval;
     SF_scal_use("__civreghdfe_dkraay_T", &dval); dkraay_T = (ST_int)dval;
     SF_scal_use("__civreghdfe_hac_panel", &dval); hac_panel = (ST_int)dval;
-    (void)kiefer;  /* Kiefer SEs are handled via vce_type == 2 with kernel */
-    (void)dkraay;  /* Driscoll-Kraay handled via hac_panel flag */
 
     /* DOF adjustment parameters */
     ST_int dofminus = 0, sdofminus_opt = 0, nopartialsmall = 0, center = 0;
@@ -551,7 +548,9 @@ static ST_retcode do_iv_regression(void)
     if (num_threads > 8) num_threads = 8;
     state->num_threads = num_threads;
 
-    if (ctools_hdfe_alloc_buffers(state, 1) != 0) {
+    /* Max columns partialled out: y + endogenous + exogenous + instruments */
+    ST_int max_partial_cols = 1 + K_endog + K_exog + K_iv;
+    if (ctools_hdfe_alloc_buffers(state, 1, max_partial_cols) != 0) {
         SF_error("civreghdfe: Memory allocation failed for HDFE buffers\n");
         ctools_hdfe_state_cleanup(state);
         free(state);
@@ -889,6 +888,213 @@ static ST_retcode do_iv_regression(void)
     /* Update K_total after possible FWL reduction of K_exog */
     K_total = K_exog + K_endog;
 
+    /* ================================================================
+     * COLLINEARITY DETECTION for X (regressors) and Z (instruments)
+     * Detect after HDFE partialling, before estimation.
+     * Same approach as creghdfe: FE-absorbed variance check + Cholesky.
+     * ================================================================ */
+    ST_int K_exog_orig = K_exog;
+    ST_int K_endog_orig = K_endog;
+    ST_int K_total_orig = K_total;
+
+    /* is_collinear_x: flags for [exog, endog] in internal order */
+    ST_int *is_collinear_x = (ST_int *)calloc(K_total, sizeof(ST_int));
+    ST_int num_collinear_x = 0;
+
+    if (!is_collinear_x) {
+        SF_error("civreghdfe: Memory allocation failed for collinearity arrays\n");
+        free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        ctools_hdfe_state_cleanup(state);
+        free(state);
+        g_state = NULL;
+        return 920;
+    }
+
+    /* Stage 1: FE-absorbed variance check — mark columns with near-zero
+       variance after partialling as collinear (same as creghdfe) */
+    {
+        for (ST_int k = 0; k < K_exog; k++) {
+            ST_double xx_partial = fast_dot(X_exog_dem + k * N, X_exog_dem + k * N, N);
+            if (xx_partial < 1e-30) {
+                is_collinear_x[k] = 1;
+                num_collinear_x++;
+            }
+        }
+        for (ST_int k = 0; k < K_endog; k++) {
+            ST_double xx_partial = fast_dot(X_endog_dem + k * N, X_endog_dem + k * N, N);
+            if (xx_partial < 1e-30) {
+                is_collinear_x[K_exog + k] = 1;
+                num_collinear_x++;
+            }
+        }
+    }
+
+    /* Stage 2: Numerical collinearity via Cholesky on X'X
+       Build concatenated X = [X_exog, X_endog] in column-major order */
+    if (K_total > 1) {
+        ST_double *XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (!XtX) {
+            free(is_collinear_x);
+            SF_error("civreghdfe: Memory allocation failed for XtX\n");
+            free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            ctools_hdfe_state_cleanup(state);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
+
+        /* Compute X'X where X = [X_exog_dem, X_endog_dem] */
+        /* Use fast_dot for each pair since data is in separate arrays */
+        for (ST_int i = 0; i < K_total; i++) {
+            const ST_double *xi = (i < K_exog) ? X_exog_dem + i * N
+                                                : X_endog_dem + (i - K_exog) * N;
+            for (ST_int j = 0; j < K_total; j++) {
+                const ST_double *xj = (j < K_exog) ? X_exog_dem + j * N
+                                                    : X_endog_dem + (j - K_exog) * N;
+                XtX[j * K_total + i] = fast_dot(xi, xj, N);
+            }
+        }
+
+        ST_int num_chol_collinear = detect_collinearity(XtX, K_total, is_collinear_x, verbose);
+        free(XtX);
+
+        if (num_chol_collinear < 0) {
+            free(is_collinear_x);
+            SF_error("civreghdfe: Collinearity detection failed\n");
+            free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            ctools_hdfe_state_cleanup(state);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
+
+        /* Recount total collinear */
+        num_collinear_x = 0;
+        for (ST_int k = 0; k < K_total; k++) {
+            if (is_collinear_x[k]) num_collinear_x++;
+        }
+    }
+
+    /* Store collinearity flags to Stata scalars (in [exog, endog] order) */
+    {
+        char scalar_name[64];
+        ctools_scal_save("__civreghdfe_num_collinear", (ST_double)num_collinear_x);
+        for (ST_int k = 0; k < K_total_orig; k++) {
+            snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_collinear_%d", (int)(k + 1));
+            ctools_scal_save(scalar_name, (ST_double)is_collinear_x[k]);
+        }
+    }
+
+    /* Compact X arrays in-place if collinear columns found */
+    if (num_collinear_x > 0) {
+        /* Compact X_exog_dem */
+        ST_int new_K_exog = 0;
+        for (ST_int k = 0; k < K_exog; k++) {
+            if (!is_collinear_x[k]) {
+                if (new_K_exog != k) {
+                    memcpy(X_exog_dem + new_K_exog * N, X_exog_dem + k * N, N * sizeof(ST_double));
+                }
+                new_K_exog++;
+            }
+        }
+
+        /* Compact X_endog_dem */
+        ST_int new_K_endog = 0;
+        for (ST_int k = 0; k < K_endog; k++) {
+            if (!is_collinear_x[K_exog + k]) {
+                if (new_K_endog != k) {
+                    memcpy(X_endog_dem + new_K_endog * N, X_endog_dem + k * N, N * sizeof(ST_double));
+                }
+                new_K_endog++;
+            }
+        }
+
+        /* Compact exogenous portion of Z_dem (first K_exog columns match X_exog) */
+        ST_int K_excl = K_iv - K_exog;
+        ST_int new_z_idx = 0;
+        for (ST_int k = 0; k < K_exog; k++) {
+            if (!is_collinear_x[k]) {
+                if (new_z_idx != k) {
+                    memcpy(Z_dem + new_z_idx * N, Z_dem + k * N, N * sizeof(ST_double));
+                }
+                new_z_idx++;
+            }
+        }
+        /* Shift excluded instruments down after compacted exog portion */
+        for (ST_int k = 0; k < K_excl; k++) {
+            if (new_z_idx != K_exog + k) {
+                memcpy(Z_dem + new_z_idx * N, Z_dem + (K_exog + k) * N, N * sizeof(ST_double));
+            }
+            new_z_idx++;
+        }
+
+        K_exog = new_K_exog;
+        K_endog = new_K_endog;
+        K_total = K_exog + K_endog;
+        K_iv = new_z_idx;  /* new_K_exog + K_excl */
+
+        if (verbose) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "civreghdfe: Dropped %d collinear regressor(s)\n",
+                     (int)num_collinear_x);
+            SF_display(msg);
+        }
+    }
+
+    /* Z collinearity detection */
+    ST_int *is_collinear_z = (ST_int *)calloc(K_iv, sizeof(ST_int));
+    ST_int num_collinear_z = 0;
+
+    if (is_collinear_z && K_iv > 1) {
+        ST_double *ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        if (ZtZ) {
+            ctools_matmul_atb(Z_dem, Z_dem, N, K_iv, K_iv, ZtZ);
+            ST_int num_z_collinear = detect_collinearity(ZtZ, K_iv, is_collinear_z, verbose);
+            free(ZtZ);
+
+            if (num_z_collinear > 0) {
+                /* Compact Z_dem in-place */
+                ST_int new_K_iv = 0;
+                for (ST_int k = 0; k < K_iv; k++) {
+                    if (!is_collinear_z[k]) {
+                        if (new_K_iv != k) {
+                            memcpy(Z_dem + new_K_iv * N, Z_dem + k * N, N * sizeof(ST_double));
+                        }
+                        new_K_iv++;
+                    }
+                }
+                num_collinear_z = K_iv - new_K_iv;
+                K_iv = new_K_iv;
+
+                if (verbose) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "civreghdfe: Dropped %d collinear instrument(s)\n",
+                             (int)num_collinear_z);
+                    SF_display(msg);
+                }
+            }
+        }
+    }
+    free(is_collinear_z);
+
+    /* Post-compaction identification check */
+    if (K_iv < K_total) {
+        free(is_collinear_x);
+        SF_error("civreghdfe: Model is underidentified after removing collinear variables\n");
+        free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        ctools_hdfe_state_cleanup(state);
+        free(state);
+        g_state = NULL;
+        return 481;
+    }
+
+    /* Store compacted dimensions */
+    ctools_scal_save("__civreghdfe_K_keep", (ST_double)K_total);
+
     /* Allocate output arrays */
     ST_double *beta = (ST_double *)calloc(K_total, sizeof(ST_double));
     ST_double *V = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
@@ -898,6 +1104,7 @@ static ST_retcode do_iv_regression(void)
     if (!beta || !V || !first_stage_F) {
         SF_error("civreghdfe: Memory allocation failed for output arrays\n");
         free(beta); free(V); free(first_stage_F);
+        free(is_collinear_x);
         free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         ctools_hdfe_state_cleanup(state);
@@ -938,6 +1145,7 @@ static ST_retcode do_iv_regression(void)
 
     if (rc != STATA_OK) {
         /* Cleanup and return */
+        free(is_collinear_x);
         free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         free(beta); free(V); free(first_stage_F);
@@ -1051,29 +1259,62 @@ static ST_retcode do_iv_regression(void)
         ctools_scal_save("__civreghdfe_lambda", lambda);
     }
 
-    /* Matrices: e(b) and e(V) - reorder from [exog, endog] to [endog, exog] */
-    /* Internal order: beta[0..K_exog-1] = exog, beta[K_exog..K_total-1] = endog
-       Stata order: [endog, exog] to match ivreghdfe convention */
+    /* Matrices: e(b) and e(V) - expand from compact to full dimensions,
+       then reorder from [exog, endog] to [endog, exog] for Stata.
+       Compact: beta[0..K_exog-1] = exog, beta[K_exog..K_total-1] = endog
+       Full: K_exog_orig exog + K_endog_orig endog (zeros for collinear)
+       Stata: [endog_orig, exog_orig] to match ivreghdfe convention */
 
-    /* Store beta in [endog, exog] order */
-    for (ST_int e = 0; e < K_endog; e++) {
-        ctools_mat_store("__civreghdfe_b", 1, e + 1, beta[K_exog + e]);
-    }
-    for (ST_int x = 0; x < K_exog; x++) {
-        ctools_mat_store("__civreghdfe_b", 1, K_endog + x + 1, beta[x]);
-    }
-
-    /* Store V in [endog, exog] order - need to reorder rows and columns */
-    /* new_order: [endog_0, ..., endog_{Ke-1}, exog_0, ..., exog_{Kx-1}]
-       For new index i in [0, K_endog): old index = K_exog + i
-       For new index i in [K_endog, K_total): old index = i - K_endog */
-    for (ST_int new_i = 0; new_i < K_total; new_i++) {
-        ST_int old_i = (new_i < K_endog) ? (K_exog + new_i) : (new_i - K_endog);
-        for (ST_int new_j = 0; new_j < K_total; new_j++) {
-            ST_int old_j = (new_j < K_endog) ? (K_exog + new_j) : (new_j - K_endog);
-            ctools_mat_store("__civreghdfe_V", new_i + 1, new_j + 1, V[old_j * K_total + old_i]);
+    /* Build mapping from full index to compact index (-1 if collinear) */
+    /* is_collinear_x[0..K_exog_orig-1] = exog flags,
+       is_collinear_x[K_exog_orig..K_total_orig-1] = endog flags */
+    ST_int *full_to_compact = (ST_int *)malloc(K_total_orig * sizeof(ST_int));
+    if (full_to_compact) {
+        ST_int compact_idx = 0;
+        for (ST_int k = 0; k < K_total_orig; k++) {
+            if (is_collinear_x[k]) {
+                full_to_compact[k] = -1;
+            } else {
+                full_to_compact[k] = compact_idx++;
+            }
         }
     }
+
+    /* Store beta in [endog_orig, exog_orig] order with zeros for collinear */
+    for (ST_int e = 0; e < K_endog_orig; e++) {
+        ST_int full_idx = K_exog_orig + e;  /* Position in full [exog, endog] */
+        ST_double val = 0.0;
+        if (full_to_compact && full_to_compact[full_idx] >= 0) {
+            val = beta[full_to_compact[full_idx]];
+        }
+        ctools_mat_store("__civreghdfe_b", 1, e + 1, val);
+    }
+    for (ST_int x = 0; x < K_exog_orig; x++) {
+        ST_double val = 0.0;
+        if (full_to_compact && full_to_compact[x] >= 0) {
+            val = beta[full_to_compact[x]];
+        }
+        ctools_mat_store("__civreghdfe_b", 1, K_endog_orig + x + 1, val);
+    }
+
+    /* Store V in [endog_orig, exog_orig] order */
+    /* new_order: [endog_0..endog_{Ke_orig-1}, exog_0..exog_{Kx_orig-1}]
+       For new index i in [0, K_endog_orig): full index = K_exog_orig + i
+       For new index i in [K_endog_orig, K_total_orig): full index = i - K_endog_orig */
+    for (ST_int new_i = 0; new_i < K_total_orig; new_i++) {
+        ST_int full_i = (new_i < K_endog_orig) ? (K_exog_orig + new_i) : (new_i - K_endog_orig);
+        ST_int compact_i = full_to_compact ? full_to_compact[full_i] : full_i;
+        for (ST_int new_j = 0; new_j < K_total_orig; new_j++) {
+            ST_int full_j = (new_j < K_endog_orig) ? (K_exog_orig + new_j) : (new_j - K_endog_orig);
+            ST_int compact_j = full_to_compact ? full_to_compact[full_j] : full_j;
+            ST_double val = 0.0;
+            if (compact_i >= 0 && compact_j >= 0) {
+                val = V[compact_j * K_total + compact_i];
+            }
+            ctools_mat_store("__civreghdfe_V", new_i + 1, new_j + 1, val);
+        }
+    }
+    free(full_to_compact);
 
     /* First stage F-stats */
     for (ST_int e = 0; e < K_endog; e++) {
@@ -1102,6 +1343,7 @@ static ST_retcode do_iv_regression(void)
     CTOOLS_SAVE_THREAD_INFO("_civreghdfe");
 
     /* Cleanup */
+    free(is_collinear_x);
     free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
     free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
     free(beta); free(V); free(first_stage_F);

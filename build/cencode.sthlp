@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cencode##syntax"}{...}
 {viewerjumpto "Description" "cencode##description"}{...}
 {viewerjumpto "Options" "cencode##options"}{...}
@@ -101,11 +101,10 @@ values to existing labels.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cencode} uses all available CPU cores as reported by
-OpenMP. Use this option to limit parallelism.
+operations. By default, {cmd:cencode} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent encoding the variables.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}

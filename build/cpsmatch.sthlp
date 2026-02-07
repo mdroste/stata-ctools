@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 01Feb2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cpsmatch##syntax"}{...}
 {viewerjumpto "Description" "cpsmatch##description"}{...}
 {viewerjumpto "Options" "cpsmatch##options"}{...}
@@ -48,8 +48,8 @@
 {synopt:{opth out:come(varname)}}outcome variable for ATT calculation{p_end}
 
 {syntab:Performance}
-{synopt:{opth thr:eads(#)}}maximum number of threads{p_end}
-{synopt:{opt v:erbose}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
+{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
 {synoptline}
 
 
@@ -59,6 +59,13 @@
 {pstd}
 {cmd:cpsmatch} performs propensity score matching to estimate causal treatment
 effects in observational studies. It implements several matching methods:
+
+{pstd}
+{cmd:cpsmatch} is a high-performance replacement for {cmd:psmatch2} (v4.0.12) by
+Edwin Leuven and Barbara Sianesi, available from SSC.
+
+{pstd}
+Matching methods:
 
 {p 8 12 2}1. {bf:Nearest neighbor matching:} Each treated observation is matched to
 the closest control(s) based on propensity score distance.{p_end}
@@ -167,12 +174,10 @@ the Average Treatment Effect on the Treated (ATT). If specified,
 {dlgtab:Performance}
 
 {phang}
-{opth threads(#)} specifies the maximum number of threads to use for
-parallel matching. The default is to use all available CPU cores.
+{opt threads(#)} specifies the maximum number of threads to use for parallel operations. By default, {cmd:cpsmatch} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a detailed timing breakdown of the matching
-process, including data loading, matching, and result storage phases.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}

@@ -1,4 +1,4 @@
-*! version 0.9.0 01Feb2026
+*! version 0.9.1 06Feb2026
 *! cpsmatch: C-accelerated propensity score matching for Stata
 *! Part of the ctools suite
 *!
@@ -446,24 +446,27 @@ program define cpsmatch, rclass sortpreserve
         quietly timer list 94
         local __time_att = r(t94)
 
-        di as text "{hline 60}"
+        di as text "{hline 55}"
         di as text "cpsmatch timing breakdown:"
-        di as text "{hline 60}"
-        di as text "  Stata pre-plugin:     " as result %8.4f `__time_preplugin' " sec"
-        di as text "  {hline 58}"
+        di as text "{hline 55}"
         di as text "  C plugin internals:"
-        di as text "    Load data:          " as result %8.4f _cpsmatch_time_load " sec"
-        di as text "    Group separation:   " as result %8.4f _cpsmatch_time_setup " sec"
-        di as text "    Sort/index build:   " as result %8.4f _cpsmatch_time_sort " sec"
-        di as text "    Matching:           " as result %8.4f _cpsmatch_time_match " sec"
-        di as text "    Store results:      " as result %8.4f _cpsmatch_time_store " sec"
-        di as text "  {hline 58}"
-        di as text "    C plugin total:     " as result %8.4f _cpsmatch_time_total " sec"
-        di as text "  {hline 58}"
-        di as text "  Stata post-plugin:    " as result %8.4f `__time_att' " sec"
-        di as text "{hline 60}"
-        di as text "    Wall clock total:   " as result %8.4f `__time_total' " sec"
-        di as text "{hline 60}"
+        di as text "    Load data:              " as result %8.4f _cpsmatch_time_load " sec"
+        di as text "    Group separation:       " as result %8.4f _cpsmatch_time_setup " sec"
+        di as text "    Sort/index build:       " as result %8.4f _cpsmatch_time_sort " sec"
+        di as text "    Matching:               " as result %8.4f _cpsmatch_time_match " sec"
+        di as text "    Store results:          " as result %8.4f _cpsmatch_time_store " sec"
+        di as text "  {hline 53}"
+        di as text "    C plugin total:         " as result %8.4f _cpsmatch_time_total " sec"
+        di as text ""
+        di as text "  Stata overhead:"
+        di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
+        di as text "    Post-plugin (ATT):      " as result %8.4f `__time_att' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_preplugin' + `__time_att'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
+        di as text "{hline 55}"
+        di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
+        di as text "{hline 55}"
 
         * Thread diagnostics
         capture local __threads_max = _cpsmatch_threads_max
@@ -472,9 +475,9 @@ program define cpsmatch, rclass sortpreserve
             if _rc != 0 local __openmp_enabled = 0
             di as text ""
             di as text "  Thread diagnostics:"
-            di as text "    OpenMP enabled:     " as result %8.0f `__openmp_enabled'
-            di as text "    Max threads:        " as result %8.0f `__threads_max'
-            di as text "{hline 60}"
+            di as text "    OpenMP enabled:         " as result %8.0f `__openmp_enabled'
+            di as text "    Max threads available:  " as result %8.0f `__threads_max'
+            di as text "{hline 55}"
         }
     }
 

@@ -16,6 +16,7 @@
 #include "../ctools_runtime.h"
 #include "../ctools_config.h"
 #include "../ctools_types.h"  /* For ctools_data_load */
+#include "../ctools_ols.h"    /* For detect_collinearity, fast_dot */
 
 #include <stdlib.h>
 #include <string.h>
@@ -255,8 +256,7 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
                                             ST_int N, ST_int K,
                                             ST_double quantile,
                                             cqreg_bw_method bw_method,
-                                            const cqreg_ipm_config *ipm_config,
-                                            const ST_double *main_beta __attribute__((unused)),
+                                            cqreg_ipm_state *main_ipm,
                                             ST_double precomputed_bw)
 {
     ST_double h = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, bw_method);
@@ -280,49 +280,57 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     }
 
     /*
-     * Configure auxiliary solves for sparsity estimation.
-     * OPTIMIZATION: Use relaxed tolerances for auxiliary solves.
-     * Sparsity estimation only needs ~3 decimal places of accuracy,
-     * so 1e-6 tolerance is sufficient (vs main solve's 1e-12 default).
+     * OPTIMIZATION: Run both auxiliary solves in parallel.
+     * - Reuse the main IPM state for one solve (zero allocation cost).
+     * - Create a lightweight state for the other (only FN solver arrays,
+     *   ~40% the memory of a full state — saves ~800 MB for N=5M).
+     * - skip_crossover=1 skips the expensive crossover + residual
+     *   computation since we only need beta for sparsity estimation.
      */
+    ST_int skip_cross = (N > 1000) ? 1 : 0;
+
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = 100;       /* Fewer iterations needed */
-    aux_config.tol_primal = 1e-6;   /* Relaxed for sparsity estimation */
+    aux_config.maxiter = 100;
+    aux_config.tol_primal = 1e-6;
     aux_config.tol_dual = 1e-6;
     aux_config.tol_gap = 1e-6;
-    aux_config.verbose = 0;         /* Suppress output for aux solves */
-    aux_config.use_mehrotra = ipm_config->use_mehrotra;
+    aux_config.verbose = 0;
+    aux_config.skip_crossover = skip_cross;
 
-    /* Create temporary IPM states for the auxiliary regressions */
-    cqreg_ipm_state *ipm_lo = cqreg_ipm_create(N, K, &aux_config);
-    cqreg_ipm_state *ipm_hi = cqreg_ipm_create(N, K, &aux_config);
-
-    if (ipm_lo == NULL || ipm_hi == NULL) {
-        cqreg_ipm_free(ipm_lo);
-        cqreg_ipm_free(ipm_hi);
+    cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
+    if (ipm_hi == NULL) {
         free(beta_lo);
         free(beta_hi);
         return 1.0;
     }
 
-    /* Solve quantile regression at q_lo and q_hi.
-     * Run the two solves in parallel if OpenMP is available.
-     */
+    /* Temporarily reconfigure the main state for the lo solve */
+    cqreg_ipm_config saved_config = main_ipm->config;
+    main_ipm->config = aux_config;
+
     ST_int rc_lo = 0, rc_hi = 0;
+    double t_aux_start = ctools_timer_seconds();
 
 #ifdef _OPENMP
     #pragma omp parallel sections
     {
         #pragma omp section
-        { rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo); }
+        { rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo); }
         #pragma omp section
         { rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi); }
     }
 #else
-    rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo);
+    rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo);
     rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
 #endif
+
+    double t_aux_elapsed = ctools_timer_seconds() - t_aux_start;
+    SF_scal_save("_cqreg_time_sparsity_aux", t_aux_elapsed);
+
+    /* Restore original config and free lite state */
+    main_ipm->config = saved_config;
+    cqreg_ipm_free(ipm_hi);
 
     main_debug_log("Siddiqui: q_lo=%.4f, q_hi=%.4f, rc_lo=%d, rc_hi=%d\n",
                    q_lo, q_hi, rc_lo, rc_hi);
@@ -334,8 +342,6 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     /* Check convergence */
     if (rc_lo <= 0 || rc_hi <= 0) {
         main_debug_log("Siddiqui: FAILED - auxiliary solves did not converge\n");
-        cqreg_ipm_free(ipm_lo);
-        cqreg_ipm_free(ipm_hi);
         free(beta_lo);
         free(beta_hi);
         return 1.0;
@@ -345,8 +351,6 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
      * OPTIMIZATION: Parallel column summation with 8x unrolling */
     ST_double *x_bar = (ST_double *)calloc(K, sizeof(ST_double));
     if (x_bar == NULL) {
-        cqreg_ipm_free(ipm_lo);
-        cqreg_ipm_free(ipm_hi);
         free(beta_lo);
         free(beta_hi);
         return 1.0;
@@ -397,8 +401,6 @@ static ST_double estimate_siddiqui_sparsity(const ST_double *y,
     }
 
     /* Cleanup */
-    cqreg_ipm_free(ipm_lo);
-    cqreg_ipm_free(ipm_hi);
     free(beta_lo);
     free(beta_hi);
     free(x_bar);
@@ -440,8 +442,7 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
                                                   ST_int N, ST_int K,
                                                   ST_double quantile,
                                                   cqreg_bw_method bw_method,
-                                                  const cqreg_ipm_config *ipm_config,
-                                                  const ST_double *main_beta,
+                                                  cqreg_ipm_state *main_ipm,
                                                   ST_double *out_bandwidth,
                                                   ST_double precomputed_bw)
 {
@@ -474,27 +475,23 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
     }
 
     /*
-     * Configure auxiliary solves for per-obs density estimation.
-     * OPTIMIZATION: Use relaxed tolerances for auxiliary solves.
-     * Density estimates only need ~3 decimal places of accuracy
-     * for VCE computation, so 1e-6 is sufficient.
+     * OPTIMIZATION: Parallel auxiliary solves — same approach as
+     * estimate_siddiqui_sparsity. Reuse main IPM state for one solve,
+     * lightweight state for the other.
      */
+    ST_int skip_cross = (N > 1000) ? 1 : 0;
+
     cqreg_ipm_config aux_config;
     cqreg_ipm_config_init(&aux_config);
-    aux_config.maxiter = 100;       /* Fewer iterations needed */
-    aux_config.tol_primal = 1e-6;   /* Relaxed for density estimation */
+    aux_config.maxiter = 100;
+    aux_config.tol_primal = 1e-6;
     aux_config.tol_dual = 1e-6;
     aux_config.tol_gap = 1e-6;
     aux_config.verbose = 0;
-    aux_config.use_mehrotra = ipm_config->use_mehrotra;
+    aux_config.skip_crossover = skip_cross;
 
-    /* Create temporary IPM states for the auxiliary regressions */
-    cqreg_ipm_state *ipm_lo = cqreg_ipm_create(N, K, &aux_config);
-    cqreg_ipm_state *ipm_hi = cqreg_ipm_create(N, K, &aux_config);
-
-    if (ipm_lo == NULL || ipm_hi == NULL) {
-        cqreg_ipm_free(ipm_lo);
-        cqreg_ipm_free(ipm_hi);
+    cqreg_ipm_state *ipm_hi = cqreg_ipm_create_lite(N, K, &aux_config);
+    if (ipm_hi == NULL) {
         free(beta_lo);
         free(beta_hi);
         for (ST_int i = 0; i < N; i++) {
@@ -503,32 +500,32 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
         return 1.0;
     }
 
-    /* Initialize from main_beta for warm start */
-    if (main_beta != NULL) {
-        memcpy(beta_lo, main_beta, K * sizeof(ST_double));
-        memcpy(beta_hi, main_beta, K * sizeof(ST_double));
-    }
+    cqreg_ipm_config saved_config = main_ipm->config;
+    main_ipm->config = aux_config;
 
-    /* Solve quantile regression at q_lo and q_hi */
     ST_int rc_lo = 0, rc_hi = 0;
+    double t_aux_start2 = ctools_timer_seconds();
 
 #ifdef _OPENMP
     #pragma omp parallel sections
     {
         #pragma omp section
-        { rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo); }
+        { rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo); }
         #pragma omp section
         { rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi); }
     }
 #else
-    rc_lo = cqreg_fn_solve(ipm_lo, y, X, q_lo, beta_lo);
+    rc_lo = cqreg_fn_solve(main_ipm, y, X, q_lo, beta_lo);
     rc_hi = cqreg_fn_solve(ipm_hi, y, X, q_hi, beta_hi);
 #endif
 
+    SF_scal_save("_cqreg_time_sparsity_aux", ctools_timer_seconds() - t_aux_start2);
+
+    main_ipm->config = saved_config;
+    cqreg_ipm_free(ipm_hi);
+
     /* Check convergence */
     if (rc_lo <= 0 || rc_hi <= 0) {
-        cqreg_ipm_free(ipm_lo);
-        cqreg_ipm_free(ipm_hi);
         free(beta_lo);
         free(beta_hi);
         for (ST_int i = 0; i < N; i++) {
@@ -587,8 +584,6 @@ static ST_double estimate_fitted_per_obs_density(ST_double *obs_density,
     }
 
     /* Cleanup */
-    cqreg_ipm_free(ipm_lo);
-    cqreg_ipm_free(ipm_hi);
     free(beta_lo);
     free(beta_hi);
 
@@ -818,10 +813,6 @@ ST_retcode cqreg_full_regression(const char *args)
         }
     }
 
-    /* Note: Constant regressors are handled by _rmcoll in the Stata layer,
-     * which drops collinear variables before calling the plugin.
-     * So we don't need to check for constant x here. */
-
     /* Compute sample quantile and raw sum of deviations for pseudo R^2 */
     state->q_v = cqreg_compute_quantile(state->y, N, quantile);
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
@@ -869,6 +860,119 @@ ST_retcode cqreg_full_regression(const char *args)
         state->df_a = cqreg_hdfe_get_df_absorbed(state);
         state->time_hdfe = ctools_timer_seconds() - hdfe_start;
 
+    }
+
+    /* ========================================================================
+     * Step 3b: Collinearity detection
+     * ======================================================================== */
+
+    ST_int *is_collinear = NULL;
+
+    if (K_x > 0) {
+        /* Compute X'X for collinearity check */
+        ST_double *xtx = (ST_double *)malloc((size_t)K_x * K_x * sizeof(ST_double));
+        is_collinear = (ST_int *)calloc(K_x, sizeof(ST_int));
+
+        if (!xtx || !is_collinear) {
+            free(xtx);
+            free(is_collinear);
+            cqreg_hdfe_cleanup(state);
+            cqreg_state_free(state);
+            ctools_filtered_data_free(&filtered);
+            free(fe_var_idx);
+            ctools_error("cqreg", "Memory allocation failed for collinearity check");
+            main_debug_close();
+            return 920;
+        }
+
+        for (ST_int i = 0; i < K_x; i++) {
+            for (ST_int j = i; j < K_x; j++) {
+                ST_double val = fast_dot(&state->X[i * N], &state->X[j * N], N);
+                xtx[i * K_x + j] = val;
+                xtx[j * K_x + i] = val;
+            }
+        }
+
+        /* Detect numerical collinearity via Cholesky */
+        ST_int num_collinear = detect_collinearity(xtx, K_x, is_collinear, verbose);
+        free(xtx);
+
+        if (num_collinear < 0) {
+            free(is_collinear);
+            cqreg_hdfe_cleanup(state);
+            cqreg_state_free(state);
+            ctools_filtered_data_free(&filtered);
+            free(fe_var_idx);
+            ctools_error("cqreg", "Collinearity detection failed");
+            main_debug_close();
+            return 920;
+        }
+
+        /* Store collinearity flags to Stata */
+        char scalar_name[64];
+        for (ST_int k = 0; k < K_x; k++) {
+            snprintf(scalar_name, sizeof(scalar_name), "__cqreg_collinear_%d", k + 1);
+            SF_scal_save(scalar_name, (ST_double)is_collinear[k]);
+        }
+
+        main_debug_log("Collinearity: %d of %d variables collinear\n", num_collinear, K_x);
+
+        /* Compact X if any collinear variables found */
+        if (num_collinear > 0) {
+            ST_int K_keep_x = K_x - num_collinear;
+            ST_int K_new = K_keep_x + 1;  /* +1 for constant */
+
+            /* Compact X in-place: shift non-collinear columns to front */
+            ST_int dst = 0;
+            for (ST_int k = 0; k < K_x; k++) {
+                if (!is_collinear[k]) {
+                    if (dst != k) {
+                        memcpy(&state->X[dst * N], &state->X[k * N],
+                               (size_t)N * sizeof(ST_double));
+                    }
+                    dst++;
+                }
+            }
+            /* Move constant column to new position */
+            memcpy(&state->X[K_keep_x * N], &state->X[K_x * N],
+                   (size_t)N * sizeof(ST_double));
+
+            /* Update state dimensions */
+            K_x = K_keep_x;
+            K = K_new;
+            state->K = K_new;
+
+            /* Reallocate beta and V for new K */
+            ctools_aligned_free(state->beta);
+            state->beta = (ST_double *)ctools_cacheline_alloc(K_new * sizeof(ST_double));
+            if (state->beta == NULL) {
+                free(is_collinear);
+                cqreg_hdfe_cleanup(state);
+                cqreg_state_free(state);
+                ctools_filtered_data_free(&filtered);
+                free(fe_var_idx);
+                ctools_error("cqreg", "Memory allocation failed for beta");
+                main_debug_close();
+                return 920;
+            }
+            memset(state->beta, 0, K_new * sizeof(ST_double));
+
+            ctools_aligned_free(state->V);
+            state->V = (ST_double *)ctools_cacheline_alloc((size_t)K_new * K_new * sizeof(ST_double));
+            if (state->V == NULL) {
+                free(is_collinear);
+                cqreg_hdfe_cleanup(state);
+                cqreg_state_free(state);
+                ctools_filtered_data_free(&filtered);
+                free(fe_var_idx);
+                ctools_error("cqreg", "Memory allocation failed for V");
+                main_debug_close();
+                return 920;
+            }
+            memset(state->V, 0, (size_t)K_new * K_new * sizeof(ST_double));
+
+            main_debug_log("Compacted X: K_x=%d, K=%d\n", K_x, K);
+        }
     }
 
     /* ========================================================================
@@ -938,6 +1042,11 @@ ST_retcode cqreg_full_regression(const char *args)
     main_debug_log("IPM phase complete. sum_adev=%.4f\n", state->sum_adev);
     state->time_ipm = ctools_timer_seconds() - ipm_start;
 
+    /* Save IPM sub-timers now, before aux solves can overwrite them */
+    double time_ipm_init = state->ipm->time_init;
+    double time_ipm_iterate = state->ipm->time_iterate;
+    double time_ipm_crossover = state->ipm->time_crossover;
+
 
 
 
@@ -952,6 +1061,8 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("Step 5: Sparsity and VCE estimation...\n");
     double vce_start = ctools_timer_seconds();
+    double time_sparsity = 0.0;
+    double time_vce_matrix = 0.0;
 
     main_debug_log("Creating sparsity state...\n");
     /* Create sparsity state */
@@ -990,21 +1101,19 @@ ST_retcode cqreg_full_regression(const char *args)
                                                           state->y, state->X,
                                                           N, K, quantile,
                                                           state->bw_method,
-                                                          &ipm_config,
-                                                          state->beta,
+                                                          state->ipm,
                                                           &state->bandwidth,
                                                           precomputed_bw);
     } else if (state->density_method == CQREG_DENSITY_FITTED) {
         /* Fitted method for IID: use Siddiqui difference quotient method.
          * This fits QR at τ±h and computes sparsity at mean(X).
-         * Uses warm-start from main solve's beta for speed.
+         * Reuses main IPM state workspace (avoids ~2.8 GB allocation for N=5M).
          * Matches Stata's default vce(iid) "fitted" method exactly.
          */
         state->sparsity = estimate_siddiqui_sparsity(state->y, state->X,
                                                      N, K, quantile,
                                                      state->bw_method,
-                                                     &ipm_config,
-                                                     state->beta,
+                                                     state->ipm,
                                                      precomputed_bw);
         state->bandwidth = (precomputed_bw > 0) ? precomputed_bw : cqreg_compute_bandwidth(N, quantile, state->bw_method);
     } else {
@@ -1015,8 +1124,10 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("Sparsity=%.4f, bandwidth=%.6f\n", state->sparsity, state->bandwidth);
 
+    time_sparsity = ctools_timer_seconds() - vce_start;
 
     main_debug_log("Computing VCE...\n");
+    double vce_matrix_start = ctools_timer_seconds();
     /* Compute VCE */
     if (cqreg_compute_vce(state, state->X) != 0) {
         main_debug_log("WARNING: VCE computation failed\n");
@@ -1024,6 +1135,7 @@ ST_retcode cqreg_full_regression(const char *args)
         /* Continue with zero VCE */
     }
     main_debug_log("VCE computed\n");
+    time_vce_matrix = ctools_timer_seconds() - vce_matrix_start;
 
     state->time_vce = ctools_timer_seconds() - vce_start;
 
@@ -1042,8 +1154,14 @@ ST_retcode cqreg_full_regression(const char *args)
     SF_scal_save("_cqreg_time_load", state->time_load);
     SF_scal_save("_cqreg_time_hdfe", state->time_hdfe);
     SF_scal_save("_cqreg_time_ipm", state->time_ipm);
+    SF_scal_save("_cqreg_time_ipm_init", time_ipm_init);
+    SF_scal_save("_cqreg_time_ipm_iterate", time_ipm_iterate);
+    SF_scal_save("_cqreg_time_ipm_crossover", time_ipm_crossover);
     SF_scal_save("_cqreg_time_vce", state->time_vce);
+    SF_scal_save("_cqreg_time_sparsity", time_sparsity);
+    SF_scal_save("_cqreg_time_vce_matrix", time_vce_matrix);
     SF_scal_save("_cqreg_time_total", state->time_total);
+    SF_scal_save("_cqreg_ipm_iterations", (ST_double)state->iterations);
     CTOOLS_SAVE_THREAD_INFO("_cqreg");
 
     /* ========================================================================
@@ -1058,6 +1176,7 @@ ST_retcode cqreg_full_regression(const char *args)
     ctools_filtered_data_free(&filtered);
     main_debug_log("indepvar_idx freed\n");
     free(fe_var_idx);
+    free(is_collinear);
     main_debug_log("fe_var_idx freed\n");
 
     main_debug_log("cqreg_full_regression: EXIT (rc=%d)\n", rc);

@@ -38,13 +38,6 @@ ST_int ctools_cholesky(ST_double *A, ST_int n);
 ST_int ctools_invert_from_cholesky(const ST_double *L, ST_int n, ST_double *inv);
 
 /* ========================================================================
- * Combined solve: compute inverse of SPD matrix A using Cholesky
- * A_inv = (A)^{-1}
- * Returns 0 on success, -1 on failure
- * ======================================================================== */
-ST_int ctools_invert_spd(ST_double *A, ST_int n, ST_double *A_inv);
-
-/* ========================================================================
  * Solve linear system Ax = b using Cholesky decomposition
  * A must be symmetric positive definite
  * Returns 0 on success, -1 on failure

@@ -24,18 +24,6 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
                                ST_int N);
 
 /* ========================================================================
- * Sorted Indices for Fast Projection
- * ======================================================================== */
-
-/* Build sorted observation indices using counting sort on levels.
- * This enables cache-friendly projection by accessing means sequentially.
- * Returns 0 on success, non-zero on error. */
-int build_sorted_indices(FE_Factor *f, ST_int N);
-
-/* Free sorted indices data */
-void free_sorted_indices(FE_Factor *f);
-
-/* ========================================================================
  * Symmetric Kaczmarz Transformation
  * ======================================================================== */
 

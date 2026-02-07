@@ -1407,9 +1407,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 20: verbose/timeit options
+ * SECTION 20: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 capture cbinscatter price mpg, verbose nograph
@@ -1418,15 +1418,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "rc=`=_rc'"
-}
-
-sysuse auto, clear
-capture cbinscatter price mpg, timeit nograph
-if _rc == 0 {
-    test_pass "timeit option"
-}
-else {
-    test_fail "timeit option" "rc=`=_rc'"
 }
 
 /*******************************************************************************

@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! csort: C-accelerated sorting for Stata datasets
 *! Part of the ctools suite
 *!
@@ -35,7 +35,7 @@ program define csort, rclass
         exit 920
     }
 
-    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby]
+    syntax varlist [if] [in], [Verbose ALGorithm(string) STReam(integer 0) THReads(integer 0) NOSORTedby NOSTReam]
 
     * =========================================================================
     * UPFRONT VALIDATION - check all options before any data manipulation
@@ -198,6 +198,12 @@ program define csort, rclass
         local stream_code "stream(`batch_size')"
     }
 
+    * Build nostream option string (disables auto-streaming)
+    local nostream_code ""
+    if "`nostream'" != "" {
+        local nostream_code "nostream"
+    }
+
     * Build threads option string
     local threads_code ""
     if `threads' > 0 {
@@ -211,7 +217,7 @@ program define csort, rclass
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code'"
+    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code'"
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {

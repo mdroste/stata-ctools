@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cbsample##syntax"}{...}
 {viewerjumpto "Description" "cbsample##description"}{...}
 {viewerjumpto "Options" "cbsample##options"}{...}
@@ -91,7 +91,7 @@ for bootstrap estimation.
 operations. By default, {cmd:cbsample} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a detailed timing breakdown.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}
@@ -118,28 +118,28 @@ structure of the original data.
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Simple bootstrap sample{p_end}
+{pstd}Simple bootstrap sample:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbsample}{p_end}
 
-{pstd}Bootstrap sample of specific size{p_end}
+{pstd}Bootstrap sample of specific size:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbsample, n(50)}{p_end}
 
-{pstd}Store bootstrap weights instead of resampling{p_end}
+{pstd}Store bootstrap weights instead of resampling:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbsample, weight(bsweight)}{p_end}
 {phang2}{cmd:. regress price mpg [fw=bsweight]}{p_end}
 
-{pstd}Stratified bootstrap{p_end}
+{pstd}Stratified bootstrap:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. cbsample, strata(foreign) weight(bsweight)}{p_end}
 
-{pstd}Cluster bootstrap{p_end}
+{pstd}Cluster bootstrap:{p_end}
 {phang2}{cmd:. webuse nlswork, clear}{p_end}
 {phang2}{cmd:. cbsample, cluster(idcode) weight(bsweight)}{p_end}
 
-{pstd}Reproducible bootstrap{p_end}
+{pstd}Reproducible bootstrap:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
 {phang2}{cmd:. set seed 12345}{p_end}
 {phang2}{cmd:. cbsample}{p_end}

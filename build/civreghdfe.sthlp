@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "civreghdfe##syntax"}{...}
 {viewerjumpto "Description" "civreghdfe##description"}{...}
 {viewerjumpto "Options" "civreghdfe##options"}{...}
@@ -53,6 +53,7 @@
 {synopt:{opt kernel(string)}}kernel type for HAC: {opt bartlett}, {opt parzen}, {opt quadraticspectral}, {opt truncated}, {opt tukey}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with {it:#} lags (for panel data){p_end}
 {synopt:{opt center}}center score vectors before HAC outer product computation{p_end}
+{synopt:{opt kiefer}}Kiefer (sandwich) SEs for panel data (requires tsset){p_end}
 
 {syntab:Estimation Settings}
 {synopt:{opt tol:erance(#)}}convergence tolerance for CG solver (default: 1e-8){p_end}
@@ -65,8 +66,7 @@
 {synopt:{opt ff:irst}}report full first-stage statistics (partial R², F-stat){p_end}
 {synopt:{opt rf}}report reduced-form estimates{p_end}
 {synopt:{opt coviv}}display covariance matrix of IV estimators{p_end}
-{synopt:{opt v:erbose}}display progress information{p_end}
-{synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
 
 {syntab:Display}
 {synopt:{opt l:evel(#)}}set confidence level; default is {cmd:level(95)}{p_end}
@@ -102,6 +102,7 @@
 {synopt:{opt savefp:refix(string)}}prefix for stored results (default: _civreghdfe_){p_end}
 {synopt:{opt saverf}}store reduced-form estimation results{p_end}
 {synopt:{opt saverfp:refix(string)}}prefix for stored RF results (default: _civreghdfe_rf_){p_end}
+{synopt:{opt noret:urn}}skip all result storage (faster for scripted use){p_end}
 {synoptline}
 {p2colreset}{...}
 {p 4 6 2}
@@ -216,6 +217,11 @@ is requested, the Newey-West optimal bandwidth floor(4*(N/100)^(2/9)) is used.
 are robust to very general forms of cross-sectional and temporal dependence
 in panel data. The Bartlett kernel is used by default.
 
+{phang}
+{opt kiefer} requests Kiefer sandwich standard errors for panel data. The data
+must be {help tsset} with both panel and time variables. This option cannot be
+combined with {opt vce(robust)} or {opt vce(cluster)}.
+
 {dlgtab:Estimation Settings}
 
 {phang}
@@ -227,9 +233,7 @@ solver used in HDFE absorption. Default is 1e-8.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations including HDFE absorption and matrix computations. By default,
-{cmd:civreghdfe} uses all available CPU cores as reported by OpenMP. Use this
-option to limit parallelism, for example when running multiple jobs simultaneously.
+operations. By default, {cmd:civreghdfe} uses all available CPU cores.
 
 {phang}
 {opt noconstant} suppresses the constant term. Note that with absorbed fixed
@@ -257,10 +261,7 @@ variable directly on all instruments).
 {opt coviv} displays the covariance matrix of the IV estimators.
 
 {phang}
-{opt verbose} displays detailed progress information during computation.
-
-{phang}
-{opt timeit} displays a timing breakdown of computational phases.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {dlgtab:Display}
 
@@ -361,6 +362,11 @@ using {cmd:estimates store}. The results are stored with a prefix (default:
 {phang}
 {opt saverfprefix(string)} specifies the prefix to use when storing reduced-form
 results with {opt saverf}. The default prefix is "_civreghdfe_rf_".
+
+{phang}
+{opt noreturn} skips all result retrieval and e() posting after estimation.
+This is useful for scripted workflows where only side effects (e.g., residuals)
+are needed, avoiding the overhead of transferring results back to Stata.
 
 
 {marker examples}{...}

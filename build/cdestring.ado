@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cdestring: C-accelerated string to numeric conversion for Stata
 *! Part of the ctools suite
 *!
@@ -219,7 +219,6 @@ program define cdestring
     else {
         * For generate, create the new variables
         local dest_varlist ""
-        local i = 1
         foreach gv of local generate {
             if "`float'" != "" {
                 quietly generate float `gv' = .
@@ -228,7 +227,6 @@ program define cdestring
                 quietly generate double `gv' = .
             }
             local dest_varlist "`dest_varlist' `gv'"
-            local ++i
         }
     }
 
@@ -406,14 +404,19 @@ program define cdestring
         di as text "{hline 55}"
         di as text "  C plugin internals:"
         di as text "    Argument parsing:       " as result %8.4f _cdestring_time_parse " sec"
+        di as text "    Data load:              " as result %8.4f _cdestring_time_load " sec"
         di as text "    String conversion:      " as result %8.4f _cdestring_time_convert " sec"
+        di as text "    Store results:          " as result %8.4f _cdestring_time_store " sec"
         di as text "  {hline 53}"
         di as text "    C plugin total:         " as result %8.4f _cdestring_time_total " sec"
-        di as text "  {hline 53}"
+        di as text ""
         di as text "  Stata overhead:"
         di as text "    Pre-plugin setup:       " as result %8.4f `__time_preplugin' " sec"
         di as text "    Plugin call overhead:   " as result %8.4f `__plugin_call_overhead' " sec"
         di as text "    Post-plugin cleanup:    " as result %8.4f `__time_postplugin' " sec"
+        di as text "  {hline 53}"
+        local __stata_overhead = `__time_preplugin' + `__plugin_call_overhead' + `__time_postplugin'
+        di as text "    Stata overhead total:   " as result %8.4f `__stata_overhead' " sec"
         di as text "{hline 55}"
         di as text "    Wall clock total:       " as result %8.4f `__time_total' " sec"
         di as text "{hline 55}"

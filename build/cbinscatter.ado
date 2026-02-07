@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cbinscatter: C-accelerated binned scatter plots
 *! Part of the ctools suite
 *!
@@ -21,7 +21,7 @@
 *!   reportreg           - Report underlying regression
 *!   nograph             - Suppress graph
 *!   verbose             - Display progress information
-*!   timeit              - Display timing breakdown
+*!   (verbose includes timing breakdown)
 
 program define cbinscatter, eclass sortpreserve
     version 14.1
@@ -45,7 +45,6 @@ program define cbinscatter, eclass sortpreserve
         [REPORTreg] ///
         [NOgraph] ///
         [Verbose] ///
-        [TIMEit] ///
         [METHod(string)] ///
         [THReads(integer 0)] ///
         /* Graph options */ ///
@@ -398,7 +397,7 @@ program define cbinscatter, eclass sortpreserve
     local actual_num_groups = __cbinscatter_num_groups
 
     * Display timing if requested
-    if "`timeit'" != "" | "`verbose'" != "" {
+    if "`verbose'" != "" {
         local plugin_overhead = r(t99) - __cbinscatter_time_total
         if `plugin_overhead' < 0 local plugin_overhead = 0
         di as text ""

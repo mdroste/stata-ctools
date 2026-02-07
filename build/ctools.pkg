@@ -15,11 +15,11 @@ d   civreghdfe  - IV/2SLS regression with HDFE
 d   cqreg       - Quantile regression with IPM solver
 d   cbinscatter - Binned scatter plots
 d
-d Version: 1.0.0
+d Version: 0.9.1
 d
 d Requires: Stata 14.0 or later
 d
-d Distribution-Date: 20260117
+d Distribution-Date: 20260206
 
 f ctools.ado
 f ctools.sthlp

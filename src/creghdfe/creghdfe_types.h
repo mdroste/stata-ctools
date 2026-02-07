@@ -43,17 +43,6 @@
 extern HDFE_State *g_state;
 
 /* ========================================================================
- * Union-Find (Disjoint Set Union) for connected components
- * Used to efficiently count mobility groups in bipartite graphs
- * ======================================================================== */
-
-typedef struct {
-    ST_int *parent;
-    ST_int *rank;
-    ST_int size;
-} UnionFind;
-
-/* ========================================================================
  * Hash table for factor creation
  * Simple open-addressing hash table for integer keys
  * ======================================================================== */

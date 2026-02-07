@@ -737,15 +737,16 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
         free(remap);
 
-        /* Initialize sorted indices fields (not used - sequential access is better) */
+        /* Sorted indices built lazily in partial_out_columns for large factors */
         g_state->factors[g].sorted_indices = NULL;
         g_state->factors[g].sorted_levels = NULL;
+        g_state->factors[g].level_offsets = NULL;
         g_state->factors[g].sorted_initialized = 0;
     }
 
     /* Allocate inv_counts, inv_weighted_counts, and thread buffers */
     g_state->num_threads = num_threads;
-    if (ctools_hdfe_alloc_buffers(g_state, 0) != 0) {
+    if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
         cleanup_state();
         for (i = 0; i < G; i++) {
             if (factors[i].levels) free(factors[i].levels);

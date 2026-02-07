@@ -15,14 +15,12 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
 #include <math.h>
 
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_runtime.h"
 #include "ctools_config.h"
-#include "ctools_arena.h"
 #include "ctools_hash.h"
 #include "ctools_parse.h"
 #include "cdecode_impl.h"
@@ -132,48 +130,31 @@ ST_retcode cdecode_main(const char *args)
     int n_missing = 0;
     int n_unlabeled = 0;
 
-    /* Build result strings array, then write back via ctools_store_filtered_str */
-    char **result_strings = malloc(nobs * sizeof(char *));
-    if (!result_strings) {
-        ctools_filtered_data_free(&filtered);
-        ctools_int_hash_free(&ht);
-        SF_error("cdecode: memory allocation failed\n");
-        return 920;
-    }
-
+    /* Decode and write directly to Stata — no intermediate array needed */
     for (size_t i = 0; i < nobs; i++) {
         double dval = src_values[i];
+        const char *label = "";
 
         if (SF_is_missing(dval)) {
-            result_strings[i] = "";
             n_missing++;
-            continue;
-        }
-
-        /* Check if value is close to an integer (like native decode) */
-        double rounded = round(dval);
-        if (fabs(dval - rounded) > 1e-9) {
-            result_strings[i] = "";
-            n_unlabeled++;
-            continue;
-        }
-        int ival = (int)rounded;
-
-        /* Look up label */
-        const char *label = ctools_int_hash_lookup(&ht, ival);
-
-        if (label) {
-            result_strings[i] = (char *)label;
-            n_decoded++;
         } else {
-            result_strings[i] = "";
-            n_unlabeled++;
+            /* Check if value is close to an integer (like native decode) */
+            double rounded = round(dval);
+            if (fabs(dval - rounded) > 1e-9) {
+                n_unlabeled++;
+            } else {
+                const char *found = ctools_int_hash_lookup(&ht, (int)rounded);
+                if (found) {
+                    label = found;
+                    n_decoded++;
+                } else {
+                    n_unlabeled++;
+                }
+            }
         }
-    }
 
-    /* Write all results at once */
-    ctools_store_filtered_str(result_strings, nobs, dst_idx, obs_map);
-    free(result_strings);
+        SF_sstore(dst_idx, (ST_int)obs_map[i], (char *)label);
+    }
 
     /* Free loaded data */
     ctools_filtered_data_free(&filtered);

@@ -11,102 +11,22 @@
 #include "../ctools_simd.h"
 
 /* ========================================================================
- * Dot product - uses ctools K-way unrolling abstraction
+ * Dot product
+ *
+ * On AVX2: explicit SIMD with FMA (4 doubles/vector, 2 accumulators = 8/iter)
+ * On NEON: scalar 8-way unrolled auto-vectorizes to 4 NEON FMAs (8/iter),
+ *          which matches or beats explicit 2-vector SIMD (4/iter)
  * ======================================================================== */
 
 ST_double dot_product(const ST_double * RESTRICT x,
                       const ST_double * RESTRICT y,
                       ST_int N)
 {
+#if CTOOLS_HAS_AVX2
+    return ctools_simd_dot(x, y, (size_t)N);
+#else
     return ctools_dot_unrolled(x, y, N);
-}
-
-/* ========================================================================
- * CSR Format Construction for Fast Projection
- *
- * CSR format stores observations grouped by level for cache-friendly access.
- * Instead of scatter-gather over N observations with indirect indexing,
- * we can iterate over levels and access contiguous observation indices.
- * ======================================================================== */
-
-/*
- * Build sorted observation indices using radix LSD sort on levels.
- * This enables cache-friendly projection by accessing means sequentially.
- *
- * After sorting:
- * - sorted_indices[i] = original observation index
- * - sorted_levels[i] = level of that observation (for sequential means access)
- *
- * Observations with the same level are grouped together.
- */
-int build_sorted_indices(FE_Factor *f, ST_int N)
-{
-    if (!f || !f->levels || f->num_levels <= 0) return -1;
-
-    const ST_int * RESTRICT levels = f->levels;
-    const ST_int num_levels = f->num_levels;
-
-    /* Allocate output arrays */
-    f->sorted_indices = (ST_int *)malloc(N * sizeof(ST_int));
-    f->sorted_levels = (ST_int *)malloc(N * sizeof(ST_int));
-
-    if (!f->sorted_indices || !f->sorted_levels) {
-        if (f->sorted_indices) { free(f->sorted_indices); f->sorted_indices = NULL; }
-        if (f->sorted_levels) { free(f->sorted_levels); f->sorted_levels = NULL; }
-        f->sorted_initialized = 0;
-        return -1;
-    }
-
-    /* Use counting sort since levels are in range [1, num_levels] */
-    /* This is O(N + L) which is faster than radix sort for small L */
-    ST_int *counts = (ST_int *)calloc(num_levels, sizeof(ST_int));
-    ST_int *offsets = (ST_int *)malloc((num_levels + 1) * sizeof(ST_int));
-
-    if (!counts || !offsets) {
-        if (counts) free(counts);
-        if (offsets) free(offsets);
-        free(f->sorted_indices); f->sorted_indices = NULL;
-        free(f->sorted_levels); f->sorted_levels = NULL;
-        f->sorted_initialized = 0;
-        return -1;
-    }
-
-    /* Count observations per level */
-    for (ST_int i = 0; i < N; i++) {
-        counts[levels[i] - 1]++;
-    }
-
-    /* Compute prefix sums for starting positions */
-    offsets[0] = 0;
-    for (ST_int l = 0; l < num_levels; l++) {
-        offsets[l + 1] = offsets[l] + counts[l];
-    }
-
-    /* Reset counts to use as insertion pointers */
-    memset(counts, 0, num_levels * sizeof(ST_int));
-
-    /* Fill sorted arrays */
-    for (ST_int i = 0; i < N; i++) {
-        ST_int l = levels[i] - 1;  /* 0-indexed level */
-        ST_int pos = offsets[l] + counts[l];
-        f->sorted_indices[pos] = i;
-        f->sorted_levels[pos] = levels[i];  /* Keep 1-indexed for compatibility */
-        counts[l]++;
-    }
-
-    free(counts);
-    free(offsets);
-    f->sorted_initialized = 1;
-    return 0;
-}
-
-void free_sorted_indices(FE_Factor *f)
-{
-    if (f) {
-        if (f->sorted_indices) { free(f->sorted_indices); f->sorted_indices = NULL; }
-        if (f->sorted_levels) { free(f->sorted_levels); f->sorted_levels = NULL; }
-        f->sorted_initialized = 0;
-    }
+#endif
 }
 
 /* ========================================================================
@@ -124,12 +44,9 @@ ST_double weighted_dot_product(const ST_double * RESTRICT x,
 }
 
 /* ========================================================================
- * Symmetric Kaczmarz transformation with thread-local buffers
+ * FE Projection: project-and-subtract (scatter-gather)
  * ======================================================================== */
 
-/*
- * Fused project-and-subtract: computes means and subtracts in-place.
- */
 static void project_and_subtract_fe(ST_double * RESTRICT ans,
                                     const FE_Factor * RESTRICT f,
                                     ST_int N,
@@ -140,7 +57,6 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
     const ST_int num_levels = f->num_levels;
     const ST_int * RESTRICT levels = f->levels;
 
-    /* Use precomputed inverse counts if available, otherwise fall back to counts */
     const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
         ? f->inv_weighted_counts : f->inv_counts;
     const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
@@ -158,7 +74,6 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
         }
     }
 
-    /* Use inverse counts (multiply) if available, otherwise divide by counts */
     if (inv_counts != NULL) {
         #pragma omp simd
         for (level = 0; level < num_levels; level++) {
@@ -177,6 +92,10 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
         ans[i] -= means[levels[i] - 1];
     }
 }
+
+/* ========================================================================
+ * Symmetric Kaczmarz transformation with thread-local buffers
+ * ======================================================================== */
 
 void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
                                      const ST_double * RESTRICT y,
@@ -210,7 +129,26 @@ void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
 }
 
 /* ========================================================================
+ * Direct demean for G=1 (bypasses CG solver entirely)
+ *
+ * With a single FE factor, the projection is a simple demean.
+ * No iteration needed — one pass produces the exact result.
+ * ======================================================================== */
+
+static void demean_column_single_fe(HDFE_State *S, ST_double *y, ST_int thread_id)
+{
+    const ST_int N = S->N;
+    const FE_Factor * RESTRICT f = &S->factors[0];
+    ST_double * RESTRICT means = S->thread_fe_means[thread_id * S->G];
+
+    project_and_subtract_fe(y, f, N, S->weights, means);
+}
+
+/* ========================================================================
  * CG solver for a single column with thread-local buffers
+ *
+ * Uses fused axpy2+dot kernel to save 2 passes per iteration.
+ * Convergence check avoids sqrt by comparing squared quantities.
  * ======================================================================== */
 
 ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
@@ -220,10 +158,11 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
     ST_double * RESTRICT u = S->thread_cg_u[thread_id];
     ST_double * RESTRICT v = S->thread_cg_v[thread_id];
     ST_double ssr, ssr_old, alpha, beta;
-    ST_double improvement_potential, recent_ssr, update_error, uv;
+    ST_double improvement_potential, recent_ssr, uv;
     const ST_int N = S->N;
     const ST_double * RESTRICT weights = S->weights;
     const ST_int has_weights = S->has_weights;
+    const ST_double tol_sq = S->tolerance * S->tolerance;
 
     if (has_weights && weights != NULL) {
         improvement_potential = weighted_dot_product(y, y, weights, N);
@@ -241,19 +180,20 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            /* CG update: y -= alpha*u, r -= alpha*v (SIMD-accelerated) */
-            ctools_simd_axpy(y, u, -alpha, (size_t)N);
-            ctools_simd_axpy(r, v, -alpha, (size_t)N);
-
+            /* Fused: y -= alpha*u, r -= alpha*v, ssr = w·(r·r) */
             ssr_old = ssr;
-            ssr = weighted_dot_product(r, r, weights, N);
+            ssr = ctools_simd_fused_axpy2_wdot(y, u, r, v, weights, alpha, (size_t)N);
             beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
             /* CG update: u = r + beta*u (SIMD-accelerated) */
             ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
 
-            update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
-            if (update_error <= S->tolerance) {
+            /* Convergence: recent_ssr / improvement_potential <= tol^2 */
+            if (improvement_potential > 1e-30 &&
+                recent_ssr <= tol_sq * improvement_potential) {
+                return iter;
+            }
+            if (improvement_potential <= 1e-30) {
                 return iter;
             }
         }
@@ -273,19 +213,20 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
             recent_ssr = alpha * ssr;
             improvement_potential -= recent_ssr;
 
-            /* CG update: y -= alpha*u, r -= alpha*v (SIMD-accelerated) */
-            ctools_simd_axpy(y, u, -alpha, (size_t)N);
-            ctools_simd_axpy(r, v, -alpha, (size_t)N);
-
+            /* Fused: y -= alpha*u, r -= alpha*v, ssr = r·r */
             ssr_old = ssr;
-            ssr = dot_product(r, r, N);
+            ssr = ctools_simd_fused_axpy2_dot(y, u, r, v, alpha, (size_t)N);
             beta = (fabs(ssr_old) < 1e-30) ? 0.0 : ssr / ssr_old;
 
             /* CG update: u = r + beta*u (SIMD-accelerated) */
             ctools_simd_axpby(u, r, 1.0, beta, (size_t)N);
 
-            update_error = (improvement_potential > 1e-30) ? sqrt(recent_ssr / improvement_potential) : 0.0;
-            if (update_error <= S->tolerance) {
+            /* Convergence: recent_ssr / improvement_potential <= tol^2 */
+            if (improvement_potential > 1e-30 &&
+                recent_ssr <= tol_sq * improvement_potential) {
+                return iter;
+            }
+            if (improvement_potential <= 1e-30) {
                 return iter;
             }
         }
@@ -298,6 +239,7 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
  * Partial Out Multiple Columns (Shared Helper)
  *
  * Partials out fixed effects from K columns of data in parallel.
+ * For G=1, uses direct demean (no CG iteration needed).
  * ======================================================================== */
 
 ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads)
@@ -309,7 +251,22 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
     (void)N;  /* N is stored in S->N */
     (void)num_threads;  /* Use S->num_threads or OpenMP default */
 
-    #pragma omp parallel for num_threads(S->num_threads) schedule(dynamic)
+    /* G=1 short-circuit: direct demean, no CG iteration */
+    if (S->G == 1) {
+        #pragma omp parallel for num_threads(S->num_threads) schedule(dynamic)
+        for (k = 0; k < K; k++) {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            demean_column_single_fe(S, data + k * S->N, tid);
+        }
+        return 1;  /* "1 iteration" */
+    }
+
+    /* General CG solve for G >= 2 */
+    #pragma omp parallel for num_threads(S->num_threads) schedule(dynamic) \
+        reduction(max:max_iters) reduction(|:any_failed)
     for (k = 0; k < K; k++) {
         int tid = 0;
 #ifdef _OPENMP
@@ -317,14 +274,11 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
 #endif
         ST_int iters = cg_solve_column_threaded(S, data + k * S->N, tid);
 
-        #pragma omp critical
-        {
-            if (iters < 0) {
-                any_failed = 1;
-            }
-            if (iters > max_iters) {
-                max_iters = iters;
-            }
+        if (iters < 0) {
+            any_failed = 1;
+            if (-iters > max_iters) max_iters = -iters;
+        } else {
+            if (iters > max_iters) max_iters = iters;
         }
     }
 

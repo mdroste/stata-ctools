@@ -333,9 +333,9 @@ keep in 1/10000
 benchmark_export, testname("panel data")
 
 /*******************************************************************************
- * SECTION 15: verbose/timeit options
+ * SECTION 15: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 sysuse auto, clear
 
@@ -345,14 +345,6 @@ if _rc == 0 {
 }
 else {
     test_fail "verbose option" "returned error `=_rc'"
-}
-
-capture cexport delimited using "temp/test.csv", timeit replace
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
 }
 
 /*******************************************************************************

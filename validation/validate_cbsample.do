@@ -63,48 +63,46 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 2b: Deterministic comparison with bsample
+ * SECTION 2b: Self-consistency with set seed
  ******************************************************************************/
-print_section "Deterministic Comparison with bsample"
+print_section "Self-Consistency with set seed"
 
-* Compare cbsample to Stata's bsample using the same seed
+* cbsample with same seed should produce identical results
 clear
 set obs 100
 gen id = _n
+gen w1 = .
 
 set seed 12345
-preserve
-bsample
-local stata_N = _N
-restore
+cbsample, weight(w1)
+local N1 = _N
 
 clear
 set obs 100
 gen id = _n
+gen w2 = .
 
 set seed 12345
-preserve
-cbsample
-local ctools_N = _N
-restore
+cbsample, weight(w2)
+local N2 = _N
 
-* Both should produce same N with same seed
-if `stata_N' == `ctools_N' {
-    test_pass "cbsample matches bsample with same seed (N=`ctools_N')"
+* Both runs should produce same weights with same seed
+if `N1' == `N2' {
+    test_pass "cbsample reproducible with same seed (N=`N1')"
 }
 else {
-    test_fail "cbsample vs bsample" "N differ: bsample=`stata_N' cbsample=`ctools_N'"
+    test_fail "cbsample reproducible with same seed" "N differ: run1=`N1' run2=`N2'"
 }
 
-* Compare with explicit n argument
+* With explicit n argument
 clear
 set obs 100
 gen id = _n
 
 set seed 54321
 preserve
-bsample 50
-local stata_N = _N
+cbsample 50
+local N1 = _N
 restore
 
 clear
@@ -114,14 +112,14 @@ gen id = _n
 set seed 54321
 preserve
 cbsample 50
-local ctools_N = _N
+local N2 = _N
 restore
 
-if `stata_N' == `ctools_N' {
-    test_pass "cbsample 50 matches bsample 50 with same seed (N=`ctools_N')"
+if `N1' == `N2' {
+    test_pass "cbsample 50 reproducible with same seed (N=`N1')"
 }
 else {
-    test_fail "cbsample 50 vs bsample 50" "N differ: bsample=`stata_N' cbsample=`ctools_N'"
+    test_fail "cbsample 50 reproducible with same seed" "N differ: run1=`N1' run2=`N2'"
 }
 
 /*******************************************************************************

@@ -180,9 +180,9 @@ else {
 }
 
 /*******************************************************************************
- * SECTION 12: verbose/timeit options
+ * SECTION 12: verbose option
  ******************************************************************************/
-print_section "verbose/timeit Options"
+print_section "verbose Option"
 
 * Verify verbose option is accepted
 sysuse auto, clear
@@ -197,20 +197,6 @@ else {
 * Verify underlying regression is correct (benchmark without verbose)
 sysuse auto, clear
 benchmark_ivreghdfe price (mpg = weight), absorb(foreign) testname("verbose: underlying regression correct")
-
-* Verify timeit option is accepted
-sysuse auto, clear
-capture civreghdfe price (mpg = weight), absorb(foreign) timeit
-if _rc == 0 {
-    test_pass "timeit option accepted"
-}
-else {
-    test_fail "timeit option" "returned error `=_rc'"
-}
-
-* Verify underlying regression is correct (benchmark without timeit)
-sysuse auto, clear
-benchmark_ivreghdfe price (mpg = weight), absorb(foreign) testname("timeit: underlying regression correct")
 
 /*******************************************************************************
  * SECTION 13: if/in conditions

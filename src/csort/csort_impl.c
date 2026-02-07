@@ -25,7 +25,8 @@
 
 /*
     Parse streaming mode option from argument string.
-    Looks for "stream" or "stream(#)" to enable streaming mode.
+    Looks for "stream" or "stream(#)" to enable streaming mode,
+    and "nostream" to explicitly disable auto-streaming.
 
     Streaming mode:
     - Only loads key (sort) variables into C memory
@@ -36,12 +37,21 @@
     The optional number specifies how many variables to load at a time
     (1-16, default 1). Higher values use more memory but may be faster.
 
-    Returns 0 if disabled, 1-16 for the batch size.
+    Returns:
+      -1       if explicitly disabled via "nostream"
+       0       if not specified (auto-detect eligible)
+       1-16    for the batch size (explicitly enabled)
 */
 static int parse_stream_option(const char *args)
 {
     const char *p;
     int batch_size = 1;  /* Default: process 1 variable at a time */
+
+    /* Check for "nostream" first (must check before "stream" since
+       "nostream" contains "stream" as a substring) */
+    if (strstr(args, "nostream") != NULL) {
+        return -1;  /* Explicitly disabled */
+    }
 
     /* Look for "stream" in the arguments */
     p = strstr(args, "stream");
@@ -258,8 +268,21 @@ ST_retcode csort_main(const char *args)
         return 2000;
     }
 
-    /* Check for streaming mode option (returns 0 if disabled, 1-16 for batch size) */
+    /* Check for streaming mode option (returns -1 if nostream, 0 if auto, 1-16 for batch size) */
     int stream_batch_size = parse_stream_option(args);
+
+    /* Auto-detect streaming mode: enable when K > 16 and N > 1M */
+    if (stream_batch_size == 0) {
+        size_t nobs = obs2 - obs1 + 1;
+        if (nvars > 16 && nobs > 1000000) {
+            int nthreads = ctools_get_max_threads();
+            stream_batch_size = nthreads > 16 ? 16 : nthreads;
+            if (stream_batch_size < 1) stream_batch_size = 1;
+        }
+    } else if (stream_batch_size == -1) {
+        /* Explicit nostream: force standard mode */
+        stream_batch_size = 0;
+    }
 
     /* ================================================================
        MEMORY-EFFICIENT MODE: For large datasets with many columns

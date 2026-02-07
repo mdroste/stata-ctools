@@ -37,58 +37,6 @@ static inline bool is_stata_missing(double val)
     return SF_is_missing(val);
 }
 
-/*
-    Powers of 10 for fast decimal formatting.
-    POW10[i] = 10^i for i in [0, 16]
-*/
-static const uint64_t POW10[17] = {
-    1ULL,
-    10ULL,
-    100ULL,
-    1000ULL,
-    10000ULL,
-    100000ULL,
-    1000000ULL,
-    10000000ULL,
-    100000000ULL,
-    1000000000ULL,
-    10000000000ULL,
-    100000000000ULL,
-    1000000000000ULL,
-    10000000000000ULL,
-    100000000000000ULL,
-    1000000000000000ULL,
-    10000000000000000ULL
-};
-
-/*
-    Format unsigned integer with leading zeros to exactly 'width' digits.
-    Used for fractional part formatting.
-    Returns number of characters written.
-*/
-static inline int format_frac_digits(uint64_t val, char *buf, int width)
-{
-    /* Format right-to-left */
-    char temp[20];
-    int pos = width;
-    temp[pos] = '\0';
-
-    while (pos > 0) {
-        pos--;
-        temp[pos] = '0' + (val % 10);
-        val /= 10;
-    }
-
-    /* Copy and strip trailing zeros */
-    int len = width;
-    while (len > 1 && temp[len - 1] == '0') {
-        len--;
-    }
-
-    memcpy(buf, temp, len);
-    return len;
-}
-
 int cexport_double_to_str(double val, char *buf, int buf_size,
                           bool missing_as_dot, vartype_t vtype)
 {
@@ -137,103 +85,12 @@ int cexport_double_to_str(double val, char *buf, int buf_size,
         return ctools_int64_to_str((int64_t)val, buf);
     }
 
-    /* Determine max significant figures based on storage type.
-     * Stata uses %.16g for doubles and %.8g for floats. */
-    int max_sig_figs = (vtype == VARTYPE_FLOAT) ? 8 : 16;
-
     /* Handle sign */
     int pos = 0;
     double abs_val = val;
     if (val < 0) {
         buf[pos++] = '-';
         abs_val = -val;
-    }
-
-    /* FAST PATH 2: Simple decimals - DISABLED
-     * The fast path cannot reliably match Stata's exact %.8g/%.16g formatting
-     * for all values. Always use snprintf fallback to ensure byte-for-byte
-     * CSV output match with Stata's export delimited.
-     *
-     * Keep the code path but make condition always false for now.
-     * Can be re-enabled for specific "exact" value ranges later if needed.
-     */
-    if (0 && abs_val < 1e9 && abs_val > 1e-10) {
-        /* Extract integer and fractional parts */
-        double int_part_d = floor(abs_val);
-        double frac_part = abs_val - int_part_d;
-
-        /* Count significant figures in integer part */
-        int int_sig_figs = 0;
-        if (int_part_d >= 1) {
-            uint64_t int_temp = (uint64_t)int_part_d;
-            while (int_temp > 0) {
-                int_sig_figs++;
-                int_temp /= 10;
-            }
-        }
-
-        /* Max decimal places to stay within sig fig limit */
-        int max_decimals = max_sig_figs - int_sig_figs;
-        if (max_decimals < 1) max_decimals = 1;
-        if (max_decimals > 15) max_decimals = 15;
-
-        /* Check if fractional part is "simple" (few decimal places needed) */
-        if (frac_part > 0) {
-            /* Try progressively more decimal places until we get exact match */
-            for (int decimals = 1; decimals <= max_decimals; decimals++) {
-                double scale = (double)POW10[decimals];
-                double scaled_frac = frac_part * scale;
-                uint64_t frac_int = (uint64_t)(scaled_frac + 0.5);
-
-                /* Check for rounding to next integer */
-                if (frac_int >= POW10[decimals]) {
-                    int_part_d += 1.0;
-                    frac_int = 0;
-                    frac_part = 0;
-                    break;
-                }
-
-                /* Check if this representation is exact enough.
-                 * For doubles, require very tight tolerance to match Stata's 16-digit precision.
-                 * For floats, allow looser tolerance since they only have ~7 significant figures.
-                 */
-                double reconstructed = int_part_d + (double)frac_int / scale;
-                double rel_error = fabs(reconstructed - abs_val) / abs_val;
-
-                double tolerance = (vtype == VARTYPE_FLOAT) ? 1e-7 : 1e-15;
-                if (rel_error < tolerance) {
-                    /* Found exact representation! Format directly. */
-                    uint64_t int_part = (uint64_t)int_part_d;
-
-                    if (int_part == 0) {
-                        /* Value between -1 and 1: Stata omits leading zero */
-                        buf[pos++] = '.';
-                    } else {
-                        /* Format integer part */
-                        pos += ctools_uint64_to_str_fast(int_part, buf + pos);
-                        buf[pos++] = '.';
-                    }
-
-                    /* Format fractional part with trailing zeros stripped */
-                    if (frac_int == 0) {
-                        /* No fractional part after rounding - remove decimal point */
-                        pos--;
-                    } else {
-                        pos += format_frac_digits(frac_int, buf + pos, decimals);
-                    }
-
-                    buf[pos] = '\0';
-                    return pos;
-                }
-            }
-        } else {
-            /* No fractional part - should have been caught by integer path,
-             * but handle it anyway */
-            uint64_t int_part = (uint64_t)int_part_d;
-            pos += ctools_uint64_to_str_fast(int_part, buf + pos);
-            buf[pos] = '\0';
-            return pos;
-        }
     }
 
     /* FALLBACK: Use snprintf for complex cases

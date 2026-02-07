@@ -1,4 +1,4 @@
-*! version 0.9.0 26Jan2026
+*! version 0.9.1 06Feb2026
 *! cbsample: C-accelerated bootstrap sampling for Stata
 *! Drop-in replacement for bsample
 

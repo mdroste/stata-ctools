@@ -67,7 +67,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
     FactorData *factors = NULL;
     IntHashTable **hash_tables = NULL;
-    ST_int *raw_values = NULL;  /* Temporary buffer for single-pass reading */
     char scalar_name[64];
     ST_int max_iter = 100;  /* Safety limit for singleton iterations */
     ST_int mobility_groups = 1;  /* Default: 1 mobility group */
@@ -109,13 +108,11 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
     factors = (FactorData *)calloc(G, sizeof(FactorData));
     hash_tables = (IntHashTable **)calloc(G, sizeof(IntHashTable *));
     mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
-    raw_values = (ST_int *)ctools_safe_malloc2((size_t)G, sizeof(ST_int));  /* One value per FE for current obs */
-
-    if (!factors || !hash_tables || !mask || !raw_values) {
+    if (!factors || !hash_tables || !mask) {
         if (factors) free(factors);
         if (hash_tables) free(hash_tables);
         if (mask) free(mask);
-        if (raw_values) free(raw_values);
+
         SF_error("creghdfe: memory allocation failed\n");
         return 1;
     }
@@ -141,7 +138,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             free(factors);
             free(hash_tables);
             free(mask);
-            free(raw_values);
             return 1;
         }
     }
@@ -164,7 +160,6 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
                 free(factors);
                 free(hash_tables);
                 free(mask);
-                free(raw_values);
                 return 198;
             }
             /* Check for missing FE value before casting to avoid undefined behavior */
@@ -198,16 +193,12 @@ ST_retcode do_hdfe_init(int argc, char *argv[])
             free(factors);
             free(hash_tables);
             free(mask);
-            free(raw_values);
             return 1;
         }
         for (i = 0; i < N_orig; i++) {
             factors[g].counts[factors[g].levels[i] - 1]++;
         }
     }
-
-    free(raw_values);
-    raw_values = NULL;
 
     /* STEP 2: Iteratively drop singletons using shared utility */
     num_singletons = 0;

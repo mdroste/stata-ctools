@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cdestring##syntax"}{...}
 {viewerjumpto "Description" "cdestring##description"}{...}
 {viewerjumpto "Options" "cdestring##options"}{...}
@@ -109,12 +109,10 @@ is interpreted as one thousand two hundred thirty-four and 56/100.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-conversion. By default, {cmd:cdestring} uses all available CPU cores as reported
-by OpenMP. Use this option to limit parallelism.
+operations. By default, {cmd:cdestring} uses all available CPU cores.
 
 {phang}
-{opt verbose} displays a timing breakdown showing time spent in each phase of
-the conversion process.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker remarks}{...}

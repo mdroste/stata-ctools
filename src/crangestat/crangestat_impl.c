@@ -25,16 +25,8 @@
 #include <omp.h>
 #endif
 
-/* SIMD support - check for actual feature availability, not just architecture */
-#if defined(__AVX2__)
-#include <immintrin.h>
-#define CRANGESTAT_HAS_AVX2 1
-#elif defined(__aarch64__) || defined(_M_ARM64)
-#include <arm_neon.h>
-#define CRANGESTAT_HAS_NEON 1
-#endif
-
 #include "stplugin.h"
+#include "ctools_simd.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
 #include "ctools_runtime.h"
@@ -301,16 +293,12 @@ static void build_prefix_arrays(const double *data, size_t start, size_t count,
         /* Parallel prefix sum */
         size_t chunk_size = (count + nthreads - 1) / nthreads;
 
-        /* Per-chunk totals */
-        double *chunk_sum = (double *)malloc(nthreads * sizeof(double));
-        double *chunk_sum2 = (double *)malloc(nthreads * sizeof(double));
-        size_t *chunk_count = (size_t *)malloc(nthreads * sizeof(size_t));
+        /* Per-chunk totals — stack-allocated (nthreads is bounded by hardware) */
+        double chunk_sum[64];
+        double chunk_sum2[64];
+        size_t chunk_count[64];
 
-        if (!chunk_sum || !chunk_sum2 || !chunk_count) {
-            /* Fall back to sequential on allocation failure */
-            if (chunk_sum) free(chunk_sum);
-            if (chunk_sum2) free(chunk_sum2);
-            if (chunk_count) free(chunk_count);
+        if (nthreads > 64) {
             goto sequential_prefix;
         }
 
@@ -383,9 +371,7 @@ static void build_prefix_arrays(const double *data, size_t start, size_t count,
             }
         }
 
-        free(chunk_sum);
-        free(chunk_sum2);
-        free(chunk_count);
+        /* chunk_sum, chunk_sum2, chunk_count are stack-allocated — no free needed */
     } else {
 sequential_prefix:;
         /* Sequential prefix sum for small groups */
@@ -468,9 +454,10 @@ static int build_sparse_table(const double *data, size_t start, size_t count,
         st->log_table[i] = st->log_table[i / 2] + 1;
     }
 
-    /* Allocate sparse tables */
-    st->sparse_min = (double **)malloc((max_log + 1) * sizeof(double *));
-    st->sparse_max = (double **)malloc((max_log + 1) * sizeof(double *));
+    /* Allocate pointer arrays for sparse tables */
+    int nlevels = max_log + 1;
+    st->sparse_min = (double **)malloc(nlevels * sizeof(double *));
+    st->sparse_max = (double **)malloc(nlevels * sizeof(double *));
     if (!st->sparse_min || !st->sparse_max) {
         free(st->log_table);
         if (st->sparse_min) free(st->sparse_min);
@@ -478,19 +465,19 @@ static int build_sparse_table(const double *data, size_t start, size_t count,
         return -1;
     }
 
-    for (int j = 0; j <= max_log; j++) {
-        st->sparse_min[j] = (double *)malloc(count * sizeof(double));
-        st->sparse_max[j] = (double *)malloc(count * sizeof(double));
-        if (!st->sparse_min[j] || !st->sparse_max[j]) {
-            for (int k = 0; k <= j; k++) {
-                if (st->sparse_min[k]) free(st->sparse_min[k]);
-                if (st->sparse_max[k]) free(st->sparse_max[k]);
-            }
-            free(st->sparse_min);
-            free(st->sparse_max);
-            free(st->log_table);
-            return -1;
-        }
+    /* Single contiguous allocation for all sparse table data:
+     * 2 * nlevels * count doubles (min and max for each level) */
+    double *block = (double *)malloc(2 * (size_t)nlevels * count * sizeof(double));
+    if (!block) {
+        free(st->sparse_min);
+        free(st->sparse_max);
+        free(st->log_table);
+        return -1;
+    }
+
+    for (int j = 0; j < nlevels; j++) {
+        st->sparse_min[j] = block + (size_t)(2 * j) * count;
+        st->sparse_max[j] = block + (size_t)(2 * j + 1) * count;
     }
 
     /* Initialize level 0: individual elements */
@@ -561,15 +548,12 @@ static inline double query_range_max(const sparse_table *st, size_t l, size_t r)
 static void free_sparse_table(sparse_table *st)
 {
     if (st->sparse_min) {
-        for (int j = 0; j <= st->max_log; j++) {
-            if (st->sparse_min[j]) free(st->sparse_min[j]);
-        }
+        /* All level data is in a single contiguous block starting at sparse_min[0] */
+        free(st->sparse_min[0]);
         free(st->sparse_min);
     }
     if (st->sparse_max) {
-        for (int j = 0; j <= st->max_log; j++) {
-            if (st->sparse_max[j]) free(st->sparse_max[j]);
-        }
+        /* sparse_max pointers point into the same block; just free the pointer array */
         free(st->sparse_max);
     }
     if (st->log_table) free(st->log_table);
@@ -747,7 +731,7 @@ static inline void simd_sum_minmax(const double *data, size_t start, size_t end,
     size_t n = 0;
     size_t i = start;
 
-    #if defined(CRANGESTAT_HAS_AVX2)
+    #if CTOOLS_HAS_AVX2
     /* AVX2: process 4 doubles at a time */
     if (end - start >= 8) {
         __m256d vsum = _mm256_setzero_pd();
@@ -758,7 +742,7 @@ static inline void simd_sum_minmax(const double *data, size_t start, size_t end,
 
         for (; i + 4 <= end; i += 4) {
             __m256d v = _mm256_loadu_pd(&data[i]);
-            __m256d mask = _mm256_cmp_pd(v, vmiss, _CMP_LT_OQ);
+            __m256d mask = ctools_valid_mask_avx2(v, vmiss);
 
             /* Masked operations */
             __m256d v_masked = _mm256_and_pd(v, mask);
@@ -772,24 +756,16 @@ static inline void simd_sum_minmax(const double *data, size_t start, size_t end,
             vmax = _mm256_max_pd(vmax, vmax_cand);
 
             /* Count non-missing */
-            n += (size_t)_mm256_movemask_pd(mask);
+            n += (size_t)ctools_count_valid_avx2(mask);
         }
 
         /* Horizontal reduction */
-        double sums[4], sums2[4], mins[4], maxs[4];
-        _mm256_storeu_pd(sums, vsum);
-        _mm256_storeu_pd(sums2, vsum2);
-        _mm256_storeu_pd(mins, vmin);
-        _mm256_storeu_pd(maxs, vmax);
-
-        sum = sums[0] + sums[1] + sums[2] + sums[3];
-        sum2 = sums2[0] + sums2[1] + sums2[2] + sums2[3];
-        for (int j = 0; j < 4; j++) {
-            if (mins[j] < minval) minval = mins[j];
-            if (maxs[j] > maxval) maxval = maxs[j];
-        }
+        sum = ctools_hsum_avx2(vsum);
+        sum2 = ctools_hsum_avx2(vsum2);
+        minval = ctools_hmin_avx2(vmin);
+        maxval = ctools_hmax_avx2(vmax);
     }
-    #elif defined(CRANGESTAT_HAS_NEON)
+    #elif CTOOLS_HAS_NEON
     /* NEON: process 2 doubles at a time */
     if (end - start >= 4) {
         float64x2_t vsum = vdupq_n_f64(0.0);
@@ -800,12 +776,10 @@ static inline void simd_sum_minmax(const double *data, size_t start, size_t end,
 
         for (; i + 2 <= end; i += 2) {
             float64x2_t v = vld1q_f64(&data[i]);
-            uint64x2_t mask = vcltq_f64(v, vmiss);
+            uint64x2_t mask = ctools_valid_mask_neon(v, vmiss);
 
             /* Count non-missing */
-            uint64_t mask_bits[2];
-            vst1q_u64(mask_bits, mask);
-            n += (mask_bits[0] ? 1 : 0) + (mask_bits[1] ? 1 : 0);
+            n += ctools_count_valid_neon(mask);
 
             /* Masked operations using bit select */
             float64x2_t zero = vdupq_n_f64(0.0);
@@ -821,14 +795,10 @@ static inline void simd_sum_minmax(const double *data, size_t start, size_t end,
         }
 
         /* Horizontal reduction */
-        sum = vgetq_lane_f64(vsum, 0) + vgetq_lane_f64(vsum, 1);
-        sum2 = vgetq_lane_f64(vsum2, 0) + vgetq_lane_f64(vsum2, 1);
-        double m0 = vgetq_lane_f64(vmin, 0), m1 = vgetq_lane_f64(vmin, 1);
-        double x0 = vgetq_lane_f64(vmax, 0), x1 = vgetq_lane_f64(vmax, 1);
-        if (m0 < minval) minval = m0;
-        if (m1 < minval) minval = m1;
-        if (x0 > maxval) maxval = x0;
-        if (x1 > maxval) maxval = x1;
+        sum = ctools_hsum_neon(vsum);
+        sum2 = ctools_hsum_neon(vsum2);
+        minval = ctools_hmin_neon(vmin);
+        maxval = ctools_hmax_neon(vmax);
     }
     #endif
 
@@ -1549,12 +1519,26 @@ ST_retcode crangestat_main(const char *args)
         ngroups = 1;
     }
 
+    /* Shrink groups array from (nobs+1) to actual ngroups.
+     * For 10M rows with 1000 groups: 160MB -> 16KB. */
+    if (ngroups < nobs + 1) {
+        group_info *shrunk = (group_info *)realloc(groups, ngroups * sizeof(group_info));
+        if (shrunk) groups = shrunk;  /* realloc failure is non-fatal */
+    }
+
     t_groups = ctools_timer_seconds() - groups_start;
 
     /* === Computation Phase === */
     double compute_start = ctools_timer_seconds();
 
-    /* Allocate work arrays for each thread */
+    /* Compute max group size for work array allocation */
+    size_t max_group_size = 0;
+    for (size_t g = 0; g < ngroups; g++) {
+        if (groups[g].count > max_group_size)
+            max_group_size = groups[g].count;
+    }
+
+    /* Allocate work arrays for each thread (sized to max_group_size, not nobs) */
     work_arrays = (double **)malloc(num_threads * sizeof(double *));
     if (!work_arrays) {
         free(groups);
@@ -1574,7 +1558,7 @@ ST_retcode crangestat_main(const char *args)
     }
 
     for (int t = 0; t < num_threads; t++) {
-        work_arrays[t] = (double *)malloc(nobs * sizeof(double));
+        work_arrays[t] = (double *)malloc(max_group_size * sizeof(double));
         if (!work_arrays[t]) {
             for (int j = 0; j < t; j++) free(work_arrays[j]);
             free(work_arrays);
@@ -2033,18 +2017,9 @@ standard_obs_loop:;
     free(specs);
     if (by_indices) free(by_indices);
 
-    #ifdef _OPENMP
-    SF_scal_save("_crangestat_threads", (double)num_threads);
-    #else
-    SF_scal_save("_crangestat_threads", 1.0);
-    #endif
+    CTOOLS_SAVE_THREAD_INFO("_crangestat");
 
-    if (config.verbose) {
-        ctools_msg(CRANGESTAT_MODULE, "%zu stats, %zu obs, %zu groups, %d threads",
-                   nstats, nobs, ngroups, num_threads);
-        ctools_msg(CRANGESTAT_MODULE, "load=%.4f sort=%.4f groups=%.4f compute=%.4f store=%.4f total=%.4f",
-                   t_load, t_sort, t_groups, t_compute, t_store, total);
-    }
+    /* Verbose output handled by .ado file using stored scalars */
 
     return 0;
 }

@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "creghdfe##syntax"}{...}
 {viewerjumpto "Description" "creghdfe##description"}{...}
 {viewerjumpto "Options" "creghdfe##options"}{...}
@@ -62,8 +62,7 @@ Note: {opt pweight}s automatically imply {opt vce(robust)}.
 {title:Description}
 
 {pstd}
-{cmd:creghdfe} is a high-performance replacement for {help reghdfe:reghdfe}
-(if installed) that uses a C plugin with optimized fixed effects absorption.
+{cmd:creghdfe} is a high-performance replacement for {cmd:reghdfe} (v6.13.1) by Sergio Correia ({browse "https://github.com/sergiocorreia/reghdfe"}) that uses a C plugin with optimized fixed effects absorption.
 It estimates linear regression models with multiple high-dimensional fixed effects.
 
 {pstd}
@@ -118,9 +117,7 @@ demeaning algorithm. The default is {cmd:10000}.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations including fixed effects absorption and OLS computation. By default,
-{cmd:creghdfe} uses all available CPU cores as reported by OpenMP. Use this
-option to limit parallelism, for example when running multiple jobs simultaneously.
+operations. By default, {cmd:creghdfe} uses all available CPU cores.
 
 {phang}
 {opt nostandardize} specifies that variables should not be standardized
@@ -148,11 +145,7 @@ compatibility with {help reghdfe:reghdfe}.
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information during estimation,
-including timing for each stage of the computation.
-
-{phang}
-{opt timeit} displays timing breakdown for the estimation.
+{opt verbose} displays detailed progress information and timing breakdown.
 
 
 {marker examples}{...}

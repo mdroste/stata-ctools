@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.9.0 26Jan2026}{...}
+{* *! version 0.9.1 06Feb2026}{...}
 {viewerjumpto "Syntax" "cbinscatter##syntax"}{...}
 {viewerjumpto "Description" "cbinscatter##description"}{...}
 {viewerjumpto "Options" "cbinscatter##options"}{...}
@@ -53,8 +53,7 @@
 
 {syntab:Reporting}
 {synopt:{opt reportreg}}report underlying regression{p_end}
-{synopt:{opt v:erbose}}display progress information{p_end}
-{synopt:{opt timeit}}display timing breakdown{p_end}
+{synopt:{opt v:erbose}}display detailed progress information and timing breakdown{p_end}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
 {synoptline}
 {p2colreset}{...}
@@ -67,7 +66,7 @@ see {help weight}.
 {title:Description}
 
 {pstd}
-{cmd:cbinscatter} is a high-performance replacement for {cmd:binscatter} that uses
+{cmd:cbinscatter} is a high-performance replacement for {cmd:binscatter} (v7.02) by Michael Stepner that uses
 a C plugin for all data computations. It creates binned scatter plots by dividing
 the x variable into equal-sized quantile bins and plotting the mean of y within
 each bin.
@@ -191,18 +190,11 @@ Default is filled circles (O). (Not yet implemented.)
 {dlgtab:Reporting}
 
 {phang}
-{opt verbose} displays detailed progress information during computation,
-including observation counts and timing for each stage.
-
-{phang}
-{opt timeit} displays a timing breakdown showing time spent in each
-computational phase (load, residualize, bin computation, line fitting).
+{opt verbose} displays detailed progress information and timing breakdown.
 
 {phang}
 {opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cbinscatter} uses all available CPU cores as
-reported by OpenMP. Use this option to limit parallelism, for example when
-running multiple jobs simultaneously.
+operations. By default, {cmd:cbinscatter} uses all available CPU cores.
 
 
 {marker examples}{...}

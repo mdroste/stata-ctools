@@ -239,7 +239,6 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         ctx->columns[i].is_integer = true;
         ctx->columns[i].min_value = DBL_MAX;
         ctx->columns[i].max_value = -DBL_MAX;
-        ctx->columns[i].max_decimal_digits = 0;
         ctx->columns[i].num_subtype = CIMPORT_NUM_DOUBLE;
     }
 
@@ -417,11 +416,8 @@ static void cimport_free_context(CImportContext *ctx) {
         }
         free(ctx->col_cache);
     }
-    free(ctx->string_arena);
-
     free(ctx->columns);
     free(ctx->filename);
-    free(ctx->row_offsets);
     free(ctx->force_numeric_cols);
     free(ctx->force_string_cols);
     free(ctx->converted_data);  /* Free encoding-converted data if any */
@@ -564,7 +560,6 @@ static void *cimport_parse_chunk_parallel(void *arg) {
                     }
 
                     if (!stats->seen_string) {
-                        stats->seen_non_empty = true;
                         if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
                             stats->seen_string = true;
                         }
@@ -779,7 +774,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         ctx->num_columns = 0;
         ctx->columns = NULL;
         ctx->total_rows = 0;
-        ctx->row_offsets = NULL;
         ctx->num_chunks = 0;
         ctx->chunks = NULL;
         if (verbose) {
@@ -974,7 +968,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                         }
 
                         if (!stats->seen_string) {
-                            stats->seen_non_empty = true;
                             if (!cimport_field_looks_numeric_sep(src, field->length, ctx->decimal_separator, ctx->group_separator)) {
                                 stats->seen_string = true;
                             }
@@ -1135,7 +1128,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
                                     stats->has_quotes = true;
                             }
                             if (!stats->seen_string) {
-                                stats->seen_non_empty = true;
                                 if (!cimport_field_looks_numeric_sep(src, field->length,
                                         ctx->decimal_separator, ctx->group_separator)) {
                                     stats->seen_string = true;
