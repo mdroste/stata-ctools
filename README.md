@@ -78,7 +78,7 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-If you have a workstation/server CPU with lots of cache, you might want to try playing around with the settings in [src/ctools_config.h](src/ctools_config.h).
+Installations on server/workstation environments might benefit from tuning the cache configs in [src/ctools_config.h](src/ctools_config.h).
 
 See [DEVELOPERS.md](./DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
