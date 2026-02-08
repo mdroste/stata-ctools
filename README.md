@@ -56,7 +56,7 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 ### Manual Installation
 
 1. Download or clone this repository
-2. Copy the contents of this repository's `build/` folder somewhere  Stata's `adopath` (e.g., your personal ado directory)
+2. Copy the contents of this repository's `build/` folder somewhere  Stata's [adopath](https://www.stata.com/manuals/psysdir.pdf)
 
 These installations will download all of the Stata program and documentation files (.ado and .sthlp) and compiled plugins.
 
