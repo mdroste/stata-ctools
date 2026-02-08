@@ -36,7 +36,7 @@
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
 
-Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.MD](./FEATURES.MD) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
+Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.md](./FEATURES.md) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
 
 Most ctools commands (e.g. `creghdfe`, `cbinscatter`) will be much faster on most (or maybe all) datasets. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back), and themselves replace internal compiled Stata routines (`sort`, `merge`) that are only inefficient when datasets become fairly long (millions of obs). As a result, it is possible for `csort` or `cmerge` to be *slower* than  `sort`/`merge` if your dataset is sufficiently wide (many variables) or not very long. If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably be significantly faster.
 
