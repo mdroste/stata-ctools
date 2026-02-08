@@ -15,9 +15,9 @@
 
 ## Overview
 
-**ctools** programs inherit the syntax and functionality of the programs they replace, but are usually much faster for large datasets.
+**ctools** programs inherit the syntax and functionality of the programs they replace. They are usually much faster for large datasets.
 
-| Stata command | Replaced with | Description | Typical speedup |
+| Stata program | ctools program | Description | Typical speedup |
 | --- | --- | --- | ---: |
 | `import` | `cimport` | Import text-delimited and Excel data | **10-30x** |
 | `export` | `cexport` | Export text-delimited and Excel data | **10-30x** |
@@ -36,18 +36,14 @@
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
 
-Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.md](./FEATURES.md) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
+Each command has complete internal documentation (for instance, `help creghdfe`).
 
-Most ctools commands (e.g. `creghdfe`, `cbinscatter`) will be much faster on most (or maybe all) datasets. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back), and themselves replace internal compiled Stata routines (`sort`, `merge`) that are only inefficient when datasets become fairly long (millions of obs). As a result, it is possible for `csort` or `cmerge` to be *slower* than  `sort`/`merge` if your dataset is sufficiently wide (many variables) or not very long. If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably be significantly faster.
+Some ctools programs provide extended functionality. See [FEATURES.md](./FEATURES.md) for a brief description of new features for each command.
 
 
 ## Compatibility and Requirements
 
 ctools is compatible with Stata 14.1+ (plugin interface version 3.0). It does not require any dependencies.
-
-**Note:** ctools does not support datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin interface for C, and can only be addressed if this interface is updated. Most commands also do not support operating on `strL` variable types. 
-
-
 
 ## Installation
 
@@ -62,14 +58,14 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 1. Download or clone this repository
 2. Copy the contents of this repository's `build/` folder somewhere  Stata's `adopath` (e.g., your personal ado directory)
 
-These installations will download all of the Stata program and documentation files (.ado and .sthlp) and compiled plugins for Linux, Windows, and Mac. The appropriate (operating system and architecture-dependent) compiled plugin is automatically invoked by ctools.
+These installations will download all of the Stata program and documentation files (.ado and .sthlp) and compiled plugins.
 
 An installation path via `ssc install` will be provided soon.
 
 
 ## Building from Source
 
-You probably do not need to compile the ctools plugin yourself. GitHub automatically builds plugins for Windows, Mac, and Linux when this repository is updated, and these pre-built plugins are included with standard installation. If you want to build these plugins yourself, make sure OpenMP is available on your system. 
+You probably do not need to compile the ctools plugin yourself. GitHub automatically builds plugins for Windows, Mac, and Linux when this repository is updated, and these pre-built plugins are included with standard installation.
 
 ```bash
 make              # Build for current platform
@@ -78,20 +74,23 @@ make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
 
-Installations on server/workstation environments might benefit from tuning the cache configs in [src/ctools_config.h](src/ctools_config.h).
+Server/workstation environments might benefit from tuning the cache configs in [src/ctools_config.h](src/ctools_config.h).
 
 See [DEVELOPERS.md](./DEVELOPERS.md) for additional information on ctools' architecture and core logic.
 
 
 ## Usage Notes
 
-- ctools programs follow a simple structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. Because ctools copies data, it generally requires more memory to run ctools programs than the programs they replace.
-- The commands `csort` and `cmerge` involve a lot of overhead when the number of variables is large relative to the number of observations because data transfer overhead is very significant for these two programs. They can be slower Stata's built-in `sort`/`merge` if datasets are very wide (e.g. 100+ variables) and/or not very long (e.g. <1M obs). They're probably faster if your dataset has many millions of observations and fewer 2-3 dozen variables. Your mileage may vary. 
+- All ctools programs: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. Because ctools copies data, ctools programs generally require more memory (RAM) than the programs they replace.
+- The commands `csort` and `cmerge` involve a lot of overhead when the number of variables is large relative to the number of observations because data transfer overhead is very significant for these two programs. They can be slower Stata's built-in `sort`/`merge` if datasets are very wide (e.g. 100+ variables) and/or not very long (e.g. <1M obs).
+- ctools does not support datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin interface for C, and can only be addressed if this interface is updated.
+- Most commands also do not support operating on `strL` variable types. 
+
 
 
 ## Authorship and Development
 
-99.9% of the code in this repository was written by Claude Opus 4.5 (through Claude Code), with some debugging and refactoring assistance from OpenAI GPT 5.2 (through Codex).
+99.9% of the code in this repository was written by Claude Opus 4.5/4.6 (Claude Code), with some debugging and refactoring assistance from OpenAI GPT 5.2/5.3 (Codex).
 
 
 ## Thanks
