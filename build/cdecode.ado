@@ -1,19 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cdecode: C-accelerated numeric to string decoding for Stata
-*! Part of the ctools suite
-*!
-*! Replaces Stata's built-in decode command with a high-performance
-*! C implementation.
-*!
-*! Syntax: cdecode varlist [if] [in], generate(newvarlist) | replace [maxlength(#) Verbose THReads(integer)]
-*!
-*! The cdecode command inherits the same syntax and functionality as Stata's
-*! built-in decode command, producing identical results but with better
-*! performance on large datasets.
-*!
-*! ctools extensions (not in Stata's decode):
-*!   - varlist support: decode multiple numeric variables at once
-*!   - replace option: replace original variables with decoded versions
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cdecode, rclass
     version 14.1

@@ -1,18 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! creghdfe: C-accelerated high-dimensional fixed effects regression
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance replacement for reghdfe using a C plugin
-*!   with optimized fixed effects absorption.
-*!
-*! Syntax:
-*!   creghdfe depvar indepvars [if] [in] [, Absorb(varlist) options]
-*!
-*! Options:
-*!   absorb(varlist)     - Fixed effects to absorb (optional; constant absorbed if omitted)
-*!   vce(cluster varlist) - Clustered standard errors
-*!   verbose             - Display progress information
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define creghdfe, eclass
     version 14.1
@@ -143,8 +129,11 @@ program define creghdfe, eclass
         fvexpand `indepvars' if `touse'
         local coef_names_all "`r(varlist)'"
 
-        * Pre-filter base/omitted levels in sync before _rmcoll
-        * (reduces _rmcoll input size; keep if ANY #-component is non-base)
+        * Pre-filter base/omitted levels in sync
+        * Drop only if ALL #-components are base/omitted (keep if ANY is non-base)
+        * This matches Stata convention: for i.var1#i.var2, only the fully-base
+        * term (e.g., 1b.race#0b.married) is dropped; mixed terms are estimable.
+        * For c.var#i.var, all terms are kept since continuous parts are non-base.
         local __vars_nobase ""
         local __names_nobase ""
         local __n_all : word count `coef_names_all'
@@ -633,6 +622,87 @@ program define creghdfe, eclass
         tempname Wald
         matrix `Wald' = `b_noconstant' * `Vinv' * `b_noconstant''
         local F = `Wald'[1,1] / `df_m'
+    }
+
+    * Expand b and V to include base levels for factor variables
+    * This matches reghdfe behavior: base levels appear in e(b) with coefficient=0
+    if "`coef_names_all'" != "" {
+        local K_all : word count `coef_names_all'
+        if `K_all' > `K_x' {
+            local K_full_new = `K_all' + 1
+            tempname b_exp V_exp
+            matrix `b_exp' = J(1, `K_full_new', 0)
+            matrix `V_exp' = J(`K_full_new', `K_full_new', 0)
+
+            * Copy constant (last element)
+            matrix `b_exp'[1, `K_full_new'] = `b'[1, `K_full']
+            matrix `V_exp'[`K_full_new', `K_full_new'] = `V'[`K_full', `K_full']
+
+            * Build position mapping: for each entry in coef_names_all,
+            * find its position in coef_names (0 if base level)
+            local __aidx = 1
+            forvalues __j = 1/`K_all' {
+                local __vn_all : word `__j' of `coef_names_all'
+                local __vn_act : word `__aidx' of `coef_names'
+                if "`__vn_all'" == "`__vn_act'" {
+                    local __bmap_`__j' = `__aidx'
+                    local __aidx = `__aidx' + 1
+                }
+                else {
+                    local __bmap_`__j' = 0
+                }
+            }
+
+            * Fill expanded matrices from active positions
+            forvalues __j = 1/`K_all' {
+                if `__bmap_`__j'' > 0 {
+                    local __aj = `__bmap_`__j''
+                    matrix `b_exp'[1, `__j'] = `b'[1, `__aj']
+                    forvalues __jj = 1/`K_all' {
+                        if `__bmap_`__jj'' > 0 {
+                            local __ajj = `__bmap_`__jj''
+                            matrix `V_exp'[`__j', `__jj'] = `V'[`__aj', `__ajj']
+                        }
+                    }
+                    matrix `V_exp'[`__j', `K_full_new'] = `V'[`__aj', `K_full']
+                    matrix `V_exp'[`K_full_new', `__j'] = `V'[`K_full', `__aj']
+                }
+            }
+
+            matrix `b' = `b_exp'
+            matrix `V' = `V_exp'
+            local K_full = `K_full_new'
+
+            * Rebuild column names with base levels
+            local colnames ""
+            forvalues __j = 1/`K_all' {
+                local __vn : word `__j' of `coef_names_all'
+                if `__bmap_`__j'' == 0 {
+                    * Base level - keep original name (e.g., 1b.rep78)
+                    local colnames `colnames' `__vn'
+                }
+                else {
+                    local __aj = `__bmap_`__j''
+                    if `K_keep' == 0 {
+                        local colnames `colnames' o.`__vn'
+                    }
+                    else {
+                        local is_collin = __creghdfe_collinear_`__aj'
+                        if `is_collin' == 1 {
+                            local colnames `colnames' o.`__vn'
+                        }
+                        else {
+                            local colnames `colnames' `__vn'
+                        }
+                    }
+                }
+            }
+            local colnames `colnames' _cons
+
+            matrix colnames `b' = `colnames'
+            matrix rownames `V' = `colnames'
+            matrix colnames `V' = `colnames'
+        }
     }
 
     * Record results building time

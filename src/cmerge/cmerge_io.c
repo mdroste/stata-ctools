@@ -40,8 +40,15 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                     should_write = 1;
                 }
                 else if (replace_mode) {
-                    /* Shared var with replace: always overwrite */
-                    should_write = 1;
+                    /* Shared var with replace: overwrite only if using value is non-missing */
+                    should_write = (using_row >= 0 && using_row < (int32_t)src->nobs &&
+                                    !SF_is_missing(src->data.dbl[using_row]));
+                    /* If using is missing, still fill missing master values */
+                    if (!should_write) {
+                        double current_val;
+                        SF_vdata(dest_idx, (ST_int)(i + 1), &current_val);
+                        should_write = SF_is_missing(current_val);
+                    }
                 }
                 else if (update_mode) {
                     /* Shared var with update: only if master value is missing */
@@ -77,8 +84,18 @@ void *cmerge_write_keepusing_var_thread(void *arg)
                     should_write = 1;
                 }
                 else if (replace_mode) {
-                    /* Shared var with replace: always overwrite */
-                    should_write = 1;
+                    /* Shared var with replace: overwrite only if using value is non-empty */
+                    int using_nonempty = (using_row >= 0 && using_row < (int32_t)src->nobs &&
+                                          src->data.str[using_row] != NULL &&
+                                          src->data.str[using_row][0] != '\0');
+                    if (using_nonempty) {
+                        should_write = 1;
+                    }
+                    else {
+                        /* If using is empty, still fill empty master values */
+                        SF_sdata(dest_idx, (ST_int)(i + 1), str_buf);
+                        should_write = (str_buf[0] == '\0');
+                    }
                 }
                 else if (update_mode) {
                     /* Shared var with update: only if master value is missing (empty string) */

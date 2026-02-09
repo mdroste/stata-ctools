@@ -55,6 +55,16 @@ void ctools_str_hash_free(ctools_str_hash_table *ht)
 {
     if (!ht) return;
 
+    /* Free strdup'd fallback keys that aren't owned by the arena */
+    if (ht->arena && ht->arena->has_fallback && ht->entries) {
+        for (size_t i = 0; i < ht->capacity; i++) {
+            if (ht->entries[i].key &&
+                !ctools_string_arena_owns(ht->arena, ht->entries[i].key)) {
+                free(ht->entries[i].key);
+            }
+        }
+    }
+
     if (ht->arena) {
         ctools_string_arena_free(ht->arena);
         ht->arena = NULL;
@@ -252,6 +262,16 @@ int ctools_int_hash_init(ctools_int_hash_table *ht, size_t initial_capacity)
 void ctools_int_hash_free(ctools_int_hash_table *ht)
 {
     if (!ht) return;
+
+    /* Free strdup'd fallback values that aren't owned by the arena */
+    if (ht->arena && ht->arena->has_fallback && ht->entries) {
+        for (size_t i = 0; i < ht->capacity; i++) {
+            if (ht->entries[i].occupied && ht->entries[i].value &&
+                !ctools_string_arena_owns(ht->arena, ht->entries[i].value)) {
+                free(ht->entries[i].value);
+            }
+        }
+    }
 
     if (ht->arena) {
         ctools_string_arena_free(ht->arena);

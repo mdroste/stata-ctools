@@ -81,6 +81,7 @@ void ivvce_compute_twoway(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     const ST_int *cluster1_ids,
@@ -191,6 +192,7 @@ void ivvce_compute_kiefer(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     const ST_int *cluster_ids,
@@ -227,6 +229,7 @@ void ivvce_compute_full(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     ST_int vce_type,

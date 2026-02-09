@@ -479,9 +479,7 @@ static ST_retcode store_results(
             SF_mat_store("__cbinscatter_bins", row, 2, (ST_double)bin->bin_id);
             SF_mat_store("__cbinscatter_bins", row, 3, bin->x_mean);
             SF_mat_store("__cbinscatter_bins", row, 4, bin->y_mean);
-            SF_mat_store("__cbinscatter_bins", row, 5, bin->x_se);
-            SF_mat_store("__cbinscatter_bins", row, 6, bin->y_se);
-            SF_mat_store("__cbinscatter_bins", row, 7, (ST_double)bin->n_obs);
+            SF_mat_store("__cbinscatter_bins", row, 5, (ST_double)bin->n_obs);
             row++;
         }
     }
@@ -549,10 +547,40 @@ static ST_retcode do_compute_bins(void) {
 
     /* Verbose output handled by .ado file using stored scalars */
 
+    /* Save raw means for addback after residualization (classic method) */
+    ST_double y_raw_mean = 0.0, x_raw_mean = 0.0;
+    int needs_mean_addback = 0;
+
     /* Residualize if needed */
     t_resid = t_load;
     if (config.has_controls || config.has_absorb) {
         ST_int dropped = 0;
+
+        /* Classic method: save raw means before in-place residualization.
+         * binscatter adds sample means back to residuals so plot axes show
+         * values in the original scale; we do the same for compatibility. */
+        if (config.method == 0) {
+            needs_mean_addback = 1;
+            if (weights != NULL) {
+                ST_double total_w = 0.0;
+                for (ST_int i = 0; i < N_valid; i++) {
+                    y_raw_mean += weights[i] * y[i];
+                    x_raw_mean += weights[i] * x[i];
+                    total_w += weights[i];
+                }
+                if (total_w > 0) {
+                    y_raw_mean /= total_w;
+                    x_raw_mean /= total_w;
+                }
+            } else {
+                for (ST_int i = 0; i < N_valid; i++) {
+                    y_raw_mean += y[i];
+                    x_raw_mean += x[i];
+                }
+                y_raw_mean /= N_valid;
+                x_raw_mean /= N_valid;
+            }
+        }
 
         if (config.verbose) {
             if (config.method == 1) {
@@ -744,6 +772,15 @@ static ST_retcode do_compute_bins(void) {
             goto cleanup;
         }
 
+        /* Add raw means back to bin means (classic method with controls/absorb,
+         * matching binscatter's behavior of showing original-scale axes) */
+        if (needs_mean_addback && group->bins != NULL) {
+            for (ST_int b = 0; b < group->num_bins; b++) {
+                group->bins[b].x_mean += x_raw_mean;
+                group->bins[b].y_mean += y_raw_mean;
+            }
+        }
+
         /* For binsreg method with absorb: apply FWL-based HDFE adjustment */
         if (use_binsreg_hdfe && group->bins != NULL && group->num_bins > 0) {
             /* Extract bin assignments */
@@ -754,25 +791,46 @@ static ST_retcode do_compute_bins(void) {
                 goto cleanup;
             }
 
-            /* Assign observations to bins using O(n log n) argsort */
-            ST_int *rank_idx = (ST_int *)malloc(n_group * sizeof(ST_int));
-            if (!rank_idx) {
-                free(bin_ids);
-                free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
-                rc = CBINSCATTER_ERR_MEMORY;
-                goto cleanup;
-            }
-            for (ST_int i = 0; i < n_group; i++) rank_idx[i] = i;
-            impl_sort_values = x_group;
-            qsort(rank_idx, n_group, sizeof(ST_int), impl_compare_indices);
+            /* Assign bins using cutpoint algorithm (matches compute_bins_single_group) */
+            {
+                ST_int nq = group->num_bins;
+                ST_int *sort_idx = (ST_int *)malloc(n_group * sizeof(ST_int));
+                ST_double *x_sorted = (ST_double *)malloc(n_group * sizeof(ST_double));
+                ST_double *cutpoints = (ST_double *)malloc((nq + 1) * sizeof(ST_double));
+                if (!sort_idx || !x_sorted || !cutpoints) {
+                    free(sort_idx); free(x_sorted); free(cutpoints);
+                    free(bin_ids);
+                    free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                    rc = CBINSCATTER_ERR_MEMORY;
+                    goto cleanup;
+                }
+                for (ST_int i = 0; i < n_group; i++) sort_idx[i] = i;
+                impl_sort_values = x_group;
+                qsort(sort_idx, n_group, sizeof(ST_int), impl_compare_indices);
+                for (ST_int i = 0; i < n_group; i++) {
+                    x_sorted[i] = x_group[sort_idx[i]];
+                }
 
-            /* Assign bins based on rank in sorted order */
-            for (ST_int r = 0; r < n_group; r++) {
-                ST_int bin_num = (r * group->num_bins) / n_group;
-                if (bin_num >= group->num_bins) bin_num = group->num_bins - 1;
-                bin_ids[rank_idx[r]] = bin_num + 1;  /* 1-based */
+                ST_double *w_sorted = NULL;
+                if (w_group != NULL) {
+                    w_sorted = (ST_double *)malloc(n_group * sizeof(ST_double));
+                    if (!w_sorted) {
+                        free(sort_idx); free(x_sorted); free(cutpoints);
+                        free(bin_ids);
+                        free(y_group); free(x_group); free(w_group); free(c_group); free(fe_group);
+                        rc = CBINSCATTER_ERR_MEMORY;
+                        goto cleanup;
+                    }
+                    for (ST_int i = 0; i < n_group; i++) {
+                        w_sorted[i] = w_group[sort_idx[i]];
+                    }
+                }
+
+                compute_quantile_cutpoints(x_sorted, n_group, nq, w_sorted, cutpoints);
+                assign_bins(x_group, n_group, cutpoints, nq, bin_ids);
+
+                free(sort_idx); free(x_sorted); free(cutpoints); free(w_sorted);
             }
-            free(rank_idx);
 
             /* Apply FWL-based HDFE adjustment */
             rc = adjust_bins_binsreg_hdfe(y_group, c_group, fe_group, bin_ids, w_group,

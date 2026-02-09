@@ -1,26 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cqreg: C-accelerated quantile regression
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance replacement for qreg using a C plugin
-*!   with Frisch-Newton solver and optional HDFE support.
-*!
-*! Syntax:
-*!   cqreg depvar indepvars [if] [in], [options]
-*!
-*! Options:
-*!   quantile(#)        - Quantile to estimate (default: 0.5)
-*!   absorb(varlist)    - Fixed effects to absorb (optional)
-*!   vce(vcetype)       - Variance estimation: iid (default), robust, cluster
-*!   denmethod(method)  - Density estimation: fitted (default), residual
-*!   bwmethod(method)   - Bandwidth method: hsheather (default), bofinger, chamberlain
-*!   verbose            - Display progress information
-*!   tolerance(#)       - Convergence tolerance (default: 1e-12)
-*!   maxiter(#)         - Maximum iterations (default: 200)
-*!   nopreprocess(#)    - Controls preprocessing algorithm (experimental)
-*!                        Default: 0 (preprocessing disabled)
-*!                        Set to -1 to enable preprocessing (experimental, may be slow)
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cqreg, eclass
     version 14.1

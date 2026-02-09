@@ -1,32 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cexport: C-accelerated delimited text export for Stata
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance replacement for export delimited using a C plugin
-*!   with parallel data loading and chunked formatting.
-*!
-*! Syntax:
-*!   cexport delimited [varlist] [using] filename [if] [in], [options]
-*!
-*! Options:
-*!   delimiter(string)   - Field delimiter (default: ",")
-*!   novarnames          - Don't write variable names as header row
-*!   quote               - Quote all string fields
-*!   noquoteif           - Don't automatically quote strings containing delimiters
-*!   replace             - Overwrite existing file
-*!   nolabel             - Export numeric values instead of value labels
-*!   datafmt             - Use display formats for date/time variables
-*!   datestring(string)  - Custom date format for date/time variables (e.g., "%tdCCYY-NN-DD")
-*!   verbose             - Display progress information
-*!
-*! Performance options:
-*!   mmap                - Use memory-mapped I/O (zero-copy formatting)
-*!   nofsync             - Skip final fsync for faster writes (less durable)
-*!   direct              - Use direct I/O bypassing OS cache (for very large files)
-*!   prefault            - Pre-fault mmap pages to avoid stalls
-*!   crlf                - Use Windows-style CRLF line endings
-*!   noparallel          - Disable parallel I/O (for debugging)
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cexport, rclass
     version 14.1
@@ -94,9 +66,15 @@ program define cexport, rclass
         di as error "Syntax: cexport delimited [varlist] [using] filename [, options]"
         exit 198
     }
-    * Resolve varlist from anything
+    * Resolve varlist from anything.
+    * Must happen BEFORE marksample, which creates a touse tempvar
+    * that ds would include in the variable list.
     if strtrim(`"`anything'"') != "" {
         unab varlist : `anything'
+    }
+    else {
+        qui ds
+        local varlist `r(varlist)'
     }
 
     * Mark sample
@@ -130,12 +108,6 @@ program define cexport, rclass
             di as error "cexport: delimiter must be a single character"
             exit 198
         }
-    }
-
-    * If no varlist specified, use all variables
-    if "`varlist'" == "" {
-        qui ds
-        local varlist `r(varlist)'
     }
 
     * Handle value labels: decode labeled variables unless nolabel specified
@@ -471,9 +443,15 @@ program define cexport_excel, rclass
         di as error "Syntax: cexport excel [varlist] [using] filename [, options]"
         exit 198
     }
-    * Resolve varlist from anything
+    * Resolve varlist from anything.
+    * Must happen BEFORE marksample, which creates a touse tempvar
+    * that ds would include in the variable list.
     if strtrim(`"`anything'"') != "" {
         unab varlist : `anything'
+    }
+    else {
+        qui ds
+        local varlist `r(varlist)'
     }
 
     * Mark sample
@@ -517,12 +495,6 @@ program define cexport_excel, rclass
             di as error "cexport excel: firstrow() must be 'variables' or 'nonames'"
             exit 198
         }
-    }
-
-    * If no varlist specified, use all variables
-    if "`varlist'" == "" {
-        qui ds
-        local varlist `r(varlist)'
     }
 
     * Handle value labels
@@ -585,6 +557,71 @@ program define cexport_excel, rclass
             }
         }
         local export_varlist `new_export_varlist'
+    }
+    else {
+        * No datafmt/datestring: convert date values to Excel serial numbers
+        * so they are stored as native Excel dates (not strings)
+        local new_export_varlist ""
+        local date_converted_vars ""
+        local export_idx = 0
+        local has_date_cols = 0
+        foreach var of local export_varlist {
+            local export_idx = `export_idx' + 1
+            local origvar : word `export_idx' of `varlist'
+            local fmt : format `origvar'
+            local is_date_fmt = 0
+            if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
+                local is_date_fmt = 1
+            }
+
+            if `is_date_fmt' {
+                local has_date_cols = 1
+                * Determine date type: strip % and optional -
+                local fmtsub = substr("`fmt'", 2, .)
+                if substr("`fmtsub'", 1, 1) == "-" local fmtsub = substr("`fmtsub'", 2, .)
+                local datetype = substr("`fmtsub'", 2, 1)
+
+                tempvar xldate_`export_idx'
+                if "`datetype'" == "d" {
+                    qui gen double `xldate_`export_idx'' = `origvar' + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "m" {
+                    qui gen double `xldate_`export_idx'' = dofm(`origvar') + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "q" {
+                    qui gen double `xldate_`export_idx'' = dofq(`origvar') + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "w" {
+                    qui gen double `xldate_`export_idx'' = dofw(`origvar') + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "h" {
+                    qui gen double `xldate_`export_idx'' = dofh(`origvar') + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "y" {
+                    qui gen double `xldate_`export_idx'' = dofy(`origvar') + 21916 if !missing(`origvar')
+                }
+                else if "`datetype'" == "c" | "`datetype'" == "C" {
+                    if "`datetype'" == "C" {
+                        qui gen double `xldate_`export_idx'' = dofC(`origvar') + 21916 if !missing(`origvar')
+                    }
+                    else {
+                        qui gen double `xldate_`export_idx'' = dofc(`origvar') + 21916 if !missing(`origvar')
+                    }
+                }
+                else {
+                    qui gen double `xldate_`export_idx'' = `origvar' + 21916 if !missing(`origvar')
+                }
+
+                local new_export_varlist `new_export_varlist' `xldate_`export_idx''
+                local date_converted_vars `date_converted_vars' `xldate_`export_idx''
+            }
+            else {
+                local new_export_varlist `new_export_varlist' `var'
+            }
+        }
+        if `has_date_cols' {
+            local export_varlist `new_export_varlist'
+        }
     }
 
     * Count variables and observations
@@ -691,6 +728,21 @@ program define cexport_excel, rclass
     }
     global CEXPORT_VARTYPES `vartypes'
 
+    * Build date column flags for plugin
+    local date_cols ""
+    local export_idx = 0
+    foreach var of local export_varlist {
+        local export_idx = `export_idx' + 1
+        local origvar : word `export_idx' of `varlist'
+        local fmt : format `origvar'
+        local is_date = 0
+        if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
+            local is_date = 1
+        }
+        local date_cols `date_cols' `is_date'
+    }
+    global CEXPORT_DATE_COLS `date_cols'
+
     * Record start time
     timer clear 99
     timer on 99
@@ -704,6 +756,7 @@ program define cexport_excel, rclass
     * Clean up
     macro drop CEXPORT_VARNAMES
     macro drop CEXPORT_VARTYPES
+    macro drop CEXPORT_DATE_COLS
 
     if `export_rc' {
         di as error "Error exporting XLSX data (rc=`export_rc')"

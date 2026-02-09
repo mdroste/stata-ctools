@@ -1,29 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! csort: C-accelerated sorting for Stata datasets
-*! Part of the ctools suite
-*!
-*! By default, csort auto-selects the optimal algorithm based on data type:
-*!   - String variables: MSD radix sort
-*!   - Numeric variables: Counting sort (falls back to LSD radix for large ranges)
-*!
-*! Explicit algorithm options:
-*!   algorithm(auto)     - Auto-select (default)
-*!   algorithm(counting) - Counting sort - optimal for small-range integers
-*!   algorithm(lsd)      - LSD radix sort - for fixed-width numeric keys
-*!   algorithm(msd)      - MSD radix sort - for string variables
-*!   algorithm(ips4o)    - IPS4o - parallel samplesort
-*!   algorithm(timsort)  - Timsort - for partially sorted data
-*!   algorithm(sample)   - Sample sort - for very large datasets
-*!   algorithm(merge)    - Parallel merge sort - stable O(n log n)
-*!
-*! Streaming mode (stream option):
-*!   Only loads sort key variables into C memory, then streams the permutation
-*!   to non-key variables. Reduces memory usage for wide datasets.
-*!   Best when: many non-key columns, limited memory, or dataset too large for RAM.
-*!
-*! nosortedby option:
-*!   Skips setting Stata's internal sort order metadata after sorting.
-*!   Use when you don't need Stata to recognize the data as sorted (faster).
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define csort, rclass
     version 14.1

@@ -1,6 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! civreghdfe: C-accelerated instrumental variables regression with HDFE
-*! Implements 2SLS/IV/LIML/GMM2S with high-dimensional fixed effects absorption
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define civreghdfe, eclass
     version 14.1
@@ -483,6 +481,11 @@ program define civreghdfe, eclass
     if `N' == 0 {
         di as error "no observations"
         exit 2001
+    }
+
+    * pweight implies robust VCE (standard Stata behavior)
+    if "`weight'" == "pweight" & `vce_type' == 0 {
+        local vce_type = 1
     }
 
     * Early check: HAC kernel options imply robust VCE (except dkraay/kiefer)

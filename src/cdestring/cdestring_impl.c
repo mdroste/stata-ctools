@@ -274,7 +274,7 @@ ST_retcode cdestring_main(const char *args)
      * ==================================================================== */
 
     /* Allocate result arrays: single contiguous block for all variables */
-    double *results_block = malloc((size_t)nvars * nobs * sizeof(double));
+    double *results_block = ctools_safe_malloc3((size_t)nvars, nobs, sizeof(double));
     double *results_ptrs[CDESTRING_MAX_VARS];
     double **results = results_ptrs;
     if (!results_block) {

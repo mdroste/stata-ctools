@@ -4,3 +4,7 @@
 .claude/
 CLAUDE.md
 *.plugin
+*.plugin
+*.plugin
+*.o
+/build/obj

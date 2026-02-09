@@ -1,6 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! ctools: C-accelerated tools for Stata
-*! Main info program for the ctools suite
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define ctools
     version 14.1

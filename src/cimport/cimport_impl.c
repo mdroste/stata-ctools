@@ -746,6 +746,11 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->verbose = verbose;
     atomic_init(&ctx->error_code, 0);
 
+    /* Initialize warning tracking early - must happen before any path that
+     * calls cimport_free_context(), which always destroys warning_mutex. */
+    ctx->num_unmatched_quote_warnings = 0;
+    pthread_mutex_init(&ctx->warning_mutex, NULL);
+
     /* Take ownership of force lists immediately so cimport_free_context always
      * handles them, preventing double-free if we fail and the caller also frees. */
     ctx->force_numeric_cols = force_numeric_cols;
@@ -772,10 +777,6 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     ctx->converted_data = NULL;
     ctx->converted_size = 0;
     ctx->time_encoding = 0;
-
-    /* Initialize warning tracking */
-    ctx->num_unmatched_quote_warnings = 0;
-    pthread_mutex_init(&ctx->warning_mutex, NULL);
 
     t_start = ctools_timer_ms();
     if (cimport_mmap_file(ctx, filename) != 0) {
@@ -1074,18 +1075,27 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
         }
 
         ctools_persistent_pool *pool = ctools_get_global_pool();
+        int pool_ok = 0;
         if (pool != NULL) {
-            ctools_persistent_pool_submit_batch(pool, cimport_parse_chunk_parallel,
-                                                 tasks, num_chunks,
-                                                 sizeof(CImportChunkParseTask));
-            ctools_persistent_pool_wait(pool);
-        } else {
+            if (ctools_persistent_pool_submit_batch(pool, cimport_parse_chunk_parallel,
+                                                     tasks, num_chunks,
+                                                     sizeof(CImportChunkParseTask)) == 0) {
+                ctools_persistent_pool_wait(pool);
+                pool_ok = 1;
+            }
+        }
+        if (!pool_ok) {
             /* Fallback: raw pthreads */
             pthread_t threads[CIMPORT_MAX_THREADS];
+            int threads_created = 0;
             for (int i = 0; i < num_chunks; i++) {
-                pthread_create(&threads[i], NULL, cimport_parse_chunk_parallel, &tasks[i]);
+                if (pthread_create(&threads[threads_created], NULL, cimport_parse_chunk_parallel, &tasks[i]) == 0) {
+                    threads_created++;
+                } else {
+                    cimport_parse_chunk_parallel(&tasks[i]);
+                }
             }
-            for (int i = 0; i < num_chunks; i++) {
+            for (int i = 0; i < threads_created; i++) {
                 pthread_join(threads[i], NULL);
             }
         }
@@ -1375,17 +1385,21 @@ static void cimport_build_column_cache(CImportContext *ctx) {
         }
 
         ctools_persistent_pool *pool = ctools_get_global_pool();
+        int pool_ok = 0;
         if (pool != NULL) {
-            ctools_persistent_pool_submit_batch(pool, cimport_build_cache_worker,
-                                                 tasks, num_threads,
-                                                 sizeof(CImportCacheBuildTask));
-            ctools_persistent_pool_wait(pool);
-        } else {
+            if (ctools_persistent_pool_submit_batch(pool, cimport_build_cache_worker,
+                                                     tasks, num_threads,
+                                                     sizeof(CImportCacheBuildTask)) == 0) {
+                ctools_persistent_pool_wait(pool);
+                pool_ok = 1;
+            }
+        }
+        if (!pool_ok) {
             /* Fallback: raw pthreads */
             pthread_t threads[CIMPORT_MAX_THREADS];
             int threads_created = 0;
             for (int t = 0; t < num_threads; t++) {
-                if (pthread_create(&threads[t], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
+                if (pthread_create(&threads[threads_created], NULL, cimport_build_cache_worker, &tasks[t]) == 0) {
                     threads_created++;
                 } else {
                     cimport_build_cache_worker(&tasks[t]);

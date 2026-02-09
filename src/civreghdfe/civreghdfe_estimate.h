@@ -250,6 +250,7 @@ ST_retcode ivest_compute_2sls(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,

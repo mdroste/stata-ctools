@@ -434,7 +434,8 @@ static stata_retcode init_data_structure(stata_data *data, size_t nvars, size_t 
         return STATA_ERR_MEMORY;
     }
 
-    /* Initialize sort order to identity permutation */
+    /* Initialize sort order to identity permutation (parallel for large datasets) */
+    #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
     for (size_t i = 0; i < nobs; i++) {
         data->sort_order[i] = (perm_idx_t)i;
     }

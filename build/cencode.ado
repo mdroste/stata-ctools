@@ -1,22 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cencode: C-accelerated string encoding for Stata
-*! Part of the ctools suite
-*!
-*! Replaces Stata's built-in encode command with a high-performance
-*! C implementation featuring:
-*!   - Parallel unique string collection
-*!   - Lock-free parallel encoding
-*!   - Efficient string interning with arena allocator
-*!
-*! Syntax: cencode varlist [if] [in], generate(newvarlist) | replace [label(name) noextend Verbose THReads(integer)]
-*!
-*! The cencode command inherits the same syntax and functionality as Stata's
-*! built-in encode command, producing identical results but with better
-*! performance on large datasets.
-*!
-*! ctools extensions (not in Stata's encode):
-*!   - varlist support: encode multiple string variables at once
-*!   - replace option: replace original variables with encoded versions
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cencode, rclass
     version 14.1

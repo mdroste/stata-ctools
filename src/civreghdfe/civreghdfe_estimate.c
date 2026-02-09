@@ -1061,6 +1061,7 @@ ST_retcode ivest_compute_2sls(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_exog,
     ST_int K_endog,
     ST_int K_iv,
@@ -1613,18 +1614,18 @@ ST_retcode ivest_compute_2sls(
            - For cluster: V = (X'ZWZ'X)^-1 * (N/df_r) * (G/(G-1))
            where df_r = N - K_total - df_a
         */
-        ST_int df_r_gmm = N - K_total - df_a;
+        ST_int df_r_gmm = N_eff - K_total - df_a;
         if (df_r_gmm <= 0) df_r_gmm = 1;
         ST_double dof_adj_gmm;
         if (vce_type == CIVREGHDFE_VCE_CLUSTER && num_clusters > 0) {
-            /* Cluster DOF adjustment: N/df_r * G/(G-1) * (1 + K/N²)
-               The small K/N² factor matches ivreghdfe's GMM2S cluster VCE */
+            /* Cluster DOF adjustment: N_eff/df_r * G/(G-1) * (1 + K/N_eff²)
+               The small K/N_eff² factor matches ivreghdfe's GMM2S cluster VCE */
             ST_double G = (ST_double)num_clusters;
-            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N * (ST_double)N);
-            dof_adj_gmm = ((ST_double)N / (ST_double)df_r_gmm) * (G / (G - 1.0)) * small_sample_corr;
+            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N_eff * (ST_double)N_eff);
+            dof_adj_gmm = ((ST_double)N_eff / (ST_double)df_r_gmm) * (G / (G - 1.0)) * small_sample_corr;
         } else {
-            /* Robust or unadjusted: N/df_r */
-            dof_adj_gmm = (ST_double)N / (ST_double)df_r_gmm;
+            /* Robust or unadjusted: N_eff/df_r */
+            dof_adj_gmm = (ST_double)N_eff / (ST_double)df_r_gmm;
         }
         for (i = 0; i < K_total * K_total; i++) {
             V[i] = gmm_hessian_inv[i] * dof_adj_gmm;
@@ -1639,16 +1640,16 @@ ST_retcode ivest_compute_2sls(
            Note: For homoskedastic CUE (vce_type == 0), we fall through to
            the standard VCE computation which uses σ² * (X'PzX)^-1.
         */
-        ST_int df_r_cue = N - K_total - df_a;
+        ST_int df_r_cue = N_eff - K_total - df_a;
         if (df_r_cue <= 0) df_r_cue = 1;
         ST_double dof_adj_cue;
         if (vce_type == CIVREGHDFE_VCE_CLUSTER && num_clusters > 0) {
-            /* Cluster DOF adjustment: N/df_r * G/(G-1) * (1 + K/N²) */
+            /* Cluster DOF adjustment: N_eff/df_r * G/(G-1) * (1 + K/N_eff²) */
             ST_double G = (ST_double)num_clusters;
-            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N * (ST_double)N);
-            dof_adj_cue = ((ST_double)N / (ST_double)df_r_cue) * (G / (G - 1.0)) * small_sample_corr;
+            ST_double small_sample_corr = 1.0 + (ST_double)K_total / ((ST_double)N_eff * (ST_double)N_eff);
+            dof_adj_cue = ((ST_double)N_eff / (ST_double)df_r_cue) * (G / (G - 1.0)) * small_sample_corr;
         } else {
-            dof_adj_cue = (ST_double)N / (ST_double)df_r_cue;
+            dof_adj_cue = (ST_double)N_eff / (ST_double)df_r_cue;
         }
         for (i = 0; i < K_total * K_total; i++) {
             V[i] = gmm_hessian_inv[i] * dof_adj_cue;
@@ -1661,7 +1662,7 @@ ST_retcode ivest_compute_2sls(
         ivvce_compute_twoway(
             Z, resid, temp1, XkX_inv,
             weights, weight_type,
-            N, K_total, K_iv,
+            N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
             cluster2_ids, num_clusters2,
             df_a,
@@ -1679,10 +1680,9 @@ ST_retcode ivest_compute_2sls(
                      (int)kernel_type, (int)bw, (int)num_clusters);
             SF_display(buf);
         }
-        /* Use original (non-demeaned) Z for Kiefer VCE
-           This ensures sum_t(Z'e) != 0, which is required for the Kiefer formula
-           to produce non-zero results */
-        const ST_double *Z_for_kiefer = Z_original ? Z_original : Z;
+        /* Use demeaned Z for Kiefer VCE to match ivreg2 behavior.
+           ivreg2 uses all-demeaned data for Kiefer VCE. */
+        const ST_double *Z_for_kiefer = Z;
         /* Note: Kiefer VCE with time-clustering is currently not fully compatible
            with FE demeaning. The FE structure causes residuals to have zero mean
            within each panel, which makes sum_t(Z_it * e_it) small when summed
@@ -1691,7 +1691,7 @@ ST_retcode ivest_compute_2sls(
         ivvce_compute_kiefer(
             Z_for_kiefer, resid, temp1, XkX_inv,
             weights, weight_type,
-            N, K_total, K_iv,
+            N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
             df_a,
             V
@@ -1708,7 +1708,7 @@ ST_retcode ivest_compute_2sls(
         ivvce_compute_full(
             Z, resid, temp1, XkX_inv,
             weights, weight_type,
-            N, K_total, K_iv,
+            N, N_eff, K_total, K_iv,
             vce_type, cluster_ids, num_clusters,
             df_a, nested_adj, kernel_type, bw,
             hac_panel_ids, num_hac_panels,

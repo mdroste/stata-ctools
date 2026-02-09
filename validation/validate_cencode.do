@@ -19,95 +19,6 @@ quietly {
 noi di as text "Running validation tests for cencode..."
 
 /*******************************************************************************
- * Helper: Compare cencode vs encode
- ******************************************************************************/
-capture program drop benchmark_encode
-program define benchmark_encode
-    syntax varname, testname(string) [GENerate(name) LABel(name) noextend if2(string) in2(string) cencodeopts(string)]
-
-    * Set default generate name
-    if "`generate'" == "" local generate = "encoded"
-
-    * Build if/in conditions
-    local ifin ""
-    if "`if2'" != "" local ifin "`ifin' if `if2'"
-    if "`in2'" != "" local ifin "`ifin' in `in2'"
-
-    * Build options for cencode (includes cencodeopts like verbose, threads)
-    local opts "generate(`generate'_c)"
-    if "`label'" != "" local opts "`opts' label(`label'_c)"
-    if "`noextend'" != "" local opts "`opts' noextend"
-    if "`cencodeopts'" != "" local opts "`opts' `cencodeopts'"
-
-    * Build options for Stata encode (no cencodeopts - Stata doesn't support them)
-    local opts_stata "generate(`generate'_s)"
-    if "`label'" != "" local opts_stata "`opts_stata' label(`label'_s)"
-    if "`noextend'" != "" local opts_stata "`opts_stata' noextend"
-
-    * Run cencode
-    capture drop `generate'_c
-    capture label drop `generate'_c
-    if "`label'" != "" capture label drop `label'_c
-    capture cencode `varlist' `ifin', `opts'
-    local rc_c = _rc
-
-    * Run native encode
-    capture drop `generate'_s
-    capture label drop `generate'_s
-    if "`label'" != "" capture label drop `label'_s
-    capture encode `varlist' `ifin', `opts_stata'
-    local rc_s = _rc
-
-    * Check both succeeded or both failed
-    if `rc_c' != `rc_s' {
-        test_fail "`testname'" "cencode rc=`rc_c', encode rc=`rc_s'"
-        exit
-    }
-
-    if `rc_c' != 0 {
-        test_pass "`testname' (both error as expected)"
-        exit
-    }
-
-    * Compare numeric values
-    quietly count if `generate'_c != `generate'_s & !missing(`generate'_c) & !missing(`generate'_s)
-    local ndiff = r(N)
-
-    * Compare missing patterns
-    quietly count if missing(`generate'_c) != missing(`generate'_s)
-    local nmiss_diff = r(N)
-
-    if `ndiff' > 0 | `nmiss_diff' > 0 {
-        test_fail "`testname'" "`ndiff' value diffs, `nmiss_diff' missing diffs"
-    }
-    else {
-        * Also verify labels match
-        local all_match = 1
-        quietly levelsof `generate'_c, local(codes)
-        foreach c of local codes {
-            local lbl_c : label (`generate'_c) `c'
-            local lbl_s : label (`generate'_s) `c'
-            if `"`lbl_c'"' != `"`lbl_s'"' {
-                local all_match = 0
-            }
-        }
-        if `all_match' {
-            test_pass "`testname'"
-        }
-        else {
-            test_fail "`testname'" "label text mismatch"
-        }
-    }
-
-    * Cleanup
-    capture drop `generate'_c `generate'_s
-    capture label drop `generate'_c `generate'_s
-    if "`label'" != "" {
-        capture label drop `label'_c `label'_s
-    }
-end
-
-/*******************************************************************************
  * SECTION 1: Plugin functionality check
  ******************************************************************************/
 print_section "Plugin Check"
@@ -140,7 +51,6 @@ else {
 }
 
 * Test 2.2: Values start at 1
-sysuse auto, clear
 capture drop make_code
 cencode make, generate(make_code)
 quietly sum make_code
@@ -152,7 +62,6 @@ else {
 }
 
 * Test 2.3: Max equals unique count
-sysuse auto, clear
 capture drop make_code
 cencode make, generate(make_code)
 quietly tab make_code
@@ -166,11 +75,9 @@ else {
 }
 
 * Test 2.4: Compare with encode
-sysuse auto, clear
 benchmark_encode make, testname("vs encode: auto make")
 
 * Test 2.5: Value labels applied
-sysuse auto, clear
 capture drop make_code
 cencode make, generate(make_code)
 local lblname : value label make_code
@@ -182,7 +89,6 @@ else {
 }
 
 * Test 2.6: Labels match original strings
-sysuse auto, clear
 capture drop make_code
 cencode make, generate(make_code)
 local pass = 1
@@ -232,7 +138,6 @@ sysuse auto, clear
 benchmark_encode make, testname("[syntax] verbose option") cencodeopts(verbose)
 
 * Test 2.10: threads option - verify correctness with threads(2)
-sysuse auto, clear
 benchmark_encode make, testname("[syntax] threads(2) option") cencodeopts(threads(2))
 
 /*******************************************************************************
@@ -505,7 +410,6 @@ else {
 drop make_code
 
 * Test 5.2: in range
-sysuse auto, clear
 cencode make in 1/20, generate(make_code)
 count if !missing(make_code) in 1/20
 local in_range = r(N)
@@ -520,7 +424,6 @@ else {
 drop make_code
 
 * Test 5.3: Empty if result
-sysuse auto, clear
 cencode make if price > 100000, generate(make_code)
 count if !missing(make_code)
 if r(N) == 0 {
@@ -532,7 +435,6 @@ else {
 drop make_code
 
 * Test 5.4: if matches all
-sysuse auto, clear
 cencode make if price > 0, generate(make_code)
 count if !missing(make_code)
 if r(N) == _N {
@@ -544,15 +446,12 @@ else {
 drop make_code
 
 * Test 5.5: Compare if with encode
-sysuse auto, clear
 benchmark_encode make, testname("vs encode: if foreign") if2("foreign == 1")
 
 * Test 5.7: Compare in with encode
-sysuse auto, clear
 benchmark_encode make, testname("vs encode: in 1/30") in2("1/30")
 
 * Test 5.8: Single observation in
-sysuse auto, clear
 cencode make in 1/1, generate(make_code)
 count if !missing(make_code)
 if r(N) == 1 {
@@ -1506,32 +1405,7 @@ replace special = "&" in 7
 replace special = "*" in 8
 replace special = "(" in 9
 replace special = ")" in 10
-* Run Stata's encode as reference
-capture encode special, generate(stata_result)
-local stata_rc = _rc
-* Run cencode
-capture cencode special, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "10 single special chars" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "10 single special chars (both error rc=`stata_rc')"
-}
-else {
-    * Compare results
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "10 single special chars"
-    }
-    else {
-        test_fail "10 single special chars" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode special, testname("10 single special chars")
 
 * Test 15.5: Single space character
 clear
@@ -1574,169 +1448,37 @@ print_section "Very Long Strings"
 clear
 set obs 10
 gen str100 long100 = "a" * 95 + string(_n)
-capture encode long100, generate(stata_result)
-local stata_rc = _rc
-capture cencode long100, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "100 char strings" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "100 char strings (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "100 char strings"
-    }
-    else {
-        test_fail "100 char strings" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode long100, testname("100 char strings")
 
 * Test 16.2: 200 character strings
 clear
 set obs 10
 gen str200 long200 = "b" * 195 + string(_n)
-capture encode long200, generate(stata_result)
-local stata_rc = _rc
-capture cencode long200, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "200 char strings" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "200 char strings (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "200 char strings"
-    }
-    else {
-        test_fail "200 char strings" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode long200, testname("200 char strings")
 
 * Test 16.3: Maximum str244 strings
 clear
 set obs 5
 gen str244 max244 = "c" * 240 + string(_n)
-capture encode max244, generate(stata_result)
-local stata_rc = _rc
-capture cencode max244, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "244 char strings (max str244)" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "244 char strings (max str244) (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "244 char strings (max str244)"
-    }
-    else {
-        test_fail "244 char strings (max str244)" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode max244, testname("244 char strings (max str244)")
 
 * Test 16.4: strL with 500 characters
 clear
 set obs 5
 gen strL longL = "d" * 495 + string(_n)
-capture encode longL, generate(stata_result)
-local stata_rc = _rc
-capture cencode longL, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strL 500 char" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strL 500 char (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strL 500 char"
-    }
-    else {
-        test_fail "strL 500 char" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode longL, testname("strL 500 char")
 
 * Test 16.5: strL with 1000 characters
 clear
 set obs 5
 gen strL longL2 = "e" * 995 + string(_n)
-capture encode longL2, generate(stata_result)
-local stata_rc = _rc
-capture cencode longL2, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strL 1000 char" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strL 1000 char (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strL 1000 char"
-    }
-    else {
-        test_fail "strL 1000 char" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode longL2, testname("strL 1000 char")
 
 * Test 16.6: strL with 2000 characters
 clear
 set obs 3
 gen strL longL3 = "f" * 1995 + string(_n)
-capture encode longL3, generate(stata_result)
-local stata_rc = _rc
-capture cencode longL3, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strL 2000 char" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strL 2000 char (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strL 2000 char"
-    }
-    else {
-        test_fail "strL 2000 char" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode longL3, testname("strL 2000 char")
 
 * Test 16.7: Very long strings differing only at end
 clear
@@ -1747,29 +1489,7 @@ replace diffEnd = diffEnd + "2" in 2
 replace diffEnd = diffEnd + "3" in 3
 replace diffEnd = diffEnd + "4" in 4
 replace diffEnd = diffEnd + "5" in 5
-capture encode diffEnd, generate(stata_result)
-local stata_rc = _rc
-capture cencode diffEnd, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "long strings differing at end" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "long strings differing at end (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "long strings differing at end"
-    }
-    else {
-        test_fail "long strings differing at end" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode diffEnd, testname("long strings differing at end")
 
 * Test 16.8: Very long strings differing only at start
 clear
@@ -1780,57 +1500,13 @@ replace diffStart = "2" + "y" * 240 in 2
 replace diffStart = "3" + "y" * 240 in 3
 replace diffStart = "4" + "y" * 240 in 4
 replace diffStart = "5" + "y" * 240 in 5
-capture encode diffStart, generate(stata_result)
-local stata_rc = _rc
-capture cencode diffStart, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "long strings differing at start" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "long strings differing at start (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "long strings differing at start"
-    }
-    else {
-        test_fail "long strings differing at start" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode diffStart, testname("long strings differing at start")
 
 * Test 16.9: Mixed long and short strings
 clear
 set obs 10
 gen str244 mixed = cond(mod(_n, 2) == 0, "short" + string(_n), "z" * 200 + string(_n))
-capture encode mixed, generate(stata_result)
-local stata_rc = _rc
-capture cencode mixed, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "mixed long and short strings" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "mixed long and short strings (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "mixed long and short strings"
-    }
-    else {
-        test_fail "mixed long and short strings" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode mixed, testname("mixed long and short strings")
 
 * Test 16.10: Compare long strings with encode
 clear
@@ -1852,29 +1528,7 @@ replace withQuotes = `"She replied "goodbye""' in 2
 replace withQuotes = `"Quote: "test""' in 3
 replace withQuotes = `"Multiple "quotes" here"' in 4
 replace withQuotes = "no quotes" in 5
-capture encode withQuotes, generate(stata_result)
-local stata_rc = _rc
-capture cencode withQuotes, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with double quotes" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with double quotes (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with double quotes"
-    }
-    else {
-        test_fail "strings with double quotes" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withQuotes, testname("strings with double quotes")
 
 * Test 17.2: Strings with commas
 clear
@@ -1885,29 +1539,7 @@ replace withCommas = "one, two, three" in 2
 replace withCommas = "a,b,c,d,e" in 3
 replace withCommas = "comma,at,end," in 4
 replace withCommas = "no comma" in 5
-capture encode withCommas, generate(stata_result)
-local stata_rc = _rc
-capture cencode withCommas, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with commas" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with commas (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with commas"
-    }
-    else {
-        test_fail "strings with commas" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withCommas, testname("strings with commas")
 
 * Test 17.3: Strings with tabs
 clear
@@ -1918,29 +1550,7 @@ replace withTabs = "a" + char(9) + "b" + char(9) + "c" in 2
 replace withTabs = char(9) + "leading tab" in 3
 replace withTabs = "trailing tab" + char(9) in 4
 replace withTabs = "no tab" in 5
-capture encode withTabs, generate(stata_result)
-local stata_rc = _rc
-capture cencode withTabs, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with tabs" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with tabs (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with tabs"
-    }
-    else {
-        test_fail "strings with tabs" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withTabs, testname("strings with tabs")
 
 * Test 17.4: Strings with newlines
 clear
@@ -1951,29 +1561,7 @@ replace withNewlines = "a" + char(13) + "b" in 2
 replace withNewlines = "cr" + char(13) + char(10) + "lf" in 3
 replace withNewlines = char(10) + "leading" in 4
 replace withNewlines = "no newline" in 5
-capture encode withNewlines, generate(stata_result)
-local stata_rc = _rc
-capture cencode withNewlines, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with newlines" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with newlines (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with newlines"
-    }
-    else {
-        test_fail "strings with newlines" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withNewlines, testname("strings with newlines")
 
 * Test 17.5: Strings with apostrophes
 clear
@@ -1984,29 +1572,7 @@ replace withApos = "it's" in 2
 replace withApos = "O'Brien" in 3
 replace withApos = "couldn't've" in 4
 replace withApos = "no apostrophe" in 5
-capture encode withApos, generate(stata_result)
-local stata_rc = _rc
-capture cencode withApos, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with apostrophes" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with apostrophes (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with apostrophes"
-    }
-    else {
-        test_fail "strings with apostrophes" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withApos, testname("strings with apostrophes")
 
 * Test 17.6: Strings with backslashes
 clear
@@ -2017,29 +1583,7 @@ replace withSlash = "C:\Windows\System32" in 2
 replace withSlash = "\\server\share" in 3
 replace withSlash = "escape\\n" in 4
 replace withSlash = "no backslash" in 5
-capture encode withSlash, generate(stata_result)
-local stata_rc = _rc
-capture cencode withSlash, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with backslashes" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with backslashes (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with backslashes"
-    }
-    else {
-        test_fail "strings with backslashes" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode withSlash, testname("strings with backslashes")
 
 * Test 17.7: Strings with various punctuation
 clear
@@ -2055,29 +1599,7 @@ replace punct = "$100" in 7
 replace punct = "@mention" in 8
 replace punct = "#hashtag" in 9
 replace punct = "a & b" in 10
-capture encode punct, generate(stata_result)
-local stata_rc = _rc
-capture cencode punct, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "various punctuation" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "various punctuation (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "various punctuation"
-    }
-    else {
-        test_fail "various punctuation" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode punct, testname("various punctuation")
 
 * Test 17.8: Strings with brackets
 clear
@@ -2089,29 +1611,7 @@ replace brackets = "{curly}" in 3
 replace brackets = "<angle>" in 4
 replace brackets = "((nested))" in 5
 replace brackets = "no brackets" in 6
-capture encode brackets, generate(stata_result)
-local stata_rc = _rc
-capture cencode brackets, generate(ctools_result)
-local ctools_rc = _rc
-if `stata_rc' != `ctools_rc' {
-    test_fail "strings with brackets" "rc differ: stata=`stata_rc' cencode=`ctools_rc'"
-}
-else if `stata_rc' != 0 {
-    test_pass "strings with brackets (both error rc=`stata_rc')"
-}
-else {
-    quietly count if stata_result != ctools_result & !missing(stata_result) & !missing(ctools_result)
-    local ndiff = r(N)
-    quietly count if missing(stata_result) != missing(ctools_result)
-    local nmiss = r(N)
-    if `ndiff' == 0 & `nmiss' == 0 {
-        test_pass "strings with brackets"
-    }
-    else {
-        test_fail "strings with brackets" "`ndiff' values differ, `nmiss' missing pattern mismatches"
-    }
-    capture drop stata_result ctools_result
-}
+benchmark_encode brackets, testname("strings with brackets")
 
 * Test 17.9: Compare special chars with encode
 clear
@@ -2575,76 +2075,12 @@ else {
     test_fail "long label text" "cencode rc=`cencode_rc' but encode rc=`stata_rc'"
 }
 
-* Test 22.4: 100 unique values
-clear
-set obs 100
-gen str15 x = "category_" + string(_n)
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly tab code
-    if r(r) == 100 {
-        test_pass "100 unique values encoded"
-    }
-    else {
-        test_fail "100 unique" "not 100"
-    }
-}
-else {
-    test_fail "100 unique" "rc=`=_rc'"
-}
-
-* Test 22.5: 500 unique values
-clear
-set obs 500
-gen str15 x = "cat_" + string(_n)
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly tab code
-    if r(r) == 500 {
-        test_pass "500 unique values encoded"
-    }
-    else {
-        test_fail "500 unique" "not 500"
-    }
-}
-else {
-    test_fail "500 unique" "rc=`=_rc'"
-}
-
-* Test 22.6: 1000 unique values
-clear
-set obs 1000
-gen str15 x = "v" + string(_n)
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly tab code
-    if r(r) == 1000 {
-        test_pass "1000 unique values encoded"
-    }
-    else {
-        test_fail "1000 unique" "not 1000"
-    }
-}
-else {
-    test_fail "1000 unique" "rc=`=_rc'"
-}
-
-* Test 22.7: 5000 unique values
-clear
-set obs 5000
-gen str15 x = "val_" + string(_n)
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly sum code
-    if r(max) == 5000 {
-        test_pass "5000 unique values encoded"
-    }
-    else {
-        test_fail "5000 unique" "max not 5000"
-    }
-}
-else {
-    test_fail "5000 unique" "rc=`=_rc'"
+* Tests 22.4-22.7: Unique value counts
+foreach k in 100 500 1000 5000 {
+    clear
+    set obs `k'
+    gen str15 x = "val_" + string(_n)
+    benchmark_encode x, testname("`k' unique values encoded")
 }
 
 * Test 22.8: Label name same as variable name
@@ -2666,80 +2102,31 @@ capture label drop myvar
  ******************************************************************************/
 print_section "Large Dataset Tests"
 
-* Test 23.1: 10K observations, 10 unique
+* Tests 23.1-23.5: Various N/K combinations
 clear
 set obs 10000
 gen str10 x = "cat" + string(mod(_n, 10))
-cencode x, generate(code)
-quietly tab code
-if r(r) == 10 {
-    test_pass "10K obs, 10 unique"
-}
-else {
-    test_fail "10K/10" "not 10 unique"
-}
+benchmark_encode x, testname("10K obs, 10 unique")
 
-* Test 23.2: 50K observations, 50 unique
 clear
 set obs 50000
 gen str10 x = "cat" + string(mod(_n, 50))
-cencode x, generate(code)
-quietly tab code
-if r(r) == 50 {
-    test_pass "50K obs, 50 unique"
-}
-else {
-    test_fail "50K/50" "not 50 unique"
-}
+benchmark_encode x, testname("50K obs, 50 unique")
 
-* Test 23.3: 100K observations, 100 unique
 clear
 set obs 100000
 gen str15 x = "category_" + string(mod(_n, 100))
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly tab code
-    if r(r) == 100 {
-        test_pass "100K obs, 100 unique"
-    }
-    else {
-        test_fail "100K/100" "not 100 unique"
-    }
-}
-else {
-    test_fail "100K/100" "rc=`=_rc'"
-}
+benchmark_encode x, testname("100K obs, 100 unique")
 
-* Test 23.4: 100K observations, 1K unique (high cardinality)
 clear
 set obs 100000
 gen str15 x = "val_" + string(mod(_n, 1000))
-capture cencode x, generate(code)
-if _rc == 0 {
-    quietly sum code
-    if r(max) == 1000 {
-        test_pass "100K obs, 1K unique (high cardinality)"
-    }
-    else {
-        test_fail "100K/1K" "max not 1000"
-    }
-}
-else {
-    test_fail "100K/1K" "rc=`=_rc'"
-}
+benchmark_encode x, testname("100K obs, 1K unique (high cardinality)")
 
-* Test 23.5: 100K observations, 2 unique (low cardinality)
 clear
 set obs 100000
 gen str10 x = cond(mod(_n, 2) == 0, "A", "B")
-cencode x, generate(code)
-quietly tab code
-if r(r) == 2 {
-    test_pass "100K obs, 2 unique (low cardinality)"
-}
-else {
-    test_fail "100K/2" "not 2 unique"
-}
+benchmark_encode x, testname("100K obs, 2 unique (low cardinality)")
 
 * Test 23.6: 500K observations
 clear
@@ -2831,7 +2218,7 @@ else {
 }
 
 * Test 24.3: Complex if with AND
-sysuse auto, clear
+sysuse auto, clear  // reload after 24.2's different data
 cencode make if price > 5000 & foreign == 1, generate(code)
 count if !missing(code)
 local n_enc = r(N)
@@ -2845,7 +2232,6 @@ else {
 drop code
 
 * Test 24.4: Complex if with OR
-sysuse auto, clear
 cencode make if price > 10000 | mpg > 30, generate(code)
 count if !missing(code)
 local n_enc = r(N)
@@ -2859,7 +2245,6 @@ else {
 drop code
 
 * Test 24.5: in first few rows
-sysuse auto, clear
 cencode make in 1/5, generate(code)
 count if !missing(code) in 1/5
 if r(N) == 5 {
@@ -2871,7 +2256,6 @@ else {
 drop code
 
 * Test 24.6: in last few rows
-sysuse auto, clear
 local last5 = _N - 4
 cencode make in `last5'/`=_N', generate(code)
 count if !missing(code)
@@ -2884,7 +2268,6 @@ else {
 drop code
 
 * Test 24.7: in middle rows
-sysuse auto, clear
 cencode make in 30/40, generate(code)
 count if !missing(code)
 if r(N) == 11 {
@@ -2896,7 +2279,6 @@ else {
 drop code
 
 * Test 24.8: if that selects no rows
-sysuse auto, clear
 cencode make if price > 100000, generate(code)
 count if !missing(code)
 if r(N) == 0 {
@@ -2908,7 +2290,6 @@ else {
 drop code
 
 * Test 24.9: if that selects all rows
-sysuse auto, clear
 cencode make if price > 0, generate(code)
 count if !missing(code)
 if r(N) == _N {
@@ -2920,10 +2301,7 @@ else {
 drop code
 
 * Test 24.10: Compare if/in with encode
-sysuse auto, clear
 benchmark_encode make, testname("vs encode: if price>8000") if2("price > 8000")
-
-sysuse auto, clear
 benchmark_encode make, testname("vs encode: in 10/60") in2("10/60")
 
 /*******************************************************************************
@@ -3184,64 +2562,28 @@ clear
 set obs 5
 gen str10 x = "val" + string(_n)
 replace x = "" in 3
-cencode x, generate(x_num)
-encode x, generate(x_enc)
-count if missing(x_num) != missing(x_enc)
-if r(N) == 0 {
-    test_pass "single empty matches encode"
-}
-else {
-    test_fail "single empty" "missing pattern differs"
-}
-drop x_num x_enc
+benchmark_encode x, testname("single empty matches encode")
 
 * Test 27.2: First observation empty
 clear
 set obs 10
 gen str10 x = "val" + string(_n)
 replace x = "" in 1
-cencode x, generate(x_num)
-encode x, generate(x_enc)
-count if missing(x_num) != missing(x_enc)
-if r(N) == 0 {
-    test_pass "first empty matches encode"
-}
-else {
-    test_fail "first empty" "missing pattern differs"
-}
-drop x_num x_enc
+benchmark_encode x, testname("first empty matches encode")
 
 * Test 27.3: Last observation empty
 clear
 set obs 10
 gen str10 x = "val" + string(_n)
 replace x = "" in 10
-cencode x, generate(x_num)
-encode x, generate(x_enc)
-count if missing(x_num) != missing(x_enc)
-if r(N) == 0 {
-    test_pass "last empty matches encode"
-}
-else {
-    test_fail "last empty" "missing pattern differs"
-}
-drop x_num x_enc
+benchmark_encode x, testname("last empty matches encode")
 
 * Test 27.4: Consecutive empties
 clear
 set obs 20
 gen str10 x = "val" + string(_n)
 replace x = "" in 5/10
-cencode x, generate(x_num)
-encode x, generate(x_enc)
-count if missing(x_num) != missing(x_enc)
-if r(N) == 0 {
-    test_pass "consecutive empties match encode"
-}
-else {
-    test_fail "consecutive empty" "missing pattern differs"
-}
-drop x_num x_enc
+benchmark_encode x, testname("consecutive empties match encode")
 
 * Test 27.5: Bookend pattern (first and last empty)
 clear
@@ -3249,16 +2591,7 @@ set obs 20
 gen str10 x = "val" + string(_n)
 replace x = "" in 1
 replace x = "" in 20
-cencode x, generate(x_num)
-encode x, generate(x_enc)
-count if missing(x_num) != missing(x_enc)
-if r(N) == 0 {
-    test_pass "bookend empties match encode"
-}
-else {
-    test_fail "bookend empty" "missing pattern differs"
-}
-drop x_num x_enc
+benchmark_encode x, testname("bookend empties match encode")
 
 /*******************************************************************************
  * SECTION 28: Combined options tests

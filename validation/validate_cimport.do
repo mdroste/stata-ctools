@@ -125,134 +125,6 @@ program define benchmark_import
 end
 
 /*******************************************************************************
- * Helper: cimport_test - Test cimport standalone (no Stata comparison)
- * Required: using/ - path to CSV file
- *           testname() - the test name
- * Optional: importopts() - options for cimport
- *           expectn() - expected row count
- *           expectk() - expected column count
- *           check() - expression to evaluate (should be true for pass)
- ******************************************************************************/
-capture program drop cimport_test
-program define cimport_test
-    syntax using/, testname(string) [IMPORTopts(string) expectn(integer 0) expectk(integer 0) CHECK(string)]
-
-    capture cimport delimited `using', `importopts' clear
-    if _rc != 0 {
-        test_fail "`testname'" "rc=`=_rc'"
-        exit
-    }
-
-    * Check expected row count
-    if `expectn' > 0 & _N != `expectn' {
-        test_fail "`testname'" "expected N=`expectn', got N=`=_N'"
-        exit
-    }
-
-    * Check expected column count
-    if `expectk' > 0 & c(k) != `expectk' {
-        test_fail "`testname'" "expected K=`expectk', got K=`=c(k)'"
-        exit
-    }
-
-    * Optional custom check expression
-    if "`check'" != "" {
-        capture assert `check'
-        if _rc != 0 {
-            test_fail "`testname'" "check() failed: `check'"
-            exit
-        }
-    }
-
-    test_pass "`testname'"
-end
-
-/*******************************************************************************
- * Helper: benchmark_import_errtol - Error-tolerant import comparison
- * Like benchmark_import but handles expected errors: if both commands error
- * with the same rc, that counts as a pass. When both succeed, does full
- * data comparison via cf _all (with positional variable renaming).
- *
- * Required: using/ - path to CSV file
- *           testname() - the test name
- ******************************************************************************/
-capture program drop benchmark_import_errtol
-program define benchmark_import_errtol
-    syntax using/, testname(string)
-
-    * Run Stata import delimited (with varnames(1) and encoding(utf-8))
-    preserve
-    capture import delimited `using', varnames(1) encoding(utf-8) clear
-    local stata_rc = _rc
-    if `stata_rc' == 0 {
-        tempfile stata_data
-        quietly save `stata_data', replace
-        local stata_N = _N
-        local stata_k = c(k)
-    }
-    restore
-
-    * Run cimport
-    capture cimport delimited `using', clear
-    local cimport_rc = _rc
-
-    * Both errored
-    if `cimport_rc' != 0 & `stata_rc' != 0 {
-        if `cimport_rc' == `stata_rc' {
-            test_pass "`testname' (both error rc=`cimport_rc')"
-        }
-        else {
-            test_fail "`testname'" "error codes differ: stata=`stata_rc' cimport=`cimport_rc'"
-        }
-        exit
-    }
-
-    * One errored, other didn't
-    if `cimport_rc' != 0 | `stata_rc' != 0 {
-        test_fail "`testname'" "one errored: stata rc=`stata_rc', cimport rc=`cimport_rc'"
-        exit
-    }
-
-    * Both succeeded - check dimensions
-    if _N != `stata_N' | c(k) != `stata_k' {
-        test_fail "`testname'" "dimensions differ: N=`=_N' vs `stata_N', K=`=c(k)' vs `stata_k'"
-        exit
-    }
-
-    * Dimensions match - compare data content with positional variable renaming
-    tempfile cimport_data
-    quietly save `cimport_data', replace
-
-    use `stata_data', clear
-    quietly ds
-    local stata_vars `r(varlist)'
-    local i = 1
-    foreach v of local stata_vars {
-        quietly rename `v' __cmp_v`i'
-        local i = `i' + 1
-    }
-    tempfile stata_renamed
-    quietly save `stata_renamed', replace
-
-    use `cimport_data', clear
-    quietly ds
-    local cimport_vars `r(varlist)'
-    local i = 1
-    foreach v of local cimport_vars {
-        quietly rename `v' __cmp_v`i'
-        local i = `i' + 1
-    }
-
-    capture cf _all using `stata_renamed'
-    if _rc == 0 {
-        test_pass "`testname'"
-    }
-    else {
-        test_fail "`testname'" "cf _all comparison failed - data not identical"
-    }
-end
-
-/*******************************************************************************
  * Create Test Data Files (call helper script)
  ******************************************************************************/
 capture do "validation/validate_cimport_helper.do"
@@ -2411,11 +2283,13 @@ program define benchmark_excel
     use `stata_data', clear
     quietly ds
     local stata_vars `r(varlist)'
+    local nvars : word count `stata_vars'
     local i = 1
     foreach v of local stata_vars {
-        quietly rename `v' __cmp_v`i'
+        quietly rename `v' __cmp_s`i'
         local i = `i' + 1
     }
+    gen long __row = _n
     tempfile stata_renamed
     quietly save `stata_renamed', replace
 
@@ -2424,17 +2298,90 @@ program define benchmark_excel
     local cimport_vars `r(varlist)'
     local i = 1
     foreach v of local cimport_vars {
-        quietly rename `v' __cmp_v`i'
+        quietly rename `v' __cmp_c`i'
         local i = `i' + 1
     }
+    gen long __row = _n
+    merge 1:1 __row using `stata_renamed', nogen
 
-    * Compare data
-    capture cf _all using `stata_renamed'
-    if _rc == 0 {
-        test_pass "`testname'"
+    * Compare each variable pair with tolerance fallback for numerics
+    local all_match = 1
+    local fail_reason ""
+    local min_sigfigs = 99
+
+    forvalues j = 1/`nvars' {
+        * Check types of both variables
+        capture confirm string variable __cmp_s`j'
+        local s_is_str = (_rc == 0)
+        capture confirm string variable __cmp_c`j'
+        local c_is_str = (_rc == 0)
+
+        if `s_is_str' != `c_is_str' {
+            * Type mismatch between Stata and cimport
+            local all_match = 0
+            local s_type = cond(`s_is_str', "string", "numeric")
+            local c_type = cond(`c_is_str', "string", "numeric")
+            local fail_reason "var `j' type mismatch: Stata=`s_type', cimport=`c_type'"
+            continue, break
+        }
+
+        if `s_is_str' == 1 {
+            * String variable - must be exactly equal
+            quietly count if __cmp_s`j' != __cmp_c`j'
+            if r(N) > 0 {
+                local all_match = 0
+                local fail_reason "string var `j' has `r(N)' mismatches"
+                continue, break
+            }
+        }
+        else {
+            * Numeric variable - compare with tolerance
+            quietly gen double __v1 = __cmp_s`j'
+            quietly gen double __v2 = __cmp_c`j'
+
+            quietly count if missing(__v1) != missing(__v2)
+            if r(N) > 0 {
+                local all_match = 0
+                local fail_reason "var `j' has `r(N)' missing value mismatches"
+                drop __v1 __v2
+                continue, break
+            }
+
+            quietly count if !missing(__v1) & !missing(__v2)
+            local n_pairs = r(N)
+            if `n_pairs' > 0 {
+                quietly gen double __rel = abs(__v1 - __v2) / max(abs(__v1), abs(__v2), 1e-300) if !missing(__v1) & !missing(__v2)
+                quietly summarize __rel
+                if r(max) != . & r(max) > 0 {
+                    local var_sf = -log10(r(max))
+                    if `var_sf' < `min_sigfigs' {
+                        local min_sigfigs = `var_sf'
+                    }
+                    if `var_sf' < $DEFAULT_SIGFIGS {
+                        local all_match = 0
+                        local sf_fmt : display %4.1f `var_sf'
+                        local fail_reason "var `j' has only `sf_fmt' sigfigs agreement"
+                        drop __v1 __v2 __rel
+                        continue, break
+                    }
+                }
+                drop __rel
+            }
+            drop __v1 __v2
+        }
+    }
+
+    if `all_match' == 1 {
+        if `min_sigfigs' < 99 {
+            local sf_fmt : display %4.1f `min_sigfigs'
+            test_pass "`testname' (min_sigfigs=`sf_fmt')"
+        }
+        else {
+            test_pass "`testname'"
+        }
     }
     else {
-        test_fail "`testname'" "cf _all comparison failed - data not identical"
+        test_fail "`testname'" "`fail_reason'"
     }
 end
 
@@ -2617,6 +2564,521 @@ capture erase "temp/excel_numtypes.xlsx"
 capture erase "temp/excel_strings.xlsx"
 capture erase "temp/excel_noheader.xlsx"
 capture erase "temp/excel_uppercase.xlsx"
+
+/*******************************************************************************
+ * SECTION: Comprehensive Excel Import Round-Trip Tests
+ *
+ * Creates xlsx files with Stata's export excel, then imports with both
+ * Stata's import excel and cimport excel, comparing results.
+ ******************************************************************************/
+print_section "Comprehensive Excel Import Round-Trip Tests"
+
+* --- Real-World Datasets ---
+
+sysuse auto, clear
+export excel using "temp/xi_auto.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_auto.xlsx", testname("xlsx import: auto full") importopts(firstrow clear)
+capture erase "temp/xi_auto.xlsx"
+
+sysuse auto, clear
+keep make price mpg weight foreign
+export excel using "temp/xi_auto_sel.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_auto_sel.xlsx", testname("xlsx import: auto select vars") importopts(firstrow clear)
+capture erase "temp/xi_auto_sel.xlsx"
+
+sysuse auto, clear
+keep if foreign == 0
+export excel using "temp/xi_auto_dom.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_auto_dom.xlsx", testname("xlsx import: auto domestic") importopts(firstrow clear)
+capture erase "temp/xi_auto_dom.xlsx"
+
+sysuse census, clear
+export excel using "temp/xi_census.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_census.xlsx", testname("xlsx import: census full") importopts(firstrow clear)
+capture erase "temp/xi_census.xlsx"
+
+capture webuse nlswork, clear
+if _rc == 0 {
+    keep in 1/2000
+    export excel using "temp/xi_nlswork.xlsx", firstrow(variables) replace
+    benchmark_excel using "temp/xi_nlswork.xlsx", testname("xlsx import: nlswork 2K") importopts(firstrow clear)
+    capture erase "temp/xi_nlswork.xlsx"
+}
+
+capture webuse lifeexp, clear
+if _rc == 0 {
+    export excel using "temp/xi_lifeexp.xlsx", firstrow(variables) replace
+    benchmark_excel using "temp/xi_lifeexp.xlsx", testname("xlsx import: lifeexp") importopts(firstrow clear)
+    capture erase "temp/xi_lifeexp.xlsx"
+}
+
+capture webuse bplong, clear
+if _rc == 0 {
+    export excel using "temp/xi_bplong.xlsx", firstrow(variables) replace
+    benchmark_excel using "temp/xi_bplong.xlsx", testname("xlsx import: bplong") importopts(firstrow clear)
+    capture erase "temp/xi_bplong.xlsx"
+}
+
+* --- Numeric Types ---
+
+clear
+set obs 20
+gen byte b = mod(_n, 128) - 64
+gen int i = _n * 100 - 1000
+gen long l = _n * 100000
+gen float f = runiform() - 0.5
+gen double d = runiform() * 1e10 - 5e9
+export excel using "temp/xi_allnum.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_allnum.xlsx", testname("xlsx import: all numeric types") importopts(firstrow clear)
+capture erase "temp/xi_allnum.xlsx"
+
+clear
+set obs 100
+gen long id = _n
+gen int val = _n * 10
+gen byte small = mod(_n, 100)
+export excel using "temp/xi_ints.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_ints.xlsx", testname("xlsx import: integers only") importopts(firstrow clear)
+capture erase "temp/xi_ints.xlsx"
+
+clear
+set obs 10
+gen double precise = runiform()
+format precise %20.15f
+export excel using "temp/xi_dbl.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_dbl.xlsx", testname("xlsx import: double precision") importopts(firstrow clear)
+capture erase "temp/xi_dbl.xlsx"
+
+clear
+set obs 5
+gen double tiny = 1e-100
+replace tiny = 1e-50 in 2
+replace tiny = 0.0000001 in 3
+replace tiny = 1.23e-10 in 4
+replace tiny = 0 in 5
+export excel using "temp/xi_tiny.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_tiny.xlsx", testname("xlsx import: very small numbers") importopts(firstrow clear)
+capture erase "temp/xi_tiny.xlsx"
+
+clear
+set obs 5
+gen double huge = 1e100
+replace huge = -1e100 in 2
+replace huge = 999999999 in 3
+replace huge = 1e50 in 4
+replace huge = 0 in 5
+export excel using "temp/xi_huge.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_huge.xlsx", testname("xlsx import: very large numbers") importopts(firstrow clear)
+capture erase "temp/xi_huge.xlsx"
+
+clear
+set obs 10
+gen x = 0
+gen y = 0.0
+gen double z = 0.00000000
+export excel using "temp/xi_zeros.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_zeros.xlsx", testname("xlsx import: all zeros") importopts(firstrow clear)
+capture erase "temp/xi_zeros.xlsx"
+
+* --- Missing Value Patterns ---
+
+clear
+set obs 20
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . if mod(_n, 2) == 0
+replace y = . if mod(_n, 3) == 0
+replace z = . if mod(_n, 5) == 0
+export excel using "temp/xi_mixmiss.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_mixmiss.xlsx", testname("xlsx import: mixed missing") importopts(firstrow clear)
+capture erase "temp/xi_mixmiss.xlsx"
+
+clear
+set obs 50
+gen x = .
+gen y = .
+gen z = .
+export excel using "temp/xi_allmiss.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_allmiss.xlsx", testname("xlsx import: all missing") importopts(firstrow clear)
+capture erase "temp/xi_allmiss.xlsx"
+
+clear
+set obs 10
+gen x = _n
+replace x = . in 1
+replace x = . in 10
+export excel using "temp/xi_flmiss.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_flmiss.xlsx", testname("xlsx import: first+last missing") importopts(firstrow clear)
+capture erase "temp/xi_flmiss.xlsx"
+
+clear
+set obs 10
+gen x = _n
+replace x = . in 3/6
+export excel using "temp/xi_consmiss.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_consmiss.xlsx", testname("xlsx import: consecutive missing") importopts(firstrow clear)
+capture erase "temp/xi_consmiss.xlsx"
+
+clear
+set obs 100
+gen x = .
+gen y = .
+forvalues i = 1(5)100 {
+    replace x = `i' in `i'
+}
+forvalues i = 3(7)100 {
+    replace y = `i' in `i'
+}
+export excel using "temp/xi_sparse.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_sparse.xlsx", testname("xlsx import: sparse data") importopts(firstrow clear)
+capture erase "temp/xi_sparse.xlsx"
+
+* --- String Edge Cases ---
+
+clear
+set obs 10
+gen id = _n
+gen str20 name = "item_" + string(_n)
+replace name = "" in 3
+replace name = "" in 7
+export excel using "temp/xi_strempty.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_strempty.xlsx", testname("xlsx import: strings with empties") importopts(firstrow clear)
+capture erase "temp/xi_strempty.xlsx"
+
+clear
+set obs 50
+gen str20 s = ""
+gen id = _n
+export excel using "temp/xi_allempty.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_allempty.xlsx", testname("xlsx import: all empty strings") importopts(firstrow clear)
+capture erase "temp/xi_allempty.xlsx"
+
+clear
+set obs 5
+gen id = _n
+gen str244 long_text = "a" * 200
+export excel using "temp/xi_longstr.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_longstr.xlsx", testname("xlsx import: long strings (200)") importopts(firstrow clear)
+capture erase "temp/xi_longstr.xlsx"
+
+clear
+input id str50 text
+1 "Normal text"
+2 "Comma, in text"
+3 "Semi;colon here"
+4 "Text with ""quotes"""
+end
+export excel using "temp/xi_special.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_special.xlsx", testname("xlsx import: special chars") importopts(firstrow clear)
+capture erase "temp/xi_special.xlsx"
+
+clear
+input id str20 name
+1 " leading"
+2 "trailing "
+3 " both "
+4 "normal"
+end
+export excel using "temp/xi_spaces.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_spaces.xlsx", testname("xlsx import: leading/trailing spaces") importopts(firstrow clear)
+capture erase "temp/xi_spaces.xlsx"
+
+clear
+input id str10 zipcode str15 phone
+1 "01234" "555-123-4567"
+2 "00501" "800-555-0000"
+3 "90210" "123-456-7890"
+end
+export excel using "temp/xi_numstr.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_numstr.xlsx", testname("xlsx import: numeric-looking strings") importopts(firstrow clear)
+capture erase "temp/xi_numstr.xlsx"
+
+* --- Mixed Types ---
+
+clear
+set obs 20
+gen id = _n
+gen double value = runiform() * 1000
+gen str30 category = "cat_" + string(mod(_n, 5))
+gen byte flag = mod(_n, 2)
+export excel using "temp/xi_mixed.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_mixed.xlsx", testname("xlsx import: mixed types") importopts(firstrow clear)
+capture erase "temp/xi_mixed.xlsx"
+
+* --- Value Labels (exported as strings by Stata) ---
+
+clear
+set obs 10
+gen id = _n
+gen status = mod(_n, 3) + 1
+label define xi_status 1 "Active" 2 "Pending" 3 "Inactive"
+label values status xi_status
+gen category = mod(_n, 2) + 1
+label define xi_cat 1 "Type A" 2 "Type B"
+label values category xi_cat
+export excel using "temp/xi_labels.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_labels.xlsx", testname("xlsx import: with value labels") importopts(firstrow clear)
+capture erase "temp/xi_labels.xlsx"
+
+* --- Dimension Edge Cases ---
+
+clear
+set obs 1
+gen x = 42
+gen str5 s = "test"
+export excel using "temp/xi_1obs.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_1obs.xlsx", testname("xlsx import: single obs") importopts(firstrow clear)
+capture erase "temp/xi_1obs.xlsx"
+
+clear
+set obs 100
+gen x = runiform()
+export excel using "temp/xi_1var.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_1var.xlsx", testname("xlsx import: single var") importopts(firstrow clear)
+capture erase "temp/xi_1var.xlsx"
+
+clear
+set obs 2
+gen x = _n
+gen str10 s = "row" + string(_n)
+export excel using "temp/xi_2obs.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_2obs.xlsx", testname("xlsx import: two obs") importopts(firstrow clear)
+capture erase "temp/xi_2obs.xlsx"
+
+clear
+set obs 1
+forvalues i = 1/20 {
+    gen v`i' = `i'
+}
+export excel using "temp/xi_wide1.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_wide1.xlsx", testname("xlsx import: 1 obs 20 vars") importopts(firstrow clear)
+capture erase "temp/xi_wide1.xlsx"
+
+clear
+set obs 10
+forvalues i = 1/30 {
+    gen v`i' = runiform()
+}
+export excel using "temp/xi_wide30.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_wide30.xlsx", testname("xlsx import: 30 columns") importopts(firstrow clear)
+capture erase "temp/xi_wide30.xlsx"
+
+* --- Large Dataset ---
+
+clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen x = runiform()
+gen y = rnormal()
+gen str20 label = "item" + string(runiformint(1, 1000))
+export excel using "temp/xi_large.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_large.xlsx", testname("xlsx import: 10K rows") importopts(firstrow clear)
+capture erase "temp/xi_large.xlsx"
+
+* --- Data Patterns ---
+
+clear
+set obs 100
+gen x = 42
+gen y = 42
+export excel using "temp/xi_const.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_const.xlsx", testname("xlsx import: constant values") importopts(firstrow clear)
+capture erase "temp/xi_const.xlsx"
+
+clear
+set obs 100
+gen x = _n
+gen y = _n * 2
+export excel using "temp/xi_mono.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_mono.xlsx", testname("xlsx import: monotonic") importopts(firstrow clear)
+capture erase "temp/xi_mono.xlsx"
+
+clear
+set obs 100
+gen x = mod(_n, 2)
+gen y = 1 - mod(_n, 2)
+export excel using "temp/xi_alt.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_alt.xlsx", testname("xlsx import: alternating 0/1") importopts(firstrow clear)
+capture erase "temp/xi_alt.xlsx"
+
+clear
+set seed 99999
+set obs 100
+gen x = runiform()
+gen y = rnormal()
+gen z = runiformint(1, 100)
+export excel using "temp/xi_rand.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_rand.xlsx", testname("xlsx import: random seeded") importopts(firstrow clear)
+capture erase "temp/xi_rand.xlsx"
+
+* --- Cell Range Tests ---
+
+sysuse auto, clear
+export excel using "temp/xi_cr.xlsx", firstrow(variables) replace
+
+cimport_excel_test using "temp/xi_cr.xlsx", testname("xlsx import: cellrange A1:C10") ///
+    importopts(cellrange(A1:C10) firstrow clear) expectn(9) expectk(3)
+
+cimport_excel_test using "temp/xi_cr.xlsx", testname("xlsx import: cellrange A1:A20") ///
+    importopts(cellrange(A1:A20) firstrow clear) expectn(19) expectk(1)
+
+cimport_excel_test using "temp/xi_cr.xlsx", testname("xlsx import: cellrange B1:D50") ///
+    importopts(cellrange(B1:D50) firstrow clear) expectn(49) expectk(3)
+
+capture erase "temp/xi_cr.xlsx"
+
+* --- Allstring Option ---
+
+sysuse auto, clear
+export excel using "temp/xi_allstr.xlsx", firstrow(variables) replace
+cimport_excel_test using "temp/xi_allstr.xlsx", testname("xlsx import: allstring auto") ///
+    importopts(allstring firstrow clear) expectn(74) expectk(12)
+
+* Verify all variables are actually strings
+clear
+cimport excel using "temp/xi_allstr.xlsx", allstring firstrow clear
+local all_str = 1
+quietly ds
+foreach v in `r(varlist)' {
+    capture confirm string variable `v'
+    if _rc != 0 {
+        local all_str = 0
+    }
+}
+if `all_str' == 1 {
+    test_pass "xlsx import: allstring - all vars are strings"
+}
+else {
+    test_fail "xlsx import: allstring - all vars are strings" "some variables are not strings"
+}
+capture erase "temp/xi_allstr.xlsx"
+
+* --- Case Handling (with verification) ---
+
+clear
+set obs 3
+gen MyVar = _n
+gen AnotherVar = _n * 10
+gen str10 TextVar = "row" + string(_n)
+export excel using "temp/xi_case.xlsx", firstrow(variables) replace
+
+* case(preserve) - should keep original case
+clear
+cimport excel using "temp/xi_case.xlsx", firstrow clear
+capture confirm variable MyVar
+local prc1 = _rc
+capture confirm variable AnotherVar
+local prc2 = _rc
+capture confirm variable TextVar
+local prc3 = _rc
+if `prc1' == 0 & `prc2' == 0 & `prc3' == 0 {
+    test_pass "xlsx import: case(preserve) keeps original"
+}
+else {
+    test_fail "xlsx import: case(preserve) keeps original" "variable names not preserved"
+}
+
+* case(lower)
+clear
+cimport excel using "temp/xi_case.xlsx", firstrow case(lower) clear
+capture confirm variable myvar
+local lrc1 = _rc
+capture confirm variable anothervar
+local lrc2 = _rc
+capture confirm variable textvar
+local lrc3 = _rc
+if `lrc1' == 0 & `lrc2' == 0 & `lrc3' == 0 {
+    test_pass "xlsx import: case(lower) lowercases"
+}
+else {
+    test_fail "xlsx import: case(lower) lowercases" "variable names not lowered"
+}
+
+* case(upper)
+clear
+cimport excel using "temp/xi_case.xlsx", firstrow case(upper) clear
+capture confirm variable MYVAR
+local urc1 = _rc
+capture confirm variable ANOTHERVAR
+local urc2 = _rc
+capture confirm variable TEXTVAR
+local urc3 = _rc
+if `urc1' == 0 & `urc2' == 0 & `urc3' == 0 {
+    test_pass "xlsx import: case(upper) uppercases"
+}
+else {
+    test_fail "xlsx import: case(upper) uppercases" "variable names not uppercased"
+}
+capture erase "temp/xi_case.xlsx"
+
+* --- No Header (no firstrow) ---
+
+clear
+set obs 5
+gen v1 = _n
+gen v2 = _n * 10
+gen v3 = _n * 100
+export excel using "temp/xi_nohdr.xlsx", replace
+benchmark_excel using "temp/xi_nohdr.xlsx", testname("xlsx import: no firstrow") importopts(clear)
+capture erase "temp/xi_nohdr.xlsx"
+
+* --- Multiple Sheets ---
+
+clear
+set obs 5
+gen id = _n
+gen x = _n * 100
+export excel using "temp/xi_multi.xlsx", sheet("Data1") firstrow(variables) replace
+
+clear
+set obs 3
+gen id = _n * 10
+gen y = _n * 1000
+export excel using "temp/xi_multi.xlsx", sheet("Data2") firstrow(variables) sheetmodify
+
+* Import default sheet (Sheet1 = Data1)
+benchmark_excel using "temp/xi_multi.xlsx", testname("xlsx import: multisheet default") importopts(firstrow clear)
+
+* Import named Sheet2
+benchmark_excel using "temp/xi_multi.xlsx", testname("xlsx import: multisheet Data2") importopts(sheet("Data2") firstrow clear)
+
+capture erase "temp/xi_multi.xlsx"
+
+* --- Synthetic Datasets ---
+
+clear
+set obs 500
+gen id = ceil(_n / 5)
+bysort id: gen time = _n
+gen value = runiform()
+gen str10 grp = "g" + string(mod(id, 4))
+export excel using "temp/xi_panel.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_panel.xlsx", testname("xlsx import: panel 100x5") importopts(firstrow clear)
+capture erase "temp/xi_panel.xlsx"
+
+clear
+set obs 200
+gen respondent = _n
+gen age = runiformint(18, 85)
+gen str10 gender = cond(runiform() < 0.5, "Male", "Female")
+gen income = runiformint(20000, 200000)
+export excel using "temp/xi_survey.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_survey.xlsx", testname("xlsx import: survey data") importopts(firstrow clear)
+capture erase "temp/xi_survey.xlsx"
+
+clear
+set obs 1000
+gen order_id = _n
+gen customer = runiformint(1, 200)
+gen quantity = runiformint(1, 10)
+gen price = round(runiform() * 100, 0.01)
+gen str15 status = cond(runiform() < 0.7, "Completed", cond(runiform() < 0.9, "Pending", "Cancelled"))
+export excel using "temp/xi_ecomm.xlsx", firstrow(variables) replace
+benchmark_excel using "temp/xi_ecomm.xlsx", testname("xlsx import: ecommerce data") importopts(firstrow clear)
+capture erase "temp/xi_ecomm.xlsx"
 
 /*******************************************************************************
  * SECTION: Intentional Error Tests

@@ -19,66 +19,6 @@ quietly {
 noi di as text "Running validation tests for cdecode..."
 
 /*******************************************************************************
- * Helper: Compare cdecode vs decode
- ******************************************************************************/
-capture program drop benchmark_decode
-program define benchmark_decode
-    syntax varname, testname(string) [GENerate(name) MAXLength(integer 0) if2(string) in2(string) cdecodeopts(string)]
-
-    * Set default generate name
-    if "`generate'" == "" local generate = "decoded"
-
-    * Build if/in conditions
-    local ifin ""
-    if "`if2'" != "" local ifin "`ifin' if `if2'"
-    if "`in2'" != "" local ifin "`ifin' in `in2'"
-
-    * Build options for cdecode (includes cdecodeopts like verbose, threads)
-    local opts "generate(`generate'_c)"
-    if `maxlength' > 0 local opts "`opts' maxlength(`maxlength')"
-    if "`cdecodeopts'" != "" local opts "`opts' `cdecodeopts'"
-
-    * Build options for Stata decode (no cdecodeopts - Stata doesn't support them)
-    local opts_stata "generate(`generate'_s)"
-    if `maxlength' > 0 local opts_stata "`opts_stata' maxlength(`maxlength')"
-
-    * Run cdecode
-    capture drop `generate'_c
-    capture cdecode `varlist' `ifin', `opts'
-    local rc_c = _rc
-
-    * Run native decode
-    capture drop `generate'_s
-    capture decode `varlist' `ifin', `opts_stata'
-    local rc_s = _rc
-
-    * Check both succeeded or both failed
-    if `rc_c' != `rc_s' {
-        test_fail "`testname'" "cdecode rc=`rc_c', decode rc=`rc_s'"
-        exit
-    }
-
-    if `rc_c' != 0 {
-        test_pass "`testname' (both error as expected)"
-        exit
-    }
-
-    * Compare string values
-    quietly count if `generate'_c != `generate'_s
-    local ndiff = r(N)
-
-    if `ndiff' > 0 {
-        test_fail "`testname'" "`ndiff' values differ"
-    }
-    else {
-        test_pass "`testname'"
-    }
-
-    * Cleanup
-    capture drop `generate'_c `generate'_s
-end
-
-/*******************************************************************************
  * SECTION 1: Plugin functionality check
  ******************************************************************************/
 print_section "Plugin Check"
@@ -111,11 +51,10 @@ else {
 }
 
 * Test 2.2: Compare with decode
-sysuse auto, clear
 benchmark_decode foreign, testname("vs decode: foreign")
 
 * Test 2.3: Labels correctly decoded
-sysuse auto, clear
+capture drop foreign_str
 cdecode foreign, generate(foreign_str)
 local pass = 1
 forvalues i = 1/10 {
@@ -150,7 +89,6 @@ sysuse auto, clear
 benchmark_decode foreign, testname("[syntax] verbose option") cdecodeopts(verbose)
 
 * Test 2.6: threads option - verify correctness with threads(2)
-sysuse auto, clear
 benchmark_decode foreign, testname("[syntax] threads(2) option") cdecodeopts(threads(2))
 
 * Test 2.7: Single observation
@@ -550,7 +488,6 @@ else {
 drop foreign_str
 
 * Test 5.2: in range
-sysuse auto, clear
 cdecode foreign in 1/20, generate(foreign_str)
 count if foreign_str != "" in 1/20
 local in_range = r(N)
@@ -565,7 +502,6 @@ else {
 drop foreign_str
 
 * Test 5.3: Empty if result
-sysuse auto, clear
 cdecode foreign if price > 100000, generate(foreign_str)
 count if foreign_str != ""
 if r(N) == 0 {
@@ -577,7 +513,6 @@ else {
 drop foreign_str
 
 * Test 5.4: if matches all
-sysuse auto, clear
 cdecode foreign if price > 0, generate(foreign_str)
 count if foreign_str != ""
 if r(N) == _N {
@@ -589,7 +524,6 @@ else {
 drop foreign_str
 
 * Test 5.5: Combined if and in
-sysuse auto, clear
 * Use a condition that actually matches some observations
 cdecode foreign if mpg > 20 in 1/50, generate(foreign_str)
 * Compare with native decode
@@ -604,15 +538,12 @@ else {
 drop foreign_str foreign_decode
 
 * Test 5.6: Compare if with decode
-sysuse auto, clear
 benchmark_decode foreign, testname("vs decode: if price>8000") if2("price > 8000")
 
 * Test 5.7: Compare in with decode
-sysuse auto, clear
 benchmark_decode foreign, testname("vs decode: in 1/30") in2("1/30")
 
 * Test 5.8: Single observation in
-sysuse auto, clear
 cdecode foreign in 1/1, generate(foreign_str)
 count if foreign_str != ""
 if r(N) == 1 {
@@ -624,7 +555,6 @@ else {
 drop foreign_str
 
 * Test 5.9: if with condition on another variable
-sysuse auto, clear
 cdecode foreign if price < 10000, generate(foreign_str)
 * Should decode foreign where price < 10000
 count if foreign_str != "" & price < 10000
@@ -637,7 +567,6 @@ else {
 drop foreign_str
 
 * Test 5.10: in from middle
-sysuse auto, clear
 cdecode foreign in 30/50, generate(foreign_str)
 count if foreign_str != "" in 30/50
 if r(N) == 21 {
@@ -856,16 +785,7 @@ label define cat_lbl 1 "This is a fairly long label for category one" ///
     4 "Medium length label" ///
     5 "The fifth and final category with long text"
 label values category cat_lbl
-capture cdecode category, generate(cat_str_c)
-local rc_c = _rc
-capture decode category, generate(cat_str_s)
-local rc_s = _rc
-if `rc_c' != 0 | `rc_s' != 0 {
-    test_fail "large with long labels" "cdecode rc=`rc_c', decode rc=`rc_s'"
-}
-else {
-    assert_strvar_equal cat_str_c cat_str_s "large with long labels"
-}
+benchmark_decode category, testname("large with long labels")
 
 * Test 7.6: Large with threads(4)
 clear
@@ -873,16 +793,7 @@ set obs 500000
 gen byte category = mod(_n, 5) + 1
 label define cat_lbl 1 "A" 2 "B" 3 "C" 4 "D" 5 "E"
 label values category cat_lbl
-capture cdecode category, generate(cat_str_c) threads(4)
-local rc_c = _rc
-capture decode category, generate(cat_str_s)
-local rc_s = _rc
-if `rc_c' != 0 | `rc_s' != 0 {
-    test_fail "large with threads(4)" "cdecode rc=`rc_c', decode rc=`rc_s'"
-}
-else {
-    assert_strvar_equal cat_str_c cat_str_s "large with threads(4)"
-}
+benchmark_decode category, testname("large with threads(4)") cdecodeopts(threads(4))
 
 * Test 7.7: Large with many missing
 clear
@@ -1103,7 +1014,6 @@ webuse nlswork, clear
 benchmark_decode race, testname("nlswork: race")
 
 * Test 9.5: nlswork - msp
-webuse nlswork, clear
 benchmark_decode msp, testname("nlswork: msp")
 
 * Test 9.6: citytemp - region
@@ -1119,7 +1029,6 @@ sysuse voter, clear
 benchmark_decode candidat, testname("voter: candidat")
 
 * Test 9.9: voter - inc
-sysuse voter, clear
 benchmark_decode inc, testname("voter: inc")
 
 * Test 9.10: bpwide - agegrp
@@ -2853,15 +2762,12 @@ sysuse auto, clear
 test_error_match, stata_cmd(decode nonexistent_var, generate(test)) ctools_cmd(cdecode nonexistent_var, generate(test)) testname("nonexistent variable")
 
 * Generate variable already exists
-sysuse auto, clear
 test_error_match, stata_cmd(decode foreign, generate(price)) ctools_cmd(cdecode foreign, generate(price)) testname("generate var already exists")
 
 * No generate option (missing required option)
-sysuse auto, clear
 test_error_match, stata_cmd(decode foreign) ctools_cmd(cdecode foreign) testname("missing generate option")
 
 * String variable (decode expects numeric)
-sysuse auto, clear
 test_error_match, stata_cmd(decode make, generate(test)) ctools_cmd(cdecode make, generate(test)) testname("string variable input")
 
 * Variable without value labels

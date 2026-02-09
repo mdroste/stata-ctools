@@ -1,30 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cpsmatch: C-accelerated propensity score matching for Stata
-*! Part of the ctools suite
-*!
-*! Implements psmatch2-compatible propensity score matching with:
-*!   - Nearest neighbor matching (with/without replacement)
-*!   - Radius/caliper matching
-*!   - Kernel matching (Epanechnikov, Gaussian, biweight, uniform, tricube)
-*!   - Common support restriction
-*!
-*! Syntax: cpsmatch treatvar [varlist] [if] [in] [, options]
-*!
-*! Options:
-*!   OUTcome(varname)     - outcome variable for ATT calculation
-*!   Pscore(varname)      - use existing propensity score variable
-*!   Logit | Probit       - estimation method (default: probit)
-*!   Neighbor(#)          - number of nearest neighbors (default: 1)
-*!   Caliper(#)           - caliper width
-*!   Radius               - radius matching
-*!   Kernel               - kernel matching
-*!   Kerneltype(string)   - kernel type: epan, normal, biweight, uniform, tricube
-*!   Bwidth(#)            - bandwidth for kernel matching
-*!   Common               - impose common support
-*!   Noreplacement        - match without replacement
-*!   Ties                 - include tied matches
-*!   Descending           - match in descending pscore order
-*!   Verbose              - display timing breakdown
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cpsmatch, rclass sortpreserve
     version 14.1

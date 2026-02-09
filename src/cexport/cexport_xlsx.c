@@ -53,6 +53,8 @@ typedef struct {
     ST_int nvars;
     char **varnames;
     int *vartypes;  /* 0=string, 1-5=numeric types */
+    bool *date_cols; /* true if column is a date (needs s="1" style) */
+    bool has_dates;  /* true if any column is a date */
 
     /* Shared strings for deduplication */
     char **shared_strings;
@@ -104,7 +106,10 @@ static const char *STYLES_XML =
     "  <fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>\n"
     "  <borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>\n"
     "  <cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\n"
-    "  <cellXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/></cellXfs>\n"
+    "  <cellXfs count=\"2\">"
+    "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
+    "<xf numFmtId=\"14\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "</cellXfs>\n"
     "</styleSheet>";
 
 static const char *WORKBOOK_RELS_XML =
@@ -259,6 +264,7 @@ static void xlsx_context_free(XLSXExportContext *ctx) {
         free(ctx->varnames);
     }
     free(ctx->vartypes);
+    free(ctx->date_cols);
     free(ctx->missing_value);
     free(ctx->preserved_styles);
 
@@ -351,6 +357,7 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
         return 198;
     }
     strncpy(ctx->filename, filename, sizeof(ctx->filename) - 1);
+    ctx->filename[sizeof(ctx->filename) - 1] = '\0';
 
     /* Parse options */
     char *opt;
@@ -371,6 +378,10 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
         } else if (strncmp(opt, "cell=", 5) == 0) {
             xlsx_parse_cell_ref(opt + 5, &ctx->start_col, &ctx->start_row);
         } else if (strncmp(opt, "missing=", 8) == 0) {
+            if (ctx->missing_value) {
+                free(ctx->missing_value);
+                ctx->missing_value = NULL;
+            }
             ctx->missing_value = strdup(opt + 8);
             if (ctx->missing_value == NULL) {
                 return 920;  /* Memory allocation failed */
@@ -447,6 +458,23 @@ static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx) {
         type_str = strtok(NULL, " ");
     }
 
+    /* Load date column flags from global macro (optional) */
+    char datecols_buf[8000];
+    rc = SF_macro_use("CEXPORT_DATE_COLS", datecols_buf, sizeof(datecols_buf));
+    if (rc == 0 && datecols_buf[0] != '\0') {
+        ctx->date_cols = calloc(ctx->nvars, sizeof(bool));
+        if (ctx->date_cols) {
+            char *dc_str = strtok(datecols_buf, " ");
+            for (ST_int i = 0; i < ctx->nvars && dc_str; i++) {
+                if (dc_str[0] == '1') {
+                    ctx->date_cols[i] = true;
+                    ctx->has_dates = true;
+                }
+                dc_str = strtok(NULL, " ");
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -508,7 +536,13 @@ static void strbuf_ensure(StringBuffer *sb, size_t need) {
         size_t new_cap = sb->capacity * 2;
         if (new_cap < sb->len + need + 1) new_cap = sb->len + need + 1024;
         char *new_data = realloc(sb->data, new_cap);
-        if (!new_data) return;
+        if (!new_data) {
+            free(sb->data);
+            sb->data = NULL;
+            sb->capacity = 0;
+            sb->len = 0;
+            return;
+        }
         sb->data = new_data;
         sb->capacity = new_cap;
     }
@@ -518,6 +552,7 @@ static void strbuf_ensure(StringBuffer *sb, size_t need) {
 static void strbuf_append_n(StringBuffer *sb, const char *str, size_t slen) {
     if (!sb->data) return;
     strbuf_ensure(sb, slen);
+    if (!sb->data) return;
     memcpy(sb->data + sb->len, str, slen);
     sb->len += slen;
     sb->data[sb->len] = '\0';
@@ -824,6 +859,7 @@ typedef struct {
     size_t *col_letters_len;    /* shared pre-computed column letter lengths */
     char (*col_prefix)[24];     /* pre-computed "      <c r=\"" + col letters */
     size_t *col_prefix_len;     /* length of each prefix */
+    const bool *date_cols;      /* which columns are dates (need s="1") */
     const char *escaped_missing;
     size_t escaped_missing_len;
     StringBuffer sb;            /* output buffer */
@@ -917,7 +953,11 @@ static void *xlsx_format_chunk(void *arg) {
                     int pos = 0;
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                     pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
-                    memcpy(cell_buf + pos, "\"><v>", 5); pos += 5;
+                    if (a->date_cols && a->date_cols[j]) {
+                        memcpy(cell_buf + pos, "\" s=\"1\"><v>", 11); pos += 11;
+                    } else {
+                        memcpy(cell_buf + pos, "\"><v>", 5); pos += 5;
+                    }
 
                     if (val == floor(val) && fabs(val) < 1e15) {
                         pos += ctools_int64_to_str((int64_t)val, cell_buf + pos);
@@ -1070,6 +1110,7 @@ static bool xlsx_gen_worksheet_segments(XLSXExportContext *ctx,
         chunks[c].col_letters_len = col_letters_len;
         chunks[c].col_prefix = col_prefix;
         chunks[c].col_prefix_len = col_prefix_len;
+        chunks[c].date_cols = ctx->date_cols;
         chunks[c].escaped_missing = ctx->missing_value ? escaped_missing : NULL;
         chunks[c].escaped_missing_len = escaped_missing_len;
 

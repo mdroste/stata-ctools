@@ -1,19 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cmerge: Optimized C-accelerated merge for Stata datasets
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance merge with MINIMAL data transfer:
-*!   - Only loads key + keepusing variables into C memory
-*!   - Master non-key variables are STREAMED (never fully loaded)
-*!   - Memory: O(nobs * (nkeys + nkeepusing)) instead of O(nobs * all_vars)
-*!
-*! Syntax:
-*!   cmerge 1:1 varlist using filename [, options]
-*!   cmerge 1:1 _n using filename [, options]
-*!   cmerge m:1 varlist using filename [, options]
-*!   cmerge 1:m varlist using filename [, options]
-*!   cmerge m:m varlist using filename [, options]
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 * Mata helpers for optimized operations
 capture mata: mata drop _cmerge_addvars()

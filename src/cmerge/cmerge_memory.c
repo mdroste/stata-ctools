@@ -29,10 +29,7 @@ cmerge_string_arena *cmerge_arena_create(size_t block_size)
 
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
 {
-    if (!arena) {
-        /* Fallback if arena creation failed */
-        return s ? strdup(s) : NULL;
-    }
+    if (!arena) return NULL;
     return ctools_arena_strdup(arena, s);
 }
 

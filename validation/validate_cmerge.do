@@ -138,18 +138,8 @@ gen val2 = runiform() * 100
 tempfile using_mm
 save `using_mm'
 
-* Test that m:m merge runs and produces correct dimensions
 use `master_mm', clear
-capture noisily cmerge m:m group using `using_mm', nogen noreport
-if _rc == 0 & _N == 100 {
-    test_pass "m:m basic (N=100)"
-}
-else if _rc != 0 {
-    test_fail "m:m basic" "returned error `=_rc'"
-}
-else {
-    test_fail "m:m basic" "unexpected N=`=_N' (expected 100)"
-}
+benchmark_merge m:m group using `using_mm', testname("m:m basic")
 
 /*******************************************************************************
  * SECTION 5: keep() option tests
@@ -611,29 +601,11 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 id using `using_1', update nogenerate
-rename value stata_value
-tempfile stata_update
-save `stata_update'
-
-use `master', clear
-cmerge 1:1 id using `using_1', update nogenerate noreport
-rename value cmerge_value
-merge 1:1 id using `stata_update', nogenerate
-assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update option"
+benchmark_merge 1:1 id using `using_1', update nogenerate testname("update option")
 
 * Test update replace option
 use `master', clear
-merge 1:1 id using `using_1', update replace nogenerate
-rename value stata_value
-tempfile stata_update_replace
-save `stata_update_replace'
-
-use `master', clear
-cmerge 1:1 id using `using_1', update replace nogenerate noreport
-rename value cmerge_value
-merge 1:1 id using `stata_update_replace', nogenerate
-assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update replace option"
+benchmark_merge 1:1 id using `using_1', update replace nogenerate testname("update replace option")
 
 /*******************************************************************************
  * SECTION 15: sorted option
@@ -679,19 +651,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-capture merge 1:1 id using `using_1', force nogenerate
-local stata_force_rc = _rc
-
-use `master', clear
-capture cmerge 1:1 id using `using_1', force nogenerate noreport
-local cmerge_force_rc = _rc
-
-if `stata_force_rc' == 0 & `cmerge_force_rc' == 0 {
-    test_pass "force option"
-}
-else {
-    test_fail "force option" "stata=`stata_force_rc' cmerge=`cmerge_force_rc'"
-}
+benchmark_merge 1:1 id using `using_1', force nogenerate testname("force option")
 
 /*******************************************************************************
  * SECTION 17: nolabel and nonotes options
@@ -712,22 +672,10 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-capture cmerge 1:1 id using `using_1', nolabel noreport
-if _rc == 0 {
-    test_pass "nolabel option accepted"
-}
-else {
-    test_fail "nolabel option" "returned error `=_rc'"
-}
+benchmark_merge 1:1 id using `using_1', nolabel testname("nolabel option")
 
 use `master', clear
-capture cmerge 1:1 id using `using_1', nonotes noreport
-if _rc == 0 {
-    test_pass "nonotes option accepted"
-}
-else {
-    test_fail "nonotes option" "returned error `=_rc'"
-}
+benchmark_merge 1:1 id using `using_1', nonotes testname("nonotes option")
 
 /*******************************************************************************
  * SECTION 18: 1:1 _n merge tests (merge by observation number)
@@ -746,23 +694,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1', nogenerate
-local stata_N = _N
-local stata_price1 = price[1]
-local stata_weight1 = weight[1]
-
-use `master', clear
-cmerge 1:1 _n using `using_1', nogenerate noreport
-local cmerge_N = _N
-local cmerge_price1 = price[1]
-local cmerge_weight1 = weight[1]
-
-if `stata_N' == `cmerge_N' & `stata_price1' == `cmerge_price1' & `stata_weight1' == `cmerge_weight1' {
-    test_pass "1:1 _n basic (same nobs)"
-}
-else {
-    test_fail "1:1 _n basic (same nobs)" "N: stata=`stata_N' cmerge=`cmerge_N'"
-}
+benchmark_merge 1:1 _n using `using_1', nogenerate testname("1:1 _n basic (same nobs)")
 
 * 1:1 _n merge - master has more observations
 clear
@@ -779,31 +711,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1'
-qui count if _merge == 3
-local stata_matched = r(N)
-qui count if _merge == 1
-local stata_master = r(N)
-qui count if _merge == 2
-local stata_using = r(N)
-drop _merge
-
-use `master', clear
-cmerge 1:1 _n using `using_1', noreport
-qui count if _merge == 3
-local cmerge_matched = r(N)
-qui count if _merge == 1
-local cmerge_master = r(N)
-qui count if _merge == 2
-local cmerge_using = r(N)
-drop _merge
-
-if `stata_matched' == `cmerge_matched' & `stata_master' == `cmerge_master' & `stata_using' == `cmerge_using' {
-    test_pass "1:1 _n master has more obs"
-}
-else {
-    test_fail "1:1 _n master has more obs" "matched: stata=`stata_matched' cmerge=`cmerge_matched'"
-}
+benchmark_merge 1:1 _n using `using_1', testname("1:1 _n master has more obs")
 
 * 1:1 _n merge - using has more observations
 clear
@@ -820,31 +728,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1'
-qui count if _merge == 3
-local stata_matched = r(N)
-qui count if _merge == 1
-local stata_master = r(N)
-qui count if _merge == 2
-local stata_using = r(N)
-drop _merge
-
-use `master', clear
-cmerge 1:1 _n using `using_1', noreport
-qui count if _merge == 3
-local cmerge_matched = r(N)
-qui count if _merge == 1
-local cmerge_master = r(N)
-qui count if _merge == 2
-local cmerge_using = r(N)
-drop _merge
-
-if `stata_matched' == `cmerge_matched' & `stata_master' == `cmerge_master' & `stata_using' == `cmerge_using' {
-    test_pass "1:1 _n using has more obs"
-}
-else {
-    test_fail "1:1 _n using has more obs" "matched: stata=`stata_matched' cmerge=`cmerge_matched'"
-}
+benchmark_merge 1:1 _n using `using_1', testname("1:1 _n using has more obs")
 
 * 1:1 _n merge with keepusing option
 sysuse auto, clear
@@ -858,29 +742,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1', keepusing(weight) nogenerate
-local stata_has_weight = 1
-capture confirm variable weight
-if _rc local stata_has_weight = 0
-capture confirm variable length
-local stata_has_length = !_rc
-local stata_weight1 = weight[1]
-
-use `master', clear
-cmerge 1:1 _n using `using_1', keepusing(weight) nogenerate noreport
-local cmerge_has_weight = 1
-capture confirm variable weight
-if _rc local cmerge_has_weight = 0
-capture confirm variable length
-local cmerge_has_length = !_rc
-local cmerge_weight1 = weight[1]
-
-if `stata_has_weight' == `cmerge_has_weight' & `stata_has_length' == `cmerge_has_length' & `stata_weight1' == `cmerge_weight1' {
-    test_pass "1:1 _n with keepusing"
-}
-else {
-    test_fail "1:1 _n with keepusing" "has_weight: stata=`stata_has_weight' cmerge=`cmerge_has_weight'"
-}
+benchmark_merge 1:1 _n using `using_1', keepusing(weight) nogenerate testname("1:1 _n with keepusing")
 
 * 1:1 _n merge with keep() option
 clear
@@ -897,19 +759,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1', keep(match) nogenerate
-local stata_N = _N
-
-use `master', clear
-cmerge 1:1 _n using `using_1', keep(match) nogenerate noreport
-local cmerge_N = _N
-
-if `stata_N' == `cmerge_N' {
-    test_pass "1:1 _n with keep(match)"
-}
-else {
-    test_fail "1:1 _n with keep(match)" "N: stata=`stata_N' cmerge=`cmerge_N'"
-}
+benchmark_merge 1:1 _n using `using_1', keep(match) nogenerate testname("1:1 _n with keep(match)")
 
 * 1:1 _n merge with generate() option
 sysuse auto, clear
@@ -923,25 +773,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1', generate(merge_result)
-local stata_has_merge = 1
-capture confirm variable merge_result
-if _rc local stata_has_merge = 0
-drop merge_result
-
-use `master', clear
-cmerge 1:1 _n using `using_1', generate(merge_result) noreport
-local cmerge_has_merge = 1
-capture confirm variable merge_result
-if _rc local cmerge_has_merge = 0
-drop merge_result
-
-if `stata_has_merge' == 1 & `cmerge_has_merge' == 1 {
-    test_pass "1:1 _n with generate()"
-}
-else {
-    test_fail "1:1 _n with generate()" "has_merge: stata=`stata_has_merge' cmerge=`cmerge_has_merge'"
-}
+benchmark_merge 1:1 _n using `using_1', generate(merge_result) testname("1:1 _n with generate()")
 
 * Large 1:1 _n merge test
 clear
@@ -961,23 +793,7 @@ tempfile using_1
 save `using_1'
 
 use `master', clear
-merge 1:1 _n using `using_1', nogenerate
-local stata_N = _N
-local stata_extra1_1 = extra1[1]
-local stata_extra1_last = extra1[_N]
-
-use `master', clear
-cmerge 1:1 _n using `using_1', nogenerate noreport
-local cmerge_N = _N
-local cmerge_extra1_1 = extra1[1]
-local cmerge_extra1_last = extra1[_N]
-
-if `stata_N' == `cmerge_N' & `stata_extra1_1' == `cmerge_extra1_1' & `stata_extra1_last' == `cmerge_extra1_last' {
-    test_pass "1:1 _n large dataset (50K obs)"
-}
-else {
-    test_fail "1:1 _n large dataset" "N: stata=`stata_N' cmerge=`cmerge_N'"
-}
+benchmark_merge 1:1 _n using `using_1', nogenerate testname("1:1 _n large dataset (50K obs)")
 
 /*******************************************************************************
  * SECTION 19: Comprehensive sysuse/webuse Dataset Tests
@@ -1502,25 +1318,8 @@ gen other = runiform()
 tempfile same_key_using
 save `same_key_using'
 
-* First run Stata's merge to get expected N
 use `same_key_master', clear
-merge m:m key1 key2 key3 using `same_key_using', nogen
-local expected_N = _N
-
-use `same_key_master', clear
-capture noisily cmerge m:m key1 key2 key3 using `same_key_using', nogen noreport
-if _rc == 0 {
-    * Verify N matches Stata's merge result
-    if _N == `expected_N' {
-        test_pass "all same keys (degenerate m:m)"
-    }
-    else {
-        test_fail "all same keys (degenerate m:m)" "N=`=_N', expected `expected_N'"
-    }
-}
-else {
-    test_fail "all same keys (degenerate)" "rc=`=_rc'"
-}
+benchmark_merge m:m key1 key2 key3 using `same_key_using', testname("all same keys (degenerate m:m)")
 
 /*******************************************************************************
  * SECTION 23: Match Pattern Edge Cases
@@ -1579,23 +1378,7 @@ tempfile master_only_using
 save `master_only_using'
 
 use `master_only_master', clear
-merge 1:1 id using `master_only_using'
-qui count if _merge == 1
-local stata_m1 = r(N)
-drop _merge
-
-use `master_only_master', clear
-cmerge 1:1 id using `master_only_using', noreport
-qui count if _merge == 1
-local cmerge_m1 = r(N)
-drop _merge
-
-if `stata_m1' == `cmerge_m1' & `cmerge_m1' == 100 {
-    test_pass "master only (no using matches)"
-}
-else {
-    test_fail "master only" "m1 counts differ"
-}
+benchmark_merge 1:1 id using `master_only_using', testname("master only (no using matches)")
 
 * Using only (no master matches any)
 clear
@@ -1613,23 +1396,7 @@ tempfile using_only_using
 save `using_only_using'
 
 use `using_only_master', clear
-merge 1:1 id using `using_only_using'
-qui count if _merge == 2
-local stata_m2 = r(N)
-drop _merge
-
-use `using_only_master', clear
-cmerge 1:1 id using `using_only_using', noreport
-qui count if _merge == 2
-local cmerge_m2 = r(N)
-drop _merge
-
-if `stata_m2' == `cmerge_m2' & `cmerge_m2' == 100 {
-    test_pass "using only (no master matches)"
-}
-else {
-    test_fail "using only" "m2 counts differ"
-}
+benchmark_merge 1:1 id using `using_only_using', testname("using only (no master matches)")
 
 * Sparse matches (10% overlap) - using has unique keys that partially overlap master
 clear
@@ -1904,20 +1671,7 @@ tempfile large_mm_using
 save `large_mm_using'
 
 use `large_mm_master', clear
-merge m:m group using `large_mm_using', nogen
-local stata_N = _N
-
-use `large_mm_master', clear
-capture cmerge m:m group using `large_mm_using', nogen noreport
-if _rc == 0 & _N == `stata_N' {
-    test_pass "large m:m with expansion"
-}
-else if _rc != 0 {
-    test_fail "large m:m expansion" "rc=`=_rc'"
-}
-else {
-    test_fail "large m:m expansion" "N mismatch: stata=`stata_N' cmerge=`=_N'"
-}
+benchmark_merge m:m group using `large_mm_using', testname("large m:m with expansion")
 
 /*******************************************************************************
  * SECTION 27: Unbalanced Merges
@@ -2077,29 +1831,11 @@ tempfile update_using
 save `update_using'
 
 use `update_master', clear
-merge 1:1 id using `update_using', update nogenerate
-rename value stata_value
-tempfile stata_update_fill
-save `stata_update_fill'
-
-use `update_master', clear
-cmerge 1:1 id using `update_using', update nogenerate noreport
-rename value cmerge_value
-merge 1:1 id using `stata_update_fill', nogenerate
-assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update fills missing values"
+benchmark_merge 1:1 id using `update_using', update nogenerate testname("update fills missing values")
 
 * update replace - replace non-missing too
 use `update_master', clear
-merge 1:1 id using `update_using', update replace nogenerate
-rename value stata_value
-tempfile stata_update_repl2
-save `stata_update_repl2'
-
-use `update_master', clear
-cmerge 1:1 id using `update_using', update replace nogenerate noreport
-rename value cmerge_value
-merge 1:1 id using `stata_update_repl2', nogenerate
-assert_var_equal stata_value cmerge_value $DEFAULT_SIGFIGS "update replace replaces non-missing"
+benchmark_merge 1:1 id using `update_using', update replace nogenerate testname("update replace replaces non-missing")
 
 * update with multiple variables
 clear
@@ -2123,22 +1859,7 @@ tempfile update_multi_using
 save `update_multi_using'
 
 use `update_multi_master', clear
-merge 1:1 id using `update_multi_using', update nogenerate
-rename x stata_x
-rename y stata_y
-rename z stata_z
-tempfile stata_update_multi
-save `stata_update_multi'
-
-use `update_multi_master', clear
-cmerge 1:1 id using `update_multi_using', update nogenerate noreport
-rename x cmerge_x
-rename y cmerge_y
-rename z cmerge_z
-merge 1:1 id using `stata_update_multi', nogenerate
-assert_var_equal stata_x cmerge_x $DEFAULT_SIGFIGS "update multi: x"
-assert_var_equal stata_y cmerge_y $DEFAULT_SIGFIGS "update multi: y"
-assert_var_equal stata_z cmerge_z $DEFAULT_SIGFIGS "update multi: z"
+benchmark_merge 1:1 id using `update_multi_using', update nogenerate testname("update multi vars")
 
 /*******************************************************************************
  * SECTION 30: Assert Option Tests
@@ -2218,722 +1939,6 @@ else if `stata_assert2_rc' == `cmerge_assert2_rc' {
 }
 else {
     test_fail "assert(using) fail" "rc differ"
-}
-
-/*******************************************************************************
- * SECTION: Additional Pathological Data Tests
- ******************************************************************************/
-print_section "Pathological Data Patterns"
-
-* All same key values
-clear
-set obs 100
-gen key = 1
-gen value = _n
-tempfile master_same
-save `master_same'
-
-clear
-set obs 100
-gen key = 1
-gen other = runiform()
-tempfile using_same
-save `using_same'
-
-use `master_same', clear
-merge m:m key using `using_same', nogenerate
-local stata_N = _N
-
-use `master_same', clear
-capture cmerge m:m key using `using_same', nogenerate noreport
-if _rc == 0 {
-    local cmerge_N = _N
-    if `stata_N' == `cmerge_N' {
-        test_pass "m:m all same key"
-    }
-    else {
-        test_fail "m:m all same key" "N differs"
-    }
-}
-else {
-    test_fail "m:m all same key" "rc=`=_rc'"
-}
-
-* Binary keys
-clear
-set obs 200
-gen key = mod(_n, 2)
-gen value = _n
-tempfile master_binary
-save `master_binary'
-
-clear
-set obs 200
-gen key = mod(_n, 2)
-gen other = runiform()
-tempfile using_binary
-save `using_binary'
-
-use `master_binary', clear
-merge m:m key using `using_binary', nogenerate
-local stata_N = _N
-
-use `master_binary', clear
-capture cmerge m:m key using `using_binary', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "m:m binary keys"
-    }
-    else {
-        test_fail "m:m binary keys" "N differs"
-    }
-}
-else {
-    test_fail "m:m binary keys" "rc=`=_rc'"
-}
-
-* Sparse keys (many gaps)
-clear
-set obs 100
-gen key = _n * 10  // 10, 20, 30, ...
-gen value = runiform()
-tempfile master_sparse
-save `master_sparse'
-
-clear
-set obs 100
-gen key = _n * 10 + 5  // 15, 25, 35, ... (no overlap!)
-gen other = runiform()
-tempfile using_sparse
-save `using_sparse'
-
-use `master_sparse', clear
-merge 1:1 key using `using_sparse', nogenerate
-local stata_N = _N
-
-use `master_sparse', clear
-capture cmerge 1:1 key using `using_sparse', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 no overlap keys"
-    }
-    else {
-        test_fail "1:1 no overlap" "N differs"
-    }
-}
-else {
-    test_fail "1:1 no overlap" "rc=`=_rc'"
-}
-
-* Negative keys
-clear
-set obs 50
-gen int key = _n - 25  // -24 to 25
-gen value = runiform()
-tempfile master_neg
-save `master_neg'
-
-clear
-set obs 50
-gen int key = _n - 30  // -29 to 20
-gen other = runiform()
-tempfile using_neg
-save `using_neg'
-
-use `master_neg', clear
-merge 1:1 key using `using_neg', nogenerate
-local stata_N = _N
-
-use `master_neg', clear
-capture cmerge 1:1 key using `using_neg', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 negative keys"
-    }
-    else {
-        test_fail "1:1 negative keys" "N differs"
-    }
-}
-else {
-    test_fail "1:1 negative keys" "rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: String Key Tests
- ******************************************************************************/
-print_section "String Key Merges"
-
-* Basic string key 1:1
-clear
-set obs 50
-gen str20 name = "item_" + string(_n)
-gen value = runiform()
-tempfile master_str
-save `master_str'
-
-clear
-set obs 50
-gen str20 name = "item_" + string(_n)
-gen other = runiform() * 100
-tempfile using_str
-save `using_str'
-
-use `master_str', clear
-merge 1:1 name using `using_str', nogenerate
-local stata_N = _N
-
-use `master_str', clear
-capture cmerge 1:1 name using `using_str', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 string key"
-    }
-    else {
-        test_fail "1:1 string key" "N differs"
-    }
-}
-else {
-    test_fail "1:1 string key" "rc=`=_rc'"
-}
-
-* String key with spaces
-clear
-set obs 30
-gen str30 name = "item " + string(_n) + " here"
-gen value = _n
-tempfile master_space
-save `master_space'
-
-clear
-set obs 30
-gen str30 name = "item " + string(_n) + " here"
-gen other = runiform()
-tempfile using_space
-save `using_space'
-
-use `master_space', clear
-merge 1:1 name using `using_space', nogenerate
-local stata_N = _N
-
-use `master_space', clear
-capture cmerge 1:1 name using `using_space', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 string key with spaces"
-    }
-    else {
-        test_fail "string spaces" "N differs"
-    }
-}
-else {
-    test_fail "string spaces" "rc=`=_rc'"
-}
-
-* Case-sensitive string key
-clear
-set obs 10
-gen str10 name = ""
-replace name = "Apple" in 1
-replace name = "apple" in 2
-replace name = "APPLE" in 3
-replace name = "Banana" in 4
-replace name = "banana" in 5
-replace name = "cherry" in 6
-replace name = "Cherry" in 7
-replace name = "CHERRY" in 8
-replace name = "date" in 9
-replace name = "Date" in 10
-gen value = _n
-tempfile master_case
-save `master_case'
-
-clear
-set obs 5
-gen str10 name = ""
-replace name = "Apple" in 1
-replace name = "Banana" in 2
-replace name = "cherry" in 3
-replace name = "Date" in 4
-replace name = "EXTRA" in 5
-gen other = _n * 10
-tempfile using_case
-save `using_case'
-
-use `master_case', clear
-merge 1:1 name using `using_case', nogenerate
-local stata_N = _N
-
-use `master_case', clear
-capture cmerge 1:1 name using `using_case', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 case-sensitive keys"
-    }
-    else {
-        test_fail "case-sensitive" "N differs"
-    }
-}
-else {
-    test_fail "case-sensitive" "rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: Multi-Key Merges
- ******************************************************************************/
-print_section "Multi-Key Merges"
-
-* Two numeric keys
-clear
-set obs 100
-gen id1 = mod(_n, 10) + 1
-gen id2 = ceil(_n / 10)
-gen value = runiform()
-tempfile master_2key
-save `master_2key'
-
-clear
-set obs 100
-gen id1 = mod(_n, 10) + 1
-gen id2 = ceil(_n / 10)
-gen other = runiform() * 100
-tempfile using_2key
-save `using_2key'
-
-use `master_2key', clear
-merge 1:1 id1 id2 using `using_2key', nogenerate
-local stata_N = _N
-
-use `master_2key', clear
-capture cmerge 1:1 id1 id2 using `using_2key', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 two numeric keys"
-    }
-    else {
-        test_fail "two keys" "N differs"
-    }
-}
-else {
-    test_fail "two keys" "rc=`=_rc'"
-}
-
-* Three keys
-clear
-set obs 200
-gen k1 = mod(_n, 5) + 1
-gen k2 = mod(_n, 4) + 1
-gen k3 = mod(_n, 3) + 1
-gen value = _n
-tempfile master_3key
-save `master_3key'
-
-clear
-set obs 200
-gen k1 = mod(_n, 5) + 1
-gen k2 = mod(_n, 4) + 1
-gen k3 = mod(_n, 3) + 1
-gen other = runiform()
-tempfile using_3key
-save `using_3key'
-
-use `master_3key', clear
-merge m:m k1 k2 k3 using `using_3key', nogenerate
-local stata_N = _N
-
-use `master_3key', clear
-capture cmerge m:m k1 k2 k3 using `using_3key', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "m:m three keys"
-    }
-    else {
-        test_fail "three keys" "N differs"
-    }
-}
-else {
-    test_fail "three keys" "rc=`=_rc'"
-}
-
-* Mixed string and numeric keys
-clear
-set obs 50
-gen str10 name = "cat_" + string(mod(_n, 5) + 1)
-gen int id = _n
-gen value = runiform()
-tempfile master_mixed
-save `master_mixed'
-
-clear
-set obs 50
-gen str10 name = "cat_" + string(mod(_n, 5) + 1)
-gen int id = _n
-gen other = runiform() * 100
-tempfile using_mixed
-save `using_mixed'
-
-use `master_mixed', clear
-merge 1:1 name id using `using_mixed', nogenerate
-local stata_N = _N
-
-use `master_mixed', clear
-capture cmerge 1:1 name id using `using_mixed', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 mixed string+numeric keys"
-    }
-    else {
-        test_fail "mixed keys" "N differs"
-    }
-}
-else {
-    test_fail "mixed keys" "rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: Large Dataset Tests
- ******************************************************************************/
-print_section "Large Dataset Tests"
-
-* 100K observations 1:1
-clear
-set seed 11111
-set obs 100000
-gen long id = _n
-gen value = runiform()
-tempfile master_100k
-save `master_100k'
-
-clear
-set obs 100000
-gen long id = _n
-gen other = runiform() * 1000
-tempfile using_100k
-save `using_100k'
-
-use `master_100k', clear
-merge 1:1 id using `using_100k', nogenerate
-local stata_N = _N
-
-use `master_100k', clear
-capture cmerge 1:1 id using `using_100k', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:1 100K observations"
-    }
-    else {
-        test_fail "100K obs" "N differs"
-    }
-}
-else {
-    test_fail "100K obs" "rc=`=_rc'"
-}
-
-* Large m:1 merge
-clear
-set seed 22222
-set obs 100000
-gen int group = runiformint(1, 1000)
-gen value = runiform()
-tempfile master_m1_large
-save `master_m1_large'
-
-clear
-set obs 1000
-gen int group = _n
-gen group_name = "group_" + string(_n)
-tempfile using_m1_large
-save `using_m1_large'
-
-use `master_m1_large', clear
-merge m:1 group using `using_m1_large', nogenerate
-local stata_N = _N
-
-use `master_m1_large', clear
-capture cmerge m:1 group using `using_m1_large', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "m:1 large (100K to 1K)"
-    }
-    else {
-        test_fail "m:1 large" "N differs"
-    }
-}
-else {
-    test_fail "m:1 large" "rc=`=_rc'"
-}
-
-* Large 1:m merge
-clear
-set obs 1000
-gen int group = _n
-gen value = runiform()
-tempfile master_1m_large
-save `master_1m_large'
-
-clear
-set seed 33333
-set obs 100000
-gen int group = runiformint(1, 1000)
-gen detail = runiform() * 100
-tempfile using_1m_large
-save `using_1m_large'
-
-use `master_1m_large', clear
-merge 1:m group using `using_1m_large', nogenerate
-local stata_N = _N
-
-use `master_1m_large', clear
-capture cmerge 1:m group using `using_1m_large', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "1:m large (1K to 100K)"
-    }
-    else {
-        test_fail "1:m large" "N differs"
-    }
-}
-else {
-    test_fail "1:m large" "rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: Options Tests
- ******************************************************************************/
-print_section "Options Tests"
-
-* keep() option
-clear
-set obs 50
-gen id = _n
-gen master_val = runiform()
-tempfile master_keep
-save `master_keep'
-
-clear
-set obs 50
-gen id = _n
-gen using_val = runiform()
-tempfile using_keep
-save `using_keep'
-
-use `master_keep', clear
-capture cmerge 1:1 id using `using_keep', keep(match) nogenerate noreport
-if _rc == 0 {
-    count
-    if r(N) == 50 {
-        test_pass "keep(match) option"
-    }
-    else {
-        test_fail "keep(match)" "wrong N"
-    }
-}
-else {
-    test_fail "keep(match)" "rc=`=_rc'"
-}
-
-* keep(master) option
-use `master_keep', clear
-capture cmerge 1:1 id using `using_keep', keep(master) nogenerate noreport
-if _rc == 0 {
-    test_pass "keep(master) option"
-}
-else {
-    test_fail "keep(master)" "rc=`=_rc'"
-}
-
-* keep(using) option
-use `master_keep', clear
-capture cmerge 1:1 id using `using_keep', keep(using) nogenerate noreport
-if _rc == 0 {
-    test_pass "keep(using) option"
-}
-else {
-    test_fail "keep(using)" "rc=`=_rc'"
-}
-
-* assert() option - should pass
-clear
-set obs 20
-gen id = _n
-gen value = _n
-tempfile master_assert
-save `master_assert'
-
-clear
-set obs 20
-gen id = _n
-gen other = _n * 2
-tempfile using_assert
-save `using_assert'
-
-use `master_assert', clear
-capture cmerge 1:1 id using `using_assert', assert(match) nogenerate noreport
-if _rc == 0 {
-    test_pass "assert(match) passes when all match"
-}
-else {
-    test_fail "assert(match)" "should pass when all observations match, but rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: Real-World Dataset Merges
- ******************************************************************************/
-print_section "Real-World Datasets"
-
-* auto dataset self-merge
-sysuse auto, clear
-keep make price mpg
-tempfile auto1
-save `auto1'
-
-sysuse auto, clear
-keep make weight length
-tempfile auto2
-save `auto2'
-
-use `auto1', clear
-merge 1:1 make using `auto2', nogenerate
-local stata_N = _N
-
-use `auto1', clear
-capture cmerge 1:1 make using `auto2', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "auto dataset self-merge"
-    }
-    else {
-        test_fail "auto self-merge" "N differs"
-    }
-}
-else {
-    test_fail "auto self-merge" "rc=`=_rc'"
-}
-
-* census dataset merge
-sysuse census, clear
-keep state region pop
-tempfile census1
-save `census1'
-
-sysuse census, clear
-keep state death marriage divorce
-tempfile census2
-save `census2'
-
-use `census1', clear
-merge 1:1 state using `census2', nogenerate
-local stata_N = _N
-
-use `census1', clear
-capture cmerge 1:1 state using `census2', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "census dataset merge"
-    }
-    else {
-        test_fail "census merge" "N differs"
-    }
-}
-else {
-    test_fail "census merge" "rc=`=_rc'"
-}
-
-/*******************************************************************************
- * SECTION: Edge Cases
- ******************************************************************************/
-print_section "Edge Cases"
-
-* Empty master
-clear
-set obs 0
-gen id = .
-gen value = .
-tempfile empty_master
-save `empty_master'
-
-clear
-set obs 10
-gen id = _n
-gen other = _n
-tempfile non_empty_using
-save `non_empty_using'
-
-use `empty_master', clear
-capture merge 1:1 id using `non_empty_using', nogenerate
-local stata_rc = _rc
-
-use `empty_master', clear
-capture cmerge 1:1 id using `non_empty_using', nogenerate noreport
-local cmerge_rc = _rc
-
-if `stata_rc' == `cmerge_rc' {
-    test_pass "empty master handling"
-}
-else {
-    test_fail "empty master" "rc differs: stata=`stata_rc' cmerge=`cmerge_rc'"
-}
-
-* Empty using
-clear
-set obs 10
-gen id = _n
-gen value = _n
-tempfile non_empty_master
-save `non_empty_master'
-
-clear
-set obs 0
-gen id = .
-gen other = .
-tempfile empty_using
-save `empty_using'
-
-use `non_empty_master', clear
-capture merge 1:1 id using `empty_using', nogenerate
-local stata_rc = _rc
-
-use `non_empty_master', clear
-capture cmerge 1:1 id using `empty_using', nogenerate noreport
-local cmerge_rc = _rc
-
-if `stata_rc' == `cmerge_rc' {
-    test_pass "empty using handling"
-}
-else {
-    test_fail "empty using" "rc differs"
-}
-
-* Single observation each
-clear
-set obs 1
-gen id = 1
-gen value = 100
-tempfile single_master
-save `single_master'
-
-clear
-set obs 1
-gen id = 1
-gen other = 200
-tempfile single_using
-save `single_using'
-
-use `single_master', clear
-merge 1:1 id using `single_using', nogenerate
-local stata_N = _N
-
-use `single_master', clear
-capture cmerge 1:1 id using `single_using', nogenerate noreport
-if _rc == 0 {
-    if _N == `stata_N' {
-        test_pass "single observation merge"
-    }
-    else {
-        test_fail "single obs" "N differs"
-    }
-}
-else {
-    test_fail "single obs" "rc=`=_rc'"
 }
 
 /*******************************************************************************

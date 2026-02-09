@@ -1,6 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cbsample: C-accelerated bootstrap sampling for Stata
-*! Drop-in replacement for bsample
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cbsample
     version 14.1

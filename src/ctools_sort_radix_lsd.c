@@ -44,7 +44,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <pthread.h>
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
@@ -68,37 +67,12 @@
    - Sufficient for Stata's 2^31 observation limit
    ============================================================================ */
 
-/* Thread argument structure for parallel histogram */
-typedef struct {
-    perm_idx_t *order;       /* Input order array (uses perm_idx_t for 50% memory savings) */
-    uint64_t *keys;          /* Key array */
-    size_t start;            /* Start index for this thread */
-    size_t end;              /* End index (exclusive) for this thread */
-    int shift;               /* Bit shift for current byte */
-    size_t *local_counts;    /* Thread-local histogram (RADIX_SIZE elements) */
-} histogram_args_t;
-
-/* Thread argument structure for parallel scatter */
-typedef struct {
-    perm_idx_t *order;       /* Input order array */
-    perm_idx_t *temp_order;  /* Output order array */
-    uint64_t *keys;          /* Key array */
-    size_t start;            /* Start index for this thread */
-    size_t end;              /* End index (exclusive) for this thread */
-    int shift;               /* Bit shift for current byte */
-    size_t *global_offsets;  /* Global starting offsets for each bucket */
-    size_t *local_offsets;   /* This thread's starting offset within each bucket */
-} scatter_args_t;
-
 /*
     Reusable allocation structure for parallel radix sort.
     Allocated once and reused across all 8 passes to avoid repeated malloc/free.
 */
 typedef struct {
     int num_threads;
-    pthread_t *threads;
-    histogram_args_t *hist_args;
-    scatter_args_t *scatter_args;
     size_t **all_local_counts;   /* [num_threads][RADIX_SIZE] */
     size_t *global_counts;       /* [RADIX_SIZE] */
     size_t *global_offsets;      /* [RADIX_SIZE] */
@@ -118,16 +92,12 @@ static radix_sort_context_t *radix_context_alloc(int num_threads)
     if (ctx == NULL) return NULL;
 
     ctx->num_threads = num_threads;
-    ctx->threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
-    ctx->hist_args = (histogram_args_t *)malloc(num_threads * sizeof(histogram_args_t));
-    ctx->scatter_args = (scatter_args_t *)malloc(num_threads * sizeof(scatter_args_t));
     ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
     ctx->global_counts = (size_t *)calloc(RADIX_SIZE, sizeof(size_t));
     ctx->global_offsets = (size_t *)malloc(RADIX_SIZE * sizeof(size_t));
     ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
 
-    if (!ctx->threads || !ctx->hist_args || !ctx->scatter_args ||
-        !ctx->all_local_counts || !ctx->global_counts ||
+    if (!ctx->all_local_counts || !ctx->global_counts ||
         !ctx->global_offsets || !ctx->thread_offsets) {
         goto fail;
     }
@@ -161,9 +131,6 @@ fail:
                 free(ctx->thread_offsets[t]);
             }
         }
-        free(ctx->threads);
-        free(ctx->hist_args);
-        free(ctx->scatter_args);
         free(ctx->all_local_counts);
         free(ctx->global_counts);
         free(ctx->global_offsets);
@@ -185,60 +152,11 @@ static void radix_context_free(radix_sort_context_t *ctx)
         free(ctx->all_local_counts[t]);
         free(ctx->thread_offsets[t]);
     }
-    free(ctx->threads);
-    free(ctx->hist_args);
-    free(ctx->scatter_args);
     free(ctx->all_local_counts);
     free(ctx->global_counts);
     free(ctx->global_offsets);
     free(ctx->thread_offsets);
     free(ctx);
-}
-
-/* Thread function: compute local histogram */
-static void *histogram_thread(void *arg)
-{
-    histogram_args_t *args = (histogram_args_t *)arg;
-    size_t i;
-    uint8_t byte_val;
-    perm_idx_t *order = args->order;
-    uint64_t *keys = args->keys;
-    int shift = args->shift;
-
-    /* Zero out local counts */
-    memset(args->local_counts, 0, RADIX_SIZE * sizeof(size_t));
-
-    /* Count occurrences in this thread's range */
-    for (i = args->start; i < args->end; i++) {
-        byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
-        args->local_counts[byte_val]++;
-    }
-
-    return NULL;
-}
-
-/* Thread function: scatter elements to sorted positions */
-static void *scatter_thread(void *arg)
-{
-    scatter_args_t *args = (scatter_args_t *)arg;
-    size_t i;
-    uint8_t byte_val;
-    size_t local_offsets[RADIX_SIZE];  /* Stack allocation for speed */
-    perm_idx_t *order = args->order;
-    uint64_t *keys = args->keys;
-    perm_idx_t *temp_order = args->temp_order;
-    int shift = args->shift;
-
-    /* Copy offsets to local array */
-    memcpy(local_offsets, args->local_offsets, RADIX_SIZE * sizeof(size_t));
-
-    /* Scatter elements from this thread's range */
-    for (i = args->start; i < args->end; i++) {
-        byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
-        temp_order[local_offsets[byte_val]++] = order[i];
-    }
-
-    return NULL;
 }
 
 /*
@@ -253,38 +171,43 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
                                             int byte_pos,
                                             radix_sort_context_t *ctx)
 {
-    size_t chunk_size, start, end;
+    size_t chunk_size;
     int shift = byte_pos * RADIX_BITS;
     int t, b;
     int num_threads = ctx->num_threads;
 
-    /* Phase 1: Parallel histogram computation */
+    /* Phase 1: Parallel histogram computation (OpenMP) */
     chunk_size = (nobs + num_threads - 1) / num_threads;
-    int threads_created = 0;
-    for (t = 0; t < num_threads; t++) {
-        start = (size_t)t * chunk_size;
-        end = (size_t)(t + 1) * chunk_size;
-        if (end > nobs) end = nobs;
-        if (start >= nobs) start = end = nobs;
 
-        ctx->hist_args[t].order = order;
-        ctx->hist_args[t].keys = keys;
-        ctx->hist_args[t].start = start;
-        ctx->hist_args[t].end = end;
-        ctx->hist_args[t].shift = shift;
-        ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        size_t my_start = (size_t)tid * chunk_size;
+        size_t my_end = (size_t)(tid + 1) * chunk_size;
+        if (my_end > nobs) my_end = nobs;
+        if (my_start >= nobs) my_start = my_end = nobs;
 
-        if (pthread_create(&ctx->threads[threads_created], NULL, histogram_thread, &ctx->hist_args[t]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
-            histogram_thread(&ctx->hist_args[t]);
+        size_t *my_counts = ctx->all_local_counts[tid];
+        memset(my_counts, 0, RADIX_SIZE * sizeof(size_t));
+
+        /* 4x unrolled histogram with prefetching */
+        size_t i = my_start;
+        for (; i + 4 <= my_end; i += 4) {
+            if (i + PREFETCH_DISTANCE < my_end) {
+                CTOOLS_PREFETCH(&keys[order[i + PREFETCH_DISTANCE]]);
+            }
+            uint8_t b0 = (keys[order[i+0]] >> shift) & RADIX_MASK;
+            uint8_t b1 = (keys[order[i+1]] >> shift) & RADIX_MASK;
+            uint8_t b2 = (keys[order[i+2]] >> shift) & RADIX_MASK;
+            uint8_t b3 = (keys[order[i+3]] >> shift) & RADIX_MASK;
+            my_counts[b0]++;
+            my_counts[b1]++;
+            my_counts[b2]++;
+            my_counts[b3]++;
         }
-    }
-
-    /* Wait for histogram threads */
-    for (t = 0; t < threads_created; t++) {
-        pthread_join(ctx->threads[t], NULL);
+        for (; i < my_end; i++) {
+            my_counts[(keys[order[i]] >> shift) & RADIX_MASK]++;
+        }
     }
 
     /* Combine local histograms into global counts */
@@ -327,34 +250,22 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
         }
     }
 
-    /* Phase 2: Parallel scatter */
-    threads_created = 0;
-    for (t = 0; t < num_threads; t++) {
-        start = (size_t)t * chunk_size;
-        end = (size_t)(t + 1) * chunk_size;
-        if (end > nobs) end = nobs;
-        if (start >= nobs) start = end = nobs;
+    /* Phase 2: Parallel scatter (OpenMP) */
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        size_t my_start = (size_t)tid * chunk_size;
+        size_t my_end = (size_t)(tid + 1) * chunk_size;
+        if (my_end > nobs) my_end = nobs;
+        if (my_start >= nobs) my_start = my_end = nobs;
 
-        ctx->scatter_args[t].order = order;
-        ctx->scatter_args[t].temp_order = temp_order;
-        ctx->scatter_args[t].keys = keys;
-        ctx->scatter_args[t].start = start;
-        ctx->scatter_args[t].end = end;
-        ctx->scatter_args[t].shift = shift;
-        ctx->scatter_args[t].global_offsets = ctx->global_offsets;
-        ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
+        size_t local_offsets[RADIX_SIZE];
+        memcpy(local_offsets, ctx->thread_offsets[tid], RADIX_SIZE * sizeof(size_t));
 
-        if (pthread_create(&ctx->threads[threads_created], NULL, scatter_thread, &ctx->scatter_args[t]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
-            scatter_thread(&ctx->scatter_args[t]);
+        for (size_t i = my_start; i < my_end; i++) {
+            uint8_t byte_val = (keys[order[i]] >> shift) & RADIX_MASK;
+            temp_order[local_offsets[byte_val]++] = order[i];
         }
-    }
-
-    /* Wait for scatter threads */
-    for (t = 0; t < threads_created; t++) {
-        pthread_join(ctx->threads[t], NULL);
     }
 
     return 0;  /* Pass was not skipped */
@@ -413,88 +324,11 @@ static int radix_sort_pass_numeric(perm_idx_t *order,
    String sorting with pre-cached lengths and parallel histogram/scatter
    ============================================================================ */
 
-/* Thread argument for parallel string histogram */
-typedef struct {
-    perm_idx_t *order;
-    char **strings;
-    size_t *str_lengths;     /* Pre-cached string lengths */
-    size_t start;
-    size_t end;
-    size_t char_pos;
-    size_t *local_counts;
-} string_histogram_args_t;
-
-/* Thread argument for parallel string scatter */
-typedef struct {
-    perm_idx_t *order;
-    perm_idx_t *temp_order;
-    char **strings;
-    size_t *str_lengths;
-    size_t start;
-    size_t end;
-    size_t char_pos;
-    size_t *local_offsets;
-} string_scatter_args_t;
-
-/* Thread function: compute string histogram */
-static void *string_histogram_thread(void *arg)
-{
-    string_histogram_args_t *args = (string_histogram_args_t *)arg;
-    size_t i;
-    unsigned char byte_val;
-    perm_idx_t idx;
-    size_t len;
-
-    memset(args->local_counts, 0, (RADIX_SIZE + 1) * sizeof(size_t));
-
-    for (i = args->start; i < args->end; i++) {
-        idx = args->order[i];
-        len = args->str_lengths[idx];
-        if (args->char_pos < len && args->strings[idx] != NULL) {
-            byte_val = (unsigned char)args->strings[idx][args->char_pos];
-        } else {
-            byte_val = 0;
-        }
-        args->local_counts[byte_val]++;
-    }
-
-    return NULL;
-}
-
-/* Thread function: scatter strings */
-static void *string_scatter_thread(void *arg)
-{
-    string_scatter_args_t *args = (string_scatter_args_t *)arg;
-    size_t i;
-    unsigned char byte_val;
-    perm_idx_t idx;
-    size_t len;
-    size_t local_offsets[RADIX_SIZE + 1];
-
-    memcpy(local_offsets, args->local_offsets, (RADIX_SIZE + 1) * sizeof(size_t));
-
-    for (i = args->start; i < args->end; i++) {
-        idx = args->order[i];
-        len = args->str_lengths[idx];
-        if (args->char_pos < len && args->strings[idx] != NULL) {
-            byte_val = (unsigned char)args->strings[idx][args->char_pos];
-        } else {
-            byte_val = 0;
-        }
-        args->temp_order[local_offsets[byte_val]++] = idx;
-    }
-
-    return NULL;
-}
-
 /*
     String sort context for reusable allocations.
 */
 typedef struct {
     int num_threads;
-    pthread_t *threads;
-    string_histogram_args_t *hist_args;
-    string_scatter_args_t *scatter_args;
     size_t **all_local_counts;  /* [num_threads][RADIX_SIZE+1] */
     size_t *global_counts;      /* [RADIX_SIZE+1] */
     size_t *global_offsets;     /* [RADIX_SIZE+1] */
@@ -510,16 +344,12 @@ static string_sort_context_t *string_context_alloc(int num_threads)
     if (ctx == NULL) return NULL;
 
     ctx->num_threads = num_threads;
-    ctx->threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
-    ctx->hist_args = (string_histogram_args_t *)malloc(num_threads * sizeof(string_histogram_args_t));
-    ctx->scatter_args = (string_scatter_args_t *)malloc(num_threads * sizeof(string_scatter_args_t));
     ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
     ctx->global_counts = (size_t *)calloc(RADIX_SIZE + 1, sizeof(size_t));
     ctx->global_offsets = (size_t *)malloc((RADIX_SIZE + 1) * sizeof(size_t));
     ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
 
-    if (!ctx->threads || !ctx->hist_args || !ctx->scatter_args ||
-        !ctx->all_local_counts || !ctx->global_counts ||
+    if (!ctx->all_local_counts || !ctx->global_counts ||
         !ctx->global_offsets || !ctx->thread_offsets) {
         goto fail;
     }
@@ -551,9 +381,6 @@ fail:
                 free(ctx->thread_offsets[t]);
             }
         }
-        free(ctx->threads);
-        free(ctx->hist_args);
-        free(ctx->scatter_args);
         free(ctx->all_local_counts);
         free(ctx->global_counts);
         free(ctx->global_offsets);
@@ -572,9 +399,6 @@ static void string_context_free(string_sort_context_t *ctx)
         free(ctx->all_local_counts[t]);
         free(ctx->thread_offsets[t]);
     }
-    free(ctx->threads);
-    free(ctx->hist_args);
-    free(ctx->scatter_args);
     free(ctx->all_local_counts);
     free(ctx->global_counts);
     free(ctx->global_offsets);
@@ -594,38 +418,35 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
                                            size_t char_pos,
                                            string_sort_context_t *ctx)
 {
-    size_t chunk_size, start, end;
+    size_t chunk_size;
     int t, b;
     int num_threads = ctx->num_threads;
 
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
-    /* Phase 1: Parallel histogram */
-    int threads_created = 0;
-    for (t = 0; t < num_threads; t++) {
-        start = (size_t)t * chunk_size;
-        end = (size_t)(t + 1) * chunk_size;
-        if (end > nobs) end = nobs;
-        if (start >= nobs) start = end = nobs;
+    /* Phase 1: Parallel histogram (OpenMP) */
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        size_t my_start = (size_t)tid * chunk_size;
+        size_t my_end = (size_t)(tid + 1) * chunk_size;
+        if (my_end > nobs) my_end = nobs;
+        if (my_start >= nobs) my_start = my_end = nobs;
 
-        ctx->hist_args[t].order = order;
-        ctx->hist_args[t].strings = strings;
-        ctx->hist_args[t].str_lengths = str_lengths;
-        ctx->hist_args[t].start = start;
-        ctx->hist_args[t].end = end;
-        ctx->hist_args[t].char_pos = char_pos;
-        ctx->hist_args[t].local_counts = ctx->all_local_counts[t];
+        size_t *my_counts = ctx->all_local_counts[tid];
+        memset(my_counts, 0, (RADIX_SIZE + 1) * sizeof(size_t));
 
-        if (pthread_create(&ctx->threads[threads_created], NULL, string_histogram_thread, &ctx->hist_args[t]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
-            string_histogram_thread(&ctx->hist_args[t]);
+        for (size_t i = my_start; i < my_end; i++) {
+            perm_idx_t idx = order[i];
+            size_t len = str_lengths[idx];
+            unsigned char byte_val;
+            if (char_pos < len && strings[idx] != NULL) {
+                byte_val = (unsigned char)strings[idx][char_pos];
+            } else {
+                byte_val = 0;
+            }
+            my_counts[byte_val]++;
         }
-    }
-
-    for (t = 0; t < threads_created; t++) {
-        pthread_join(ctx->threads[t], NULL);
     }
 
     /* Combine histograms */
@@ -666,33 +487,29 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
         }
     }
 
-    /* Phase 2: Parallel scatter */
-    threads_created = 0;
-    for (t = 0; t < num_threads; t++) {
-        start = (size_t)t * chunk_size;
-        end = (size_t)(t + 1) * chunk_size;
-        if (end > nobs) end = nobs;
-        if (start >= nobs) start = end = nobs;
+    /* Phase 2: Parallel scatter (OpenMP) */
+    #pragma omp parallel num_threads(num_threads)
+    {
+        int tid = omp_get_thread_num();
+        size_t my_start = (size_t)tid * chunk_size;
+        size_t my_end = (size_t)(tid + 1) * chunk_size;
+        if (my_end > nobs) my_end = nobs;
+        if (my_start >= nobs) my_start = my_end = nobs;
 
-        ctx->scatter_args[t].order = order;
-        ctx->scatter_args[t].temp_order = temp_order;
-        ctx->scatter_args[t].strings = strings;
-        ctx->scatter_args[t].str_lengths = str_lengths;
-        ctx->scatter_args[t].start = start;
-        ctx->scatter_args[t].end = end;
-        ctx->scatter_args[t].char_pos = char_pos;
-        ctx->scatter_args[t].local_offsets = ctx->thread_offsets[t];
+        size_t local_offsets[RADIX_SIZE + 1];
+        memcpy(local_offsets, ctx->thread_offsets[tid], (RADIX_SIZE + 1) * sizeof(size_t));
 
-        if (pthread_create(&ctx->threads[threads_created], NULL, string_scatter_thread, &ctx->scatter_args[t]) == 0) {
-            threads_created++;
-        } else {
-            /* Run in current thread as fallback */
-            string_scatter_thread(&ctx->scatter_args[t]);
+        for (size_t i = my_start; i < my_end; i++) {
+            perm_idx_t idx = order[i];
+            size_t len = str_lengths[idx];
+            unsigned char byte_val;
+            if (char_pos < len && strings[idx] != NULL) {
+                byte_val = (unsigned char)strings[idx][char_pos];
+            } else {
+                byte_val = 0;
+            }
+            temp_order[local_offsets[byte_val]++] = idx;
         }
-    }
-
-    for (t = 0; t < threads_created; t++) {
-        pthread_join(ctx->threads[t], NULL);
     }
 
     return 0;
@@ -795,8 +612,9 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
         return STATA_ERR_MEMORY;
     }
 
-    /* Convert doubles to sortable uint64 keys */
+    /* Convert doubles to sortable uint64 keys (parallel for large datasets) */
     dbl_data = data->vars[var_idx].data.dbl;
+    #pragma omp parallel for schedule(static) if(data->nobs >= MIN_OBS_PER_THREAD * 2)
     for (i = 0; i < data->nobs; i++) {
         keys[i] = ctools_double_to_sortable(dbl_data[i], SF_is_missing(dbl_data[i]));
     }

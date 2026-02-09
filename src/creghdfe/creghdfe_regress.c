@@ -512,8 +512,12 @@ ST_retcode do_full_regression(int argc, char *argv[])
     }
 
     if (dof_adjust_type == 1) {
-        /* dofadjustments(none): skip mobility calculation entirely */
-        mobility_groups = 1;
+        /* dofadjustments(none): skip mobility calculation but still subtract 1
+         * for the intercept that is always identified by 2+ FE sets */
+        if (G >= 2) {
+            mobility_groups = 1;
+            df_a -= 1;
+        }
         /* All observations in group 1 if groupvar requested */
         if (group_assignments) {
             for (idx = 0; idx < N; idx++) {

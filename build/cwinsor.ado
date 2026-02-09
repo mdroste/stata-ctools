@@ -1,6 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cwinsor: C-accelerated winsorization for Stata
-*! Part of the ctools suite
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cwinsor
     version 14.1

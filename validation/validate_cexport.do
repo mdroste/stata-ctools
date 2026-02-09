@@ -25,177 +25,6 @@ quietly {
 noi di as text "Running validation tests for cexport..."
 
 /*******************************************************************************
- * Helper: benchmark_export - Export with both methods, import back, compare
- * Required: testname() - the test criterion/name
- * Optional: exportopts() - options for export commands
- *           importopts() - options for re-importing CSVs
- *           ifcond() - if condition
- *           incond() - in condition
- ******************************************************************************/
-capture program drop benchmark_export
-program define benchmark_export
-    syntax [varlist], testname(string) [EXPORTopts(string) IMPORTopts(string) IFcond(string) INcond(string)]
-
-    * Build if/in conditions
-    local ifin ""
-    if "`ifcond'" != "" local ifin "`ifin' if `ifcond'"
-    if "`incond'" != "" local ifin "`ifin' in `incond'"
-
-    tempfile stata_csv cexport_csv
-
-    * Export with Stata's export delimited
-    if "`varlist'" != "" {
-        export delimited `varlist' using "`stata_csv'" `ifin', `exportopts' replace
-    }
-    else {
-        export delimited using "`stata_csv'" `ifin', `exportopts' replace
-    }
-
-    * Export with cexport delimited
-    if "`varlist'" != "" {
-        cexport delimited `varlist' using "`cexport_csv'" `ifin', `exportopts' replace
-    }
-    else {
-        cexport delimited using "`cexport_csv'" `ifin', `exportopts' replace
-    }
-
-    * Import both CSVs back
-    preserve
-
-    import delimited using "`stata_csv'", `importopts' clear
-    tempfile stata_data
-    quietly save `stata_data', replace
-    local stata_n = _N
-    local stata_k = c(k)
-
-    import delimited using "`cexport_csv'", `importopts' clear
-    tempfile cexport_data
-    quietly save `cexport_data', replace
-    local cexport_n = _N
-    local cexport_k = c(k)
-
-    * Check dimensions first
-    if `stata_n' != `cexport_n' | `stata_k' != `cexport_k' {
-        restore
-        test_fail "`testname'" "dimensions differ: Stata N=`stata_n' K=`stata_k', cexport N=`cexport_n' K=`cexport_k'"
-        exit
-    }
-
-    * Compare data using cf _all
-    use `stata_data', clear
-    capture cf _all using `cexport_data'
-    local cfrc = _rc
-
-    if `cfrc' == 0 {
-        restore
-        test_pass "`testname'"
-        exit
-    }
-
-    * cf _all failed - try tolerance-based comparison for numeric variables
-    use `stata_data', clear
-    ds
-    local allvars `r(varlist)'
-
-    * Rename variables from stata data with _stata suffix
-    foreach v of local allvars {
-        rename `v' `v'_stata
-    }
-    gen long _row = _n
-    tempfile stata_renamed
-    quietly save `stata_renamed', replace
-
-    * Load cexport data and rename with _cexport suffix
-    use `cexport_data', clear
-    foreach v of local allvars {
-        capture confirm variable `v'
-        if _rc != 0 {
-            restore
-            test_fail "`testname'" "variable `v' missing from cexport data"
-            exit
-        }
-        rename `v' `v'_cexport
-    }
-    gen long _row = _n
-    merge 1:1 _row using `stata_renamed', nogen
-
-    local all_match = 1
-    local fail_reason ""
-    local min_sigfigs = 99
-
-    foreach v of local allvars {
-        * Check if string or numeric
-        capture confirm string variable `v'_stata
-        if _rc == 0 {
-            * String variable - must be exactly equal
-            quietly count if `v'_stata != `v'_cexport
-            if r(N) > 0 {
-                local all_match = 0
-                local fail_reason "string variable `v' has `r(N)' mismatches"
-                continue, break
-            }
-        }
-        else {
-            * Numeric variable - compare values using significant figures
-            * Create double copies to avoid type mismatch issues
-            quietly gen double _v1 = `v'_stata
-            quietly gen double _v2 = `v'_cexport
-
-            * Check each non-missing pair using sigfigs
-            local var_min_sf = 99
-            quietly count if !missing(_v1) & !missing(_v2)
-            local n_pairs = r(N)
-            if `n_pairs' > 0 {
-                * Use vectorized comparison via assert_var_equal logic
-                quietly gen double _rel_err = abs(_v1 - _v2) / max(abs(_v1), abs(_v2), 1e-300) if !missing(_v1) & !missing(_v2)
-                quietly summarize _rel_err
-                if r(max) != . & r(max) > 0 {
-                    * Convert max relative error to approximate sigfigs
-                    local max_rel_err = r(max)
-                    local var_min_sf = -log10(`max_rel_err')
-                    if `var_min_sf' < `min_sigfigs' {
-                        local min_sigfigs = `var_min_sf'
-                    }
-                }
-                drop _rel_err
-            }
-
-            * Check if sigfigs meets threshold
-            if `var_min_sf' < $DEFAULT_SIGFIGS {
-                local all_match = 0
-                local sf_fmt : display %4.1f `var_min_sf'
-                local fail_reason "numeric variable `v' has only `sf_fmt' significant figures agreement"
-                drop _v1 _v2
-                continue, break
-            }
-            drop _v1 _v2
-            * Check missing values match
-            quietly count if missing(`v'_stata) != missing(`v'_cexport)
-            if r(N) > 0 {
-                local all_match = 0
-                local fail_reason "variable `v' has `r(N)' missing value mismatches"
-                continue, break
-            }
-        }
-    }
-
-    restore
-
-    if `all_match' == 1 {
-        if `min_sigfigs' < 99 {
-            local sf_fmt : display %4.1f `min_sigfigs'
-            test_pass "`testname' (min_sigfigs=`sf_fmt')"
-        }
-        else {
-            test_pass "`testname'"
-        }
-    }
-    else {
-        test_fail "`testname'" "`fail_reason'"
-    }
-end
-
-/*******************************************************************************
  * SECTION 1: Plugin check
  ******************************************************************************/
 print_section "Plugin Check"
@@ -2084,6 +1913,626 @@ else {
     test_fail "Excel auto dataset with new options" "no data imported"
 }
 capture erase "temp/excel_auto_opts.xlsx"
+
+/*******************************************************************************
+ * SECTION: Comprehensive Excel Export Round-Trip Tests
+ *
+ * These tests export with both Stata's export excel and cexport excel,
+ * re-import both files with import excel, and compare to ensure identical data.
+ ******************************************************************************/
+print_section "Comprehensive Excel Export Round-Trip Tests"
+
+/*******************************************************************************
+ * Enhanced helper: supports varlist, if/in conditions
+ * Always exports with firstrow(variables) and re-imports with firstrow
+ ******************************************************************************/
+capture program drop benchmark_xlsx_export
+program define benchmark_xlsx_export
+    syntax [varlist], testname(string) [EXPORTopts(string) IFcond(string) INcond(string)]
+
+    local ifin ""
+    if "`ifcond'" != "" local ifin "`ifin' if `ifcond'"
+    if "`incond'" != "" local ifin "`ifin' in `incond'"
+
+    * Export with Stata's export excel
+    if "`varlist'" != "" {
+        capture export excel `varlist' using "temp/__s_xlsx.xlsx" `ifin', `exportopts' replace
+    }
+    else {
+        capture export excel using "temp/__s_xlsx.xlsx" `ifin', `exportopts' replace
+    }
+    if _rc != 0 {
+        test_fail "`testname'" "Stata export excel failed rc=`=_rc'"
+        exit
+    }
+
+    * Export with cexport excel
+    if "`varlist'" != "" {
+        capture cexport excel `varlist' using "temp/__c_xlsx.xlsx" `ifin', `exportopts' replace
+    }
+    else {
+        capture cexport excel using "temp/__c_xlsx.xlsx" `ifin', `exportopts' replace
+    }
+    if _rc != 0 {
+        test_fail "`testname'" "cexport excel failed rc=`=_rc'"
+        exit
+    }
+
+    preserve
+
+    * Re-import Stata's output
+    import excel using "temp/__s_xlsx.xlsx", firstrow clear
+    local sn = _N
+    local sk = c(k)
+    tempfile stata_ri
+    quietly save `stata_ri', replace
+
+    * Re-import cexport's output
+    import excel using "temp/__c_xlsx.xlsx", firstrow clear
+    local cn = _N
+    local ck = c(k)
+
+    if `sn' != `cn' | `sk' != `ck' {
+        restore
+        test_fail "`testname'" "dims differ: Stata N=`sn' K=`sk', cexport N=`cn' K=`ck'"
+        capture erase "temp/__s_xlsx.xlsx"
+        capture erase "temp/__c_xlsx.xlsx"
+        exit
+    }
+
+    * Try exact comparison first
+    quietly ds
+    local cvars `r(varlist)'
+    local nvars : word count `cvars'
+    local i = 1
+    foreach v of local cvars {
+        quietly rename `v' __cmp_c`i'
+        local i = `i' + 1
+    }
+    tempfile cexport_ri
+    quietly save `cexport_ri', replace
+
+    use `stata_ri', clear
+    quietly ds
+    local svars `r(varlist)'
+    local i = 1
+    foreach v of local svars {
+        quietly rename `v' __cmp_s`i'
+        local i = `i' + 1
+    }
+
+    gen long __row = _n
+    quietly save `stata_ri', replace
+    use `cexport_ri', clear
+    gen long __row = _n
+    merge 1:1 __row using `stata_ri', nogen
+
+    * Compare each variable pair with tolerance fallback for numerics
+    local all_match = 1
+    local fail_reason ""
+    local min_sigfigs = 99
+
+    forvalues j = 1/`nvars' {
+        capture confirm string variable __cmp_s`j'
+        if _rc == 0 {
+            * String variable - must be exactly equal
+            quietly count if __cmp_s`j' != __cmp_c`j'
+            if r(N) > 0 {
+                local all_match = 0
+                local fail_reason "string var `j' has `r(N)' mismatches"
+                continue, break
+            }
+        }
+        else {
+            * Numeric variable - compare with tolerance
+            quietly gen double __v1 = __cmp_s`j'
+            quietly gen double __v2 = __cmp_c`j'
+
+            quietly count if missing(__v1) != missing(__v2)
+            if r(N) > 0 {
+                local all_match = 0
+                local fail_reason "var `j' has `r(N)' missing value mismatches"
+                drop __v1 __v2
+                continue, break
+            }
+
+            quietly count if !missing(__v1) & !missing(__v2)
+            local n_pairs = r(N)
+            if `n_pairs' > 0 {
+                quietly gen double __rel = abs(__v1 - __v2) / max(abs(__v1), abs(__v2), 1e-300) if !missing(__v1) & !missing(__v2)
+                quietly summarize __rel
+                if r(max) != . & r(max) > 0 {
+                    local var_sf = -log10(r(max))
+                    if `var_sf' < `min_sigfigs' {
+                        local min_sigfigs = `var_sf'
+                    }
+                    if `var_sf' < $DEFAULT_SIGFIGS {
+                        local all_match = 0
+                        local sf_fmt : display %4.1f `var_sf'
+                        local fail_reason "var `j' has only `sf_fmt' sigfigs agreement"
+                        drop __v1 __v2 __rel
+                        continue, break
+                    }
+                }
+                drop __rel
+            }
+            drop __v1 __v2
+        }
+    }
+
+    restore
+
+    if `all_match' == 1 {
+        if `min_sigfigs' < 99 {
+            local sf_fmt : display %4.1f `min_sigfigs'
+            test_pass "`testname' (min_sigfigs=`sf_fmt')"
+        }
+        else {
+            test_pass "`testname'"
+        }
+    }
+    else {
+        test_fail "`testname'" "`fail_reason'"
+    }
+
+    capture erase "temp/__s_xlsx.xlsx"
+    capture erase "temp/__c_xlsx.xlsx"
+end
+
+* --- Real-World Datasets ---
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: auto full") exportopts(firstrow(variables))
+
+sysuse auto, clear
+benchmark_xlsx_export make price mpg weight, testname("xlsx export: auto select vars") exportopts(firstrow(variables))
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: auto domestic") exportopts(firstrow(variables)) ifcond(foreign == 0)
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: auto foreign") exportopts(firstrow(variables)) ifcond(foreign == 1)
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: auto first 20") exportopts(firstrow(variables)) incond(1/20)
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: auto if+in") exportopts(firstrow(variables)) ifcond(price > 5000) incond(1/50)
+
+sysuse census, clear
+benchmark_xlsx_export, testname("xlsx export: census full") exportopts(firstrow(variables))
+
+sysuse census, clear
+benchmark_xlsx_export state pop, testname("xlsx export: census select") exportopts(firstrow(variables))
+
+capture webuse nlswork, clear
+if _rc == 0 {
+    keep in 1/2000
+    benchmark_xlsx_export, testname("xlsx export: nlswork 2K") exportopts(firstrow(variables))
+}
+
+capture webuse lifeexp, clear
+if _rc == 0 {
+    benchmark_xlsx_export, testname("xlsx export: lifeexp") exportopts(firstrow(variables))
+}
+
+capture webuse bplong, clear
+if _rc == 0 {
+    benchmark_xlsx_export, testname("xlsx export: bplong") exportopts(firstrow(variables))
+}
+
+* --- Numeric Types ---
+
+clear
+set obs 20
+gen byte b = mod(_n, 128) - 64
+gen int i = _n * 100 - 1000
+gen long l = _n * 100000
+gen float f = runiform() - 0.5
+gen double d = runiform() * 1e10 - 5e9
+benchmark_xlsx_export, testname("xlsx export: all numeric types") exportopts(firstrow(variables))
+
+clear
+set obs 100
+gen long id = _n
+gen int val = _n * 10
+gen byte small = mod(_n, 100)
+benchmark_xlsx_export, testname("xlsx export: integers only") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen double precise = runiform()
+format precise %20.15f
+benchmark_xlsx_export, testname("xlsx export: double precision") exportopts(firstrow(variables))
+
+clear
+set obs 5
+gen double tiny = 1e-300
+replace tiny = 1e-100 in 2
+replace tiny = 1e-50 in 3
+replace tiny = 0.0000001 in 4
+replace tiny = 0 in 5
+benchmark_xlsx_export, testname("xlsx export: very small numbers") exportopts(firstrow(variables))
+
+clear
+set obs 5
+gen double huge = 1e100
+replace huge = 1e50 in 2
+replace huge = 999999999 in 3
+replace huge = 0 in 4
+replace huge = -1e100 in 5
+benchmark_xlsx_export, testname("xlsx export: very large numbers") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen x = 0
+gen y = 0.0
+gen double z = 0.00000000
+benchmark_xlsx_export, testname("xlsx export: all zeros") exportopts(firstrow(variables))
+
+* --- Missing Value Patterns ---
+
+clear
+set obs 20
+gen x = _n
+gen y = _n * 2
+gen z = _n * 3
+replace x = . if mod(_n, 2) == 0
+replace y = . if mod(_n, 3) == 0
+replace z = . if mod(_n, 5) == 0
+benchmark_xlsx_export, testname("xlsx export: mixed missing") exportopts(firstrow(variables))
+
+clear
+set obs 50
+gen x = .
+gen y = .
+gen z = .
+benchmark_xlsx_export, testname("xlsx export: all missing") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen x = .
+replace x = .a in 1
+replace x = .b in 2
+replace x = .c in 3
+replace x = .z in 4
+replace x = 100 in 5
+benchmark_xlsx_export, testname("xlsx export: extended missing") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen x = _n
+replace x = . in 1
+replace x = . in 10
+benchmark_xlsx_export, testname("xlsx export: first+last missing") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen x = _n
+replace x = . in 3/6
+benchmark_xlsx_export, testname("xlsx export: consecutive missing") exportopts(firstrow(variables))
+
+clear
+set obs 100
+gen x = .
+gen y = .
+forvalues i = 1(5)100 {
+    replace x = `i' in `i'
+}
+forvalues i = 3(7)100 {
+    replace y = `i' in `i'
+}
+benchmark_xlsx_export, testname("xlsx export: sparse data") exportopts(firstrow(variables))
+
+* --- String Edge Cases ---
+
+clear
+set obs 10
+gen id = _n
+gen str20 name = "item_" + string(_n)
+replace name = "" in 3
+replace name = "" in 7
+benchmark_xlsx_export, testname("xlsx export: strings with empties") exportopts(firstrow(variables))
+
+clear
+set obs 50
+gen str20 s = ""
+gen id = _n
+benchmark_xlsx_export, testname("xlsx export: all empty strings") exportopts(firstrow(variables))
+
+clear
+set obs 5
+gen id = _n
+gen str244 long_text = "a" * 200
+benchmark_xlsx_export, testname("xlsx export: long strings (200)") exportopts(firstrow(variables))
+
+clear
+input id str50 text
+1 "Normal text"
+2 "Comma, in text"
+3 "Semi;colon here"
+4 "Text with ""quotes"""
+end
+benchmark_xlsx_export, testname("xlsx export: special chars") exportopts(firstrow(variables))
+
+clear
+input id str20 name
+1 " leading"
+2 "trailing "
+3 " both "
+4 "normal"
+end
+benchmark_xlsx_export, testname("xlsx export: leading/trailing spaces") exportopts(firstrow(variables))
+
+clear
+input id str10 zipcode str15 phone
+1 "01234" "555-123-4567"
+2 "00501" "800-555-0000"
+3 "90210" "123-456-7890"
+end
+benchmark_xlsx_export, testname("xlsx export: numeric-looking strings") exportopts(firstrow(variables))
+
+* --- Mixed Types ---
+
+clear
+set obs 20
+gen id = _n
+gen double value = runiform() * 1000
+gen str30 category = "cat_" + string(mod(_n, 5))
+gen byte flag = mod(_n, 2)
+benchmark_xlsx_export, testname("xlsx export: mixed types") exportopts(firstrow(variables))
+
+* --- Value Labels ---
+
+clear
+set obs 10
+gen id = _n
+gen status = mod(_n, 3) + 1
+label define xlbl_status 1 "Active" 2 "Pending" 3 "Inactive"
+label values status xlbl_status
+gen category = mod(_n, 2) + 1
+label define xlbl_cat 1 "Type A" 2 "Type B"
+label values category xlbl_cat
+benchmark_xlsx_export, testname("xlsx export: value labels") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen id = _n
+gen status = mod(_n, 3) + 1
+label define xlbl_st2 1 "Active" 2 "Pending" 3 "Inactive"
+label values status xlbl_st2
+benchmark_xlsx_export, testname("xlsx export: nolabel") exportopts(firstrow(variables) nolabel)
+
+* --- Date Variables ---
+
+clear
+set obs 10
+gen id = _n
+gen daily = mdy(1, _n, 2024)
+format daily %td
+gen monthly = ym(2024, _n)
+format monthly %tm
+gen value = _n * 100
+benchmark_xlsx_export, testname("xlsx export: date variables") exportopts(firstrow(variables))
+
+clear
+set obs 10
+gen id = _n
+gen daily = mdy(6, _n, 2024)
+format daily %td
+replace daily = . in 3
+replace daily = . in 7
+gen value = _n * 10
+benchmark_xlsx_export, testname("xlsx export: dates with missing") exportopts(firstrow(variables))
+
+* --- Dimension Edge Cases ---
+
+clear
+set obs 1
+gen x = 42
+gen str5 s = "test"
+benchmark_xlsx_export, testname("xlsx export: single obs") exportopts(firstrow(variables))
+
+clear
+set obs 100
+gen x = runiform()
+benchmark_xlsx_export x, testname("xlsx export: single var") exportopts(firstrow(variables))
+
+clear
+set obs 2
+gen x = _n
+gen str10 s = "row" + string(_n)
+benchmark_xlsx_export, testname("xlsx export: two obs") exportopts(firstrow(variables))
+
+clear
+set obs 1
+forvalues i = 1/20 {
+    gen v`i' = `i'
+}
+benchmark_xlsx_export, testname("xlsx export: 1 obs 20 vars") exportopts(firstrow(variables))
+
+clear
+set obs 10
+forvalues i = 1/30 {
+    gen v`i' = runiform()
+}
+benchmark_xlsx_export, testname("xlsx export: 30 columns") exportopts(firstrow(variables))
+
+* --- Large Dataset ---
+
+clear
+set seed 12345
+set obs 10000
+gen id = _n
+gen group = runiformint(1, 100)
+gen x = runiform()
+gen y = rnormal()
+gen str20 label = "item" + string(runiformint(1, 1000))
+benchmark_xlsx_export, testname("xlsx export: 10K rows") exportopts(firstrow(variables))
+
+* --- Data Patterns ---
+
+clear
+set obs 100
+gen x = 42
+gen y = 42
+benchmark_xlsx_export, testname("xlsx export: constant values") exportopts(firstrow(variables))
+
+clear
+set obs 100
+gen x = _n
+gen y = _n * 2
+benchmark_xlsx_export, testname("xlsx export: monotonic") exportopts(firstrow(variables))
+
+clear
+set obs 100
+gen x = mod(_n, 2)
+gen y = 1 - mod(_n, 2)
+benchmark_xlsx_export, testname("xlsx export: alternating 0/1") exportopts(firstrow(variables))
+
+clear
+set seed 99999
+set obs 100
+gen x = runiform()
+gen y = rnormal()
+gen z = runiformint(1, 100)
+benchmark_xlsx_export, testname("xlsx export: random seeded") exportopts(firstrow(variables))
+
+* --- Sheet Name ---
+
+sysuse auto, clear
+benchmark_xlsx_export, testname("xlsx export: sheet name") exportopts(firstrow(variables) sheet("MyData"))
+
+* --- firstrow(nonames) - cexport-specific test ---
+* Note: Stata's export excel does not support firstrow(nonames), so we compare
+* cexport excel without firstrow against Stata's export excel without firstrow
+* Uses tolerance-based comparison since float→double→string→double round-trip
+* can differ by ~1 ULP between Stata's and cexport's dtoa implementations.
+
+sysuse auto, clear
+capture export excel using "temp/__s_nn.xlsx", replace
+local snn_rc = _rc
+capture cexport excel using "temp/__c_nn.xlsx", firstrow(nonames) replace
+local cnn_rc = _rc
+if `snn_rc' == 0 & `cnn_rc' == 0 {
+    preserve
+    import excel using "temp/__s_nn.xlsx", clear
+    local sn = _N
+    local sk = c(k)
+    quietly ds
+    local svars `r(varlist)'
+    local nvars : word count `svars'
+    local i = 1
+    foreach v of local svars {
+        quietly rename `v' __cmp_s`i'
+        local i = `i' + 1
+    }
+    gen long __row = _n
+    tempfile s_nn
+    quietly save `s_nn', replace
+    import excel using "temp/__c_nn.xlsx", clear
+    local cn = _N
+    local ck = c(k)
+    quietly ds
+    local cvars `r(varlist)'
+    local i = 1
+    foreach v of local cvars {
+        quietly rename `v' __cmp_c`i'
+        local i = `i' + 1
+    }
+    gen long __row = _n
+    merge 1:1 __row using `s_nn', nogen
+    if `sn' == `cn' & `sk' == `ck' {
+        local all_match = 1
+        local fail_reason ""
+        forvalues j = 1/`nvars' {
+            capture confirm string variable __cmp_s`j'
+            if _rc == 0 {
+                quietly count if __cmp_s`j' != __cmp_c`j'
+                if r(N) > 0 {
+                    local all_match = 0
+                    local fail_reason "string var `j' has `r(N)' mismatches"
+                    continue, break
+                }
+            }
+            else {
+                quietly gen double __v1 = __cmp_s`j'
+                quietly gen double __v2 = __cmp_c`j'
+                quietly count if missing(__v1) != missing(__v2)
+                if r(N) > 0 {
+                    local all_match = 0
+                    local fail_reason "var `j' has `r(N)' missing value mismatches"
+                    drop __v1 __v2
+                    continue, break
+                }
+                quietly count if !missing(__v1) & !missing(__v2)
+                if r(N) > 0 {
+                    quietly gen double __rel = abs(__v1 - __v2) / max(abs(__v1), abs(__v2), 1e-300) if !missing(__v1) & !missing(__v2)
+                    quietly summarize __rel
+                    if r(max) != . & r(max) > 0 {
+                        local var_sf = -log10(r(max))
+                        if `var_sf' < $DEFAULT_SIGFIGS {
+                            local all_match = 0
+                            local sf_fmt : display %4.1f `var_sf'
+                            local fail_reason "var `j' has only `sf_fmt' sigfigs"
+                            drop __v1 __v2 __rel
+                            continue, break
+                        }
+                    }
+                    drop __rel
+                }
+                drop __v1 __v2
+            }
+        }
+        if `all_match' {
+            test_pass "xlsx export: firstrow(nonames)"
+        }
+        else {
+            test_fail "xlsx export: firstrow(nonames)" "`fail_reason'"
+        }
+    }
+    else {
+        test_fail "xlsx export: firstrow(nonames)" "dims differ: Stata N=`sn' K=`sk', cexport N=`cn' K=`ck'"
+    }
+    restore
+}
+else {
+    if `cnn_rc' != 0 {
+        test_fail "xlsx export: firstrow(nonames)" "cexport failed rc=`cnn_rc'"
+    }
+    else {
+        test_fail "xlsx export: firstrow(nonames)" "Stata failed rc=`snn_rc'"
+    }
+}
+capture erase "temp/__s_nn.xlsx"
+capture erase "temp/__c_nn.xlsx"
+
+* --- Synthetic Datasets ---
+
+clear
+set obs 500
+gen id = ceil(_n / 5)
+bysort id: gen time = _n
+gen value = runiform()
+gen str10 grp = "g" + string(mod(id, 4))
+benchmark_xlsx_export, testname("xlsx export: panel 100x5") exportopts(firstrow(variables))
+
+clear
+set obs 200
+gen respondent = _n
+gen age = runiformint(18, 85)
+gen str10 gender = cond(runiform() < 0.5, "Male", "Female")
+gen income = runiformint(20000, 200000)
+benchmark_xlsx_export, testname("xlsx export: survey data") exportopts(firstrow(variables))
+
+clear
+set obs 1000
+gen order_id = _n
+gen customer = runiformint(1, 200)
+gen quantity = runiformint(1, 10)
+gen price = round(runiform() * 100, 0.01)
+gen str15 status = cond(runiform() < 0.7, "Completed", cond(runiform() < 0.9, "Pending", "Cancelled"))
+benchmark_xlsx_export, testname("xlsx export: ecommerce data") exportopts(firstrow(variables))
 
 /*******************************************************************************
  * SECTION: Intentional Error Tests

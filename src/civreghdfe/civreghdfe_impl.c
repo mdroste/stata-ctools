@@ -384,13 +384,13 @@ static ST_retcode do_iv_regression(void)
     ST_int N = N_valid - num_singletons_total;
 
     /* Allocate final arrays */
-    ST_double *y_c = (ST_double *)malloc((size_t)N * sizeof(ST_double));
-    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)malloc((size_t)N * K_endog * sizeof(ST_double)) : NULL;
-    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)malloc((size_t)N * K_exog * sizeof(ST_double)) : NULL;
-    ST_double *Z_c = (ST_double *)malloc((size_t)N * K_iv * sizeof(ST_double));
-    ST_double *weights_c = has_weights ? (ST_double *)malloc((size_t)N * sizeof(ST_double)) : NULL;
-    ST_int *cluster_ids_c = has_cluster ? (ST_int *)malloc((size_t)N * sizeof(ST_int)) : NULL;
-    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)malloc((size_t)N * sizeof(ST_int)) : NULL;
+    ST_double *y_c = (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double));
+    ST_double *X_endog_c = (K_endog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_endog, sizeof(ST_double)) : NULL;
+    ST_double *X_exog_c = (K_exog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_exog, sizeof(ST_double)) : NULL;
+    ST_double *Z_c = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_iv, sizeof(ST_double));
+    ST_double *weights_c = has_weights ? (ST_double *)ctools_safe_malloc2((size_t)N, sizeof(ST_double)) : NULL;
+    ST_int *cluster_ids_c = has_cluster ? (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int)) : NULL;
+    ST_int *cluster2_ids_c = has_cluster2 ? (ST_int *)ctools_safe_malloc2((size_t)N, sizeof(ST_int)) : NULL;
 
     if (!y_c || !Z_c || (K_endog > 0 && !X_endog_c) || (K_exog > 0 && !X_exog_c) ||
         (has_weights && !weights_c) || (has_cluster && !cluster_ids_c) ||
@@ -447,6 +447,27 @@ static ST_retcode do_iv_regression(void)
     }
 
     free(singleton_mask);
+
+    /* Weight normalization:
+       - aw (type=1) and pw (type=3): normalize weights so sum(w) = N
+       - fw (type=2): compute N_eff = sum(fw) for reporting/DOF */
+    ST_double N_eff = (ST_double)N;
+    if (has_weights && weights_c) {
+        if (weight_type == 1 || weight_type == 3) {
+            /* aweight or pweight: normalize so sum(w) = N */
+            ST_double sum_w_raw = 0.0;
+            for (ST_int i = 0; i < N; i++) sum_w_raw += weights_c[i];
+            if (sum_w_raw > 0.0) {
+                ST_double scale = (ST_double)N / sum_w_raw;
+                for (ST_int i = 0; i < N; i++) weights_c[i] *= scale;
+            }
+        } else if (weight_type == 2) {
+            /* fweight: N_eff = sum(fw) */
+            ST_double sum_fw = 0.0;
+            for (ST_int i = 0; i < N; i++) sum_fw += weights_c[i];
+            N_eff = sum_fw;
+        }
+    }
 
     /* Free original arrays */
     free(y); free(X_endog); free(X_exog); free(Z);
@@ -605,6 +626,18 @@ static ST_retcode do_iv_regression(void)
         /* Read partial variable indices (1-based indices into X_exog) */
         partial_indices = (ST_int *)malloc(n_partial * sizeof(ST_int));
         is_partial = (ST_int *)calloc(K_exog, sizeof(ST_int));  /* Mask for partial vars */
+        if (!partial_indices || !is_partial) {
+            SF_error("civreghdfe: Memory allocation failed for partial indices\n");
+            free(partial_indices);
+            free(is_partial);
+            free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+            free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+            free(fe_levels_c);
+            ctools_hdfe_state_cleanup(state);
+            free(state);
+            g_state = NULL;
+            return 920;
+        }
         ST_double dval_idx;
 
         for (ST_int pi = 0; pi < n_partial; pi++) {
@@ -627,7 +660,7 @@ static ST_retcode do_iv_regression(void)
     ST_int total_cols = 1 + K_endog + K_exog + K_iv;
 
     /* Combine all data into one array for parallel processing */
-    ST_double *all_data = (ST_double *)malloc((size_t)N * total_cols * sizeof(ST_double));
+    ST_double *all_data = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)total_cols, sizeof(ST_double));
     if (!all_data) {
         SF_error("civreghdfe: Memory allocation failed for demeaning buffer\n");
         free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
@@ -661,12 +694,12 @@ static ST_retcode do_iv_regression(void)
        each projection, not a fixed precomputed P. */
     if (n_partial > 0 && K_exog > 0 && partial_indices && is_partial) {
         /* Allocate workspace */
-        ST_double *P_cur = (ST_double *)malloc((size_t)N * n_partial * sizeof(ST_double));
-        ST_double *PtP = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
-        ST_double *PtP_inv = (ST_double *)calloc(n_partial * n_partial, sizeof(ST_double));
+        ST_double *P_cur = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)n_partial, sizeof(ST_double));
+        ST_double *PtP = (ST_double *)ctools_safe_calloc3((size_t)n_partial, (size_t)n_partial, sizeof(ST_double));
+        ST_double *PtP_inv = (ST_double *)ctools_safe_calloc3((size_t)n_partial, (size_t)n_partial, sizeof(ST_double));
         ST_double *Ptx = (ST_double *)calloc(n_partial, sizeof(ST_double));
         ST_double *coef = (ST_double *)calloc(n_partial, sizeof(ST_double));
-        ST_double *old_data = (ST_double *)malloc((size_t)N * total_cols * sizeof(ST_double));
+        ST_double *old_data = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)total_cols, sizeof(ST_double));
 
         /* Get column offsets for partial variables in all_data */
         ST_int *partial_col_offsets = (ST_int *)malloc(n_partial * sizeof(ST_int));
@@ -969,7 +1002,7 @@ static ST_retcode do_iv_regression(void)
     /* Stage 2: Numerical collinearity via Cholesky on X'X
        Build concatenated X = [X_exog, X_endog] in column-major order */
     if (K_total > 1) {
-        ST_double *XtX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        ST_double *XtX = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
         if (!XtX) {
             free(is_collinear_x);
             SF_error("civreghdfe: Memory allocation failed for XtX\n");
@@ -989,9 +1022,9 @@ static ST_retcode do_iv_regression(void)
          * K_total² individual fast_dot calls. */
         if (K_exog > 0 && K_endog > 0) {
             /* Both exog and endog present — compute 3 blocks (4th by symmetry) */
-            ST_double *blk_ee = (ST_double *)malloc(K_exog * K_exog * sizeof(ST_double));
-            ST_double *blk_en = (ST_double *)malloc(K_exog * K_endog * sizeof(ST_double));
-            ST_double *blk_nn = (ST_double *)malloc(K_endog * K_endog * sizeof(ST_double));
+            ST_double *blk_ee = (ST_double *)ctools_safe_malloc3((size_t)K_exog, (size_t)K_exog, sizeof(ST_double));
+            ST_double *blk_en = (ST_double *)ctools_safe_malloc3((size_t)K_exog, (size_t)K_endog, sizeof(ST_double));
+            ST_double *blk_nn = (ST_double *)ctools_safe_malloc3((size_t)K_endog, (size_t)K_endog, sizeof(ST_double));
             if (blk_ee && blk_en && blk_nn) {
                 ctools_matmul_atb(X_exog_dem, X_exog_dem, N, K_exog, K_exog, blk_ee);
                 ctools_matmul_atb(X_exog_dem, X_endog_dem, N, K_exog, K_endog, blk_en);
@@ -1122,7 +1155,7 @@ static ST_retcode do_iv_regression(void)
     ST_int num_collinear_z = 0;
 
     if (is_collinear_z && K_iv > 1) {
-        ST_double *ZtZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        ST_double *ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
         if (ZtZ) {
             ctools_matmul_atb(Z_dem, Z_dem, N, K_iv, K_iv, ZtZ);
             ST_int num_z_collinear = detect_collinearity(ZtZ, K_iv, is_collinear_z, verbose);
@@ -1170,7 +1203,7 @@ static ST_retcode do_iv_regression(void)
 
     /* Allocate output arrays */
     ST_double *beta = (ST_double *)calloc(K_total, sizeof(ST_double));
-    ST_double *V = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *V = (ST_double *)ctools_safe_calloc3((size_t)K_total, (size_t)K_total, sizeof(ST_double));
     ST_double *first_stage_F = (ST_double *)calloc(K_endog, sizeof(ST_double));
 
     /* Check allocations - critical for preventing NULL pointer dereference */
@@ -1204,7 +1237,7 @@ static ST_retcode do_iv_regression(void)
     ST_retcode rc = ivest_compute_2sls(
         y_dem, X_exog_dem, X_endog_dem, Z_dem,
         weights_c, weight_type,
-        N, K_exog, K_endog, K_iv,
+        N, (ST_int)N_eff, K_exog, K_endog, K_iv,
         beta, V, first_stage_F,
         vce_type, cluster_ids_c, num_clusters,
         cluster2_ids_c, num_clusters2,
@@ -1212,7 +1245,7 @@ static ST_retcode do_iv_regression(void)
         est_method, kclass_user, fuller_alpha, &lambda,
         kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
-        sdofminus_opt, center,
+        (G > 0) ? (df_a_for_vce > 0 ? df_a_for_vce : 1) : sdofminus_opt, center,
         kiefer ? Z_c : NULL  /* Pass original Z for Kiefer VCE */
     );
 
@@ -1278,20 +1311,27 @@ static ST_retcode do_iv_regression(void)
        - nopartialsmall: exclude partialled variables from K for DOF calc */
     ST_int K_for_dof = nopartialsmall ? (K_total - n_partial) : K_total;
     ST_int df_r_val;
-    if (vce_type == 4 && dkraay_T > 0) {
+    if (kiefer) {
+        /* Kiefer VCE: df_r = N_eff - K - df_a - dofminus (not cluster-based) */
+        df_r_val = (ST_int)(N_eff - K_for_dof - df_a - dofminus);
+    } else if (vce_type == 4 && dkraay_T > 0) {
         /* Driscoll-Kraay: df_r = T - 1 */
         df_r_val = dkraay_T - 1;
+    } else if (has_cluster2) {
+        /* Two-way clustering: df_r = min(G1, G2) - 1 */
+        ST_int min_clust = (num_clusters < num_clusters2) ? num_clusters : num_clusters2;
+        df_r_val = min_clust - 1;
     } else if (has_cluster) {
         df_r_val = num_clusters - 1;
     } else {
-        df_r_val = N - K_for_dof - df_a - dofminus;
+        df_r_val = (ST_int)(N_eff - K_for_dof - df_a - dofminus);
     }
     if (df_r_val <= 0) df_r_val = 1;
     /* For rmse, use sdofminus = max(1, df_a_for_vce) when nested, df_a otherwise
        (matches ivreghdfe line 670: if HDFE.df_a=0, force absorb_ct to 1) */
     ST_int sdofminus = (has_cluster && df_a_nested > 0) ?
                        (df_a_for_vce > 0 ? df_a_for_vce : 1) : df_a;
-    ST_double rmse = sqrt(rss / (N - K_total - sdofminus > 0 ? N - K_total - sdofminus : 1));
+    ST_double rmse = sqrt(rss / ((ST_double)N_eff - K_total - sdofminus > 0 ? (ST_double)N_eff - K_total - sdofminus : 1));
 
     /* Compute model F-statistic: (R2 / K) / ((1 - R2) / df_r) */
     ST_double f_stat = 0.0;
@@ -1305,7 +1345,7 @@ static ST_retcode do_iv_regression(void)
 
     /* Store results to Stata using checked wrappers */
     /* Scalars - use error-checking wrappers to prevent silent failures */
-    ctools_scal_save("__civreghdfe_N", (ST_double)N);
+    ctools_scal_save("__civreghdfe_N", N_eff);
     ctools_scal_save("__civreghdfe_df_r", (ST_double)df_r_val);
     ctools_scal_save("__civreghdfe_df_a", (ST_double)df_a);
     ctools_scal_save("__civreghdfe_df_a_for_vce", (ST_double)df_a_for_vce);
@@ -1319,6 +1359,10 @@ static ST_retcode do_iv_regression(void)
     if (vce_type == 4 && dkraay_T > 0) {
         /* Driscoll-Kraay: N_clust = number of time periods */
         ctools_scal_save("__civreghdfe_N_clust", (ST_double)dkraay_T);
+    } else if (has_cluster2) {
+        /* Two-way clustering: N_clust = min(G1, G2) */
+        ST_int min_clust = (num_clusters < num_clusters2) ? num_clusters : num_clusters2;
+        ctools_scal_save("__civreghdfe_N_clust", (ST_double)min_clust);
     } else if (has_cluster) {
         ctools_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
     }

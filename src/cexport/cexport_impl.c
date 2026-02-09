@@ -166,25 +166,6 @@ static void *format_chunk_thread(void *arg)
 }
 
 /*
-    Thread function: Write a chunk at a specific offset.
-*/
-static void *write_chunk_thread(void *arg)
-{
-    write_chunk_args_t *args = (write_chunk_args_t *)arg;
-
-    if (args->len == 0) {
-        args->success = 1;
-        return NULL;
-    }
-
-    ssize_t written = cexport_io_write_at(args->file, args->buffer,
-                                           args->len, args->offset);
-    args->success = (written == (ssize_t)args->len);
-
-    return args->success ? NULL : (void *)(intptr_t)-1;
-}
-
-/*
     Thread function: Format rows directly into mapped memory (zero-copy).
 */
 static void *format_mmap_thread(void *arg)
@@ -480,14 +461,14 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
 
     /* Arena-allocated metadata (sized to total num_chunks for offset tracking) */
     format_chunk_args_t *chunk_args = (format_chunk_args_t *)ctools_arena_alloc(arena, num_chunks * sizeof(format_chunk_args_t));
-    write_chunk_args_t *write_args = (write_chunk_args_t *)ctools_arena_alloc(arena, wave_size * sizeof(write_chunk_args_t));
+    cexport_io_batch_entry *batch_entries = (cexport_io_batch_entry *)ctools_arena_alloc(arena, wave_size * sizeof(cexport_io_batch_entry));
 
     /* Allocate 2x wave_size buffer pointers for double-buffered pipeline */
     size_t total_buffers = wave_size * 2;
     if (total_buffers > num_chunks + wave_size) total_buffers = num_chunks + wave_size;
     char **wave_buffers = (char **)ctools_arena_alloc(arena, total_buffers * sizeof(char *));
 
-    if (chunk_args == NULL || write_args == NULL || wave_buffers == NULL) {
+    if (chunk_args == NULL || batch_entries == NULL || wave_buffers == NULL) {
         free(header_buf);
         SF_error("cexport: memory allocation failed\n");
         return 920;
@@ -599,15 +580,17 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
         }
     }
 
-    /* Main pipeline: overlap write of current wave with format of next wave */
+    /* Main pipeline: overlap write of current wave with format of next wave.
+     * Writes use batched I/O from the main thread (cexport_io_write_batch)
+     * while format tasks run concurrently on the thread pool.
+     * On Windows: async WriteFile with pre-allocated events + WaitForMultipleObjects.
+     * On POSIX: pwritev for contiguous ranges (single syscall). */
     while (wave_start < num_chunks) {
-        /* Compute write offsets for current wave */
+        /* Build batch entries for current wave's writes */
         for (size_t w = 0; w < wave_count; w++) {
-            write_args[w].file = &outfile;
-            write_args[w].buffer = chunk_args[wave_start + w].output_buffer;
-            write_args[w].len = chunk_args[wave_start + w].bytes_written;
-            write_args[w].offset = file_offset;
-            write_args[w].success = 0;
+            batch_entries[w].buf = chunk_args[wave_start + w].output_buffer;
+            batch_entries[w].len = chunk_args[wave_start + w].bytes_written;
+            batch_entries[w].offset = file_offset;
             file_offset += chunk_args[wave_start + w].bytes_written;
         }
 
@@ -624,25 +607,25 @@ static ST_retcode export_pwrite(size_t nobs, size_t avg_row_size, size_t chunk_s
             chunk_args[next_start + w].success = 0;
         }
 
-        /* Submit writes for current wave AND formats for next wave concurrently */
-        for (size_t w = 0; w < wave_count; w++) {
-            ctools_persistent_pool_submit(pool, write_chunk_thread, &write_args[w]);
-        }
+        /* Submit format tasks for next wave to pool */
         for (size_t w = 0; w < next_count; w++) {
             ctools_persistent_pool_submit(pool, format_chunk_thread, &chunk_args[next_start + w]);
         }
+
+        /* Write current wave from main thread using batched I/O */
+        ssize_t batch_written = cexport_io_write_batch(&outfile, batch_entries, wave_count);
+
+        /* Wait for format tasks */
         ctools_persistent_pool_wait(pool);
 
-        /* Check for write failures */
-        for (size_t w = 0; w < wave_count; w++) {
-            if (!write_args[w].success) {
-                for (size_t u = 0; u < total_buffers; u++) {
-                    if (wave_buffers[u]) free(wave_buffers[u]);
-                }
-                cexport_io_close(&outfile, 0);
-                SF_error("cexport: write error during parallel I/O\n");
-                return 693;
+        /* Check for write failure */
+        if (batch_written < 0) {
+            for (size_t u = 0; u < total_buffers; u++) {
+                if (wave_buffers[u]) free(wave_buffers[u]);
             }
+            cexport_io_close(&outfile, 0);
+            SF_error("cexport: write error during parallel I/O\n");
+            return 693;
         }
 
         /* Check for format failures in next wave */

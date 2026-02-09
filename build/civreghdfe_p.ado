@@ -1,6 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! civreghdfe_p: Predict program for civreghdfe
-*! Part of the ctools suite
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define civreghdfe_p, rclass
     version 14.1

@@ -899,76 +899,44 @@ ST_retcode compute_bins_single_group_binsreg(
         return CBINSCATTER_ERR_FEW_OBS;
     }
 
-    /* Assign bins based on quantiles of x */
-    if (weights == NULL) {
-        /* Unweighted: equal-count bins */
-        ST_int obs_per_bin = N_valid / nq;
-        ST_int extra = N_valid % nq;
-        ST_int valid_idx = 0;
+    /* Assign bins using cutpoint-based algorithm (matches compute_bins_single_group) */
+    {
+        ST_double *x_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+        ST_double *cutpoints = (ST_double *)malloc((nq + 1) * sizeof(ST_double));
+        ST_double *w_sorted = NULL;
 
-        for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (SF_is_missing(x[orig_idx])) {
-                bin_ids[orig_idx] = 0;
-            } else {
-                /* Compute bin for this valid observation */
-                ST_int bin;
-                if (extra > 0) {
-                    /* First 'extra' bins have (obs_per_bin + 1) observations */
-                    ST_int cutoff = extra * (obs_per_bin + 1);
-                    if (valid_idx < cutoff) {
-                        bin = valid_idx / (obs_per_bin + 1) + 1;
-                    } else {
-                        bin = extra + (valid_idx - cutoff) / obs_per_bin + 1;
-                    }
-                } else {
-                    bin = valid_idx / obs_per_bin + 1;
-                }
-                if (bin > nq) bin = nq;
-                bin_ids[orig_idx] = bin;
-                valid_idx++;
-            }
-        }
-    } else {
-        /* Weighted: bins based on cumulative weight */
-        ST_double total_weight = 0.0;
-        for (i = 0; i < N; i++) {
-            if (!SF_is_missing(x[sort_idx[i]])) {
-                total_weight += weights[sort_idx[i]];
-            }
-        }
-
-        ST_double weight_per_bin = total_weight / nq;
-        ST_double *cum_weight = (ST_double *)calloc(N, sizeof(ST_double));
-        if (!cum_weight) {
+        if (!x_sorted || !cutpoints) {
+            free(x_sorted);
+            free(cutpoints);
             free(sort_idx);
             free(bin_ids);
             return CBINSCATTER_ERR_MEMORY;
         }
 
-        ST_double cumw = 0.0;
         for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (SF_is_missing(x[orig_idx])) {
-                cum_weight[i] = cumw;
-            } else {
-                cumw += weights[orig_idx];
-                cum_weight[i] = cumw;
+            x_sorted[i] = x[sort_idx[i]];
+        }
+
+        if (weights != NULL) {
+            w_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+            if (!w_sorted) {
+                free(x_sorted);
+                free(cutpoints);
+                free(sort_idx);
+                free(bin_ids);
+                return CBINSCATTER_ERR_MEMORY;
+            }
+            for (i = 0; i < N; i++) {
+                w_sorted[i] = weights[sort_idx[i]];
             }
         }
 
-        for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (SF_is_missing(x[orig_idx])) {
-                bin_ids[orig_idx] = 0;
-            } else {
-                ST_int bin = (ST_int)(cum_weight[i] / weight_per_bin) + 1;
-                if (bin > nq) bin = nq;
-                if (bin < 1) bin = 1;
-                bin_ids[orig_idx] = bin;
-            }
-        }
-        free(cum_weight);
+        compute_quantile_cutpoints(x_sorted, N, nq, w_sorted, cutpoints);
+        assign_bins(x, N, cutpoints, nq, bin_ids);
+
+        free(x_sorted);
+        free(cutpoints);
+        free(w_sorted);
     }
 
     /* Compute initial bin statistics (raw means) */

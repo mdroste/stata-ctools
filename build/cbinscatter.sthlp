@@ -261,7 +261,7 @@ operations. By default, {cmd:cbinscatter} uses all available CPU cores.
 
 {synoptset 20 tabbed}{...}
 {p2col 5 20 24 2: Matrices}{p_end}
-{synopt:{cmd:e(bindata)}}matrix of bin statistics: by_group, bin_id, x_mean, y_mean, x_se, y_se, n_obs{p_end}
+{synopt:{cmd:e(bindata)}}matrix of bin statistics: by_group, bin_id, x_mean, y_mean, n_obs{p_end}
 {synopt:{cmd:e(coefs)}}fit line coefficients (if linetype specified){p_end}
 {synopt:{cmd:e(fit_stats)}}R-squared and other fit statistics{p_end}
 

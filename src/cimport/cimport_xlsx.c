@@ -280,6 +280,7 @@ static bool workbook_callback(const xlsx_xml_event *event, void *user_data)
             }
             if (rel_id) {
                 strncpy(info->rel_id, rel_id, sizeof(info->rel_id) - 1);
+                info->rel_id[sizeof(info->rel_id) - 1] = '\0';
             }
 
             /* Default sheet index is based on position */
@@ -1082,7 +1083,6 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
             switch (cell_type) {
             case XLSX_CELL_SHARED_STRING:
             case XLSX_CELL_STRING: {
-                cs->type = CIMPORT_COL_STRING;
                 size_t slen = 0;
                 if (cell_type == XLSX_CELL_SHARED_STRING && ss_idx >= 0 &&
                     (uint32_t)ss_idx < ctx->num_shared_strings) {
@@ -1093,6 +1093,10 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
                 } else if (inline_str) {
                     slen = strlen(inline_str);
                 }
+                /* Only promote to STRING if the resolved string is non-empty.
+                 * Empty strings are treated as missing (matching Stata behavior). */
+                if (slen > 0)
+                    cs->type = CIMPORT_COL_STRING;
                 if ((int)slen > cs->max_strlen) cs->max_strlen = (int)slen;
                 break;
             }
@@ -1178,12 +1182,23 @@ static void xlsx_scan_buffer(XLSXContext *ctx, const char *buf, size_t len)
 
         if (c1 == 'c' && lt + 2 < end &&
             (lt[2] == ' ' || lt[2] == '>' || lt[2] == '/')) {
-            const char *close_c = xlsx_memfind(lt + 2,
-                                               (size_t)(end - lt - 2),
-                                               "</c>", 4);
-            if (!close_c) break;
-            xlsx_scan_cell(ctx, lt, close_c, current_row);
-            pos = close_c + 4;
+            /* Check if this is a self-closing <c .../> tag first.
+             * Self-closing cells have no </c>, so searching for </c>
+             * would incorrectly find the NEXT cell's close tag. */
+            const char *gt = (const char *)memchr(lt, '>',
+                                                  (size_t)(end - lt));
+            if (!gt) break;
+            if (gt > lt && gt[-1] == '/') {
+                /* Self-closing empty cell — skip it (value stays as missing) */
+                pos = gt + 1;
+            } else {
+                const char *close_c = xlsx_memfind(gt + 1,
+                                                   (size_t)(end - gt - 1),
+                                                   "</c>", 4);
+                if (!close_c) break;
+                xlsx_scan_cell(ctx, lt, close_c, current_row);
+                pos = close_c + 4;
+            }
         }
         else if (c1 == 'r' && lt + 4 <= end &&
                  lt[2] == 'o' && lt[3] == 'w' &&
@@ -1488,7 +1503,6 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                         switch (cell_type) {
                         case XLSX_CELL_SHARED_STRING:
                         case XLSX_CELL_STRING:
-                            cs->type = CIMPORT_COL_STRING;
                             {
                                 size_t slen = 0;
                                 if (cell_type == XLSX_CELL_SHARED_STRING && ss_idx >= 0 &&
@@ -1501,6 +1515,9 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                                 } else if (cell_type == XLSX_CELL_STRING && inline_str) {
                                     slen = strlen(inline_str);
                                 }
+                                /* Only promote to STRING if non-empty (match Stata) */
+                                if (slen > 0)
+                                    cs->type = CIMPORT_COL_STRING;
                                 if ((int)slen > cs->max_strlen) {
                                     cs->max_strlen = (int)slen;
                                 }
@@ -1874,10 +1891,15 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                 cache->numeric_data = src_num;
                 ctx->cm_numeric[cm_col] = NULL; /* prevent double-free */
 
-                /* Apply date conversion in-place */
+                /* Fix up non-numeric cell types in-place */
                 for (size_t r = 0; r < total_data_rows; r++) {
-                    if (src_types[r] == XLSX_CELL_DATE) {
+                    uint8_t ct = src_types[r];
+                    if (ct == XLSX_CELL_DATE) {
                         cache->numeric_data[r] = excel_date_to_stata(cache->numeric_data[r]);
+                    } else if (ct == XLSX_CELL_SHARED_STRING ||
+                               ct == XLSX_CELL_STRING) {
+                        /* Empty-string cells in numeric column → missing */
+                        cache->numeric_data[r] = SV_missval;
                     }
                 }
             } else {
@@ -2548,10 +2570,14 @@ ST_retcode xlsx_import_main(const char *args)
                     tasks[c].var = c + 1;
                     tasks[c].stata_nobs = stata_nobs;
                 }
-                ctools_persistent_pool_submit_batch(pool, xlsx_store_worker,
-                                                     tasks, store_cols, sizeof(xlsx_store_task));
-                ctools_persistent_pool_wait(pool);
-                free(tasks);
+                if (ctools_persistent_pool_submit_batch(pool, xlsx_store_worker,
+                                                         tasks, store_cols, sizeof(xlsx_store_task)) == 0) {
+                    ctools_persistent_pool_wait(pool);
+                    free(tasks);
+                } else {
+                    free(tasks);
+                    goto xlsx_store_sequential;
+                }
             } else {
                 goto xlsx_store_sequential;
             }

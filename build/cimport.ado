@@ -1,31 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cimport: C-accelerated CSV import for Stata
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance replacement for import delimited using a C plugin
-*!   with multi-threaded parallel parsing.
-*!
-*! Syntax:
-*!   cimport delimited [using filename] [, options]
-*!
-*! Options:
-*!   delimiters(string)  - Field delimiter(s) (default: ",")
-*!   varnames(1|nonames) - First row is variable names (1) or data (nonames)
-*!   clear               - Clear current data before import
-*!   case(preserve|lower|upper) - Variable name case handling
-*!   encoding(string)    - File encoding (currently only UTF-8 supported)
-*!   bindquotes(strict|loose) - Quote handling mode
-*!   stripquotes         - Remove surrounding quotes from string values
-*!   rowrange([start][:end]) - Row range to import
-*!   asfloat             - Import all numeric variables as float
-*!   asdouble            - Import all numeric variables as double
-*!   numericcols(numlist)  - Force specific columns to be numeric
-*!   stringcols(numlist)   - Force specific columns to be string
-*!   decimalseparator(char) - Decimal separator character (default: ".")
-*!   groupseparator(char)  - Thousands grouping separator (default: none)
-*!   maxquotedrows(#)    - Max rows to scan for quotes (default: 20)
-*!   emptylines(skip|fill) - How to handle empty lines (default: skip)
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cimport, rclass
     version 14.1

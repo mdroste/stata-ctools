@@ -329,36 +329,48 @@ ssize_t cexport_io_write_at(cexport_io_file *file, const void *buf,
     }
 
     /*
-     * pwrite-style using OVERLAPPED with event for async completion.
-     * Using event-based completion allows batching via WaitForMultipleObjects.
+     * pwrite-style using OVERLAPPED with a temporary event.
+     * Each call gets its own event to ensure correct behavior when
+     * multiple threads call write_at on the same FILE_FLAG_OVERLAPPED handle.
+     * Without a per-call event, GetOverlappedResult waits on the file handle
+     * itself, which is signaled by ANY completing I/O — causing undefined
+     * behavior with concurrent operations.
      */
     OVERLAPPED ov;
     memset(&ov, 0, sizeof(ov));
     ov.Offset = (DWORD)(offset & 0xFFFFFFFF);
     ov.OffsetHigh = (DWORD)(offset >> 32);
-    /* Use NULL event for single synchronous write */
 
-    DWORD written = 0;
-    BOOL success = WriteFile(file->handle, buf, (DWORD)len, &written, &ov);
+    HANDLE event = CreateEvent(NULL, TRUE, FALSE, NULL);
+    if (event == NULL) {
+        snprintf(file->error_message, sizeof(file->error_message),
+                 "CreateEvent failed: Windows error %lu", GetLastError());
+        return -1;
+    }
+    ov.hEvent = event;
+
+    BOOL success = WriteFile(file->handle, buf, (DWORD)len, NULL, &ov);
 
     if (!success) {
         DWORD err = GetLastError();
-        if (err == ERROR_IO_PENDING) {
-            /* Wait for completion */
-            success = GetOverlappedResult(file->handle, &ov, &written, TRUE);
-            if (!success) {
-                err = GetLastError();
-                snprintf(file->error_message, sizeof(file->error_message),
-                         "GetOverlappedResult failed: Windows error %lu", err);
-                return -1;
-            }
-        } else {
+        if (err != ERROR_IO_PENDING) {
+            CloseHandle(event);
             snprintf(file->error_message, sizeof(file->error_message),
                      "WriteFile failed: Windows error %lu", err);
             return -1;
         }
     }
 
+    DWORD written = 0;
+    if (!GetOverlappedResult(file->handle, &ov, &written, TRUE)) {
+        DWORD err = GetLastError();
+        CloseHandle(event);
+        snprintf(file->error_message, sizeof(file->error_message),
+                 "GetOverlappedResult failed: Windows error %lu", err);
+        return -1;
+    }
+
+    CloseHandle(event);
     return (ssize_t)written;
 }
 

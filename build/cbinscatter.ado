@@ -1,27 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cbinscatter: C-accelerated binned scatter plots
-*! Part of the ctools suite
-*!
-*! Description:
-*!   High-performance replacement for binscatter using a C plugin
-*!   with optimized data processing and optional HDFE residualization.
-*!
-*! Syntax:
-*!   cbinscatter yvar xvar [if] [in] [weight], [options]
-*!
-*! Options:
-*!   nquantiles(#)       - Number of bins (default 20)
-*!   controls(varlist)   - Control variables to partial out
-*!   absorb(varlist)     - Fixed effects to absorb
-*!   by(varname)         - Separate series by group
-*!   linetype(string)    - Line fit type: none, linear, quadratic, cubic
-*!   discrete            - Treat x as discrete (one bin per unique value)
-*!   genxq(varname)      - Generate bin assignment variable
-*!   savedata(filename)  - Save bin data to file
-*!   reportreg           - Report underlying regression
-*!   nograph             - Suppress graph
-*!   verbose             - Display progress information
-*!   (verbose includes timing breakdown)
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cbinscatter, eclass sortpreserve
     version 14.1
@@ -334,7 +311,7 @@ program define cbinscatter, eclass sortpreserve
         * For discrete, could have many more bins - use a reasonable max
         local max_bins = min(`nobs', 500)
     }
-    matrix __cbinscatter_bins = J(`max_bins' * `num_by_groups', 7, .)
+    matrix __cbinscatter_bins = J(`max_bins' * `num_by_groups', 5, .)
     if `linetype_num' > 0 {
         matrix __cbinscatter_coefs = J(`num_by_groups', 4, .)
         matrix __cbinscatter_fit_stats = J(`num_by_groups', 2, .)
@@ -445,9 +422,7 @@ program define cbinscatter, eclass sortpreserve
             rename c2 bin_id
             rename c3 x_mean
             rename c4 y_mean
-            rename c5 x_se
-            rename c6 y_se
-            rename c7 n_obs
+            rename c5 n_obs
             * Drop empty rows
             drop if missing(bin_id)
             save "`savedata'", replace

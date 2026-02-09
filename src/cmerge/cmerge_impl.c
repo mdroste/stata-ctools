@@ -664,26 +664,56 @@ static ST_retcode cmerge_execute(const char *args)
     (void)verbose;  /* Timing output moved to ado file */
 
     /* ===================================================================
-     * Step 1: Load ALL master variables (parallel I/O)
+     * Step 1: Load master variables (parallel I/O)
+     *
+     * Deferred loading optimization: When the master is already sorted and
+     * merge type is 1:1 or m:1, load only key vars + _orig_row first.
+     * After merge join + identity detection:
+     *   - Identity case: skip ALL non-key loading (huge savings)
+     *   - Non-identity case: stream non-key vars with fused permutation
      * =================================================================== */
 
     t_start = ctools_timer_ms();
 
-    /* Build array of all variable indices to load */
-    int *all_var_indices = malloc(master_nvars * sizeof(int));
-    if (!all_var_indices) {
-        cache_cleanup_on_error();
-        SF_error("cmerge: Failed to allocate var indices\n");
-        return 920;
-    }
-    for (size_t v = 0; v < master_nvars; v++) {
-        all_var_indices[v] = (int)(v + 1);
+    /* Determine if we can use deferred loading */
+    int deferred_loading = (sorted && !merge_by_n &&
+                            (merge_type == MERGE_1_1 || merge_type == MERGE_M_1));
+
+    /* Build array of variable indices to load */
+    int *all_var_indices = NULL;
+    size_t n_load_vars = 0;
+
+    if (deferred_loading) {
+        /* Deferred: load only key vars + _orig_row */
+        n_load_vars = (size_t)nkeys + 1;  /* keys + _orig_row */
+        all_var_indices = malloc(n_load_vars * sizeof(int));
+        if (!all_var_indices) {
+            cache_cleanup_on_error();
+            SF_error("cmerge: Failed to allocate var indices\n");
+            return 920;
+        }
+        for (int k = 0; k < nkeys; k++) {
+            all_var_indices[k] = master_key_indices[k];
+        }
+        all_var_indices[nkeys] = orig_row_idx;
+    } else {
+        /* Full load: all variables */
+        n_load_vars = master_nvars;
+        all_var_indices = malloc(n_load_vars * sizeof(int));
+        if (!all_var_indices) {
+            cache_cleanup_on_error();
+            SF_error("cmerge: Failed to allocate var indices\n");
+            return 920;
+        }
+        for (size_t v = 0; v < master_nvars; v++) {
+            all_var_indices[v] = (int)(v + 1);
+        }
     }
 
-    /* Load all master variables using parallel I/O */
+    /* Load master variables using parallel I/O */
     ctools_filtered_data master_data;
     ctools_filtered_data_init(&master_data);
-    rc = ctools_data_load(&master_data, all_var_indices, master_nvars, 1, master_nobs, CTOOLS_LOAD_SKIP_IF);
+    rc = ctools_data_load(&master_data, all_var_indices, n_load_vars, 1, master_nobs, CTOOLS_LOAD_SKIP_IF);
     if (rc != STATA_OK) {
         free(all_var_indices);
         cache_cleanup_on_error();
@@ -811,7 +841,14 @@ static ST_retcode cmerge_execute(const char *args)
 
         /* Point to the key variables in master_data (0-indexed in vars array) */
         for (int k = 0; k < nkeys; k++) {
-            int var_idx = master_key_indices[k] - 1;  /* Convert to 0-based */
+            int var_idx;
+            if (deferred_loading) {
+                /* In deferred mode, keys are at positions 0..nkeys-1 */
+                var_idx = k;
+            } else {
+                /* In full-load mode, variable at Stata index N is at position N-1 */
+                var_idx = master_key_indices[k] - 1;
+            }
 
             /* Critical bounds check - prevents crash from bad indices */
             if (var_idx < 0 || (size_t)var_idx >= master_data.data.nvars) {
@@ -872,9 +909,13 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    /* _orig_row is at index orig_row_idx-1 in master_data.data.vars */
-    /* Bounds check for orig_row_idx */
-    if (orig_row_idx <= 0 || (size_t)(orig_row_idx - 1) >= master_data.data.nvars) {
+    /* _orig_row location depends on loading mode:
+     *   deferred: at position nkeys (last loaded var)
+     *   full:     at position orig_row_idx - 1 (1-based Stata index) */
+    int orig_row_var_pos = deferred_loading ? nkeys : (orig_row_idx - 1);
+
+    /* Bounds check for orig_row position */
+    if (orig_row_var_pos < 0 || (size_t)orig_row_var_pos >= master_data.data.nvars) {
         free(output_specs);
         if (sort_perm) free(sort_perm);
         ctools_filtered_data_free(&master_data);
@@ -885,7 +926,7 @@ static ST_retcode cmerge_execute(const char *args)
         return 459;
     }
 
-    double *orig_row_data = master_data.data.vars[orig_row_idx - 1].data.dbl;
+    double *orig_row_data = master_data.data.vars[orig_row_var_pos].data.dbl;
 
     for (size_t i = 0; i < output_nobs; i++) {
         if (output_specs[i].master_sorted_row >= 0) {
@@ -982,13 +1023,79 @@ static ST_retcode cmerge_execute(const char *args)
     }
 
     /* Fast path: if permutation is identity and no using-only rows, master data
-     * is already correct in Stata - skip Steps 6-7 entirely (no alloc/copy/store) */
+     * is already correct in Stata - skip Steps 6-7 entirely (no alloc/copy/store).
+     * Also skip when deferred loading is active: non-identity case is handled
+     * by streaming below, identity case needs no work. */
     int skip_master_store = (is_identity_permutation && n_using_only == 0
-                             && output_nobs == master_nobs);
+                             && output_nobs == master_nobs)
+                            || deferred_loading;
+
+    /* ===================================================================
+     * Deferred loading: stream non-key vars with fused permutation
+     *
+     * When we used deferred loading, master_data only contains keys + _orig_row.
+     * For non-identity case, stream each non-key var through Stata SPI
+     * using ctools_stream_var_permuted(). This avoids loading ALL master vars
+     * into memory, which is a huge win for wide datasets.
+     * =================================================================== */
+
+    double t_stream = 0;
+    if (deferred_loading && !skip_master_store) {
+        double t_stream_start = ctools_timer_ms();
+
+        /* Build fused permutation: output row i -> original Stata row (0-based).
+         * This combines the sort permutation + merge mapping into one pass. */
+        int64_t *fused_perm = ctools_safe_malloc2(output_nobs, sizeof(int64_t));
+        if (!fused_perm) {
+            free(output_specs);
+            free(master_orig_rows);
+            if (sort_perm) free(sort_perm);
+            ctools_filtered_data_free(&master_data);
+            free(all_var_indices);
+            cache_cleanup_on_error();
+            return 920;
+        }
+
+        for (size_t i = 0; i < output_nobs; i++) {
+            fused_perm[i] = (master_orig_rows[i] >= 0) ? (int64_t)master_orig_rows[i] : -1;
+        }
+
+        /* Stream each non-key, non-_orig_row, non-shared-keepusing variable */
+        for (size_t v = 0; v < master_nvars; v++) {
+            int stata_idx = (int)(v + 1);
+            if (stata_idx == orig_row_idx) continue;  /* Skip _orig_row */
+
+            /* Skip shared keepusing (handled by keepusing write path) */
+            int is_shared_keepusing = 0;
+            for (int kv = 0; kv < n_keepusing; kv++) {
+                if (keepusing_placeholder_indices[kv] == stata_idx) {
+                    is_shared_keepusing = 1;
+                    break;
+                }
+            }
+            if (is_shared_keepusing) continue;
+
+            rc = ctools_stream_var_permuted(stata_idx, fused_perm, output_nobs, 1);
+            if (rc != STATA_OK) {
+                free(fused_perm);
+                free(output_specs);
+                free(master_orig_rows);
+                if (sort_perm) free(sort_perm);
+                ctools_filtered_data_free(&master_data);
+                free(all_var_indices);
+                cache_cleanup_on_error();
+                SF_error("cmerge: Failed to stream permuted variable\n");
+                return rc;
+            }
+        }
+
+        free(fused_perm);
+        t_stream = ctools_timer_ms() - t_stream_start;
+    }
 
     /* ===================================================================
      * Step 6: Create output data structure with permuted data
-     *         (or skip permutation if identity)
+     *         (or skip permutation if identity or deferred loading)
      * =================================================================== */
 
     t_start = ctools_timer_ms();
@@ -1150,7 +1257,17 @@ static ST_retcode cmerge_execute(const char *args)
                                           g_using_cache.keys.data.vars[key_idx].data.dbl : NULL;
 
                 /* Use master_sorted_row to index into sorted master_data */
+                #define GATHER_PF_DIST 16
                 for (size_t i = 0; i < output_nobs; i++) {
+                    /* Prefetch output_specs and source data ahead */
+                    #if defined(__GNUC__) || defined(__clang__)
+                    if (i + GATHER_PF_DIST < output_nobs) {
+                        __builtin_prefetch(&output_specs[i + GATHER_PF_DIST], 0, 0);
+                        int32_t pf_row = output_specs[i + GATHER_PF_DIST].master_sorted_row;
+                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound)
+                            __builtin_prefetch(&src_var->data.dbl[pf_row], 0, 0);
+                    }
+                    #endif
                     int32_t sorted_row = output_specs[i].master_sorted_row;
                     if (sorted_row >= 0) {
                         /* Bounds check: sorted_row must be valid index into master data */
@@ -1171,6 +1288,7 @@ static ST_retcode cmerge_execute(const char *args)
                         dst_var->data.dbl[i] = SV_missval;
                     }
                 }
+                #undef GATHER_PF_DIST
             }
         } else {
             /* String variable - use arena allocator to reduce malloc overhead */
@@ -1188,6 +1306,13 @@ static ST_retcode cmerge_execute(const char *args)
             if (block_size < 4096) block_size = 4096;
             cmerge_string_arena *var_arena = cmerge_arena_create(block_size);
             dst_var->_arena = var_arena;
+            if (!var_arena) {
+                #ifdef _OPENMP
+                #pragma omp atomic write
+                #endif
+                alloc_failed = 1;
+                continue;
+            }
 
             /* OPTIMIZATION: Identity permutation fast path - direct pointer copy */
             if (is_identity_permutation) {
@@ -1197,6 +1322,13 @@ static ST_retcode cmerge_execute(const char *args)
                     } else {
                         dst_var->data.str[i] = cmerge_arena_strdup(var_arena, "");
                     }
+                    if (!dst_var->data.str[i]) {
+                        #ifdef _OPENMP
+                        #pragma omp atomic write
+                        #endif
+                        alloc_failed = 1;
+                        break;
+                    }
                 }
             } else {
                 int is_key = output_var_is_key[vi];
@@ -1205,7 +1337,17 @@ static ST_retcode cmerge_execute(const char *args)
                                          g_using_cache.keys.data.vars[key_idx].data.str : NULL;
 
                 /* Use master_sorted_row to index into sorted master_data */
+                #define GATHER_STR_PF_DIST 16
                 for (size_t i = 0; i < output_nobs; i++) {
+                    /* Prefetch output_specs and source string pointers ahead */
+                    #if defined(__GNUC__) || defined(__clang__)
+                    if (i + GATHER_STR_PF_DIST < output_nobs) {
+                        __builtin_prefetch(&output_specs[i + GATHER_STR_PF_DIST], 0, 0);
+                        int32_t pf_row = output_specs[i + GATHER_STR_PF_DIST].master_sorted_row;
+                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound)
+                            __builtin_prefetch(&src_var->data.str[pf_row], 0, 0);
+                    }
+                    #endif
                     int32_t sorted_row = output_specs[i].master_sorted_row;
                     /* Bounds check: sorted_row must be valid index into master data */
                     if (sorted_row >= 0 && (size_t)sorted_row < master_nobs_bound &&
@@ -1223,7 +1365,15 @@ static ST_retcode cmerge_execute(const char *args)
                     } else {
                         dst_var->data.str[i] = cmerge_arena_strdup(var_arena, "");
                     }
+                    if (!dst_var->data.str[i]) {
+                        #ifdef _OPENMP
+                        #pragma omp atomic write
+                        #endif
+                        alloc_failed = 1;
+                        break;
+                    }
                 }
+                #undef GATHER_STR_PF_DIST
             }
         }
     }
@@ -1310,8 +1460,22 @@ static ST_retcode cmerge_execute(const char *args)
 
     if (merge_var_idx > 0) {
         ST_int mvar = (ST_int)merge_var_idx;
-        for (size_t i = 0; i < output_nobs; i++) {
-            SF_vstore(mvar, (ST_int)(i + 1), (double)output_specs[i].merge_result);
+        /* Batch writes: fill a buffer of 16 doubles, flush with SF_VSTORE_BATCH16 */
+        size_t full_batches = output_nobs / 16;
+        size_t remainder = output_nobs % 16;
+        size_t i = 0;
+        double buf[16];
+
+        for (size_t b = 0; b < full_batches; b++) {
+            for (int j = 0; j < 16; j++) {
+                buf[j] = (double)output_specs[i + j].merge_result;
+            }
+            SF_VSTORE_BATCH16(mvar, (ST_int)(i + 1), buf);
+            i += 16;
+        }
+        /* Handle remainder */
+        for (size_t r = 0; r < remainder; r++) {
+            SF_vstore(mvar, (ST_int)(i + r + 1), (double)output_specs[i + r].merge_result);
         }
     }
 
@@ -1351,13 +1515,17 @@ static ST_retcode cmerge_execute(const char *args)
 
             /* Submit all keepusing writes to thread pool */
             ctools_persistent_pool *pool = ctools_get_global_pool();
+            int pool_ok = 0;
             if (pool != NULL && n_keepusing >= 1) {
-                ctools_persistent_pool_submit_batch(pool, cmerge_write_keepusing_var_thread,
-                                                     ku_args_array, n_keepusing,
-                                                     sizeof(cmerge_keepusing_write_args_t));
-                ctools_persistent_pool_wait(pool);
-            } else {
-                /* Sequential fallback if no pool or only one variable */
+                if (ctools_persistent_pool_submit_batch(pool, cmerge_write_keepusing_var_thread,
+                                                         ku_args_array, n_keepusing,
+                                                         sizeof(cmerge_keepusing_write_args_t)) == 0) {
+                    ctools_persistent_pool_wait(pool);
+                    pool_ok = 1;
+                }
+            }
+            if (!pool_ok) {
+                /* Sequential fallback if no pool or submission failed */
                 for (int kv = 0; kv < n_keepusing; kv++) {
                     cmerge_write_keepusing_var_thread(&ku_args_array[kv]);
                 }
@@ -1426,6 +1594,7 @@ static ST_retcode cmerge_execute(const char *args)
     SF_scal_save("_cmerge_p2_merge_join", t_merge / 1000.0);
     SF_scal_save("_cmerge_p2_reorder", t_reorder / 1000.0);
     SF_scal_save("_cmerge_p2_permute", t_permute / 1000.0);
+    SF_scal_save("_cmerge_p2_stream", t_stream / 1000.0);
     SF_scal_save("_cmerge_p2_store", t_store / 1000.0);
     SF_scal_save("_cmerge_p2_write_meta", t_write_meta / 1000.0);
     SF_scal_save("_cmerge_p2_cleanup", t_cleanup / 1000.0);

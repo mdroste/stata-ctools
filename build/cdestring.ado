@@ -1,19 +1,4 @@
-*! version 1.0.1 07Feb2026
-*! cdestring: C-accelerated string to numeric conversion for Stata
-*! Part of the ctools suite
-*!
-*! Replaces Stata's built-in destring command with a high-performance
-*! C implementation featuring:
-*!   - Parallel conversion across observations using OpenMP
-*!   - Fast numeric parsing optimized for common formats
-*!   - Full compatibility with destring syntax and options
-*!
-*! Syntax: cdestring [varlist] [if] [in], {generate(newvarlist) | replace}
-*!         [ignore("chars") force float percent dpcomma Verbose THReads(integer)]
-*!
-*! The cdestring command inherits the same syntax and functionality as Stata's
-*! built-in destring command, producing identical results but with better
-*! performance on large datasets.
+*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
 
 program define cdestring
     version 14.1

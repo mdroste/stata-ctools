@@ -195,6 +195,7 @@ void ivvce_compute_twoway(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     const ST_int *cluster1_ids,
@@ -291,26 +292,26 @@ void ivvce_compute_twoway(
     compute_cluster_meat(PzX, resid, weights, weight_type, intersection_ids, N, K_total, num_intersection, meat_int);
 
     /* DOF adjustments for each dimension */
-    ST_int df_r = N - K_total - df_a;
+    ST_int df_r = N_eff - K_total - df_a;
     if (df_r <= 0) df_r = 1;
 
     /* V1 = XkX_inv * meat1 * XkX_inv * dof_adj1 */
     ST_double G1 = (ST_double)num_clusters1;
-    ST_double dof_adj1 = ((ST_double)(N - 1) / (ST_double)df_r) * (G1 / (G1 - 1.0));
+    ST_double dof_adj1 = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G1 / (G1 - 1.0));
     ctools_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
     ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V1);
     for (i = 0; i < K_total * K_total; i++) V1[i] *= dof_adj1;
 
     /* V2 = XkX_inv * meat2 * XkX_inv * dof_adj2 */
     ST_double G2 = (ST_double)num_clusters2;
-    ST_double dof_adj2 = ((ST_double)(N - 1) / (ST_double)df_r) * (G2 / (G2 - 1.0));
+    ST_double dof_adj2 = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G2 / (G2 - 1.0));
     ctools_matmul_ab(XkX_inv, meat2, K_total, K_total, K_total, temp_v);
     ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V2);
     for (i = 0; i < K_total * K_total; i++) V2[i] *= dof_adj2;
 
     /* V_int = XkX_inv * meat_int * XkX_inv * dof_adj_int */
     ST_double G_int = (ST_double)num_intersection;
-    ST_double dof_adj_int = ((ST_double)(N - 1) / (ST_double)df_r) * (G_int / (G_int - 1.0));
+    ST_double dof_adj_int = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G_int / (G_int - 1.0));
     ctools_matmul_ab(XkX_inv, meat_int, K_total, K_total, K_total, temp_v);
     ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V_int);
     for (i = 0; i < K_total * K_total; i++) V_int[i] *= dof_adj_int;
@@ -354,6 +355,7 @@ void ivvce_compute_kiefer(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     const ST_int *panel_ids,
@@ -364,7 +366,7 @@ void ivvce_compute_kiefer(
 {
     ST_int i, p;
 
-    ST_int df_r = N - K_total - df_a;
+    ST_int df_r = N_eff - K_total - df_a;
     if (df_r <= 0) df_r = 1;
 
     /* Build panel membership lists */
@@ -482,9 +484,9 @@ void ivvce_compute_kiefer(
     free(time_sums);
     free(panel_counts); free(panel_starts); free(obs_by_panel);
 
-    /* Divide by N */
+    /* Divide by N_eff (effective sample size) */
     for (i = 0; i < K_iv * K_iv; i++) {
-        shat_ZZ[i] /= N;
+        shat_ZZ[i] /= N_eff;
     }
 
     /* Transform shat_ZZ to X-space:
@@ -505,8 +507,8 @@ void ivvce_compute_kiefer(
     free(shat_ZZ);
     free(temp_kk);
 
-    /* DOF adjustment for Kiefer: N / (N - K - df_a) */
-    ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+    /* DOF adjustment for Kiefer: N_eff / (N_eff - K - df_a) */
+    ST_double dof_adj = (ST_double)N_eff / (ST_double)df_r;
 
     /* V = XkX_inv * meat * XkX_inv * dof_adj */
     ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
@@ -548,6 +550,7 @@ void ivvce_compute_full(
     const ST_double *weights,
     ST_int weight_type,
     ST_int N,
+    ST_int N_eff,  /* Effective sample size: sum(fw) for fweights, N otherwise */
     ST_int K_total,
     ST_int K_iv,
     ST_int vce_type,
@@ -576,7 +579,7 @@ void ivvce_compute_full(
         }
     }
 
-    ST_int df_r = N - K_total - df_a;
+    ST_int df_r = N_eff - K_total - df_a;
     if (df_r <= 0) df_r = 1;
 
     if (vce_type == CIVREGHDFE_VCE_UNADJUSTED) {
@@ -680,9 +683,9 @@ void ivvce_compute_full(
         ST_double T = (ST_double)num_clusters;
         ST_int effective_df_a = df_a;
         if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
-        ST_double denom = (ST_double)(N - K_total - effective_df_a);
+        ST_double denom = (ST_double)(N_eff - K_total - effective_df_a);
         if (denom <= 0) denom = 1.0;
-        ST_double dof_adj = ((ST_double)(N - 1) / denom) * (T / (T - 1.0));
+        ST_double dof_adj = ((ST_double)(N_eff - 1) / denom) * (T / (T - 1.0));
 
         /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
@@ -710,10 +713,10 @@ void ivvce_compute_full(
         /* DOF adjustment */
         ST_int effective_df_a = df_a;
         if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
-        ST_double denom = (ST_double)(N - K_total - effective_df_a);
+        ST_double denom = (ST_double)(N_eff - K_total - effective_df_a);
         if (denom <= 0) denom = 1.0;
         ST_double G = (ST_double)num_clusters;
-        ST_double dof_adj = ((ST_double)(N - 1) / denom) * (G / (G - 1.0));
+        ST_double dof_adj = ((ST_double)(N_eff - 1) / denom) * (G / (G - 1.0));
 
         ctools_vce_data d;
         d.X_eff = PzX;
@@ -723,7 +726,7 @@ void ivvce_compute_full(
         d.weight_type = weight_type;
         d.N = N;
         d.K = K_total;
-        d.normalize_weights = 0;  /* IV: use raw weights */
+        d.normalize_weights = 1;  /* Normalize aw/pw weights for correct meat */
 
         ctools_vce_cluster(&d, cluster_ids_0, num_clusters, dof_adj, V);
         free(cluster_ids_0);
@@ -877,7 +880,7 @@ void ivvce_compute_full(
            where K = number of regressors and G = absorbed FE count.
            This is equivalent to V = V * N / df_r.
          */
-        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+        ST_double dof_adj = (ST_double)N_eff / (ST_double)df_r;
 
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
         if (temp_v) {
@@ -892,7 +895,7 @@ void ivvce_compute_full(
 
     } else {
         /* Standard HC robust — delegate to shared VCE engine */
-        ST_double dof_adj = (ST_double)N / (ST_double)df_r;
+        ST_double dof_adj = (ST_double)N_eff / (ST_double)df_r;
 
         ctools_vce_data d;
         d.X_eff = PzX;
@@ -902,7 +905,7 @@ void ivvce_compute_full(
         d.weight_type = weight_type;
         d.N = N;
         d.K = K_total;
-        d.normalize_weights = 0;  /* IV: use raw weights */
+        d.normalize_weights = 1;  /* Normalize aw/pw weights for correct meat (w^2*e^2) */
 
         ctools_vce_robust(&d, dof_adj, V);
     }

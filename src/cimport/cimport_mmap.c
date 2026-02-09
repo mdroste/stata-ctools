@@ -28,6 +28,7 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
     LARGE_INTEGER file_size;
     if (!GetFileSizeEx(ctx->file_handle, &file_size)) {
         CloseHandle(ctx->file_handle);
+        ctx->file_handle = NULL;
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Cannot get file size: error %lu", GetLastError());
         return -1;
@@ -50,6 +51,7 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
                                               0, 0, NULL);
     if (ctx->mapping_handle == NULL) {
         CloseHandle(ctx->file_handle);
+        ctx->file_handle = NULL;
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Cannot create file mapping: error %lu", GetLastError());
         return -1;
@@ -60,7 +62,9 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
                                             0, 0, ctx->file_size);
     if (ctx->file_data == NULL) {
         CloseHandle(ctx->mapping_handle);
+        ctx->mapping_handle = NULL;
         CloseHandle(ctx->file_handle);
+        ctx->file_handle = NULL;
         snprintf(ctx->error_message, sizeof(ctx->error_message),
                  "Cannot map file: error %lu", GetLastError());
         return -1;
@@ -82,11 +86,11 @@ void cimport_munmap_file(CImportContext *ctx)
         ctx->mmap_data = NULL;
         ctx->file_data = NULL;
     }
-    if (ctx->mapping_handle) {
+    if (ctx->mapping_handle != NULL && ctx->mapping_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(ctx->mapping_handle);
         ctx->mapping_handle = NULL;
     }
-    if (ctx->file_handle) {
+    if (ctx->file_handle != NULL && ctx->file_handle != INVALID_HANDLE_VALUE) {
         CloseHandle(ctx->file_handle);
         ctx->file_handle = NULL;
     }

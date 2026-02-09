@@ -133,6 +133,7 @@ void ctools_sort_order_pairs(ctools_order_pair_t *pairs, size_t n)
         int shift = pass * 8;
 
         /* Phase 1: Parallel histogram */
+        memset(all_counts, 0, hist_count * sizeof(size_t));
         size_t offset = 0;
         for (int t = 0; t < num_threads; t++) {
             hist_args[t].pairs = src;
@@ -143,11 +144,19 @@ void ctools_sort_order_pairs(ctools_order_pair_t *pairs, size_t n)
             offset = hist_args[t].end;
         }
 
-        if (pool != NULL && num_threads >= 2) {
-            ctools_persistent_pool_submit_batch(pool, ctools_histogram_thread,
-                                                 hist_args, num_threads,
-                                                 sizeof(ctools_hist_args_t));
-            ctools_persistent_pool_wait(pool);
+        int use_pool = (pool != NULL && num_threads >= 2);
+        if (use_pool) {
+            if (ctools_persistent_pool_submit_batch(pool, ctools_histogram_thread,
+                                                     hist_args, num_threads,
+                                                     sizeof(ctools_hist_args_t)) != 0) {
+                use_pool = 0;  /* Fall back to single-threaded for this pass */
+                memset(all_counts, 0, hist_count * sizeof(size_t));
+                for (int t = 0; t < num_threads; t++) {
+                    ctools_histogram_thread(&hist_args[t]);
+                }
+            } else {
+                ctools_persistent_pool_wait(pool);
+            }
         } else {
             for (int t = 0; t < num_threads; t++) {
                 ctools_histogram_thread(&hist_args[t]);
@@ -194,11 +203,16 @@ void ctools_sort_order_pairs(ctools_order_pair_t *pairs, size_t n)
             offset = scatter_args[t].end;
         }
 
-        if (pool != NULL && num_threads >= 2) {
-            ctools_persistent_pool_submit_batch(pool, ctools_scatter_thread,
-                                                 scatter_args, num_threads,
-                                                 sizeof(ctools_scatter_args_t));
-            ctools_persistent_pool_wait(pool);
+        if (use_pool) {
+            if (ctools_persistent_pool_submit_batch(pool, ctools_scatter_thread,
+                                                     scatter_args, num_threads,
+                                                     sizeof(ctools_scatter_args_t)) != 0) {
+                for (int t = 0; t < num_threads; t++) {
+                    ctools_scatter_thread(&scatter_args[t]);
+                }
+            } else {
+                ctools_persistent_pool_wait(pool);
+            }
         } else {
             for (int t = 0; t < num_threads; t++) {
                 ctools_scatter_thread(&scatter_args[t]);

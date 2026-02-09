@@ -7,6 +7,25 @@
 #include "cmerge_keys.h"
 #include "stplugin.h"
 
+/*
+ * Inline missing value check: SF_is_missing(val) dereferences a function
+ * pointer per call. All Stata missing values (., .a-.z) are >= SV_missval,
+ * so a simple comparison suffices. Cache the threshold once.
+ */
+static double g_missval_cached = 0.0;
+static int g_missval_initialized = 0;
+
+static inline double cmerge_get_missval(void)
+{
+    if (__builtin_expect(!g_missval_initialized, 0)) {
+        g_missval_cached = SV_missval;
+        g_missval_initialized = 1;
+    }
+    return g_missval_cached;
+}
+
+#define CMERGE_IS_MISSING(val) ((val) >= cmerge_get_missval())
+
 /* Check if all keys are numeric (for fast path selection) */
 int cmerge_all_keys_numeric(stata_data *data, int nkeys)
 {
@@ -28,8 +47,8 @@ int cmerge_compare_keys_numeric(stata_data *data_a, size_t row_a,
         double val_b = data_b->vars[k].data.dbl[row_b];
 
         /* Missing value handling - must distinguish extended missing (.a, .b, etc.) */
-        int miss_a = SF_is_missing(val_a);
-        int miss_b = SF_is_missing(val_b);
+        int miss_a = CMERGE_IS_MISSING(val_a);
+        int miss_b = CMERGE_IS_MISSING(val_b);
 
         if (miss_a | miss_b) {
             if (miss_a && miss_b) {
@@ -57,8 +76,8 @@ int cmerge_compare_keys_numeric_same(stata_data *data, size_t row_a,
         double val_a = col[row_a];
         double val_b = col[row_b];
 
-        int miss_a = SF_is_missing(val_a);
-        int miss_b = SF_is_missing(val_b);
+        int miss_a = CMERGE_IS_MISSING(val_a);
+        int miss_b = CMERGE_IS_MISSING(val_b);
 
         if (miss_a | miss_b) {
             if (miss_a && miss_b) {
@@ -89,8 +108,8 @@ int cmerge_compare_keys(stata_data *data_a, size_t row_a,
             double val_a = var_a->data.dbl[row_a];
             double val_b = var_b->data.dbl[row_b];
 
-            int miss_a = SF_is_missing(val_a);
-            int miss_b = SF_is_missing(val_b);
+            int miss_a = CMERGE_IS_MISSING(val_a);
+            int miss_b = CMERGE_IS_MISSING(val_b);
 
             if (miss_a && miss_b) {
                 /* Both missing - compare actual values to distinguish .a, .b, .z, etc. */

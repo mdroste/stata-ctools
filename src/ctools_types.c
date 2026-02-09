@@ -775,16 +775,17 @@ bool ctools_parse_double_fast(const char *str, int len, double *result, double m
         return true;
     }
 
-    /* Compute the effective decimal exponent:
-     * mantissa * 10^(exponent - decimal_shift + extra_digits) */
-    int decimal_shift = (decimal_pos >= 0) ? (total_digits - decimal_pos) : 0;
-    int extra_digits = (total_digits > 19) ? (total_digits - 19) : 0;
-    if (decimal_pos >= 0 && decimal_pos < total_digits) {
-        int frac_digits = total_digits - decimal_pos;
-        extra_digits -= frac_digits;
-        if (extra_digits < 0) extra_digits = 0;
+    /* Compute the effective decimal exponent.
+     * The mantissa holds the first digit_count digits as an integer.
+     * With a decimal point at position decimal_pos (count of integer digits),
+     * value = mantissa * 10^(exponent + decimal_pos - digit_count).
+     * Without a decimal point, unconsumed trailing digits need positive shift. */
+    int final_exp;
+    if (decimal_pos >= 0) {
+        final_exp = exponent + decimal_pos - digit_count;
+    } else {
+        final_exp = exponent + (total_digits - digit_count);
     }
-    int final_exp = exponent - decimal_shift + extra_digits;
 
     /* Eisel-Lemire fast path: handles ~99% of inputs exactly */
     if (digit_count <= 19 && eisel_lemire_compute(mantissa, final_exp, negative, result)) {
