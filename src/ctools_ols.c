@@ -450,6 +450,95 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
 }
 
 /* ========================================================================
+ * Sweep-based generalized inverse for symmetric matrices.
+ * Matches Stata's invsym() behavior: pivots on largest diagonal first,
+ * zeros out columns whose Schur complement is below tolerance.
+ * Returns 0 on success, -1 on memory error.
+ * Output: inv (K x K), rank_out (number of non-singular pivots)
+ * ======================================================================== */
+ST_int ctools_invsym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out)
+{
+    ST_int i, j;
+
+    ST_double *W = (ST_double *)malloc(K * K * sizeof(ST_double));
+    ST_int *swept = (ST_int *)calloc(K, sizeof(ST_int));
+    if (!W || !swept) { free(W); free(swept); return -1; }
+
+    memcpy(W, A, K * K * sizeof(ST_double));
+
+    /* Find max original diagonal for relative tolerance */
+    ST_double max_diag = 0.0;
+    for (i = 0; i < K; i++) {
+        ST_double d = fabs(A[i * K + i]);
+        if (d > max_diag) max_diag = d;
+    }
+    /* Tolerance: treat pivot as zero if below eps * max_original_diag.
+     * Use 1e-14 to match Stata's invsym near-singularity detection. */
+    ST_double tol = 1e-14 * max_diag;
+
+    ST_int rank = 0;
+    for (ST_int iter = 0; iter < K; iter++) {
+        /* Find largest unswept diagonal */
+        ST_int p = -1;
+        ST_double best = 0.0;
+        for (i = 0; i < K; i++) {
+            if (!swept[i] && fabs(W[i * K + i]) > best) {
+                best = fabs(W[i * K + i]);
+                p = i;
+            }
+        }
+        if (p < 0 || best <= tol) break;
+
+        /* Sweep on column/row p (Gauss-Jordan pivot for symmetric matrix).
+         * L is small (number of excluded instruments, typically 2-10),
+         * so parallelization would be pure overhead — do not add OMP here. */
+        ST_double inv_d = 1.0 / W[p * K + p];
+
+        /* Update off-diagonal block: W[i,j] -= W[i,p] * W[p,j] / d
+         * W[.,p] and W[p,.] are read-only during this loop (only W[i!=p, j!=p] written),
+         * so we precompute scaled pivot column to avoid repeated division. */
+        for (i = 0; i < K; i++) {
+            if (i == p) continue;
+            ST_double wip = W[p * K + i] * inv_d;  /* W[i,p] / d, constant for inner loop */
+            for (j = i; j < K; j++) {
+                if (j == p) continue;
+                W[j * K + i] -= wip * W[j * K + p];
+                if (i != j) W[i * K + j] = W[j * K + i];
+            }
+        }
+
+        /* Update pivot row/col: W[i,p] /= d, W[p,i] /= d */
+        for (i = 0; i < K; i++) {
+            if (i != p) {
+                W[p * K + i] *= inv_d;
+                W[i * K + p] *= inv_d;
+            }
+        }
+
+        /* Pivot diagonal */
+        W[p * K + p] = inv_d;
+        swept[p] = 1;
+        rank++;
+    }
+
+    /* Copy result: swept positions have inverse, zero out unswept */
+    for (i = 0; i < K; i++) {
+        for (j = 0; j < K; j++) {
+            if (swept[i] && swept[j]) {
+                inv[j * K + i] = W[j * K + i];
+            } else {
+                inv[j * K + i] = 0.0;
+            }
+        }
+    }
+
+    if (rank_out) *rank_out = rank;
+    free(W);
+    free(swept);
+    return 0;
+}
+
+/* ========================================================================
  * Pseudo-inverse for symmetric positive semidefinite matrices
  * Uses Jacobi eigenvalue decomposition (exact for small matrices).
  * Eigenvalues below rel_tol * max_eigenvalue are treated as zero.

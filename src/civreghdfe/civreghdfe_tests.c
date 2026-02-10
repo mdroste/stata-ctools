@@ -632,28 +632,27 @@ void civreghdfe_compute_underid_test(
                 return;
             }
 
-            if (kiefer && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
-                /* Kiefer VCE: homoskedastic HAC with Kronecker structure.
-                   dofminus=0: ivreg2's kiefer uses homoskedastic m_omega path
-                   where dofminus equals ivreg2's partial_ct (not FE count) */
-                compute_kiefer_shat0_homoskedastic(
-                    Z_excl, v, weights, weight_type,
-                    cluster_ids, num_clusters,
-                    N, N_eff, L, 0, kernel_type, bw, shat0);
-                /* Debug: print shat0 diagnostics */
-                {
-                    ST_double ee_dbg = 0, z_norm = 0;
-                    for (int ii = 0; ii < N; ii++) { ee_dbg += v[ii]*v[ii]; }
-                    for (int ii = 0; ii < N; ii++) { z_norm += Z_excl[ii]*Z_excl[ii]; }
-                    fprintf(stderr, "[KP Wald] N=%d N_eff=%d L=%d bw=%d kernel=%d panels=%d\n",
-                        N, N_eff, L, bw, kernel_type, num_clusters);
-                    fprintf(stderr, "[KP Wald] sigma2=%g, v_ss=%g, z0_ss=%g\n",
-                        ee_dbg/(double)N_eff, ee_dbg, z_norm);
-                    fprintf(stderr, "[KP Wald] shat0 diag: %g %g\n",
-                        shat0[0], L>1?shat0[L+1]:0.0);
-                    fprintf(stderr, "[KP Wald] ZtX: %g %g, pi: %g %g\n",
-                        ZtX[0], L>1?ZtX[1]:0.0, pi_excl[0], L>1?pi_excl[1]:0.0);
-                    fflush(stderr);
+            if (kiefer) {
+                /* Kiefer VCE: ivreg2 calls ranktest WITHOUT bw/kernel for
+                   test statistics (bwopt/kernopt are empty because bw is set
+                   after ivparse returns). So KP tests use IID shat0, not HAC.
+                   IID shat0 = sigma2 * Z'Z where sigma2 = v'v/N */
+                ST_double ee_kf = 0.0;
+                for (i = 0; i < N; i++) {
+                    ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                    ee_kf += w * v[i] * v[i];
+                }
+                ST_double sigma2_kf = ee_kf / (ST_double)N_eff;
+                for (ST_int ki = 0; ki < L; ki++) {
+                    for (ST_int kj = 0; kj <= ki; kj++) {
+                        ST_double sum = 0.0;
+                        for (i = 0; i < N; i++) {
+                            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                            sum += w * Z_excl[ki * N + i] * Z_excl[kj * N + i];
+                        }
+                        shat0[ki * L + kj] = sigma2_kf * sum;
+                        if (ki != kj) shat0[kj * L + ki] = sigma2_kf * sum;
+                    }
                 }
             } else if (vce_type == CIVREGHDFE_VCE_CLUSTER2 && cluster_ids && cluster2_ids && num_clusters > 0 && num_clusters2 > 0) {
                 /* Two-way cluster-robust: CGM shat0 = shat1 + shat2 - shat_int */
@@ -774,8 +773,10 @@ void civreghdfe_compute_underid_test(
                 }
             }
             if (!shat_ok) {
-                /* Pseudo-inverse via eigenvalue decomposition (handles rank-deficient shat0) */
-                shat_ok = (ctools_pinverse_sym(shat0, L, shat0_inv, NULL) == 0);
+                /* Sweep-based generalized inverse matching Stata's invsym():
+                 * pivots on largest diagonal, zeros out rank-deficient columns.
+                 * This matches ranktest's use of invsym() for the KP statistic. */
+                shat_ok = (ctools_invsym(shat0, L, shat0_inv, NULL) == 0);
             }
 
             /* Handle standard HAC (kernel+bw without cluster/dkraay) */
@@ -888,7 +889,7 @@ void civreghdfe_compute_underid_test(
                     }
                 }
                 if (!shat_ok) {
-                    shat_ok = (ctools_pinverse_sym(shat0, L, shat0_inv, NULL) == 0);
+                    shat_ok = (ctools_invsym(shat0, L, shat0_inv, NULL) == 0);
                 }
             }
 
@@ -1102,12 +1103,26 @@ void civreghdfe_compute_underid_test(
                     /* Now compute KP LM using Z_excl and y_resid */
                     ST_double *shat0_lm = (ST_double *)calloc(L * L, sizeof(ST_double));
                     if (shat0_lm) {
-                        if (kiefer && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
-                            /* Kiefer VCE: homoskedastic HAC with Kronecker structure */
-                            compute_kiefer_shat0_homoskedastic(
-                                Z_excl, y_resid, weights, weight_type,
-                                cluster_ids, num_clusters,
-                                N, N_eff, L, 0, kernel_type, bw, shat0_lm);
+                        if (kiefer) {
+                            /* Kiefer VCE: IID shat0 for LM test (see Wald block comment).
+                               sigma2 = y_resid'y_resid/N for LM test */
+                            ST_double ee_lm = 0.0;
+                            for (i = 0; i < N; i++) {
+                                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                ee_lm += w * y_resid[i] * y_resid[i];
+                            }
+                            ST_double sigma2_lm = ee_lm / (ST_double)N_eff;
+                            for (ST_int ki = 0; ki < L; ki++) {
+                                for (ST_int kj = 0; kj <= ki; kj++) {
+                                    ST_double sum = 0.0;
+                                    for (i = 0; i < N; i++) {
+                                        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                                        sum += w * Z_excl[ki * N + i] * Z_excl[kj * N + i];
+                                    }
+                                    shat0_lm[ki * L + kj] = sigma2_lm * sum;
+                                    if (ki != kj) shat0_lm[kj * L + ki] = sigma2_lm * sum;
+                                }
+                            }
                         } else if (vce_type == CIVREGHDFE_VCE_CLUSTER2 && cluster_ids && cluster2_ids && num_clusters > 0 && num_clusters2 > 0) {
                             /* Two-way cluster-robust: CGM shat0_lm = shat1 + shat2 - shat_int */
                             compute_twoway_shat0(Z_excl, y_resid, weights, weight_type,
@@ -1279,7 +1294,7 @@ void civreghdfe_compute_underid_test(
                                 }
                             }
                             if (!lm_inv_ok) {
-                                lm_inv_ok = (ctools_pinverse_sym(shat0_lm, L, shat0_lm_inv, NULL) == 0);
+                                lm_inv_ok = (ctools_invsym(shat0_lm, L, shat0_lm_inv, NULL) == 0);
                             }
                             if (lm_inv_ok) {
 
@@ -1924,6 +1939,10 @@ void civreghdfe_compute_sargan_j(
     ST_int kiefer,
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
+    const ST_double *y,
+    const ST_double *X_all,
+    const ST_double *ZtX,
+    const ST_double *Zty,
     ST_double *sargan_stat,
     ST_int *overid_df
 )
@@ -2129,6 +2148,120 @@ void civreghdfe_compute_sargan_j(
             if (cholesky(ZOmegaZ_inv, K_iv) == 0) {
                 invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
 
+                /* ivreg2's Hansen J requires efficient GMM residuals, not 2SLS residuals.
+                   ivreg2's s_iegmm re-estimates beta using W = (Z'ΩZ)^{-1} as optimal weights:
+                     beta_eff = (X'Z * (Z'ΩZ)^{-1} * Z'X)^{-1} * X'Z * (Z'ΩZ)^{-1} * Z'y
+                   Then J = (Z'e_eff)' * (Z'ΩZ)^{-1} * (Z'e_eff) using the efficient residuals.
+                   For homoskedastic VCE, efficient GMM = 2SLS so this only matters for
+                   robust/cluster/HAC cases. */
+                if (y && X_all && ZtX && Zty) {
+                    /* Step 1: temp_sinv_ztx = ZOmegaZ_inv * ZtX  (K_iv × K_total) */
+                    ST_double *temp_sinv_ztx = (ST_double *)malloc(K_iv * K_total * sizeof(ST_double));
+                    ST_double *XZSZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+                    ST_double *beta_eff = (ST_double *)calloc(K_total, sizeof(ST_double));
+                    ST_double *rhs = (ST_double *)calloc(K_total, sizeof(ST_double));
+
+                    if (temp_sinv_ztx && XZSZX && beta_eff && rhs) {
+                        for (j = 0; j < K_total; j++) {
+                            for (i = 0; i < K_iv; i++) {
+                                ST_double sum = 0.0;
+                                for (k = 0; k < K_iv; k++) {
+                                    sum += ZOmegaZ_inv[k * K_iv + i] * ZtX[j * K_iv + k];
+                                }
+                                temp_sinv_ztx[j * K_iv + i] = sum;
+                            }
+                        }
+
+                        /* Step 2: XZSZX = ZtX' * temp_sinv_ztx  (K_total × K_total) */
+                        for (j = 0; j < K_total; j++) {
+                            for (i = 0; i < K_total; i++) {
+                                ST_double sum = 0.0;
+                                for (k = 0; k < K_iv; k++) {
+                                    sum += ZtX[i * K_iv + k] * temp_sinv_ztx[j * K_iv + k];
+                                }
+                                XZSZX[j * K_total + i] = sum;
+                            }
+                        }
+
+                        /* Step 3: sinv_zty = ZOmegaZ_inv * Zty  (K_iv × 1) */
+                        ST_double *sinv_zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
+                        if (sinv_zty) {
+                            for (i = 0; i < K_iv; i++) {
+                                ST_double sum = 0.0;
+                                for (k = 0; k < K_iv; k++) {
+                                    sum += ZOmegaZ_inv[k * K_iv + i] * Zty[k];
+                                }
+                                sinv_zty[i] = sum;
+                            }
+
+                            /* Step 4: rhs = ZtX' * sinv_zty  (K_total × 1) */
+                            for (i = 0; i < K_total; i++) {
+                                ST_double sum = 0.0;
+                                for (k = 0; k < K_iv; k++) {
+                                    sum += ZtX[i * K_iv + k] * sinv_zty[k];
+                                }
+                                rhs[i] = sum;
+                            }
+                            free(sinv_zty);
+                        }
+
+                        /* Step 5: Solve XZSZX * beta_eff = rhs via Cholesky */
+                        ST_double *XZSZX_L = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+                        if (XZSZX_L) {
+                            memcpy(XZSZX_L, XZSZX, K_total * K_total * sizeof(ST_double));
+                            if (cholesky(XZSZX_L, K_total) == 0) {
+                                /* Forward substitution: L * z = rhs */
+                                for (i = 0; i < K_total; i++) {
+                                    ST_double sum = rhs[i];
+                                    for (j = 0; j < i; j++) {
+                                        sum -= XZSZX_L[i * K_total + j] * beta_eff[j];
+                                    }
+                                    beta_eff[i] = sum / XZSZX_L[i * K_total + i];
+                                }
+                                /* Back substitution: L' * beta = z */
+                                for (i = K_total - 1; i >= 0; i--) {
+                                    ST_double sum = beta_eff[i];
+                                    for (j = i + 1; j < K_total; j++) {
+                                        sum -= XZSZX_L[j * K_total + i] * beta_eff[j];
+                                    }
+                                    beta_eff[i] = sum / XZSZX_L[i * K_total + i];
+                                }
+
+                                /* Step 6: Recompute Ztr using efficient GMM residuals */
+                                for (k = 0; k < K_iv; k++) {
+                                    ST_double sum = 0.0;
+                                    const ST_double *z_col = Z + k * N;
+                                    if (weights && weight_type != 0) {
+                                        for (i = 0; i < N; i++) {
+                                            ST_double e_eff = y[i];
+                                            for (j = 0; j < K_total; j++) {
+                                                e_eff -= X_all[j * N + i] * beta_eff[j];
+                                            }
+                                            sum += z_col[i] * weights[i] * e_eff;
+                                        }
+                                    } else {
+                                        for (i = 0; i < N; i++) {
+                                            ST_double e_eff = y[i];
+                                            for (j = 0; j < K_total; j++) {
+                                                e_eff -= X_all[j * N + i] * beta_eff[j];
+                                            }
+                                            sum += z_col[i] * e_eff;
+                                        }
+                                    }
+                                    Ztr[k] = sum;
+                                }
+                            }
+                            free(XZSZX_L);
+                        }
+                    }
+
+                    if (temp_sinv_ztx) free(temp_sinv_ztx);
+                    if (XZSZX) free(XZSZX);
+                    if (beta_eff) free(beta_eff);
+                    if (rhs) free(rhs);
+                }
+
+                /* Compute J = Ztr' * ZOmegaZ_inv * Ztr */
                 ST_double *temp_zr = (ST_double *)calloc(K_iv, sizeof(ST_double));
                 if (temp_zr) {
                     for (i = 0; i < K_iv; i++) {

@@ -90,8 +90,7 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_maxiter", &dval); maxiter = (ST_int)dval;
     SF_scal_use("__civreghdfe_tolerance", &dval); tolerance = dval;
     SF_scal_use("__civreghdfe_verbose", &dval); verbose = (ST_int)dval;
-    ST_int nested_fe_index;
-    SF_scal_use("__civreghdfe_nested_fe_index", &dval); nested_fe_index = (ST_int)dval;
+    /* nested_fe_index from .ado is no longer used — data-based detection in C handles it */
 
     /* New scalars for estimation method */
     ST_int est_method = 0;
@@ -244,17 +243,47 @@ static ST_retcode do_iv_regression(void)
         }
     }
     if (has_cluster) {
-        double *src = filtered.data.vars[var_cluster_idx].data.dbl;
-        for (i = 0; i < N_total; i++) {
-            /* Use -1 as sentinel for missing cluster values */
-            cluster_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+        if (filtered.data.vars[var_cluster_idx].type == STATA_TYPE_STRING) {
+            /* String cluster variable: convert to group IDs in C (like egen group()) */
+            ST_int n_groups = 0;
+            if (ctools_strings_to_cluster_ids(filtered.data.vars[var_cluster_idx].data.str,
+                                               N_total, cluster_ids, &n_groups) != 0) {
+                SF_error("civreghdfe: Failed to convert string cluster variable to group IDs\n");
+                free(y); free(X_endog); free(X_exog); free(Z);
+                free(weights); free(cluster_ids); free(cluster2_ids);
+                for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+                free(fe_levels);
+                ctools_filtered_data_free(&filtered);
+                return 920;
+            }
+        } else {
+            double *src = filtered.data.vars[var_cluster_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                /* Use -1 as sentinel for missing cluster values */
+                cluster_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+            }
         }
     }
     if (has_cluster2) {
-        double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
-        for (i = 0; i < N_total; i++) {
-            /* Use -1 as sentinel for missing cluster2 values */
-            cluster2_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+        if (filtered.data.vars[var_cluster2_idx].type == STATA_TYPE_STRING) {
+            /* String cluster variable: convert to group IDs in C (like egen group()) */
+            ST_int n_groups = 0;
+            if (ctools_strings_to_cluster_ids(filtered.data.vars[var_cluster2_idx].data.str,
+                                               N_total, cluster2_ids, &n_groups) != 0) {
+                SF_error("civreghdfe: Failed to convert string cluster2 variable to group IDs\n");
+                free(y); free(X_endog); free(X_exog); free(Z);
+                free(weights); free(cluster_ids); free(cluster2_ids);
+                for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
+                free(fe_levels);
+                ctools_filtered_data_free(&filtered);
+                return 920;
+            }
+        } else {
+            double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
+            for (i = 0; i < N_total; i++) {
+                /* Use -1 as sentinel for missing cluster2 values */
+                cluster2_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+            }
         }
     }
     if (has_weights) {
@@ -897,10 +926,6 @@ static ST_retcode do_iv_regression(void)
     ctools_compute_hdfe_dof(state->factors, G, N, &df_a, &mobility_groups);
 
     for (ST_int g = 0; g < G; g++) {
-        /* Check if this FE is nested in cluster (1-indexed) */
-        if (nested_fe_index > 0 && g == (nested_fe_index - 1)) {
-            df_a_nested = state->factors[g].num_levels;
-        }
         /* Save per-FE num_levels to Stata scalars for absorbed DOF table */
         char scalar_name[64];
         snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_num_levels_%d", (int)(g + 1));
@@ -946,23 +971,37 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
-    /* Detect FEs nested within cluster variable */
+    /* Detect FEs nested within cluster variable using data-based check.
+     * This works for both numeric and string cluster variables. */
     ST_int *fe_nested = (ST_int *)calloc(G, sizeof(ST_int));
     if (has_cluster && fe_nested) {
+        df_a_nested = 0;
         for (ST_int g = 0; g < G; g++) {
             ST_int is_nested = ctools_fe_nested_in_cluster(
                 state->factors[g].levels, state->factors[g].num_levels,
                 cluster_ids_c, N);
             if (is_nested < 0) is_nested = 0;
             fe_nested[g] = is_nested;
+            if (is_nested) df_a_nested += state->factors[g].num_levels;
 
             char scalar_name[64];
             snprintf(scalar_name, sizeof(scalar_name), "__civreghdfe_fe_nested_%d", (int)(g + 1));
             ctools_scal_save(scalar_name, (ST_double)is_nested);
         }
-
+        /* Recompute VCE DOF with data-based nesting results */
+        df_a_for_vce = df_a - df_a_nested;
+        nested_adj = (df_a_nested > 0) ? 1 : 0;
     }
     if (fe_nested) free(fe_nested);
+
+    /* For Kiefer, the panel variable is set as "cluster" for HAC lag structure,
+       not true clustering. The FE nesting detection incorrectly sets df_a_for_vce=0
+       because the FE and "cluster" are the same variable. Override: use full df_a
+       to match ivreghdfe's sdofminus = absorb_ct. */
+    if (kiefer) {
+        df_a_for_vce = df_a;
+        nested_adj = 0;
+    }
 
     /* Update K_total after possible FWL reduction of K_exog */
     K_total = K_exog + K_endog;

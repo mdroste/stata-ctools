@@ -1679,7 +1679,10 @@ gen y = x_endog / 1e6 + x_exog / 1e6 + rnormal() * 1e3
 
 benchmark_ivreghdfe y (x_endog = z) x_exog, absorb(id) testname("very large values")
 
-* Pathological: mixed tiny and huge - compare against ivreghdfe
+* Pathological: mixed tiny and huge
+* NOTE: ivreghdfe is buggy here — ivreg2 chokes on extreme scales, omitting
+* x_endog and x_tiny entirely (b=[0,0,8.52e-10], R2=0.01).
+* Validate civreghdfe independently against DGP truth instead.
 clear
 set seed 383
 set obs 1000
@@ -1690,7 +1693,17 @@ gen x_tiny = runiform() / 1e9
 gen x_huge = runiform() * 1e9
 gen y = 2*x_endog + x_tiny * 1e9 + x_huge / 1e9 + rnormal()
 
-benchmark_ivreghdfe y (x_endog = z) x_tiny x_huge, absorb(id) testname("mixed scale (tiny and huge)")
+civreghdfe y (x_endog = z) x_tiny x_huge, absorb(id)
+local b_endog = _b[x_endog]
+local b_tiny  = _b[x_tiny]
+local b_huge  = _b[x_huge]
+* DGP truth: b_endog=2, b_tiny=1e9, b_huge=1e-9; check within 50% (IV is noisy)
+if abs(`b_endog' - 2) / 2 < 0.5 & abs(`b_tiny' - 1e9) / 1e9 < 0.5 & abs(`b_huge' - 1e-9) / 1e-9 < 0.5 {
+    test_pass "mixed scale (tiny and huge)"
+}
+else {
+    test_fail "mixed scale (tiny and huge)" "b_endog=`b_endog' b_tiny=`b_tiny' b_huge=`b_huge'"
+}
 
 /*******************************************************************************
  * SECTION 39: Many Instruments / Many Endogenous

@@ -125,17 +125,7 @@ ST_retcode ivest_init_context(
     if (weights && weight_type != 0) {
         ctools_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ctx->ZtZ);
     } else {
-        /* Use Kahan-compensated dot products to match ivreg2's quadcross() precision.
-         * Post-HDFE partialled data has severe cancellation; uncompensated summation
-         * loses significant digits in X'PzX which propagates through inversion. */
-        ST_int ii, jj;
-        for (jj = 0; jj < K_iv; jj++) {
-            for (ii = 0; ii <= jj; ii++) {
-                ST_double val = kahan_dot(Z + (size_t)ii * N, Z + (size_t)jj * N, N);
-                ctx->ZtZ[jj * K_iv + ii] = val;
-                ctx->ZtZ[ii * K_iv + jj] = val;
-            }
-        }
+        ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ctx->ZtZ);
     }
 
     /* Invert Z'Z */
@@ -164,19 +154,15 @@ ST_retcode ivest_init_context(
             ctx->Zty[i] = sum;
         }
     } else {
-        /* Use Kahan-compensated dot products for Z'X and Z'y */
-        {
-            ST_int ii, jj;
-            for (jj = 0; jj < K_total; jj++) {
-                for (ii = 0; ii < K_iv; ii++) {
-                    ctx->ZtX[jj * K_iv + ii] = kahan_dot(Z + (size_t)ii * N,
-                                                          ctx->X_all + (size_t)jj * N, N);
-                }
-            }
-        }
+        ctools_matmul_atb(Z, ctx->X_all, N, K_iv, K_total, ctx->ZtX);
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
-            ctx->Zty[i] = kahan_dot(Z + (size_t)i * N, y, N);
+            ST_double sum = 0.0;
+            const ST_double *z_col = Z + i * N;
+            for (k = 0; k < N; k++) {
+                sum += z_col[k] * y[k];
+            }
+            ctx->Zty[i] = sum;
         }
     }
 
@@ -1434,16 +1420,7 @@ ST_retcode ivest_compute_2sls(
     if (weights && weight_type != 0) {
         matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ZtZ);
     } else {
-        /* Use Kahan-compensated dot products to match ivreg2's quadcross() precision.
-         * Post-HDFE partialled data has severe cancellation; uncompensated summation
-         * loses significant digits in X'PzX which propagates through inversion. */
-        for (j = 0; j < K_iv; j++) {
-            for (i = 0; i <= j; i++) {
-                ST_double val = kahan_dot(Z + (size_t)i * N, Z + (size_t)j * N, N);
-                ZtZ[j * K_iv + i] = val;
-                ZtZ[i * K_iv + j] = val;
-            }
-        }
+        matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
     }
 
     /* Step 2: Invert Z'Z */
@@ -1478,44 +1455,82 @@ ST_retcode ivest_compute_2sls(
             Zty[i] = sum;
         }
     } else {
-        /* Use Kahan-compensated dot products for Z'X and Z'y */
-        for (j = 0; j < K_total; j++) {
-            for (i = 0; i < K_iv; i++) {
-                ZtX[j * K_iv + i] = kahan_dot(Z + (size_t)i * N,
-                                               X_all + (size_t)j * N, N);
-            }
-        }
+        matmul_atb(Z, X_all, N, K_iv, K_total, ZtX);
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
-            Zty[i] = kahan_dot(Z + (size_t)i * N, y, N);
+            ST_double sum = 0.0;
+            const ST_double *z_col = Z + i * N;
+            for (k = 0; k < N; k++) {
+                sum += z_col[k] * y[k];
+            }
+            Zty[i] = sum;
         }
     }
 
     /* Step 4: Compute (Z'Z)^-1 * Z'X  -> temp1 (K_iv x K_total) */
     matmul_ab(ZtZ_inv, ZtX, K_iv, K_iv, K_total, temp1);
 
-    /* Step 5: Compute X'P_Z X = (Z'X)' * (Z'Z)^-1 * Z'X = ZtX' * temp1 */
-    /* ZtX is K_iv x K_total, temp1 is K_iv x K_total */
-    /* ZtX' * temp1 = K_total x K_total */
-    for (j = 0; j < K_total; j++) {
-        for (i = 0; i < K_total; i++) {
-            ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                /* ZtX[k,i] = ZtX[i * K_iv + k] */
-                /* temp1[k,j] = temp1[j * K_iv + k] */
-                sum += ZtX[i * K_iv + k] * temp1[j * K_iv + k];
+    /* Step 5: Compute X'P_Z X and X'P_Z y via fitted values (X_hat approach).
+     * X_hat = Z * (Z'Z)^{-1} * Z'X = Z * temp1 (N x K_total)
+     * X'PzX = X_hat' * X_hat using Kahan-compensated N-length dot products.
+     *
+     * This matches ivreg2's quadcross(X_hat, X_hat) precision. The compact
+     * triple-product approach (Z'X)' * (Z'Z)^{-1} * Z'X only does K_iv-length
+     * dot products, which don't benefit from compensated summation. With
+     * condition number ~10^8 for X'PzX, the ~15 digit X'PzX precision after
+     * compact triple-product leaves only ~7 sigfigs after inversion. The
+     * X_hat approach gives ~19 digit X'PzX precision (Kahan N-length dots),
+     * leaving ~11 sigfigs after inversion. */
+    ST_double *X_hat = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K_total, sizeof(ST_double));
+    if (!X_hat) {
+        SF_error("civreghdfe: Memory allocation failed for X_hat\n");
+        free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+        free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        return 920;
+    }
+
+    /* X_hat[i,j] = sum_{k=0}^{K_iv-1} Z[i,k] * temp1[k,j]
+     * Z stored column-major: Z[k*N + i], temp1 column-major: temp1[j*K_iv + k] */
+    if (weights && weight_type != 0) {
+        /* For weighted: X_hat = sqrt(W) * Z * temp1 so X_hat'X_hat = X'W*PzX */
+        for (j = 0; j < K_total; j++) {
+            for (i = 0; i < N; i++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    sum += Z[k * N + i] * temp1[j * K_iv + k];
+                }
+                X_hat[j * N + i] = sqrt(weights[i]) * sum;
             }
-            XtPzX[j * K_total + i] = sum;
+        }
+    } else {
+        for (j = 0; j < K_total; j++) {
+            for (i = 0; i < N; i++) {
+                ST_double sum = 0.0;
+                for (k = 0; k < K_iv; k++) {
+                    sum += Z[k * N + i] * temp1[j * K_iv + k];
+                }
+                X_hat[j * N + i] = sum;
+            }
         }
     }
 
-    /* Step 6: Compute X'P_Z y = (Z'X)' * (Z'Z)^-1 * Z'y */
-    /* First compute (Z'Z)^-1 * Z'y */
+    /* X'PzX = X_hat' * X_hat using Kahan-compensated dot products (symmetric) */
+    for (j = 0; j < K_total; j++) {
+        for (i = 0; i <= j; i++) {
+            ST_double val = kahan_dot(X_hat + (size_t)i * N, X_hat + (size_t)j * N, N);
+            XtPzX[j * K_total + i] = val;
+            XtPzX[i * K_total + j] = val;
+        }
+    }
+
+    /* X'Pzy = X_hat' * y_hat where y_hat = Z * (Z'Z)^{-1} * Z'y */
+    /* Step 6: Compute (Z'Z)^-1 * Z'y */
     ST_double *ZtZ_inv_Zty = (ST_double *)calloc(K_iv, sizeof(ST_double));
     if (!ZtZ_inv_Zty) {
         SF_error("civreghdfe: Memory allocation failed for ZtZ_inv_Zty\n");
         free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
         free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+        free(X_hat);
         return 920;
     }
     for (i = 0; i < K_iv; i++) {
@@ -1526,14 +1541,29 @@ ST_retcode ivest_compute_2sls(
         ZtZ_inv_Zty[i] = sum;
     }
 
-    /* Then compute (Z'X)' * result */
-    for (i = 0; i < K_total; i++) {
-        ST_double sum = 0.0;
-        for (k = 0; k < K_iv; k++) {
-            sum += ZtX[i * K_iv + k] * ZtZ_inv_Zty[k];
+    /* Compute y_hat = Z * ZtZ_inv_Zty, then X'Pzy = X_hat' * y_hat via Kahan */
+    {
+        ST_double *y_hat = (ST_double *)malloc(N * sizeof(ST_double));
+        if (!y_hat) {
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all); free(resid);
+            free(X_hat); free(ZtZ_inv_Zty);
+            return 920;
         }
-        XtPzy[i] = sum;
+        for (i = 0; i < N; i++) {
+            ST_double sum = 0.0;
+            for (k = 0; k < K_iv; k++) {
+                sum += Z[k * N + i] * ZtZ_inv_Zty[k];
+            }
+            y_hat[i] = (weights && weight_type != 0) ? sqrt(weights[i]) * sum : sum;
+        }
+        /* X'Pzy[a] = X_hat[:,a] . y_hat */
+        for (i = 0; i < K_total; i++) {
+            XtPzy[i] = kahan_dot(X_hat + (size_t)i * N, y_hat, N);
+        }
+        free(y_hat);
     }
+    free(X_hat);
 
     /* Step 6b: For k-class estimation (k != 1), compute X'X and X'y */
     ST_double *XtX = NULL;
@@ -1557,15 +1587,7 @@ ST_retcode ivest_compute_2sls(
         if (weights && weight_type != 0) {
             matmul_atdb(X_all, X_all, weights, N, K_total, K_total, XtX);
         } else {
-            /* Kahan-compensated X'X for k-class precision */
-            for (j = 0; j < K_total; j++) {
-                for (i = 0; i <= j; i++) {
-                    ST_double val = kahan_dot(X_all + (size_t)i * N,
-                                              X_all + (size_t)j * N, N);
-                    XtX[j * K_total + i] = val;
-                    XtX[i * K_total + j] = val;
-                }
-            }
+            matmul_atb(X_all, X_all, N, K_total, K_total, XtX);
         }
 
         /* Compute X'y */
@@ -1580,7 +1602,12 @@ ST_retcode ivest_compute_2sls(
             }
         } else {
             for (i = 0; i < K_total; i++) {
-                Xty[i] = kahan_dot(X_all + (size_t)i * N, y, N);
+                ST_double sum = 0.0;
+                const ST_double *x_col = X_all + i * N;
+                for (k = 0; k < N; k++) {
+                    sum += x_col[k] * y[k];
+                }
+                Xty[i] = sum;
             }
         }
 
@@ -1922,12 +1949,14 @@ ST_retcode ivest_compute_2sls(
            within each panel, which makes sum_t(Z_it * e_it) small when summed
            across panels. This is a known limitation.
            TODO: Investigate ivreg2's approach for proper Kiefer + FE handling. */
+        /* df_a_full equals the full absorbed DOF for Kiefer (overridden in
+           civreghdfe_impl.c to undo the FE-nested-in-cluster subtraction). */
         ivvce_compute_kiefer(
             Z_for_kiefer, resid, temp1, XkX_inv,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
-            df_a,
+            df_a_full,
             V
         );
     } else {
@@ -2119,6 +2148,7 @@ ST_retcode ivest_compute_2sls(
         vce_type, cluster_ids, num_clusters,
         kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
+        y, X_all, ZtX, Zty,
         &sargan_stat, &overid_df
     );
 

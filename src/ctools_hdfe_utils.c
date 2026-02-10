@@ -181,6 +181,81 @@ ST_int ctools_remap_cluster_ids(
 }
 
 /*
+    Compare function for string-index pairs (used by qsort in ctools_strings_to_cluster_ids).
+*/
+typedef struct {
+    const char *str;
+    ST_int index;
+} StringIndexPair;
+
+static int compare_string_index(const void *a, const void *b)
+{
+    const StringIndexPair *pa = (const StringIndexPair *)a;
+    const StringIndexPair *pb = (const StringIndexPair *)b;
+    return strcmp(pa->str, pb->str);
+}
+
+/*
+    Convert string array to integer cluster IDs using sort-based grouping.
+*/
+ST_int ctools_strings_to_cluster_ids(
+    char **strings,
+    ST_int N,
+    ST_int *cluster_ids,
+    ST_int *num_groups
+)
+{
+    if (N <= 0 || !strings || !cluster_ids || !num_groups) return -1;
+
+    /* First pass: count non-missing strings and mark missing */
+    ST_int n_valid = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (strings[i] == NULL || strings[i][0] == '\0') {
+            cluster_ids[i] = -1;  /* Missing sentinel */
+        } else {
+            cluster_ids[i] = 0;  /* Placeholder, will be filled */
+            n_valid++;
+        }
+    }
+
+    if (n_valid == 0) {
+        *num_groups = 0;
+        return 0;
+    }
+
+    /* Build (string, index) pairs for non-missing strings */
+    StringIndexPair *pairs = (StringIndexPair *)malloc(n_valid * sizeof(StringIndexPair));
+    if (!pairs) return -1;
+
+    ST_int j = 0;
+    for (ST_int i = 0; i < N; i++) {
+        if (cluster_ids[i] != -1) {
+            pairs[j].str = strings[i];
+            pairs[j].index = i;
+            j++;
+        }
+    }
+
+    /* Sort by string value */
+    qsort(pairs, n_valid, sizeof(StringIndexPair), compare_string_index);
+
+    /* Assign consecutive group IDs (0-based) */
+    ST_int current_group = 0;
+    cluster_ids[pairs[0].index] = 0;
+
+    for (ST_int i = 1; i < n_valid; i++) {
+        if (strcmp(pairs[i].str, pairs[i - 1].str) != 0) {
+            current_group++;
+        }
+        cluster_ids[pairs[i].index] = current_group;
+    }
+
+    *num_groups = current_group + 1;
+    free(pairs);
+    return 0;
+}
+
+/*
     Compact a double array by removing flagged observations.
 */
 ST_int ctools_compact_array_double(

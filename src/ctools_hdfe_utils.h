@@ -134,6 +134,30 @@ ST_int ctools_remap_cluster_ids(
 );
 
 /*
+    Convert string array to integer cluster IDs using sort-based grouping.
+
+    Equivalent of Stata's `egen group()` but in C. Assigns consecutive
+    non-negative integer IDs to each unique string. NULL or empty strings
+    are assigned -1 (missing sentinel).
+
+    Parameters:
+    - strings: Array of N string pointers (from ctools_data_load string var)
+    - N: Number of observations
+    - cluster_ids: Output array (pre-allocated to N), will contain group IDs
+                   Non-missing: 0, 1, 2, ... (consecutive)
+                   Missing (NULL or ""): -1
+    - num_groups: Output - number of unique non-missing groups
+
+    Returns: 0 on success, -1 on memory allocation failure
+*/
+ST_int ctools_strings_to_cluster_ids(
+    char **strings,
+    ST_int N,
+    ST_int *cluster_ids,
+    ST_int *num_groups
+);
+
+/*
     Compact arrays by removing flagged observations.
 
     Copies data from source to dest for observations where mask[i] == 1.

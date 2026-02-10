@@ -1560,6 +1560,10 @@ ST_retcode cpsmatch_main(const char *args)
                         } else {
                             out_weight[obs_idx] = 1.0;
                         }
+                    } else {
+                        /* No match found - treated is off support */
+                        out_support[obs_idx] = 0.0;
+                        n_off_support++;
                     }
                 }
             }
@@ -1639,6 +1643,10 @@ ST_retcode cpsmatch_main(const char *args)
                         } else {
                             out_weight[obs_idx] = 1.0;
                         }
+                    } else {
+                        /* No match found (e.g., caliper/bandwidth constraint) */
+                        out_support[obs_idx] = 0.0;
+                        n_off_support++;
                     }
                     /* No free needed - workspace owns the buffers */
                 }

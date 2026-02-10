@@ -434,19 +434,6 @@ program define civreghdfe, eclass
                 local vce_type = 2
                 local cluster_var `cluster_vars'
                 confirm variable `cluster_var'
-                * Convert string cluster variable to numeric
-                capture confirm numeric variable `cluster_var'
-                if _rc != 0 {
-                    tempvar cluster_var_numeric
-                    capture which gegen
-                    if _rc == 0 {
-                        quietly gegen `cluster_var_numeric' = group(`cluster_var')
-                    }
-                    else {
-                        quietly egen `cluster_var_numeric' = group(`cluster_var')
-                    }
-                    local cluster_var "`cluster_var_numeric'"
-                }
             }
             else if `n_cluster' == 2 {
                 * Two-way clustering
@@ -455,31 +442,6 @@ program define civreghdfe, eclass
                 local cluster_var2 : word 2 of `cluster_vars'
                 confirm variable `cluster_var'
                 confirm variable `cluster_var2'
-                * Convert string cluster variables to numeric
-                capture confirm numeric variable `cluster_var'
-                if _rc != 0 {
-                    tempvar cluster_var_numeric
-                    capture which gegen
-                    if _rc == 0 {
-                        quietly gegen `cluster_var_numeric' = group(`cluster_var')
-                    }
-                    else {
-                        quietly egen `cluster_var_numeric' = group(`cluster_var')
-                    }
-                    local cluster_var "`cluster_var_numeric'"
-                }
-                capture confirm numeric variable `cluster_var2'
-                if _rc != 0 {
-                    tempvar cluster_var2_numeric
-                    capture which gegen
-                    if _rc == 0 {
-                        quietly gegen `cluster_var2_numeric' = group(`cluster_var2')
-                    }
-                    else {
-                        quietly egen `cluster_var2_numeric' = group(`cluster_var2')
-                    }
-                    local cluster_var2 "`cluster_var2_numeric'"
-                }
             }
             else {
                 di as error "vce(cluster) supports 1 or 2 cluster variables"
@@ -515,10 +477,22 @@ program define civreghdfe, eclass
     * Mark out additional variables from sample (touse already created earlier for fvrevar)
     markout `touse' `endogvars_expanded' `exogvars_expanded' `instruments_expanded'
     if "`cluster_var'" != "" {
-        markout `touse' `cluster_var'
+        capture confirm numeric variable `cluster_var'
+        if _rc == 0 {
+            markout `touse' `cluster_var'
+        }
+        else {
+            quietly replace `touse' = 0 if `cluster_var' == "" & `touse' == 1
+        }
     }
     if "`cluster_var2'" != "" {
-        markout `touse' `cluster_var2'
+        capture confirm numeric variable `cluster_var2'
+        if _rc == 0 {
+            markout `touse' `cluster_var2'
+        }
+        else {
+            quietly replace `touse' = 0 if `cluster_var2' == "" & `touse' == 1
+        }
     }
     if `has_weights' {
         markout `touse' `weight_var'

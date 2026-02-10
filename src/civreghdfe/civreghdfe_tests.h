@@ -149,6 +149,10 @@ void civreghdfe_compute_underid_test(
     - kiefer: 1 if Kiefer VCE, 0 otherwise
     - hac_panel_ids: Panel IDs for panel-aware HAC (NULL if not used)
     - num_hac_panels: Number of panels for HAC
+    - y: Dependent variable (N x 1, for efficient GMM re-estimation)
+    - X_all: All regressors (N x K_total, column-major, for efficient GMM)
+    - ZtX: Z'X (K_iv x K_total, for efficient GMM)
+    - Zty: Z'y (K_iv x 1, for efficient GMM)
     - sargan_stat: Output - overidentification test statistic
     - overid_df: Output - degrees of freedom (L - K_endog)
 */
@@ -173,6 +177,10 @@ void civreghdfe_compute_sargan_j(
     ST_int kiefer,
     const ST_int *hac_panel_ids,
     ST_int num_hac_panels,
+    const ST_double *y,
+    const ST_double *X_all,
+    const ST_double *ZtX,
+    const ST_double *Zty,
     ST_double *sargan_stat,
     ST_int *overid_df
 );
