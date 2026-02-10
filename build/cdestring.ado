@@ -12,7 +12,7 @@ program define cdestring
 
     * Parse syntax - note varlist is optional (defaults to all string vars)
     syntax [varlist] [if] [in], [Generate(string) replace ///
-        IGnore(string) force float percent dpcomma Verbose FAST THReads(integer 0)]
+        IGnore(string) force float percent dpcomma Verbose THReads(integer 0)]
 
     * =========================================================================
     * UPFRONT VALIDATION
@@ -282,11 +282,6 @@ program define cdestring
         local verbose_code "verbose"
     }
 
-    local fast_code ""
-    if "`fast'" != "" {
-        local fast_code "fast"
-    }
-
     if `__do_timing' {
         timer off 91
         timer on 92
@@ -304,7 +299,7 @@ program define cdestring
 
     * Call the C plugin with ALL variables (so indices match dataset positions)
     plugin call ctools_plugin `allvars' `if' `in', ///
-        "cdestring `threads_code' `cmd_indices' nvars=`nvars' `ignore_code' `force_code' `percent_code' `dpcomma_code' `verbose_code' `fast_code'"
+        "cdestring `threads_code' `cmd_indices' nvars=`nvars' `ignore_code' `force_code' `percent_code' `dpcomma_code' `verbose_code'"
 
     local plugin_rc = _rc
 

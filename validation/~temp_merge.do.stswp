@@ -1,0 +1,30 @@
+* single variable merge key
+
+clear all
+set obs 25000000
+gen i = _n
+forval i=1/10 {
+	gen x`i' = rnormal()
+}
+sort x1
+tempfile t1
+save `t1'
+
+clear all
+set obs 25000000
+gen long i = _n
+forval i=1/10 {
+	gen y`i' = rnormal()
+}
+sort y1
+tempfile t2
+save `t2'
+
+use `t1', clear
+merge 1:1 i using `t2'
+
+
+use `t1', clear
+cmerge 1:1 i using `t2', verbose
+
+
