@@ -1434,6 +1434,214 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
 }
 
 /* ===========================================================================
+   Row-Parallel Single-Variable Loader (experimental)
+   =========================================================================== */
+
+/*
+    Load a single variable using row-parallel OpenMP threads.
+    For single-variable loads (the common cdestring case), the standard
+    ctools_data_load() is entirely sequential since it parallelizes across
+    columns. This function splits observations across threads instead.
+
+    Strings use strdup (no arena) since arenas aren't thread-safe.
+    The _arena field is set to NULL so stata_data_free uses the per-string
+    free path.
+*/
+stata_retcode ctools_data_load_single_var_rowpar(
+    ctools_filtered_data *result,
+    int var_idx,
+    size_t obs_start,
+    size_t obs_end,
+    int flags)
+{
+    ST_int obs1, obs2;
+    size_t n_range, n_filtered;
+    perm_idx_t *obs_map = NULL;
+    int is_identity = 0;
+    int skip_if_check = (flags & CTOOLS_LOAD_SKIP_IF) != 0;
+    int is_string;
+
+    if (result == NULL) {
+        return STATA_ERR_INVALID_INPUT;
+    }
+
+    ctools_filtered_data_init(result);
+
+    /* Resolve observation range */
+    obs1 = (obs_start > 0) ? (ST_int)obs_start : SF_in1();
+    obs2 = (obs_end > 0)   ? (ST_int)obs_end   : SF_in2();
+    if (obs1 < 1) obs1 = 1;
+    if (obs2 < obs1) {
+        /* Empty range */
+        return init_data_structure(&result->data, 1, 0);
+    }
+
+    n_range = (size_t)(obs2 - obs1 + 1);
+    result->n_range = n_range;
+
+    is_string = SF_var_is_string((ST_int)var_idx);
+
+    /* --- Filter pass (sequential — requires SPI) --- */
+    if (skip_if_check) {
+        is_identity = 1;
+        n_filtered = n_range;
+    } else {
+        /* Pass 1: count */
+        n_filtered = 0;
+        for (ST_int obs = obs1; obs <= obs2; obs++) {
+            if (SF_ifobs(obs)) n_filtered++;
+        }
+        is_identity = (n_filtered == n_range);
+    }
+
+    if (n_filtered == 0) {
+        return init_data_structure(&result->data, 1, 0);
+    }
+
+    /* Build obs_map */
+    if (is_identity) {
+        obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+        if (obs_map == NULL) return STATA_ERR_MEMORY;
+        for (size_t i = 0; i < n_filtered; i++) {
+            obs_map[i] = (perm_idx_t)(obs1 + (ST_int)i);
+        }
+    } else {
+        obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
+        if (obs_map == NULL) return STATA_ERR_MEMORY;
+        size_t idx = 0;
+        for (ST_int obs = obs1; obs <= obs2; obs++) {
+            if (SF_ifobs(obs)) obs_map[idx++] = (perm_idx_t)obs;
+        }
+    }
+
+    result->obs_map = obs_map;
+    result->was_filtered = !is_identity;
+
+    /* --- Allocate data structure for 1 variable --- */
+    stata_retcode rc = init_data_structure(&result->data, 1, n_filtered);
+    if (rc != STATA_OK) {
+        ctools_aligned_free(obs_map);
+        result->obs_map = NULL;
+        return rc;
+    }
+
+    stata_variable *var = &result->data.vars[0];
+    var->nobs = n_filtered;
+
+    /* --- Row-parallel load --- */
+    if (is_string) {
+        var->type = STATA_TYPE_STRING;
+        var->str_maxlen = STATA_STR_MAXLEN;
+        var->_arena = NULL;
+
+        size_t str_array_size;
+        if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
+            ctools_filtered_data_free(result);
+            return STATA_ERR_MEMORY;
+        }
+        var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
+        if (var->data.str == NULL) {
+            ctools_filtered_data_free(result);
+            return STATA_ERR_MEMORY;
+        }
+        memset(var->data.str, 0, str_array_size);
+
+        /* Create arena and partition into per-thread slabs so each thread
+           does plain pointer bumping with no atomic contention. */
+        ctools_string_arena *arena = NULL;
+        if (n_filtered <= SIZE_MAX / 64) {
+            size_t arena_capacity = n_filtered * 64;
+            arena = ctools_string_arena_create(arena_capacity,
+                                               CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
+        }
+        if (arena != NULL) {
+            var->_arena = arena;
+        }
+
+        volatile int load_error = 0;
+
+        #pragma omp parallel if(n_filtered >= MIN_OBS_PER_THREAD * 2)
+        {
+            /* Partition arena into per-thread slabs */
+            char *slab_ptr = NULL;
+            char *slab_end = NULL;
+            if (arena != NULL) {
+                int nthreads = 1;
+                int tid = 0;
+                #ifdef _OPENMP
+                nthreads = omp_get_num_threads();
+                tid = omp_get_thread_num();
+                #endif
+                size_t slab_size = arena->capacity / (size_t)nthreads;
+                slab_ptr = arena->base + (size_t)tid * slab_size;
+                slab_end = (tid == nthreads - 1)
+                    ? arena->base + arena->capacity
+                    : slab_ptr + slab_size;
+            }
+
+            #pragma omp for schedule(static)
+            for (size_t i = 0; i < n_filtered; i++) {
+                if (load_error) continue;
+                char strbuf[STATA_STR_MAXLEN + 1];
+                SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+                size_t len = strlen(strbuf) + 1;
+
+                char *s;
+                if (slab_ptr != NULL && slab_ptr + len <= slab_end) {
+                    memcpy(slab_ptr, strbuf, len);
+                    s = slab_ptr;
+                    slab_ptr += len;
+                } else {
+                    /* Slab full or no arena — fall back to strdup */
+                    s = strdup(strbuf);
+                    if (arena != NULL) arena->has_fallback = 1;
+                    if (s == NULL) {
+                        load_error = 1;
+                        continue;
+                    }
+                }
+                var->data.str[i] = s;
+            }
+
+            /* Update arena->used so arena_owns() covers all slabs */
+            #pragma omp single
+            {
+                if (arena != NULL) arena->used = arena->capacity;
+            }
+        }
+
+        if (load_error) {
+            ctools_filtered_data_free(result);
+            return STATA_ERR_MEMORY;
+        }
+    } else {
+        var->type = STATA_TYPE_DOUBLE;
+        var->_arena = NULL;
+
+        size_t dbl_array_size;
+        if (ctools_safe_mul_size(n_filtered, sizeof(double), &dbl_array_size) != 0) {
+            ctools_filtered_data_free(result);
+            return STATA_ERR_MEMORY;
+        }
+        var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
+        if (var->data.dbl == NULL) {
+            ctools_filtered_data_free(result);
+            return STATA_ERR_MEMORY;
+        }
+
+        double * restrict dbl_ptr = var->data.dbl;
+
+        #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
+        for (size_t i = 0; i < n_filtered; i++) {
+            SF_vdata((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+        }
+    }
+
+    ctools_memory_barrier();
+    return STATA_OK;
+}
+
+/* ===========================================================================
    Filtered Data Storing (C -> Stata with obs_map)
    =========================================================================== */
 
@@ -1463,6 +1671,28 @@ stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
             return STATA_ERR_INVALID_INPUT;
         }
         SF_vstore(stata_var, (ST_int)obs, values[i]);
+    }
+
+    return STATA_OK;
+}
+
+/*
+    Row-parallel store for a single numeric variable.
+    Counterpart to ctools_data_load_single_var_rowpar().
+    Skips per-element bounds checks (obs_map is trusted from our own loader).
+*/
+stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
+                                            int var_idx, perm_idx_t *obs_map)
+{
+    if (values == NULL || obs_map == NULL || n_filtered == 0) {
+        return (values == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
+    }
+
+    ST_int stata_var = (ST_int)var_idx;
+
+    #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
+    for (size_t i = 0; i < n_filtered; i++) {
+        SF_vstore(stata_var, (ST_int)obs_map[i], values[i]);
     }
 
     return STATA_OK;

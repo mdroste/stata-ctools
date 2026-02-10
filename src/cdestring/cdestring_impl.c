@@ -50,6 +50,7 @@ typedef struct {
     int percent;            /* 1 = strip % and divide by 100 */
     int dpcomma;            /* 1 = use comma as decimal separator */
     int verbose;            /* 1 = print timing info */
+    int fast;               /* 1 = use row-parallel single-var loader */
 } cdestring_options;
 
 /*
@@ -188,6 +189,7 @@ static int parse_options(const char *args, cdestring_options *opts)
     opts->percent = ctools_parse_bool_option(args, "percent");
     opts->dpcomma = ctools_parse_bool_option(args, "dpcomma");
     opts->verbose = ctools_parse_bool_option(args, "verbose");
+    opts->fast = ctools_parse_bool_option(args, "fast");
 
     return 0;
 }
@@ -246,8 +248,14 @@ ST_retcode cdestring_main(const char *args)
 
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
-    stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices,
-                                                       (size_t)nvars, 0, 0, 0);
+    stata_retcode load_rc;
+    if (opts.fast && nvars == 1) {
+        load_rc = ctools_data_load_single_var_rowpar(&filtered,
+                                                      opts.src_indices[0], 0, 0, 0);
+    } else {
+        load_rc = ctools_data_load(&filtered, opts.src_indices,
+                                             (size_t)nvars, 0, 0, 0);
+    }
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);
         free_options(&opts);
@@ -388,9 +396,13 @@ ST_retcode cdestring_main(const char *args)
      * Uses obs_map to write to correct Stata observations.
      * ==================================================================== */
 
-    #pragma omp parallel for schedule(static)
-    for (int v = 0; v < nvars; v++) {
-        ctools_store_filtered(results[v], nobs, opts.dst_indices[v], obs_map);
+    if (opts.fast && nvars == 1) {
+        ctools_store_filtered_rowpar(results[0], nobs, opts.dst_indices[0], obs_map);
+    } else {
+        #pragma omp parallel for schedule(static)
+        for (int v = 0; v < nvars; v++) {
+            ctools_store_filtered(results[v], nobs, opts.dst_indices[v], obs_map);
+        }
     }
 
     /* Free loaded string data — no longer needed after store */
