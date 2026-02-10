@@ -448,3 +448,119 @@ ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, 
     free(L);
     return num_collinear;
 }
+
+/* ========================================================================
+ * Pseudo-inverse for symmetric positive semidefinite matrices
+ * Uses Jacobi eigenvalue decomposition (exact for small matrices).
+ * Eigenvalues below rel_tol * max_eigenvalue are treated as zero.
+ * Returns 0 on success, -1 on error.
+ * Output: inv (K x K), rank (effective rank of matrix)
+ * ======================================================================== */
+
+ST_int ctools_pinverse_sym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out)
+{
+    ST_int i, j, p, q, iter;
+    const ST_int max_iter = 100 * K * K;
+    const ST_double sweep_tol = 1e-15;
+    const ST_double eval_rel_tol = 1e-10;
+
+    /* Work arrays: V (eigenvectors), D (working copy of A -> eigenvalues on diag) */
+    ST_double *V = (ST_double *)malloc(K * K * sizeof(ST_double));
+    ST_double *D = (ST_double *)malloc(K * K * sizeof(ST_double));
+    if (!V || !D) { free(V); free(D); return -1; }
+
+    memcpy(D, A, K * K * sizeof(ST_double));
+
+    /* Initialize V = I */
+    memset(V, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) V[i * K + i] = 1.0;
+
+    /* Jacobi eigenvalue iteration: repeatedly zero the largest off-diagonal */
+    for (iter = 0; iter < max_iter; iter++) {
+        /* Find largest off-diagonal element */
+        ST_double max_off = 0.0;
+        p = 0; q = 1;
+        for (i = 0; i < K; i++) {
+            for (j = i + 1; j < K; j++) {
+                ST_double a = fabs(D[j * K + i]);
+                if (a > max_off) {
+                    max_off = a;
+                    p = i; q = j;
+                }
+            }
+        }
+        if (max_off < sweep_tol) break;
+
+        /* Compute Jacobi rotation to zero D[p,q] */
+        ST_double app = D[p * K + p];
+        ST_double aqq = D[q * K + q];
+        ST_double apq = D[q * K + p];
+
+        ST_double c, s;
+        if (fabs(app - aqq) < 1e-30) {
+            c = s = sqrt(0.5);
+        } else {
+            ST_double tau = (aqq - app) / (2.0 * apq);
+            ST_double t = ((tau >= 0) ? 1.0 : -1.0) / (fabs(tau) + sqrt(1.0 + tau * tau));
+            c = 1.0 / sqrt(1.0 + t * t);
+            s = t * c;
+        }
+
+        /* Apply rotation to D: D <- G' D G */
+        for (i = 0; i < K; i++) {
+            ST_double dip = D[p * K + i];
+            ST_double diq = D[q * K + i];
+            D[p * K + i] = c * dip - s * diq;
+            D[q * K + i] = s * dip + c * diq;
+        }
+        for (j = 0; j < K; j++) {
+            ST_double dpj = D[j * K + p];
+            ST_double dqj = D[j * K + q];
+            D[j * K + p] = c * dpj - s * dqj;
+            D[j * K + q] = s * dpj + c * dqj;
+        }
+
+        /* Accumulate eigenvectors: V <- V G */
+        for (i = 0; i < K; i++) {
+            ST_double vip = V[p * K + i];
+            ST_double viq = V[q * K + i];
+            V[p * K + i] = c * vip - s * viq;
+            V[q * K + i] = s * vip + c * viq;
+        }
+    }
+
+    /* Eigenvalues are on diagonal of D, eigenvectors in columns of V */
+    ST_double max_eval = 0.0;
+    for (i = 0; i < K; i++) {
+        if (D[i * K + i] > max_eval) max_eval = D[i * K + i];
+    }
+
+    ST_double tol = eval_rel_tol * max_eval;
+    ST_int rank = 0;
+
+    /* Compute pseudo-inverse: inv = V * diag(1/lambda_i) * V'
+     * where lambda_i = 0 for eigenvalues below tolerance */
+    memset(inv, 0, K * K * sizeof(ST_double));
+    for (i = 0; i < K; i++) {
+        for (j = 0; j <= i; j++) {
+            ST_double s_val = 0.0;
+            for (ST_int m = 0; m < K; m++) {
+                ST_double eval = D[m * K + m];
+                if (eval > tol) {
+                    s_val += V[m * K + i] * V[m * K + j] / eval;
+                }
+            }
+            inv[j * K + i] = s_val;
+            inv[i * K + j] = s_val;
+        }
+    }
+
+    for (i = 0; i < K; i++) {
+        if (D[i * K + i] > tol) rank++;
+    }
+    if (rank_out) *rank_out = rank;
+
+    free(V);
+    free(D);
+    return 0;
+}

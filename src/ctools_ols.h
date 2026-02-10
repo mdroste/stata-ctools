@@ -144,4 +144,9 @@ void compute_xtx_xty_weighted(
  * Returns number of collinear variables detected (-1 on error) */
 ST_int detect_collinearity(const ST_double *xx, ST_int K, ST_int *is_collinear, ST_int verbose);
 
+/* Pseudo-inverse for symmetric positive semidefinite matrices
+ * Uses Jacobi eigenvalue decomposition. Eigenvalues below relative tolerance
+ * are treated as zero. Returns 0 on success, -1 on error. */
+ST_int ctools_pinverse_sym(const ST_double *A, ST_int K, ST_double *inv, ST_int *rank_out);
+
 #endif /* CTOOLS_OLS_H */

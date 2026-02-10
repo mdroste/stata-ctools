@@ -312,6 +312,18 @@ program define civreghdfe, eclass
         local instruments_coef "`__names_nobase'"
     }
 
+    * Check that no endogenous variable is also an excluded instrument
+    if `is_iv_model' {
+        foreach evar of local endogvars_coef {
+            foreach ivar of local instruments_coef {
+                if "`evar'" == "`ivar'" {
+                    di as error "`evar' is both endogenous and an instrument"
+                    exit 481
+                }
+            }
+        }
+    }
+
     * Load the platform-appropriate ctools plugin if not already loaded
     capture program list ctools_plugin
     if _rc != 0 {
@@ -422,6 +434,19 @@ program define civreghdfe, eclass
                 local vce_type = 2
                 local cluster_var `cluster_vars'
                 confirm variable `cluster_var'
+                * Convert string cluster variable to numeric
+                capture confirm numeric variable `cluster_var'
+                if _rc != 0 {
+                    tempvar cluster_var_numeric
+                    capture which gegen
+                    if _rc == 0 {
+                        quietly gegen `cluster_var_numeric' = group(`cluster_var')
+                    }
+                    else {
+                        quietly egen `cluster_var_numeric' = group(`cluster_var')
+                    }
+                    local cluster_var "`cluster_var_numeric'"
+                }
             }
             else if `n_cluster' == 2 {
                 * Two-way clustering
@@ -430,6 +455,31 @@ program define civreghdfe, eclass
                 local cluster_var2 : word 2 of `cluster_vars'
                 confirm variable `cluster_var'
                 confirm variable `cluster_var2'
+                * Convert string cluster variables to numeric
+                capture confirm numeric variable `cluster_var'
+                if _rc != 0 {
+                    tempvar cluster_var_numeric
+                    capture which gegen
+                    if _rc == 0 {
+                        quietly gegen `cluster_var_numeric' = group(`cluster_var')
+                    }
+                    else {
+                        quietly egen `cluster_var_numeric' = group(`cluster_var')
+                    }
+                    local cluster_var "`cluster_var_numeric'"
+                }
+                capture confirm numeric variable `cluster_var2'
+                if _rc != 0 {
+                    tempvar cluster_var2_numeric
+                    capture which gegen
+                    if _rc == 0 {
+                        quietly gegen `cluster_var2_numeric' = group(`cluster_var2')
+                    }
+                    else {
+                        quietly egen `cluster_var2_numeric' = group(`cluster_var2')
+                    }
+                    local cluster_var2 "`cluster_var2_numeric'"
+                }
             }
             else {
                 di as error "vce(cluster) supports 1 or 2 cluster variables"
@@ -541,11 +591,12 @@ program define civreghdfe, eclass
 
     * Detect if cluster variable is nested within (same as) an absorb variable
     * When cluster var = FE var, that FE shouldn't reduce DOF for VCE
+    * Also check for two-way clustering (vce_type == 3)
     local nested_fe_index = 0
-    if `vce_type' == 2 & "`cluster_var'" != "" {
+    if (`vce_type' == 2 | `vce_type' == 3) & "`cluster_var'" != "" {
         local fe_idx = 1
         foreach fe_var of local absorb {
-            if "`fe_var'" == "`cluster_var'" {
+            if "`fe_var'" == "`cluster_var'" | "`fe_var'" == "`cluster_var2'" {
                 local nested_fe_index = `fe_idx'
             }
             local fe_idx = `fe_idx' + 1
@@ -1041,6 +1092,8 @@ program define civreghdfe, eclass
         local N_clust = __civreghdfe_N_clust
     }
     if `vce_type' == 3 {
+        capture local N_clust1 = __civreghdfe_N_clust1
+        if _rc != 0 local N_clust1 = `N_clust'
         capture local N_clust2 = __civreghdfe_N_clust2
         if _rc != 0 local N_clust2 = 0
     }
@@ -1195,7 +1248,7 @@ program define civreghdfe, eclass
     matrix `b_col' = `b_temp''
     matrix `wald_temp' = `Vinv' * `b_col'
     matrix `wald_stat' = `b_temp' * `wald_temp'
-    local F_wald = `wald_stat'[1,1] / `K_total'
+    local F_wald = `wald_stat'[1,1] / `K'
 
     * Post results
     ereturn clear
@@ -1222,10 +1275,13 @@ program define civreghdfe, eclass
 
     if `vce_type' == 2 | `vce_type' == 3 | `vce_type' == 4 {
         ereturn scalar N_clust = `N_clust'
-        ereturn scalar N_clust1 = `N_clust'
-    }
-    if `vce_type' == 3 {
-        ereturn scalar N_clust2 = `N_clust2'
+        if `vce_type' == 3 {
+            ereturn scalar N_clust1 = `N_clust1'
+            ereturn scalar N_clust2 = `N_clust2'
+        }
+        else {
+            ereturn scalar N_clust1 = `N_clust'
+        }
     }
 
     * Store first-stage F statistics
@@ -1303,8 +1359,8 @@ program define civreghdfe, eclass
     ereturn scalar rmse = `rmse'
     ereturn scalar F = `F_wald'
 
-    * Model degrees of freedom
-    ereturn scalar df_m = `K_total'
+    * Model degrees of freedom (use K from plugin, which reflects collinearity removal)
+    ereturn scalar df_m = `K'
 
     * Number of absorbed fixed effect dimensions (matches reghdfe/ivreghdfe)
     ereturn scalar N_hdfe = `G'
@@ -1330,7 +1386,9 @@ program define civreghdfe, eclass
     else {
         local sdofminus = 0
     }
-    local adj_denom = `N_used' - `K_total' - `sdofminus'
+    * Use K (plugin's non-collinear count) not K_total, so vars absorbed by FE
+    * don't inflate the denominator (matches df_r = N - K - df_a from plugin)
+    local adj_denom = `N_used' - `K' - `sdofminus'
     if `adj_denom' > 0 {
         * With absorb, constant is partialled out, so use N not N-1
         local r2_a = 1 - (1 - `r2') * `N_used' / `adj_denom'
@@ -1927,6 +1985,7 @@ program define civreghdfe, eclass
     capture scalar drop __civreghdfe_has_cluster
     capture scalar drop __civreghdfe_has_cluster2
     capture scalar drop __civreghdfe_has_weights
+    capture scalar drop __civreghdfe_N_clust1
     capture scalar drop __civreghdfe_N_clust2
     capture scalar drop __civreghdfe_weight_type
     capture scalar drop __civreghdfe_vce_type

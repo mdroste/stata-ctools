@@ -11,6 +11,10 @@
 #include <stdio.h>
 #include <math.h>
 
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 #include "civreghdfe_vce.h"
 #include "../ctools_config.h"
 #include "../ctools_matrix.h"
@@ -69,19 +73,32 @@ void ivvce_compute_ZOmegaZ_robust(
     ST_double *ZOmegaZ
 )
 {
-    ST_int i, j, k;
+    ST_int i;
 
     memset(ZOmegaZ, 0, K_iv * K_iv * sizeof(ST_double));
 
-    for (i = 0; i < N; i++) {
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        ST_double e2 = w * resid[i] * resid[i];
-        for (j = 0; j < K_iv; j++) {
-            for (k = 0; k <= j; k++) {
-                ST_double contrib = Z[j * N + i] * e2 * Z[k * N + i];
-                ZOmegaZ[j * K_iv + k] += contrib;
-                if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+    #pragma omp parallel if(N > 5000)
+    {
+        ST_double *local_ZOZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        if (local_ZOZ) {
+            #pragma omp for schedule(static)
+            for (i = 0; i < N; i++) {
+                ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+                ST_double e2 = w * resid[i] * resid[i];
+                for (ST_int jj = 0; jj < K_iv; jj++) {
+                    for (ST_int kk = 0; kk <= jj; kk++) {
+                        ST_double contrib = Z[jj * N + i] * e2 * Z[kk * N + i];
+                        local_ZOZ[jj * K_iv + kk] += contrib;
+                        if (kk != jj) local_ZOZ[kk * K_iv + jj] += contrib;
+                    }
+                }
             }
+            #pragma omp critical
+            {
+                for (ST_int idx = 0; idx < K_iv * K_iv; idx++)
+                    ZOmegaZ[idx] += local_ZOZ[idx];
+            }
+            free(local_ZOZ);
         }
     }
 }
@@ -101,7 +118,7 @@ void ivvce_compute_ZOmegaZ_cluster(
     ST_double *ZOmegaZ
 )
 {
-    ST_int i, j, k, c;
+    ST_int j, k, c;
 
     memset(ZOmegaZ, 0, K_iv * K_iv * sizeof(ST_double));
 
@@ -110,13 +127,26 @@ void ivvce_compute_ZOmegaZ_cluster(
     if (!cluster_ze) return;
 
     /* Sum Z_i * e_i within each cluster */
-    for (i = 0; i < N; i++) {
-        c = cluster_ids[i] - 1;  /* 1-indexed to 0-indexed */
-        if (c < 0 || c >= num_clusters) continue;
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        ST_double we = w * resid[i];
-        for (j = 0; j < K_iv; j++) {
-            cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+    #pragma omp parallel if(N > 5000)
+    {
+        ST_double *local_cze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+        if (local_cze) {
+            #pragma omp for schedule(static)
+            for (ST_int ii = 0; ii < N; ii++) {
+                ST_int cc = cluster_ids[ii] - 1;
+                if (cc < 0 || cc >= num_clusters) continue;
+                ST_double w = (weights && weight_type != 0) ? weights[ii] : 1.0;
+                ST_double we = w * resid[ii];
+                for (ST_int jj = 0; jj < K_iv; jj++) {
+                    local_cze[cc * K_iv + jj] += Z[jj * N + ii] * we;
+                }
+            }
+            #pragma omp critical
+            {
+                for (ST_int idx = 0; idx < num_clusters * K_iv; idx++)
+                    cluster_ze[idx] += local_cze[idx];
+            }
+            free(local_cze);
         }
     }
 
@@ -150,7 +180,7 @@ static void compute_cluster_meat(
     ST_double *meat
 )
 {
-    ST_int i, j, k, c;
+    ST_int j, k, c;
 
     memset(meat, 0, K_total * K_total * sizeof(ST_double));
 
@@ -159,13 +189,26 @@ static void compute_cluster_meat(
     if (!cluster_sums) return;
 
     /* Sum (PzX_i * e_i) within each cluster */
-    for (i = 0; i < N; i++) {
-        c = cluster_ids[i] - 1;  /* 1-indexed to 0-indexed */
-        if (c < 0 || c >= num_clusters) continue;
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        ST_double we = w * resid[i];
-        for (j = 0; j < K_total; j++) {
-            cluster_sums[c * K_total + j] += PzX[j * N + i] * we;
+    #pragma omp parallel if(N > 5000)
+    {
+        ST_double *local_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
+        if (local_sums) {
+            #pragma omp for schedule(static)
+            for (ST_int ii = 0; ii < N; ii++) {
+                ST_int cc = cluster_ids[ii] - 1;
+                if (cc < 0 || cc >= num_clusters) continue;
+                ST_double w = (weights && weight_type != 0) ? weights[ii] : 1.0;
+                ST_double we = w * resid[ii];
+                for (ST_int jj = 0; jj < K_total; jj++) {
+                    local_sums[cc * K_total + jj] += PzX[jj * N + ii] * we;
+                }
+            }
+            #pragma omp critical
+            {
+                for (ST_int idx = 0; idx < num_clusters * K_total; idx++)
+                    cluster_sums[idx] += local_sums[idx];
+            }
+            free(local_sums);
         }
     }
 
@@ -206,19 +249,20 @@ void ivvce_compute_twoway(
     ST_double *V
 )
 {
-    ST_int i, j, k;
+    ST_int i;
 
     /* Compute P_Z X = Z * (Z'Z)^-1 Z'X */
     ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
     if (!PzX) return;
 
+    #pragma omp parallel for schedule(static) if(N > 1000)
     for (i = 0; i < N; i++) {
-        for (j = 0; j < K_total; j++) {
+        for (ST_int jj = 0; jj < K_total; jj++) {
             ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
+            for (ST_int kk = 0; kk < K_iv; kk++) {
+                sum += Z[kk * N + i] * temp_kiv_ktotal[jj * K_iv + kk];
             }
-            PzX[j * N + i] = sum;
+            PzX[jj * N + i] = sum;
         }
     }
 
@@ -291,34 +335,29 @@ void ivvce_compute_twoway(
     compute_cluster_meat(PzX, resid, weights, weight_type, cluster2_ids, N, K_total, num_clusters2, meat2);
     compute_cluster_meat(PzX, resid, weights, weight_type, intersection_ids, N, K_total, num_intersection, meat_int);
 
-    /* DOF adjustments for each dimension */
+    /* CGM: combine raw meats first, then apply single DOF adjustment.
+       This matches ivreg2's approach:
+       1. shat = shat1 + shat2 - shat3 (combine in Z-space, no per-dimension DOF)
+       2. V = sandwich(shat_combined) * (N-1)/(N-K) * N_clust/(N_clust-1)
+       where N_clust = min(G1, G2). */
+
+    /* meat_combined = meat1 + meat2 - meat_int */
+    for (i = 0; i < K_total * K_total; i++) {
+        meat1[i] = meat1[i] + meat2[i] - meat_int[i];
+    }
+
+    /* V = XkX_inv * meat_combined * XkX_inv */
+    ctools_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
+    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
+
+    /* Single DOF adjustment: (N_eff-1)/(N_eff-K-df_a) * N_clust/(N_clust-1)
+       where N_clust = min(G1, G2), matching ivreg2's small-sample correction */
     ST_int df_r = N_eff - K_total - df_a;
     if (df_r <= 0) df_r = 1;
-
-    /* V1 = XkX_inv * meat1 * XkX_inv * dof_adj1 */
-    ST_double G1 = (ST_double)num_clusters1;
-    ST_double dof_adj1 = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G1 / (G1 - 1.0));
-    ctools_matmul_ab(XkX_inv, meat1, K_total, K_total, K_total, temp_v);
-    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V1);
-    for (i = 0; i < K_total * K_total; i++) V1[i] *= dof_adj1;
-
-    /* V2 = XkX_inv * meat2 * XkX_inv * dof_adj2 */
-    ST_double G2 = (ST_double)num_clusters2;
-    ST_double dof_adj2 = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G2 / (G2 - 1.0));
-    ctools_matmul_ab(XkX_inv, meat2, K_total, K_total, K_total, temp_v);
-    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V2);
-    for (i = 0; i < K_total * K_total; i++) V2[i] *= dof_adj2;
-
-    /* V_int = XkX_inv * meat_int * XkX_inv * dof_adj_int */
-    ST_double G_int = (ST_double)num_intersection;
-    ST_double dof_adj_int = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (G_int / (G_int - 1.0));
-    ctools_matmul_ab(XkX_inv, meat_int, K_total, K_total, K_total, temp_v);
-    ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V_int);
-    for (i = 0; i < K_total * K_total; i++) V_int[i] *= dof_adj_int;
-
-    /* V = V1 + V2 - V_int */
+    ST_double N_clust = (ST_double)((num_clusters1 < num_clusters2) ? num_clusters1 : num_clusters2);
+    ST_double dof_adj = ((ST_double)(N_eff - 1) / (ST_double)df_r) * (N_clust / (N_clust - 1.0));
     for (i = 0; i < K_total * K_total; i++) {
-        V[i] = V1[i] + V2[i] - V_int[i];
+        V[i] *= dof_adj;
     }
 
     /* Clean up */
@@ -336,16 +375,21 @@ void ivvce_compute_twoway(
 /*
     Compute Kiefer VCE (within-panel autocorrelation robust).
 
-    Kiefer (1980) VCE uses TIME-CLUSTERING: sum across all panels at each time point,
-    then add HAC cross-lag terms with truncated kernel (kw=1 for all lags).
+    Kiefer (1980) VCE: homoskedastic HAC with truncated kernel, bandwidth = T.
+    Unlike cluster-robust VCE which uses individual Z_i*e_i score vectors,
+    Kiefer uses a Kronecker product structure separating the residual
+    autocovariance from the instrument cross-products at each lag.
 
-    Following ivreg2's implementation (livreg2.mlib m_omega lines 446-535):
-    1. For each time t, compute eZ_t = sum over panels i of (e_it * Z_it)
-    2. Build shat_ZZ = sum_t (eZ_t * eZ_t') + sum_{tau} kw*(ghat + ghat')
-    3. Transform to X-space: meat = A' * shat_ZZ * A
-    4. V = XkX_inv * meat * XkX_inv * dof_adj
-
-    Note: Uses original (non-demeaned) Z to avoid orthogonality cancellation.
+    Following ivreg2's m_omega (homoskedastic + kernel path, lines 194-236):
+    1. Base: shat = sigma2 * Z'WZ  where sigma2 = e'We / N_eff
+    2. For each lag tau = 1..T-1 (truncated kernel, kw=1):
+       sigmahat_tau = sum of w_t * e_t * w_{t-tau} * e_{t-tau} / N_eff
+       ZZhat_tau    = sum of w_t * Z_t' * w_{t-tau} * Z_{t-tau}
+       ghat = sigmahat_tau * ZZhat_tau   (Kronecker for scalar)
+       shat += kw * (ghat + ghat')
+    3. shat /= N_eff
+    4. Transform to X-space: meat = A' * shat * A
+    5. V = XkX_inv * meat * XkX_inv * (N_eff / df_r)
 */
 void ivvce_compute_kiefer(
     const ST_double *Z,
@@ -413,81 +457,109 @@ void ivvce_compute_kiefer(
         return;
     }
 
-    /* Compute Z-space score vectors: uZ[l,i] = Z[l,i] * e[i] * w[i] */
-    ST_double *uZ = (ST_double *)calloc(K_iv * N, sizeof(ST_double));
-    if (!uZ) {
+    /* === Homoskedastic HAC (Kiefer) ===
+       Base term: shat_ZZ = sigma2 * Z'WZ
+       sigma2 = e'We / N_eff  (large-sample, dofminus=0 matching ivreghdfe->ivreg2) */
+
+    /* Compute sigma2 = e'We / N_eff */
+    ST_double ee = 0.0;
+    #pragma omp parallel for schedule(static) reduction(+:ee) if(N > 10000)
+    for (i = 0; i < N; i++) {
+        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
+        ee += w * resid[i] * resid[i];
+    }
+    ST_double sigma2 = ee / (ST_double)N_eff;
+
+    /* Compute shat_ZZ = sigma2 * Z'WZ */
+    ST_double *shat_ZZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    if (!shat_ZZ) {
         free(panel_counts); free(panel_starts); free(obs_by_panel);
         return;
     }
 
-    for (i = 0; i < N; i++) {
-        ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-        ST_double we = w * resid[i];
-        for (ST_int l = 0; l < K_iv; l++) {
-            uZ[l * N + i] = Z[l * N + i] * we;
-        }
-    }
+    if (weights && weight_type != 0)
+        ctools_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, shat_ZZ);
+    else
+        ctools_matmul_atb(Z, Z, N, K_iv, K_iv, shat_ZZ);
 
-    /* Allocate time_sums: for each time t, store sum of uZ across all panels */
-    ST_double *time_sums = (ST_double *)calloc(T_max * K_iv, sizeof(ST_double));
-    if (!time_sums) {
-        free(uZ); free(panel_counts); free(panel_starts); free(obs_by_panel);
+    for (i = 0; i < K_iv * K_iv; i++)
+        shat_ZZ[i] *= sigma2;
+
+    /* Cross-lag terms: for tau=1..T_max-1, truncated kernel (kw=1 for all lags)
+       For each lag tau, accumulate within-panel (t, t-tau) pairs:
+         sigmahat_tau = Σ_{panels} Σ_{t} wv * e[t] * e[t-tau] / N_eff
+         ZZhat_tau    = Σ_{panels} Σ_{t} wv * Z[t]' Z[t-tau]
+       Then: shat_ZZ += ghat + ghat'  where ghat = sigmahat_tau * ZZhat_tau */
+
+    ST_double *ZZhat_tau = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+    if (!ZZhat_tau) {
+        free(shat_ZZ);
+        free(panel_counts); free(panel_starts); free(obs_by_panel);
         return;
     }
 
-    /* Compute time_sums: cluster by time (within-panel position), sum across panels */
-    for (p = 0; p < num_panels; p++) {
-        ST_int start = panel_starts[p];
-        ST_int T_p = panel_starts[p + 1] - start;
-
-        for (ST_int t = 0; t < T_p; t++) {
-            ST_int obs_idx = obs_by_panel[start + t];
-            for (ST_int l = 0; l < K_iv; l++) {
-                time_sums[t * K_iv + l] += uZ[l * N + obs_idx];
-            }
-        }
-    }
-
-    free(uZ);
-
-    /* Compute shat_ZZ in Z-space with HAC (time-clustering) */
-    ST_double *shat_ZZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    if (!shat_ZZ) {
-        free(time_sums); free(panel_counts); free(panel_starts); free(obs_by_panel);
-        return;
-    }
-
-    /* Lag 0: sum_t (time_sum[t])(time_sum[t])' */
-    for (ST_int t = 0; t < T_max; t++) {
-        for (ST_int l = 0; l < K_iv; l++) {
-            for (ST_int m = 0; m <= l; m++) {
-                ST_double contrib = time_sums[t * K_iv + l] * time_sums[t * K_iv + m];
-                shat_ZZ[l * K_iv + m] += contrib;
-                if (m != l) shat_ZZ[m * K_iv + l] += contrib;
-            }
-        }
-    }
-
-    /* HAC cross-lag terms: for tau=1 to T-1, add (ghat + ghat') with kw=1 (truncated) */
     for (ST_int tau = 1; tau < T_max; tau++) {
-        for (ST_int t = tau; t < T_max; t++) {
-            for (ST_int l = 0; l < K_iv; l++) {
-                for (ST_int m = 0; m < K_iv; m++) {
-                    ST_double contrib = time_sums[t * K_iv + l] * time_sums[(t - tau) * K_iv + m]
-                                      + time_sums[(t - tau) * K_iv + l] * time_sums[t * K_iv + m];
-                    shat_ZZ[l * K_iv + m] += contrib;
+        ST_double sigmahat_tau = 0.0;
+        memset(ZZhat_tau, 0, K_iv * K_iv * sizeof(ST_double));
+
+        /* Panels are independent — parallelize with thread-local reduction */
+        #pragma omp parallel if(num_panels > 4)
+        {
+            ST_double local_sigma = 0.0;
+            ST_double *local_ZZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+            if (local_ZZ) {
+                #pragma omp for schedule(dynamic)
+                for (p = 0; p < num_panels; p++) {
+                    ST_int start = panel_starts[p];
+                    ST_int T_p = panel_starts[p + 1] - start;
+
+                    for (ST_int t = tau; t < T_p; t++) {
+                        ST_int obs_t     = obs_by_panel[start + t];
+                        ST_int obs_t_tau = obs_by_panel[start + t - tau];
+
+                        ST_double w_t     = (weights && weight_type != 0) ? weights[obs_t] : 1.0;
+                        ST_double w_t_tau = (weights && weight_type != 0) ? weights[obs_t_tau] : 1.0;
+                        ST_double wv = w_t * w_t_tau;
+
+                        local_sigma += wv * resid[obs_t] * resid[obs_t_tau];
+
+                        for (ST_int l = 0; l < K_iv; l++) {
+                            for (ST_int m = 0; m < K_iv; m++) {
+                                local_ZZ[l * K_iv + m] +=
+                                    wv * Z[l * N + obs_t] * Z[m * N + obs_t_tau];
+                            }
+                        }
+                    }
                 }
+                #pragma omp critical
+                {
+                    sigmahat_tau += local_sigma;
+                    for (ST_int idx = 0; idx < K_iv * K_iv; idx++)
+                        ZZhat_tau[idx] += local_ZZ[idx];
+                }
+                free(local_ZZ);
+            }
+        }
+
+        sigmahat_tau /= (ST_double)N_eff;  /* large-sample dof correction */
+
+        /* ghat = sigmahat_tau * ZZhat_tau (Kronecker for scalar)
+           shat_ZZ += ghat + ghat' */
+        for (ST_int l = 0; l < K_iv; l++) {
+            for (ST_int m = 0; m < K_iv; m++) {
+                shat_ZZ[l * K_iv + m] +=
+                    sigmahat_tau * (ZZhat_tau[l * K_iv + m] + ZZhat_tau[m * K_iv + l]);
             }
         }
     }
 
-    free(time_sums);
+    free(ZZhat_tau);
     free(panel_counts); free(panel_starts); free(obs_by_panel);
 
-    /* Divide by N_eff (effective sample size) */
-    for (i = 0; i < K_iv * K_iv; i++) {
-        shat_ZZ[i] /= N_eff;
-    }
+    /* Note: shat_ZZ is NOT divided by N here.  In ivreg2, m_omega divides by N
+       (line 235) but s_iegmm multiplies by N in the sandwich (line 5557).
+       Our convention matches the robust/HAC path in ivvce_compute_full:
+       shat_ZZ stores the raw (N * omega) and dof_adj = N/df_r handles scaling. */
 
     /* Transform shat_ZZ to X-space:
        meat = A' * shat_ZZ * A where A = temp_kiv_ktotal = (Z'Z)^{-1} * Z'X */
@@ -507,7 +579,8 @@ void ivvce_compute_kiefer(
     free(shat_ZZ);
     free(temp_kk);
 
-    /* DOF adjustment for Kiefer: N_eff / (N_eff - K - df_a) */
+    /* Small-sample DOF adjustment: V *= (N_eff - dofminus) / (N_eff - K - dofminus - sdofminus)
+       With dofminus=0 (ivreghdfe convention): V *= N_eff / (N_eff - K_total - df_a) */
     ST_double dof_adj = (ST_double)N_eff / (ST_double)df_r;
 
     /* V = XkX_inv * meat * XkX_inv * dof_adj */
@@ -570,10 +643,12 @@ void ivvce_compute_full(
     /* Compute residual sum of squares */
     ST_double rss = 0.0;
     if (weights && weight_type != 0) {
+        #pragma omp parallel for schedule(static) reduction(+:rss) if(N > 10000)
         for (i = 0; i < N; i++) {
             rss += weights[i] * resid[i] * resid[i];
         }
     } else {
+        #pragma omp parallel for schedule(static) reduction(+:rss) if(N > 10000)
         for (i = 0; i < N; i++) {
             rss += resid[i] * resid[i];
         }
@@ -595,13 +670,14 @@ void ivvce_compute_full(
     ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
     if (!PzX) return;
 
+    #pragma omp parallel for schedule(static) if(N > 1000)
     for (i = 0; i < N; i++) {
-        for (j = 0; j < K_total; j++) {
+        for (ST_int jj = 0; jj < K_total; jj++) {
             ST_double sum = 0.0;
-            for (k = 0; k < K_iv; k++) {
-                sum += Z[k * N + i] * temp_kiv_ktotal[j * K_iv + k];
+            for (ST_int kk = 0; kk < K_iv; kk++) {
+                sum += Z[kk * N + i] * temp_kiv_ktotal[jj * K_iv + kk];
             }
-            PzX[j * N + i] = sum;
+            PzX[jj * N + i] = sum;
         }
     }
 
@@ -626,13 +702,26 @@ void ivvce_compute_full(
         }
 
         /* Sum (PzX_i * e_i) at each time period (cluster) */
-        for (i = 0; i < N; i++) {
-            ST_int t = cluster_ids[i] - 1;  /* time cluster index */
-            if (t < 0 || t >= num_clusters) continue;
-            ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
-            ST_double we = w * resid[i];
-            for (j = 0; j < K_total; j++) {
-                cluster_sums[t * K_total + j] += PzX[j * N + i] * we;
+        #pragma omp parallel if(N > 5000)
+        {
+            ST_double *local_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
+            if (local_sums) {
+                #pragma omp for schedule(static)
+                for (ST_int ii = 0; ii < N; ii++) {
+                    ST_int t = cluster_ids[ii] - 1;
+                    if (t < 0 || t >= num_clusters) continue;
+                    ST_double w = (weights && weight_type != 0) ? weights[ii] : 1.0;
+                    ST_double we = w * resid[ii];
+                    for (ST_int jj = 0; jj < K_total; jj++) {
+                        local_sums[t * K_total + jj] += PzX[jj * N + ii] * we;
+                    }
+                }
+                #pragma omp critical
+                {
+                    for (ST_int idx = 0; idx < num_clusters * K_total; idx++)
+                        cluster_sums[idx] += local_sums[idx];
+                }
+                free(local_sums);
             }
         }
 
@@ -751,6 +840,7 @@ void ivvce_compute_full(
         }
 
         /* Compute Z-space score vectors: uZ[l,i] = Z[l,i] * e[i] */
+        #pragma omp parallel for schedule(static) if(N > 5000)
         for (i = 0; i < N; i++) {
             ST_double w = (weights && weight_type != 0) ? weights[i] : 1.0;
             ST_double we = w * resid[i];

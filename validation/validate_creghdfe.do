@@ -175,13 +175,7 @@ benchmark_reghdfe price mpg weight in 1/50, absorb(foreign) testname("in conditi
 print_section "nostandardize Option"
 
 sysuse auto, clear
-capture creghdfe price mpg weight, absorb(foreign) nostandardize
-if _rc == 0 {
-    test_pass "nostandardize option accepted"
-}
-else {
-    test_fail "nostandardize option" "returned error `=_rc'"
-}
+benchmark_reghdfe price mpg weight, absorb(foreign) testname("nostandardize results match reghdfe")
 
 /*******************************************************************************
  * SECTION 13: Edge cases - Singletons
@@ -376,7 +370,7 @@ benchmark_reghdfe y x, absorb(id) testname("50% missing")
  ******************************************************************************/
 print_section "Edge Cases - Perfect Collinearity"
 
-* Collinear regressors
+* Collinear regressors - compare against reghdfe
 clear
 set seed 150
 set obs 1000
@@ -385,12 +379,35 @@ gen x1 = runiform()
 gen x2 = 2 * x1  // Perfectly collinear with x1
 gen y = x1 + rnormal()
 
-capture creghdfe y x1 x2, absorb(id)
-if _rc == 0 {
+quietly reghdfe y x1 x2, absorb(id)
+local reghdfe_N = e(N)
+local reghdfe_b_x1 = _b[x1]
+local reghdfe_se_x1 = _se[x1]
+
+creghdfe y x1 x2, absorb(id)
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_N' != e(N) {
+    local has_failure = 1
+    local all_diffs "e(N):`reghdfe_N'!=`=e(N)'"
+}
+sigfigs `reghdfe_b_x1' `=_b[x1]'
+if r(sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(sigfigs)
+    local all_diffs "`all_diffs' b[x1]:sigfigs=`sf_fmt'"
+}
+sigfigs `reghdfe_se_x1' `=_se[x1]'
+if r(sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(sigfigs)
+    local all_diffs "`all_diffs' se[x1]:sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
     test_pass "collinear regressors handled (dropped)"
 }
 else {
-    test_fail "collinear regressors" "should drop collinear vars but returned error rc=`=_rc'"
+    test_fail "collinear regressors" "`=trim("`all_diffs'")'"
 }
 
 * Variable collinear with FE
@@ -402,12 +419,35 @@ gen x = runiform()
 gen fe_indicator = id  // This is collinear with the FE
 gen y = x + rnormal()
 
-capture creghdfe y x fe_indicator, absorb(id)
-if _rc == 0 {
+quietly reghdfe y x fe_indicator, absorb(id)
+local reghdfe_N = e(N)
+local reghdfe_b_x = _b[x]
+local reghdfe_se_x = _se[x]
+
+creghdfe y x fe_indicator, absorb(id)
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_N' != e(N) {
+    local has_failure = 1
+    local all_diffs "e(N):`reghdfe_N'!=`=e(N)'"
+}
+sigfigs `reghdfe_b_x' `=_b[x]'
+if r(sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(sigfigs)
+    local all_diffs "`all_diffs' b[x]:sigfigs=`sf_fmt'"
+}
+sigfigs `reghdfe_se_x' `=_se[x]'
+if r(sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(sigfigs)
+    local all_diffs "`all_diffs' se[x]:sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
     test_pass "regressor collinear with FE handled"
 }
 else {
-    test_fail "regressor collinear with FE" "should drop collinear var but returned error rc=`=_rc'"
+    test_fail "regressor collinear with FE" "`=trim("`all_diffs'")'"
 }
 
 /*******************************************************************************
@@ -621,7 +661,7 @@ benchmark_reghdfe y x1 x2, absorb(id year) testname("100K obs, two-way FE")
  ******************************************************************************/
 print_section "Pathological - Numeric Values"
 
-* Very small values
+* Very small values - compare against reghdfe
 clear
 set seed 210
 set obs 1000
@@ -629,15 +669,9 @@ gen id = runiformint(1, 50)
 gen x = runiform() / 1e6
 gen y = x * 1e6 + rnormal() / 1e6
 
-capture creghdfe y x, absorb(id)
-if _rc == 0 {
-    test_pass "very small values"
-}
-else {
-    test_fail "very small values" "rc=`=_rc'"
-}
+benchmark_reghdfe y x, absorb(id) testname("very small values")
 
-* Very large values
+* Very large values - compare against reghdfe
 clear
 set seed 211
 set obs 1000
@@ -645,15 +679,9 @@ gen id = runiformint(1, 50)
 gen x = runiform() * 1e9
 gen y = x / 1e6 + rnormal() * 1e3
 
-capture creghdfe y x, absorb(id)
-if _rc == 0 {
-    test_pass "very large values"
-}
-else {
-    test_fail "very large values" "rc=`=_rc'"
-}
+benchmark_reghdfe y x, absorb(id) testname("very large values")
 
-* Mixed scale
+* Mixed scale - compare against reghdfe
 clear
 set seed 212
 set obs 1000
@@ -662,13 +690,7 @@ gen x_tiny = runiform() / 1e9
 gen x_huge = runiform() * 1e9
 gen y = x_tiny * 1e9 + x_huge / 1e9 + rnormal()
 
-capture creghdfe y x_tiny x_huge, absorb(id)
-if _rc == 0 {
-    test_pass "mixed scale (tiny and huge)"
-}
-else {
-    test_fail "mixed scale" "rc=`=_rc'"
-}
+benchmark_reghdfe y x_tiny x_huge, absorb(id) testname("mixed scale (tiny and huge)")
 
 * All zeros in X
 clear
@@ -686,7 +708,7 @@ else {
     test_fail "all zeros in X" "should error on all-zero regressor (collinearity) but succeeded"
 }
 
-* Constant Y (reghdfe succeeds with constant depvar, so creghdfe should too)
+* Constant Y - compare against reghdfe
 clear
 set seed 214
 set obs 1000
@@ -694,13 +716,7 @@ gen id = runiformint(1, 50)
 gen x = runiform()
 gen y = 100  // Constant
 
-capture creghdfe y x, absorb(id)
-if _rc == 0 {
-    test_pass "constant Y - succeeds like reghdfe"
-}
-else {
-    test_fail "constant Y" "should succeed like reghdfe but got rc=`=_rc'"
-}
+benchmark_reghdfe y x, absorb(id) testname("constant Y")
 
 /*******************************************************************************
  * SECTION 24: Sparse FE patterns
@@ -1050,16 +1066,42 @@ sysuse auto, clear
 reghdfe price mpg weight, absorb(foreign rep78) dof(all)
 local reghdfe_df_a = e(df_a)
 local reghdfe_df_r = e(df_r)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe price mpg weight, absorb(foreign rep78) dofadjustments(all)
 local creghdfe_df_a = e(df_a)
 local creghdfe_df_r = e(df_r)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_a' == `creghdfe_df_a' & `reghdfe_df_r' == `creghdfe_df_r' {
-    test_pass "dofadjustments(all): df_a and df_r match"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_a' != `creghdfe_df_a' {
+    local has_failure = 1
+    local all_diffs "df_a:`reghdfe_df_a'vs`creghdfe_df_a'"
+}
+if `reghdfe_df_r' != `creghdfe_df_r' {
+    local has_failure = 1
+    local all_diffs "`all_diffs' df_r:`reghdfe_df_r'vs`creghdfe_df_r'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dofadjustments(all): df_a, df_r, b, V match"
 }
 else {
-    test_fail "dofadjustments(all)" "df_a:`reghdfe_df_a'vs`creghdfe_df_a' df_r:`reghdfe_df_r'vs`creghdfe_df_r'"
+    test_fail "dofadjustments(all)" "`=trim("`all_diffs'")'"
 }
 
 * Test 5: dofadjustments(firstpair) - compare e() against reghdfe
@@ -1067,16 +1109,42 @@ sysuse auto, clear
 reghdfe price mpg weight, absorb(foreign rep78) dof(firstpair)
 local reghdfe_df_a = e(df_a)
 local reghdfe_df_r = e(df_r)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe price mpg weight, absorb(foreign rep78) dofadjustments(firstpair)
 local creghdfe_df_a = e(df_a)
 local creghdfe_df_r = e(df_r)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_a' == `creghdfe_df_a' & `reghdfe_df_r' == `creghdfe_df_r' {
-    test_pass "dofadjustments(firstpair): df_a and df_r match"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_a' != `creghdfe_df_a' {
+    local has_failure = 1
+    local all_diffs "df_a:`reghdfe_df_a'vs`creghdfe_df_a'"
+}
+if `reghdfe_df_r' != `creghdfe_df_r' {
+    local has_failure = 1
+    local all_diffs "`all_diffs' df_r:`reghdfe_df_r'vs`creghdfe_df_r'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dofadjustments(firstpair): df_a, df_r, b, V match"
 }
 else {
-    test_fail "dofadjustments(firstpair)" "df_a:`reghdfe_df_a'vs`creghdfe_df_a' df_r:`reghdfe_df_r'vs`creghdfe_df_r'"
+    test_fail "dofadjustments(firstpair)" "`=trim("`all_diffs'")'"
 }
 
 * Test 6: savefe with panel data - compare values
@@ -1874,51 +1942,117 @@ print_section "DOF Adjustments vs reghdfe"
 
 * Two-way FE with dofadjustments(none)
 * NOTE: dof(none) may have a 1-unit difference due to intercept handling
-* between reghdfe and creghdfe. We allow abs diff <= 1.
+* between reghdfe and creghdfe. We allow abs diff <= 1 on df_r.
 webuse grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(none)
 local reghdfe_df_r_none = e(df_r)
 local reghdfe_df_a_none = e(df_a)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe invest mvalue kstock, absorb(company year) dofadjustments(none)
 local creghdfe_df_r_none = e(df_r)
 local creghdfe_df_a_none = e(df_a)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if abs(`reghdfe_df_r_none' - `creghdfe_df_r_none') <= 1 {
-    test_pass "dof(none): df_r close (`reghdfe_df_r_none' vs `creghdfe_df_r_none')"
+local all_diffs ""
+local has_failure = 0
+if abs(`reghdfe_df_r_none' - `creghdfe_df_r_none') > 1 {
+    local has_failure = 1
+    local all_diffs "df_r:`reghdfe_df_r_none'vs`creghdfe_df_r_none'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dof(none): df_r, b, V match (`reghdfe_df_r_none' vs `creghdfe_df_r_none')"
 }
 else {
-    test_fail "dof(none) df_r" "reghdfe=`reghdfe_df_r_none' vs creghdfe=`creghdfe_df_r_none'"
+    test_fail "dof(none)" "`=trim("`all_diffs'")'"
 }
 
 * Two-way FE with dofadjustments(pairwise)
 webuse grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(pairwise)
 local reghdfe_df_r_pair = e(df_r)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe invest mvalue kstock, absorb(company year) dofadjustments(pairwise)
 local creghdfe_df_r_pair = e(df_r)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_r_pair' == `creghdfe_df_r_pair' {
-    test_pass "dof(pairwise): df_r matches (`reghdfe_df_r_pair')"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_r_pair' != `creghdfe_df_r_pair' {
+    local has_failure = 1
+    local all_diffs "df_r:`reghdfe_df_r_pair'vs`creghdfe_df_r_pair'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dof(pairwise): df_r, b, V match (`reghdfe_df_r_pair')"
 }
 else {
-    test_fail "dof(pairwise) df_r" "reghdfe=`reghdfe_df_r_pair' vs creghdfe=`creghdfe_df_r_pair'"
+    test_fail "dof(pairwise)" "`=trim("`all_diffs'")'"
 }
 
 * Two-way FE with dofadjustments(firstpair)
 webuse grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(firstpair)
 local reghdfe_df_r_first = e(df_r)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe invest mvalue kstock, absorb(company year) dofadjustments(firstpair)
 local creghdfe_df_r_first = e(df_r)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_r_first' == `creghdfe_df_r_first' {
-    test_pass "dof(firstpair): df_r matches (`reghdfe_df_r_first')"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_r_first' != `creghdfe_df_r_first' {
+    local has_failure = 1
+    local all_diffs "df_r:`reghdfe_df_r_first'vs`creghdfe_df_r_first'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dof(firstpair): df_r, b, V match (`reghdfe_df_r_first')"
 }
 else {
-    test_fail "dof(firstpair) df_r" "reghdfe=`reghdfe_df_r_first' vs creghdfe=`creghdfe_df_r_first'"
+    test_fail "dof(firstpair)" "`=trim("`all_diffs'")'"
 }
 
 * DOF adjustments with larger synthetic data
@@ -1933,24 +2067,42 @@ gen y = x + rnormal()
 reghdfe y x, absorb(id1 id2) dofadjustments(all)
 local reghdfe_df_r_all = e(df_r)
 local reghdfe_df_a = e(df_a)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe y x, absorb(id1 id2) dofadjustments(all)
 local creghdfe_df_r_all = e(df_r)
 local creghdfe_df_a = e(df_a)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_r_all' == `creghdfe_df_r_all' {
-    test_pass "dof(all) synthetic: df_r matches (`reghdfe_df_r_all')"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_r_all' != `creghdfe_df_r_all' {
+    local has_failure = 1
+    local all_diffs "df_r:`reghdfe_df_r_all'vs`creghdfe_df_r_all'"
+}
+if `reghdfe_df_a' != `creghdfe_df_a' {
+    local has_failure = 1
+    local all_diffs "`all_diffs' df_a:`reghdfe_df_a'vs`creghdfe_df_a'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dof(all) synthetic: df_r, df_a, b, V match"
 }
 else {
-    test_fail "dof(all) synthetic df_r" "reghdfe=`reghdfe_df_r_all' vs creghdfe=`creghdfe_df_r_all'"
-}
-
-* Compare df_a (absorbed degrees of freedom)
-if `reghdfe_df_a' == `creghdfe_df_a' {
-    test_pass "dof(all) synthetic: df_a matches (`reghdfe_df_a')"
-}
-else {
-    test_fail "dof(all) synthetic df_a" "reghdfe=`reghdfe_df_a' vs creghdfe=`creghdfe_df_a'"
+    test_fail "dof(all) synthetic" "`=trim("`all_diffs'")'"
 }
 
 * DOF with nlswork panel
@@ -1958,15 +2110,37 @@ webuse nlswork, clear
 keep in 1/10000
 reghdfe ln_wage age tenure, absorb(idcode year) dofadjustments(pairwise)
 local reghdfe_df_r = e(df_r)
+matrix reghdfe_b = e(b)
+matrix reghdfe_V = e(V)
 
 creghdfe ln_wage age tenure, absorb(idcode year) dofadjustments(pairwise)
 local creghdfe_df_r = e(df_r)
+matrix creghdfe_b = e(b)
+matrix creghdfe_V = e(V)
 
-if `reghdfe_df_r' == `creghdfe_df_r' {
-    test_pass "dof(pairwise) nlswork: df_r matches"
+local all_diffs ""
+local has_failure = 0
+if `reghdfe_df_r' != `creghdfe_df_r' {
+    local has_failure = 1
+    local all_diffs "df_r:`reghdfe_df_r'vs`creghdfe_df_r'"
+}
+matrix_min_sigfigs reghdfe_b creghdfe_b
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(b):sigfigs=`sf_fmt'"
+}
+matrix_min_sigfigs reghdfe_V creghdfe_V
+if r(min_sigfigs) < $DEFAULT_SIGFIGS {
+    local has_failure = 1
+    local sf_fmt : display %4.1f r(min_sigfigs)
+    local all_diffs "`all_diffs' e(V):sigfigs=`sf_fmt'"
+}
+if `has_failure' == 0 {
+    test_pass "dof(pairwise) nlswork: df_r, b, V match"
 }
 else {
-    test_fail "dof(pairwise) nlswork" "reghdfe=`reghdfe_df_r' vs creghdfe=`creghdfe_df_r'"
+    test_fail "dof(pairwise) nlswork" "`=trim("`all_diffs'")'"
 }
 
 /*******************************************************************************

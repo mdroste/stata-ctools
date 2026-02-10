@@ -1031,9 +1031,12 @@ program define benchmark_psmatch2
     quietly count if _weight != . & _weight > 0 & _treated == 1
     local psmatch2_n_matched = r(N)
 
-    * Store psmatch2 propensity scores
-    tempvar pscore_psm2
+    * Store psmatch2 propensity scores, support, and weight
+    tempvar pscore_psm2 support_psm2 weight_psm2 treated_psm2
     quietly gen double `pscore_psm2' = _pscore
+    quietly gen byte `support_psm2' = _support
+    quietly gen double `weight_psm2' = _weight
+    quietly gen byte `treated_psm2' = _treated
 
     * Drop psmatch2-created variables before running cpsmatch
     capture drop _pscore _weight _treated _support _nn _id _n1 _pdif
@@ -1049,34 +1052,29 @@ program define benchmark_psmatch2
     }
 
     * Store cpsmatch results
-    local cpsmatch_n_treated = r(n_treated)
-    local cpsmatch_n_controls = r(n_controls)
-    local cpsmatch_n_matched = r(n_matched)
     local cpsmatch_att = r(att)
     local cpsmatch_att_se = r(att_se)
+
+    * Compute comparable sample counts from cpsmatch's generated variables
+    * (r(n_treated) counts ALL treated including off-support, so use _treated/_support)
+    quietly count if _treated == 1 & _support == 1
+    local cpsmatch_n_treated = r(N)
+    quietly count if _treated == 0 & _support == 1
+    local cpsmatch_n_controls = r(N)
 
     * Track all differences found
     local all_diffs ""
     local has_failure = 0
 
-    * Compare sample sizes (must match exactly)
+    * Compare sample sizes on support (must match exactly)
     if `psmatch2_n_treated' != `cpsmatch_n_treated' {
         local has_failure = 1
-        local all_diffs "`all_diffs' n_treated:`psmatch2_n_treated'!=`cpsmatch_n_treated'"
+        local all_diffs "`all_diffs' n_treated_on_support:`psmatch2_n_treated'!=`cpsmatch_n_treated'"
     }
 
     if `psmatch2_n_controls' != `cpsmatch_n_controls' {
         local has_failure = 1
-        local all_diffs "`all_diffs' n_controls:`psmatch2_n_controls'!=`cpsmatch_n_controls'"
-    }
-
-    * Note: n_matched definition may differ between implementations
-    * psmatch2 counts treated with matches, cpsmatch may count differently
-    * Only flag as failure if significantly different
-    local matched_diff = abs(`psmatch2_n_matched' - `cpsmatch_n_matched')
-    if `matched_diff' > 0 {
-        * Just note the difference, don't fail
-        * local all_diffs "`all_diffs' n_matched:`psmatch2_n_matched'!=`cpsmatch_n_matched'"
+        local all_diffs "`all_diffs' n_controls_on_support:`psmatch2_n_controls'!=`cpsmatch_n_controls'"
     }
 
     * Compare ATT using significant figures (if outcome specified)
@@ -1122,6 +1120,35 @@ program define benchmark_psmatch2
         }
     }
     drop _pscore_diff
+
+    * Compare _support variable (exact match)
+    quietly count if _support != `support_psm2' & !missing(_support) & !missing(`support_psm2')
+    local support_diff = r(N)
+    if `support_diff' > 0 {
+        local has_failure = 1
+        local all_diffs "`all_diffs' _support:`support_diff'_differ"
+    }
+
+    * Compare _weight for control observations on support
+    * For treated obs, both assign _weight=1 (skip).
+    * For controls, _weight represents match frequency.
+    quietly count if `treated_psm2' == 0 & `support_psm2' == 1 & !missing(_weight) & !missing(`weight_psm2')
+    local n_ctrl_compare = r(N)
+    if `n_ctrl_compare' > 0 {
+        tempvar wt_sf_var
+        quietly gen double `wt_sf_var' = 15 if `treated_psm2' == 0 & `support_psm2' == 1 & _weight == `weight_psm2'
+        quietly replace `wt_sf_var' = -log10(abs(_weight - `weight_psm2') / max(abs(_weight), abs(`weight_psm2'), 1e-300)) ///
+            if `treated_psm2' == 0 & `support_psm2' == 1 & `wt_sf_var' == .
+        quietly replace `wt_sf_var' = 0 if `wt_sf_var' < 0
+        quietly replace `wt_sf_var' = 15 if `wt_sf_var' > 15
+        quietly sum `wt_sf_var' if `treated_psm2' == 0 & `support_psm2' == 1
+        local min_wt_sf = r(min)
+        if `min_wt_sf' < `minsf' {
+            local has_failure = 1
+            local sf_fmt : display %4.1f `min_wt_sf'
+            local all_diffs "`all_diffs' _weight(ctrl):sigfigs=`sf_fmt'"
+        }
+    }
 
     restore
 

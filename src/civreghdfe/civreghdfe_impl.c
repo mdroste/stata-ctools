@@ -28,6 +28,9 @@
 #include "../ctools_spi.h"  /* Error-checking SPI wrappers */
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
+
+/* Forward declaration - defined in creghdfe_utils.c */
+extern int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels);
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
@@ -228,9 +231,16 @@ static ST_retcode do_iv_regression(void)
     }
     for (ST_int g = 0; g < G; g++) {
         double *src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
-        for (i = 0; i < N_total; i++) {
-            /* Use -1 as sentinel for missing FE values to avoid undefined cast behavior */
-            fe_levels[g][i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+        /* Use remap_values_sorted to handle non-integer FE values (e.g. headroom=1.5) */
+        ST_int num_fe_levels_g;
+        if (remap_values_sorted(src, N_total, fe_levels[g], &num_fe_levels_g) != 0) {
+            SF_error("civreghdfe: FE level remapping failed\n");
+            free(y); free(X_endog); free(X_exog); free(Z);
+            free(weights); free(cluster_ids); free(cluster2_ids);
+            for (ST_int fg = 0; fg < G; fg++) free(fe_levels[fg]);
+            free(fe_levels);
+            ctools_filtered_data_free(&filtered);
+            return 920;
         }
     }
     if (has_cluster) {
@@ -1063,6 +1073,22 @@ static ST_retcode do_iv_regression(void)
             ctools_matmul_atb(X_endog_dem, X_endog_dem, N, K_endog, K_endog, XtX);
         }
 
+        /* Equilibrate XtX to correlation matrix before collinearity detection.
+         * This makes the Cholesky-based detection scale-invariant, preventing
+         * false positives from mixed-scale variables (e.g., x_tiny / x_huge). */
+        {
+            for (ST_int ii = 0; ii < K_total; ii++) {
+                ST_double d = XtX[ii * K_total + ii];
+                if (d > 0.0) {
+                    ST_double s = 1.0 / sqrt(d);
+                    for (ST_int jj = 0; jj < K_total; jj++) {
+                        XtX[jj * K_total + ii] *= s;
+                        XtX[ii * K_total + jj] *= s;
+                    }
+                }
+            }
+        }
+
         ST_int num_chol_collinear = detect_collinearity(XtX, K_total, is_collinear_x, verbose);
         free(XtX);
 
@@ -1158,6 +1184,19 @@ static ST_retcode do_iv_regression(void)
         ST_double *ZtZ = (ST_double *)ctools_safe_calloc3((size_t)K_iv, (size_t)K_iv, sizeof(ST_double));
         if (ZtZ) {
             ctools_matmul_atb(Z_dem, Z_dem, N, K_iv, K_iv, ZtZ);
+
+            /* Equilibrate ZtZ for scale-invariant collinearity detection */
+            for (ST_int ii = 0; ii < K_iv; ii++) {
+                ST_double d = ZtZ[ii * K_iv + ii];
+                if (d > 0.0) {
+                    ST_double s = 1.0 / sqrt(d);
+                    for (ST_int jj = 0; jj < K_iv; jj++) {
+                        ZtZ[jj * K_iv + ii] *= s;
+                        ZtZ[ii * K_iv + jj] *= s;
+                    }
+                }
+            }
+
             ST_int num_z_collinear = detect_collinearity(ZtZ, K_iv, is_collinear_z, verbose);
             free(ZtZ);
 
@@ -1360,9 +1399,10 @@ static ST_retcode do_iv_regression(void)
         /* Driscoll-Kraay: N_clust = number of time periods */
         ctools_scal_save("__civreghdfe_N_clust", (ST_double)dkraay_T);
     } else if (has_cluster2) {
-        /* Two-way clustering: N_clust = min(G1, G2) */
+        /* Two-way clustering: N_clust = min(G1, G2), store both counts separately */
         ST_int min_clust = (num_clusters < num_clusters2) ? num_clusters : num_clusters2;
         ctools_scal_save("__civreghdfe_N_clust", (ST_double)min_clust);
+        ctools_scal_save("__civreghdfe_N_clust1", (ST_double)num_clusters);
     } else if (has_cluster) {
         ctools_scal_save("__civreghdfe_N_clust", (ST_double)num_clusters);
     }

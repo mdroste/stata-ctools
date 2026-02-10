@@ -28,6 +28,111 @@ if _rc != 0 {
 }
 test_pass "cbinscatter plugin loads and runs"
 
+* Check if binscatter is installed (used for value comparison throughout)
+capture which binscatter
+local binscatter_installed = (_rc == 0)
+
+if `binscatter_installed' {
+    * -------------------------------------------------------------------------
+    * Helper: compare_binscatter_bins
+    *   Runs binscatter and cbinscatter, compares bin X and Y values.
+    *   Arguments:
+    *     bs_cmd   - full binscatter command (must include savedata(_bs_test) replace)
+    *     cb_cmd   - full cbinscatter command (must include nograph)
+    *     nbins    - number of bins requested
+    *     yvar     - y variable name (for renaming CSV columns)
+    *     xvar     - x variable name (for renaming CSV columns)
+    *     testname - test label
+    *     minsf    - minimum significant figures (default $DEFAULT_SIGFIGS)
+    * -------------------------------------------------------------------------
+    capture program drop compare_binscatter_bins
+    program define compare_binscatter_bins
+        syntax, bs_cmd(string asis) cb_cmd(string asis) nbins(integer) yvar(string) xvar(string) testname(string) [minsf(real $DEFAULT_SIGFIGS)]
+
+        local min_sigfigs = `minsf'
+
+        * Run binscatter and extract bin data from CSV
+        preserve
+        quietly `bs_cmd'
+        import delimited _bs_test.csv, clear
+        rename `xvar' bs_x
+        rename `yvar' bs_y
+        sort bs_x
+        mkmat bs_x bs_y, mat(_bs_data)
+        local bs_nbins = _N
+        restore
+
+        * Run cbinscatter
+        `cb_cmd'
+        mat _cb_data = e(bindata)
+
+        * Count non-missing cbinscatter bins
+        local cb_nbins = 0
+        local nrows = rowsof(_cb_data)
+        forval r = 1/`nrows' {
+            if _cb_data[`r', 2] != . {
+                local cb_nbins = `cb_nbins' + 1
+            }
+        }
+
+        * Check bin counts match before comparing values
+        if `bs_nbins' != `cb_nbins' {
+            test_fail "binscatter X: `testname'" "bin count mismatch: binscatter=`bs_nbins' cbinscatter=`cb_nbins'"
+            test_fail "binscatter Y: `testname'" "bin count mismatch"
+            cap erase _bs_test.csv
+            cap erase _bs_test.do
+            mat drop _bs_data _cb_data
+            exit
+        }
+
+        * Direct comparison
+        local min_sf_x = 15
+        forval i = 1/`bs_nbins' {
+            local val1 = _bs_data[`i', 1]
+            local val2 = _cb_data[`i', 3]
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_x' {
+                local min_sf_x = `sf'
+            }
+        }
+
+        if `min_sf_x' >= `min_sigfigs' {
+            local sf_fmt : display %4.1f `min_sf_x'
+            test_pass "binscatter X: `testname' (`sf_fmt' sf)"
+        }
+        else {
+            local sf_fmt : display %4.1f `min_sf_x'
+            test_fail "binscatter X: `testname'" "sigfigs=`sf_fmt', need `min_sigfigs'"
+        }
+
+        * Compare Y values
+        local min_sf_y = 15
+        forval i = 1/`bs_nbins' {
+            local val1 = _bs_data[`i', 2]
+            local val2 = _cb_data[`i', 4]
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_y' {
+                local min_sf_y = `sf'
+            }
+        }
+
+        if `min_sf_y' >= `min_sigfigs' {
+            local sf_fmt : display %4.1f `min_sf_y'
+            test_pass "binscatter Y: `testname' (`sf_fmt' sf)"
+        }
+        else {
+            local sf_fmt : display %4.1f `min_sf_y'
+            test_fail "binscatter Y: `testname'" "sigfigs=`sf_fmt', need `min_sigfigs'"
+        }
+
+        cap erase _bs_test.csv
+        cap erase _bs_test.do
+        mat drop _bs_data _cb_data
+    end
+}
+
 /*******************************************************************************
  * SECTION 2: Basic functionality
  ******************************************************************************/
@@ -62,6 +167,15 @@ else {
     test_fail "e(coefs)" "matrix not found"
 }
 
+* Compare actual bin X/Y values against binscatter
+if `binscatter_installed' {
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, nquantiles(20) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, nquantiles(20) nograph) ///
+        nbins(20) yvar(price) xvar(mpg) testname("basic 20 bins")
+}
+
 /*******************************************************************************
  * SECTION 3: nquantiles option
  ******************************************************************************/
@@ -92,6 +206,33 @@ if e(nquantiles) == 5 {
 }
 else {
     test_fail "nquantiles(5)" "got `=e(nquantiles)'"
+}
+
+* Compare actual bin X/Y values for different nquantiles
+if `binscatter_installed' {
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, nquantiles(5) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, nquantiles(5) nograph) ///
+        nbins(5) yvar(price) xvar(mpg) testname("nquantiles(5)")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("nquantiles(10)")
+
+    * nquantiles(50) on larger dataset (auto has only 21 unique mpg values)
+    * Lower tolerance: bin near zero inflates relative error in sigfigs metric
+    clear
+    set seed 12345
+    set obs 2000
+    gen x = rnormal()
+    gen y = 2*x + rnormal()
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter y x, nquantiles(50) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, nquantiles(50) nograph) ///
+        nbins(50) yvar(y) xvar(x) testname("nquantiles(50)") minsf(5)
 }
 
 * Test invalid nquantiles (should error)
@@ -144,6 +285,25 @@ else {
     test_fail "discrete creates one bin per unique value" "got `num_bins' bins, expected 10"
 }
 
+* Compare discrete bin X/Y values against binscatter
+if `binscatter_installed' {
+    clear
+    set seed 12345
+    set obs 1000
+    gen x = runiformint(1, 10)
+    gen y = 2*x + rnormal()
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter y x, discrete savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter y x, discrete nograph) ///
+        nbins(10) yvar(y) xvar(x) testname("discrete 10 values")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price rep78, discrete savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price rep78, discrete nograph) ///
+        nbins(5) yvar(price) xvar(rep78) testname("discrete rep78")
+}
+
 /*******************************************************************************
  * SECTION 5: controls option
  ******************************************************************************/
@@ -177,6 +337,27 @@ else {
     test_fail "controls (4 variables)" "returned no observations"
 }
 
+* Compare bin X/Y values with controls against binscatter
+if `binscatter_installed' {
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, controls(weight) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, controls(weight) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("controls(weight) values")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, controls(weight length) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, controls(weight length) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("controls(weight length) values")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, controls(weight length turn displacement) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, controls(weight length turn displacement) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("controls(4 vars) values")
+}
+
 /*******************************************************************************
  * SECTION 6: absorb option
  ******************************************************************************/
@@ -208,6 +389,22 @@ if "`e(controls)'" == "weight" & "`e(absorb)'" == "foreign" {
 }
 else {
     test_fail "controls + absorb" "controls=`e(controls)' absorb=`e(absorb)'"
+}
+
+* Compare bin X/Y values with absorb against binscatter
+* Note: binscatter only supports single absorb variable
+if `binscatter_installed' {
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, absorb(foreign) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, absorb(foreign) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("absorb(foreign) values")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg, controls(weight) absorb(foreign) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg, controls(weight) absorb(foreign) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("controls + absorb values")
 }
 
 /*******************************************************************************
@@ -414,110 +611,7 @@ else {
  ******************************************************************************/
 print_section "Comparison vs binscatter.ado"
 
-* Check if binscatter is installed
-capture which binscatter
-local binscatter_installed = (_rc == 0)
-
 if `binscatter_installed' {
-
-    * -------------------------------------------------------------------------
-    * Helper: compare_binscatter_bins
-    *   Runs binscatter and cbinscatter, compares bin X and Y values.
-    *   Arguments:
-    *     bs_cmd   - full binscatter command (must include savedata(_bs_test) replace)
-    *     cb_cmd   - full cbinscatter command (must include nograph)
-    *     nbins    - number of bins requested
-    *     yvar     - y variable name (for renaming CSV columns)
-    *     xvar     - x variable name (for renaming CSV columns)
-    *     testname - test label
-    *     minsf    - minimum significant figures (default $DEFAULT_SIGFIGS)
-    * -------------------------------------------------------------------------
-    capture program drop compare_binscatter_bins
-    program define compare_binscatter_bins
-        syntax, bs_cmd(string asis) cb_cmd(string asis) nbins(integer) yvar(string) xvar(string) testname(string) [minsf(real $DEFAULT_SIGFIGS)]
-
-        local min_sigfigs = `minsf'
-
-        * Run binscatter and extract bin data from CSV
-        preserve
-        quietly `bs_cmd'
-        import delimited _bs_test.csv, clear
-        rename `xvar' bs_x
-        rename `yvar' bs_y
-        sort bs_x
-        mkmat bs_x bs_y, mat(_bs_data)
-        local bs_nbins = _N
-        restore
-
-        * Run cbinscatter
-        `cb_cmd'
-        mat _cb_data = e(bindata)
-
-        * Count non-missing cbinscatter bins
-        local cb_nbins = 0
-        local nrows = rowsof(_cb_data)
-        forval r = 1/`nrows' {
-            if _cb_data[`r', 2] != . {
-                local cb_nbins = `cb_nbins' + 1
-            }
-        }
-
-        * Check bin counts match before comparing values
-        if `bs_nbins' != `cb_nbins' {
-            test_fail "binscatter X: `testname'" "bin count mismatch: binscatter=`bs_nbins' cbinscatter=`cb_nbins'"
-            test_fail "binscatter Y: `testname'" "bin count mismatch"
-            cap erase _bs_test.csv
-            cap erase _bs_test.do
-            mat drop _bs_data _cb_data
-            exit
-        }
-
-        * Direct comparison (cbinscatter adds means back, matching binscatter)
-        local min_sf_x = 15
-        forval i = 1/`bs_nbins' {
-            local val1 = _bs_data[`i', 1]
-            local val2 = _cb_data[`i', 3]
-            sigfigs `val1' `val2'
-            local sf = r(sigfigs)
-            if `sf' < `min_sf_x' {
-                local min_sf_x = `sf'
-            }
-        }
-
-        if `min_sf_x' >= `min_sigfigs' {
-            local sf_fmt : display %4.1f `min_sf_x'
-            test_pass "binscatter X: `testname' (`sf_fmt' sf)"
-        }
-        else {
-            local sf_fmt : display %4.1f `min_sf_x'
-            test_fail "binscatter X: `testname'" "sigfigs=`sf_fmt', need `min_sigfigs'"
-        }
-
-        * Compare Y values
-        local min_sf_y = 15
-        forval i = 1/`bs_nbins' {
-            local val1 = _bs_data[`i', 2]
-            local val2 = _cb_data[`i', 4]
-            sigfigs `val1' `val2'
-            local sf = r(sigfigs)
-            if `sf' < `min_sf_y' {
-                local min_sf_y = `sf'
-            }
-        }
-
-        if `min_sf_y' >= `min_sigfigs' {
-            local sf_fmt : display %4.1f `min_sf_y'
-            test_pass "binscatter Y: `testname' (`sf_fmt' sf)"
-        }
-        else {
-            local sf_fmt : display %4.1f `min_sf_y'
-            test_fail "binscatter Y: `testname'" "sigfigs=`sf_fmt', need `min_sigfigs'"
-        }
-
-        cap erase _bs_test.csv
-        cap erase _bs_test.do
-        mat drop _bs_data _cb_data
-    end
 
     * Basic scatter
     sysuse auto, clear
@@ -574,9 +668,6 @@ if `binscatter_installed' {
         bs_cmd(binscatter weight displacement, controls(length) absorb(foreign) nquantiles(10) savedata(_bs_test) replace) ///
         cb_cmd(cbinscatter weight displacement, controls(length) absorb(foreign) nquantiles(10) nograph) ///
         nbins(10) yvar(weight) xvar(displacement) testname("weight~displ ctrl+absorb")
-
-    * Clean up helper
-    capture program drop compare_binscatter_bins
 }
 else {
     test_fail "binscatter comparison" "binscatter not installed - cannot validate"
@@ -1019,6 +1110,56 @@ else {
 }
 
 /*******************************************************************************
+ * SECTION 11b: Weighted bin comparison vs binscatter.ado
+ *
+ * Compares weighted cbinscatter bins against binscatter [aw=weight].
+ * binscatter uses xtile [aw=weight] for weighted quantile binning;
+ * cbinscatter now uses the same cutpoint-based algorithm.
+ ******************************************************************************/
+print_section "Weighted Comparison vs binscatter.ado"
+
+if `binscatter_installed' {
+
+    * Analytic weights - basic
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg [aw=weight], nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg [aw=weight], nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("aweight basic")
+
+    * Analytic weights + controls
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg [aw=weight], controls(length) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg [aw=weight], controls(length) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("aweight + controls")
+
+    * Analytic weights + absorb
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg [aw=weight], absorb(foreign) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg [aw=weight], absorb(foreign) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("aweight + absorb")
+
+    * Frequency weights - basic
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg [fw=rep78], nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg [fw=rep78], nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("fweight basic")
+
+    * Analytic weights + controls + absorb
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg [aw=weight], controls(length) absorb(foreign) nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg [aw=weight], controls(length) absorb(foreign) nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("aweight ctrl + absorb")
+}
+else {
+    test_fail "weighted binscatter comparison" "binscatter not installed - cannot validate"
+}
+
+/*******************************************************************************
  * SECTION 12: savedata option
  ******************************************************************************/
 print_section "savedata Option"
@@ -1085,6 +1226,21 @@ if e(N) == `expected_N' {
 }
 else {
     test_fail "if + in combined" "N=`=e(N)' expected `expected_N'"
+}
+
+* Compare bin X/Y values with if condition against binscatter
+if `binscatter_installed' {
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg if price > 5000, nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg if price > 5000, nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("if condition values")
+
+    sysuse auto, clear
+    compare_binscatter_bins, ///
+        bs_cmd(binscatter price mpg if foreign == 0, nquantiles(10) savedata(_bs_test) replace) ///
+        cb_cmd(cbinscatter price mpg if foreign == 0, nquantiles(10) nograph) ///
+        nbins(10) yvar(price) xvar(mpg) testname("if foreign==0 values")
 }
 
 /*******************************************************************************
@@ -1567,10 +1723,6 @@ else {
  ******************************************************************************/
 print_section "Intentional Error Tests"
 
-* Check if binscatter is installed
-capture which binscatter
-local binscatter_installed = (_rc == 0)
-
 * Variable doesn't exist
 sysuse auto, clear
 if `binscatter_installed' {
@@ -1660,6 +1812,10 @@ else {
         test_fail "[error] no observations after if" "should have errored"
     }
 }
+
+* Clean up helpers
+capture program drop compare_binscatter_bins
+capture program drop compare_binsreg_bins
 
 * End of cbinscatter validation
 noi print_summary "cbinscatter"

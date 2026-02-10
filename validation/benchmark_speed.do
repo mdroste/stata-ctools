@@ -217,34 +217,64 @@ local t_civreghdfe = r(t1)
 
 noi di as text "  Running binscatter benchmarks"
 
+capture which binsreg
+local binsreg_installed = (_rc == 0)
+
 use `main', clear
 timer clear
 timer on 1
-binscatter y x1
+binscatter y x1, nquantiles(20)
 timer off 1
 quietly timer list 1
 local t_binscatter = r(t1)
 timer clear
 timer on 1
-cbinscatter y x1, nograph verbose
+cbinscatter y x1, nquantiles(20) nograph verbose
 timer off 1
 quietly timer list 1
 local t_cbinscatter = r(t1)
+
+if `binsreg_installed' {
+    use `main', clear
+    timer clear
+    timer on 1
+    binsreg y x1, nbins(20)
+    timer off 1
+    quietly timer list 1
+    local t_binsreg = r(t1)
+}
+else {
+    noi di as text "    (binsreg not installed - skipping binsreg comparison)"
+    local t_binsreg = .
+}
 
 * With controls and absorb
 use `main', clear
 timer clear
 timer on 1
-binscatter y x1, controls(x2 x3) absorb(g1)
+binscatter y x1, controls(x2 x3) absorb(g1) nquantiles(20)
 timer off 1
 quietly timer list 1
 local t_binscatter2 = r(t1)
 timer clear
 timer on 1
-cbinscatter y x1, controls(x2 x3) absorb(g1) nograph verbose
+cbinscatter y x1, controls(x2 x3) absorb(g1) nquantiles(20) nograph verbose
 timer off 1
 quietly timer list 1
 local t_cbinscatter2 = r(t1)
+
+if `binsreg_installed' {
+    use `main', clear
+    timer clear
+    timer on 1
+    binsreg y x1, nbins(20) controls(x2 x3) absorb(g1)
+    timer off 1
+    quietly timer list 1
+    local t_binsreg2 = r(t1)
+}
+else {
+    local t_binsreg2 = .
+}
 
 *===============================================================================
 * IMPORT/EXPORT BENCHMARKS
@@ -422,6 +452,23 @@ timer off 1
 quietly timer list 1
 local t_cwinsor = r(t1)
 
+capture which gtools
+local gtools_installed = (_rc == 0)
+
+if `gtools_installed' {
+    use `main', clear
+    timer clear
+    timer on 1
+    gstats winsor x1 x2 x3 x4, cuts(1 99) replace
+    timer off 1
+    quietly timer list 1
+    local t_gwinsor = r(t1)
+}
+else {
+    noi di as text "    (gtools not installed - skipping gstats winsor comparison)"
+    local t_gwinsor = .
+}
+
 *===============================================================================
 * SAMPLE BENCHMARKS
 *===============================================================================
@@ -571,9 +618,21 @@ noi di as text ""
 noi di as text "QREG (N=`N'):"
 noi di as text "  qreg                      " %8.2f `t_qreg' "    " %8.2f `t_cqreg' "    " %5.1f (`t_qreg'/`t_cqreg') "x"
 noi di as text ""
-noi di as text "BINSCATTER (N=`N'):"
+noi di as text "BINSCATTER (N=`N', 20 bins):"
 noi di as text "  binscatter                " %8.2f `t_binscatter' "    " %8.2f `t_cbinscatter' "    " %5.1f (`t_binscatter'/`t_cbinscatter') "x"
+if `t_binsreg' != . {
+    noi di as text "  binsreg                   " %8.2f `t_binsreg' "    " %8.2f `t_cbinscatter' "    " %5.1f (`t_binsreg'/`t_cbinscatter') "x"
+}
+else {
+    noi di as text "  binsreg                        N/A    " %8.2f `t_cbinscatter' "       N/A"
+}
 noi di as text "  binscatter (controls+abs) " %8.2f `t_binscatter2' "    " %8.2f `t_cbinscatter2' "    " %5.1f (`t_binscatter2'/`t_cbinscatter2') "x"
+if `t_binsreg2' != . {
+    noi di as text "  binsreg (controls+abs)    " %8.2f `t_binsreg2' "    " %8.2f `t_cbinscatter2' "    " %5.1f (`t_binsreg2'/`t_cbinscatter2') "x"
+}
+else {
+    noi di as text "  binsreg (controls+abs)         N/A    " %8.2f `t_cbinscatter2' "       N/A"
+}
 noi di as text ""
 noi di as text "DECODE (N=`N'):"
 noi di as text "  decode                    " %8.2f `t_decode' "    " %8.2f `t_cdecode' "    " %5.1f (`t_decode'/`t_cdecode') "x"
@@ -586,6 +645,12 @@ noi di as text "  destring                  " %8.2f `t_destring' "    " %8.2f `t
 noi di as text ""
 noi di as text "WINSOR (N=`N'):"
 noi di as text "  winsor2                   " %8.2f `t_winsor' "    " %8.2f `t_cwinsor' "    " %5.1f (`t_winsor'/`t_cwinsor') "x"
+if `t_gwinsor' != . {
+    noi di as text "  gstats winsor             " %8.2f `t_gwinsor' "    " %8.2f `t_cwinsor' "    " %5.1f (`t_gwinsor'/`t_cwinsor') "x"
+}
+else {
+    noi di as text "  gstats winsor                  N/A    " %8.2f `t_cwinsor' "       N/A"
+}
 noi di as text ""
 noi di as text "IMPORT/EXPORT DELIMITED (N=`N'):"
 noi di as text "  export delimited          " %8.2f `t_export' "    " %8.2f `t_cexport' "    " %5.1f (`t_export'/`t_cexport') "x"

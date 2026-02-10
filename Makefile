@@ -62,9 +62,14 @@ endif
 # All .c files under src/ are compiled, all .h files tracked for dependencies,
 # and all subdirectories are added as include paths. Adding new files or modules
 # under src/ requires no changes to this Makefile.
-SOURCES      = $(shell find $(SRC_DIR) -name '*.c')
+#
+# Third-party sources (libdeflate) are compiled separately with warnings
+# suppressed to keep our own code warning-clean.
+ALL_SOURCES  = $(shell find $(SRC_DIR) -name '*.c')
+LIBDEFLATE_SRCS = $(shell find $(SRC_DIR)/cimport/libdeflate -name '*.c' 2>/dev/null)
+SOURCES      = $(filter-out $(LIBDEFLATE_SRCS),$(ALL_SOURCES))
 HEADERS      = $(shell find $(SRC_DIR) -name '*.h')
-INCLUDE_DIRS = $(addprefix -I,$(sort $(dir $(SOURCES) $(HEADERS))))
+INCLUDE_DIRS = $(addprefix -I,$(sort $(dir $(ALL_SOURCES) $(HEADERS))))
 
 # ------------------------------------------------------------------------------
 # Output Configuration
@@ -418,7 +423,12 @@ endif
 ifeq ($(MAC_ARM_HAS_OMP),no)
 	@echo "    Warning:   Install libomp for OpenMP: brew install libomp"
 endif
-	@$(CC_MAC) $(CFLAGS_MAC_ARM) -o $(PLUGIN_MAC_ARM) $(SOURCES) $(LDFLAGS_MAC_ARM)
+	@for f in $(LIBDEFLATE_SRCS); do \
+		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+		$(CC_MAC) $(CFLAGS_MAC_ARM) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_arm.o; \
+	done
+	@$(CC_MAC) $(CFLAGS_MAC_ARM) -o $(PLUGIN_MAC_ARM) $(SOURCES) $(BUILD_DIR)/ld_*_arm.o $(LDFLAGS_MAC_ARM)
+	@rm -f $(BUILD_DIR)/ld_*_arm.o
 	@echo "    Output:    $(PLUGIN_MAC_ARM)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_ARM) | awk '{print $$5}'
 
@@ -438,7 +448,12 @@ endif
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
-	@$(CC_MAC) $(CFLAGS_MAC_X86) -o $(PLUGIN_MAC_X86) $(SOURCES) $(LDFLAGS_MAC_X86)
+	@for f in $(LIBDEFLATE_SRCS); do \
+		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+		$(CC_MAC) $(CFLAGS_MAC_X86) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_x86.o; \
+	done
+	@$(CC_MAC) $(CFLAGS_MAC_X86) -o $(PLUGIN_MAC_X86) $(SOURCES) $(BUILD_DIR)/ld_*_x86.o $(LDFLAGS_MAC_X86)
+	@rm -f $(BUILD_DIR)/ld_*_x86.o
 	@echo "    Output:    $(PLUGIN_MAC_X86)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_X86) | awk '{print $$5}'
 
@@ -497,7 +512,12 @@ ifeq ($(WIN_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(LDFLAGS_WIN)
+	@for f in $(LIBDEFLATE_SRCS); do \
+		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+		$(CC_WIN) $(CFLAGS_WIN) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_win.o; \
+	done
+	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(BUILD_DIR)/ld_*_win.o $(LDFLAGS_WIN)
+	@rm -f $(BUILD_DIR)/ld_*_win.o
 	@echo "    Output:    $(PLUGIN_WINDOWS)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_WINDOWS) | awk '{print $$5}'
 endif
@@ -528,7 +548,12 @@ ifeq ($(LINUX_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(LDFLAGS_LINUX)
+	@for f in $(LIBDEFLATE_SRCS); do \
+		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+		$(CC_LINUX) $(CFLAGS_LINUX) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_linux.o; \
+	done
+	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(BUILD_DIR)/ld_*_linux.o $(LDFLAGS_LINUX)
+	@rm -f $(BUILD_DIR)/ld_*_linux.o
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
 endif

@@ -1044,57 +1044,21 @@ clear
 set obs 10000
 gen t = _n
 gen x = runiform()
-capture crangestat (mean) m=x, interval(t -10 10)
-if _rc == 0 {
-    quietly count if !missing(m)
-    if r(N) > 0 {
-        test_pass "10K observations"
-    }
-    else {
-        test_fail "10K obs" "all results missing"
-    }
-}
-else {
-    test_fail "10K obs" "rc=`=_rc'"
-}
+benchmark_rangestat mean x, interval(t -10 10) testname("10K observations")
 
 * Test 8.2: 50K observations
 clear
 set obs 50000
 gen t = _n
 gen x = runiform()
-capture crangestat (mean) m=x, interval(t -5 5)
-if _rc == 0 {
-    quietly count if !missing(m)
-    if r(N) > 0 {
-        test_pass "50K observations"
-    }
-    else {
-        test_fail "50K obs" "all results missing"
-    }
-}
-else {
-    test_fail "50K obs" "rc=`=_rc'"
-}
+benchmark_rangestat mean x, interval(t -5 5) testname("50K observations")
 
 * Test 8.3: 100K observations
 clear
 set obs 100000
 gen t = _n
 gen x = runiform()
-capture crangestat (mean) m=x, interval(t -5 5)
-if _rc == 0 {
-    quietly count if !missing(m)
-    if r(N) > 0 {
-        test_pass "100K observations"
-    }
-    else {
-        test_fail "100K obs" "all results missing"
-    }
-}
-else {
-    test_fail "100K obs" "rc=`=_rc'"
-}
+benchmark_rangestat mean x, interval(t -5 5) testname("100K observations")
 
 * Test 8.4: Large with by-groups
 clear
@@ -1103,45 +1067,17 @@ gen group = mod(_n - 1, 100)
 gen t = ceil(_n / 100)
 gen x = runiform()
 sort group t
-capture crangestat (mean) m=x, interval(t -5 5) by(group)
-if _rc == 0 {
-    quietly count if !missing(m)
-    if r(N) > 0 {
-        test_pass "large with by-groups"
-    }
-    else {
-        test_fail "large by-groups" "all results missing"
-    }
-}
-else {
-    test_fail "large by-groups" "rc=`=_rc'"
-}
+benchmark_rangestat mean x, interval(t -5 5) by(group) testname("large with by-groups")
 
 * Test 8.5: Large with multiple stats
 clear
 set obs 50000
 gen t = _n
 gen x = runiform()
-capture crangestat (mean) m=x (sd) s=x (min) minx=x (max) maxx=x, interval(t -5 5)
-if _rc == 0 {
-    quietly count if !missing(m)
-    local nm = r(N)
-    quietly count if !missing(s)
-    local ns = r(N)
-    quietly count if !missing(minx)
-    local nmin = r(N)
-    quietly count if !missing(maxx)
-    local nmax = r(N)
-    if `nm' > 0 & `ns' > 0 & `nmin' > 0 & `nmax' > 0 {
-        test_pass "large with multiple stats"
-    }
-    else {
-        test_fail "large multi stats" "some results all missing (m:`nm' s:`ns' min:`nmin' max:`nmax')"
-    }
-}
-else {
-    test_fail "large multi stats" "rc=`=_rc'"
-}
+benchmark_rangestat mean x, interval(t -5 5) testname("large multi-stat: mean")
+benchmark_rangestat sd x, interval(t -5 5) testname("large multi-stat: sd")
+benchmark_rangestat min x, interval(t -5 5) testname("large multi-stat: min")
+benchmark_rangestat max x, interval(t -5 5) testname("large multi-stat: max")
 
 /*******************************************************************************
  * SECTION 9: Real-world scenarios (5 tests)
@@ -1728,6 +1664,7 @@ benchmark_rangestat count x, interval(t -4 4) by(group) excludeself testname("co
 * Test 17.2: All percentiles with by-group on real data
 webuse grunfeld, clear
 sort company year
+benchmark_rangestat median invest, interval(year -3 3) by(company) testname("grunfeld: median by company")
 crangestat (p10) c_p10=invest (p25) c_p25=invest (median) c_p50=invest (p75) c_p75=invest (p90) c_p90=invest, interval(year -3 3) by(company)
 * Verify percentile ordering within each observation
 local ordered = 1

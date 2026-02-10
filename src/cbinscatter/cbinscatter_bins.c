@@ -549,48 +549,43 @@ ST_retcode compute_bins_single_group(
 
     } else {
         /*
-         * Weighted, small N: Full sort for exact results
+         * Weighted, small N: Use cutpoint-based binning to match xtile [aw=weight]
+         *
+         * 1. Sort x values
+         * 2. Build sorted x and weight arrays
+         * 3. Compute weighted quantile cutpoints (matches _pctile [aw=weight])
+         * 4. Assign bins based on which cutpoint interval each value falls into
          */
         g_sort_values = x;
         qsort(sort_idx, N, sizeof(ST_int), compare_indices);
 
-        ST_double total_weight = 0.0;
-        ST_double *cum_weight = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!cum_weight) {
+        /* Build sorted x and weight arrays for cutpoint computation */
+        ST_double *x_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+        ST_double *w_sorted = (ST_double *)malloc(N * sizeof(ST_double));
+        ST_double *cutpoints = (ST_double *)malloc((nq + 1) * sizeof(ST_double));
+
+        if (!x_sorted || !w_sorted || !cutpoints) {
+            free(x_sorted);
+            free(w_sorted);
+            free(cutpoints);
             rc = CBINSCATTER_ERR_MEMORY;
             goto cleanup;
         }
 
         for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (!SF_is_missing(x[orig_idx])) {
-                total_weight += weights[orig_idx];
-            }
-            cum_weight[i] = total_weight;
+            x_sorted[i] = x[sort_idx[i]];
+            w_sorted[i] = weights[sort_idx[i]];
         }
 
-        /* Handle zero total weight - assign all to bin 1 */
-        if (total_weight <= 0.0) {
-            for (i = 0; i < N; i++) {
-                bin_ids[i] = SF_is_missing(x[i]) ? 0 : 1;
-            }
-            free(cum_weight);
-            goto compute_stats;
-        }
+        /* Compute weighted quantile cutpoints */
+        compute_quantile_cutpoints(x_sorted, N, nq, w_sorted, cutpoints);
 
-        ST_double weight_per_bin = total_weight / nq;
-        for (i = 0; i < N; i++) {
-            ST_int orig_idx = sort_idx[i];
-            if (SF_is_missing(x[orig_idx])) {
-                bin_ids[orig_idx] = 0;
-            } else {
-                ST_int bin = (ST_int)(cum_weight[i] / weight_per_bin) + 1;
-                if (bin > nq) bin = nq;
-                if (bin < 1) bin = 1;
-                bin_ids[orig_idx] = bin;
-            }
-        }
-        free(cum_weight);
+        /* Assign bins based on cutpoints */
+        assign_bins(x, N, cutpoints, nq, bin_ids);
+
+        free(x_sorted);
+        free(w_sorted);
+        free(cutpoints);
     }
 
 compute_stats:

@@ -125,7 +125,17 @@ ST_retcode ivest_init_context(
     if (weights && weight_type != 0) {
         ctools_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ctx->ZtZ);
     } else {
-        ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ctx->ZtZ);
+        /* Use Kahan-compensated dot products to match ivreg2's quadcross() precision.
+         * Post-HDFE partialled data has severe cancellation; uncompensated summation
+         * loses significant digits in X'PzX which propagates through inversion. */
+        ST_int ii, jj;
+        for (jj = 0; jj < K_iv; jj++) {
+            for (ii = 0; ii <= jj; ii++) {
+                ST_double val = kahan_dot(Z + (size_t)ii * N, Z + (size_t)jj * N, N);
+                ctx->ZtZ[jj * K_iv + ii] = val;
+                ctx->ZtZ[ii * K_iv + jj] = val;
+            }
+        }
     }
 
     /* Invert Z'Z */
@@ -154,15 +164,19 @@ ST_retcode ivest_init_context(
             ctx->Zty[i] = sum;
         }
     } else {
-        ctools_matmul_atb(Z, ctx->X_all, N, K_iv, K_total, ctx->ZtX);
+        /* Use Kahan-compensated dot products for Z'X and Z'y */
+        {
+            ST_int ii, jj;
+            for (jj = 0; jj < K_total; jj++) {
+                for (ii = 0; ii < K_iv; ii++) {
+                    ctx->ZtX[jj * K_iv + ii] = kahan_dot(Z + (size_t)ii * N,
+                                                          ctx->X_all + (size_t)jj * N, N);
+                }
+            }
+        }
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
-            ST_double sum = 0.0;
-            const ST_double *z_col = Z + i * N;
-            for (k = 0; k < N; k++) {
-                sum += z_col[k] * y[k];
-            }
-            ctx->Zty[i] = sum;
+            ctx->Zty[i] = kahan_dot(Z + (size_t)i * N, y, N);
         }
     }
 
@@ -319,6 +333,7 @@ ST_retcode ivest_compute_kclass(
 
     /* Compute residuals if requested */
     if (resid) {
+        #pragma omp parallel for schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             ST_double pred = 0.0;
             for (k = 0; k < K_total; k++) {
@@ -378,13 +393,26 @@ ST_retcode ivest_compute_gmm2s(
             return 920;
         }
 
-        for (i = 0; i < N; i++) {
-            ST_int c = cluster_ids[i] - 1;
-            if (c < 0 || c >= num_clusters) continue;
-            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-            ST_double we = w * initial_resid[i];
-            for (j = 0; j < K_iv; j++) {
-                cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
+        #pragma omp parallel if(N > 5000)
+        {
+            ST_double *local_cze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+            if (local_cze) {
+                #pragma omp for schedule(static)
+                for (ST_int ii = 0; ii < N; ii++) {
+                    ST_int c = cluster_ids[ii] - 1;
+                    if (c < 0 || c >= num_clusters) continue;
+                    ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[ii] : 1.0;
+                    ST_double we = w * initial_resid[ii];
+                    for (ST_int jj = 0; jj < K_iv; jj++) {
+                        local_cze[c * K_iv + jj] += Z[jj * N + ii] * we;
+                    }
+                }
+                #pragma omp critical
+                {
+                    for (ST_int idx = 0; idx < num_clusters * K_iv; idx++)
+                        cluster_ze[idx] += local_cze[idx];
+                }
+                free(local_cze);
             }
         }
 
@@ -399,18 +427,34 @@ ST_retcode ivest_compute_gmm2s(
         }
         free(cluster_ze);
     } else {
-        /* Heteroskedastic optimal weighting matrix: Z'diag(e²)Z */
-        for (i = 0; i < N; i++) {
-            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-            ST_double e2 = w * initial_resid[i] * initial_resid[i];
-            for (j = 0; j < K_iv; j++) {
-                ST_double z_j = Z[j * N + i];
-                ST_double z_j_e2 = z_j * e2;
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = z_j_e2 * Z[k * N + i];
-                    ZOmegaZ[j * K_iv + k] += contrib;
-                    if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+        /* Heteroskedastic optimal weighting matrix: Z'diag(e²)Z
+           For aw/pw: score is w*z*e, so variance uses w²*e² (outer product of scores)
+           For fw: replication weight, variance uses w*e² */
+        #pragma omp parallel if(N > 5000)
+        {
+            ST_double *local_ZOZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+            if (local_ZOZ) {
+                #pragma omp for schedule(static)
+                for (ST_int ii = 0; ii < N; ii++) {
+                    ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[ii] : 1.0;
+                    ST_double wt_factor = (ctx->weight_type == 1 || ctx->weight_type == 3) ? w * w : w;
+                    ST_double e2 = wt_factor * initial_resid[ii] * initial_resid[ii];
+                    for (ST_int jj = 0; jj < K_iv; jj++) {
+                        ST_double z_j = Z[jj * N + ii];
+                        ST_double z_j_e2 = z_j * e2;
+                        for (ST_int kk = 0; kk <= jj; kk++) {
+                            ST_double contrib = z_j_e2 * Z[kk * N + ii];
+                            local_ZOZ[jj * K_iv + kk] += contrib;
+                            if (kk != jj) local_ZOZ[kk * K_iv + jj] += contrib;
+                        }
+                    }
                 }
+                #pragma omp critical
+                {
+                    for (ST_int idx = 0; idx < K_iv * K_iv; idx++)
+                        ZOmegaZ[idx] += local_ZOZ[idx];
+                }
+                free(local_ZOZ);
             }
         }
     }
@@ -500,6 +544,7 @@ ST_retcode ivest_compute_gmm2s(
 
     /* Compute residuals */
     if (resid) {
+        #pragma omp parallel for schedule(static) if(N > 10000)
         for (i = 0; i < N; i++) {
             ST_double pred = 0.0;
             for (k = 0; k < K_total; k++) {
@@ -543,7 +588,9 @@ static void cue_compute_residuals(
     ST_double *resid
 )
 {
-    for (ST_int i = 0; i < N; i++) {
+    ST_int i;
+    #pragma omp parallel for schedule(static) if(N > 10000)
+    for (i = 0; i < N; i++) {
         ST_double pred = 0.0;
         for (ST_int k = 0; k < K_total; k++) {
             pred += X_all[k * N + i] * beta[k];
@@ -576,13 +623,15 @@ static ST_double cue_objective(
     /* Compute residuals */
     cue_compute_residuals(y, ctx->X_all, beta, N, K_total, work_resid);
 
-    /* Compute g = Z'e */
+    /* Compute g = Z'We (weighted moment conditions) */
     ST_double *g = (ST_double *)calloc(K_iv, sizeof(ST_double));
     if (!g) return 1e30;  /* Return large value on allocation failure */
 
     for (i = 0; i < N; i++) {
+        ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+        ST_double we = w * work_resid[i];
         for (j = 0; j < K_iv; j++) {
-            g[j] += Z[j * N + i] * work_resid[i];
+            g[j] += Z[j * N + i] * we;
         }
     }
 
@@ -607,10 +656,11 @@ static ST_double cue_objective(
         }
         free(temp);
 
-        /* Compute σ² = e'e / N */
+        /* Compute σ² = e'We / N */
         ST_double ete = 0.0;
         for (i = 0; i < N; i++) {
-            ete += work_resid[i] * work_resid[i];
+            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+            ete += w * work_resid[i] * work_resid[i];
         }
         ST_double sigma2 = ete / N;
 
@@ -635,8 +685,10 @@ static ST_double cue_objective(
             for (i = 0; i < N; i++) {
                 ST_int c = cluster_ids[i] - 1;
                 if (c < 0 || c >= num_clusters) continue;
+                ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+                ST_double we = w * work_resid[i];
                 for (j = 0; j < K_iv; j++) {
-                    cluster_ze[c * K_iv + j] += Z[j * N + i] * work_resid[i];
+                    cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
                 }
             }
             for (ST_int c = 0; c < num_clusters; c++) {
@@ -652,7 +704,8 @@ static ST_double cue_objective(
         } else {
             /* Heteroskedastic robust */
             for (i = 0; i < N; i++) {
-                ST_double e2 = work_resid[i] * work_resid[i];
+                ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
+                ST_double e2 = w * work_resid[i] * work_resid[i];
                 for (j = 0; j < K_iv; j++) {
                     ST_double z_j_e2 = Z[j * N + i] * e2;
                     for (k = 0; k <= j; k++) {
@@ -709,7 +762,9 @@ static ST_double cue_objective(
     For robust (vce_type=1): Q = g'(Z'diag(e²)Z)^{-1}g
     For cluster (vce_type>=2): Cluster-robust weighting
 
-    Uses gradient descent with numerical differentiation to minimize Q(β).
+    Uses Newton's method with numerical derivatives to minimize Q(β).
+    Step sizes scale with |β| for numerical stability (matching Stata's optimize()).
+    For homoskedastic CUE (vce_type=0), the caller should use LIML directly.
 */
 ST_retcode ivest_compute_cue(
     IVEstContext *ctx,
@@ -730,23 +785,61 @@ ST_retcode ivest_compute_cue(
     ST_int K_total = ctx->K_total;
     const ST_double *Z = ctx->Z;
     ST_int i, j, k;
-    ST_int use_robust_weighting = (vce_type > 0);
 
-    /* Initialize beta from input */
+    /* Initialize beta from input (2SLS estimate) */
     memcpy(beta, initial_beta, K_total * sizeof(ST_double));
 
     /* Allocate working arrays */
     ST_double *current_resid = (ST_double *)malloc(N * sizeof(ST_double));
-    ST_double *beta_test = (ST_double *)malloc(K_total * sizeof(ST_double));
     ST_double *gradient = (ST_double *)calloc(K_total, sizeof(ST_double));
+    ST_double *hessian = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+    ST_double *direction = (ST_double *)calloc(K_total, sizeof(ST_double));
 
-    if (!current_resid || !beta_test || !gradient) {
-        free(current_resid); free(beta_test); free(gradient);
+    if (!current_resid || !gradient || !hessian || !direction) {
+        free(current_resid); free(gradient);
+        free(hessian); free(direction);
+        return 920;
+    }
+
+    /* Pre-allocate per-thread buffers for parallel CUE gradient/Hessian.
+       Each thread needs its own beta_test and work_resid buffers since
+       cue_objective modifies work_resid. */
+    int cue_nthreads = 1;
+#ifdef _OPENMP
+    cue_nthreads = omp_get_max_threads();
+    if (cue_nthreads > K_total) cue_nthreads = K_total;
+    if (cue_nthreads < 1) cue_nthreads = 1;
+#endif
+    ST_double **thread_beta = (ST_double **)malloc(cue_nthreads * sizeof(ST_double *));
+    ST_double **thread_resid = (ST_double **)malloc(cue_nthreads * sizeof(ST_double *));
+    ST_double **thread_grad = (ST_double **)malloc(cue_nthreads * sizeof(ST_double *));
+    if (!thread_beta || !thread_resid || !thread_grad) {
+        free(current_resid); free(gradient);
+        free(hessian); free(direction);
+        free(thread_beta); free(thread_resid); free(thread_grad);
+        return 920;
+    }
+    int alloc_ok = 1;
+    for (int t = 0; t < cue_nthreads; t++) {
+        thread_beta[t] = (ST_double *)malloc(K_total * sizeof(ST_double));
+        thread_resid[t] = (ST_double *)malloc(N * sizeof(ST_double));
+        thread_grad[t] = (ST_double *)calloc(K_total, sizeof(ST_double));
+        if (!thread_beta[t] || !thread_resid[t] || !thread_grad[t]) alloc_ok = 0;
+    }
+    if (!alloc_ok) {
+        for (int t = 0; t < cue_nthreads; t++) {
+            if (thread_beta[t]) free(thread_beta[t]);
+            if (thread_resid[t]) free(thread_resid[t]);
+            if (thread_grad[t]) free(thread_grad[t]);
+        }
+        free(thread_beta); free(thread_resid); free(thread_grad);
+        free(current_resid); free(gradient);
+        free(hessian); free(direction);
         return 920;
     }
 
     if (ctx->verbose) {
-        SF_display("civreghdfe: Computing CUE (gradient descent)\n");
+        SF_display("civreghdfe: Computing CUE (Newton's method)\n");
     }
 
     /* Compute initial objective */
@@ -758,23 +851,37 @@ ST_retcode ivest_compute_cue(
         SF_display(buf);
     }
 
-    ST_double eps = 1e-7;  /* Step for numerical gradient */
     ST_int iter;
 
     for (iter = 0; iter < max_iter; iter++) {
-        /* Compute gradient using numerical differentiation */
+        /* Adaptive step sizes (matching Stata's optimize() d0 convention) */
+        /* eps_g ≈ max(|β_k|, 1) * eps^(1/3) for gradient */
+        /* eps_h ≈ max(|β_k|, 1) * eps^(1/4) for Hessian */
+
+        /* Compute gradient using central differences with adaptive step.
+           Each k is independent — parallelize with per-thread buffers. */
+        #pragma omp parallel for schedule(dynamic) num_threads(cue_nthreads) if(K_total > 1)
         for (k = 0; k < K_total; k++) {
-            memcpy(beta_test, beta, K_total * sizeof(ST_double));
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            ST_double *my_beta = thread_beta[tid];
+            ST_double *my_resid = thread_resid[tid];
 
-            /* Forward step */
-            beta_test[k] = beta[k] + eps;
-            ST_double Q_plus = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
+            ST_double scale = fabs(beta[k]);
+            if (scale < 1.0) scale = 1.0;
+            ST_double eps_g = scale * 6e-6;  /* eps^(1/3) ≈ 6e-6 */
 
-            /* Backward step */
-            beta_test[k] = beta[k] - eps;
-            ST_double Q_minus = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
+            memcpy(my_beta, beta, K_total * sizeof(ST_double));
 
-            gradient[k] = (Q_plus - Q_minus) / (2.0 * eps);
+            my_beta[k] = beta[k] + eps_g;
+            ST_double Q_plus = cue_objective(ctx, y, my_beta, vce_type, cluster_ids, num_clusters, my_resid);
+
+            my_beta[k] = beta[k] - eps_g;
+            ST_double Q_minus = cue_objective(ctx, y, my_beta, vce_type, cluster_ids, num_clusters, my_resid);
+
+            gradient[k] = (Q_plus - Q_minus) / (2.0 * eps_g);
         }
 
         /* Compute gradient norm */
@@ -793,23 +900,123 @@ ST_retcode ivest_compute_cue(
             break;
         }
 
-        /* Line search along negative gradient direction */
+        /* Compute Hessian using forward differences on gradient with adaptive step.
+           Each column j is independent — parallelize with per-thread buffers. */
+        #pragma omp parallel for schedule(dynamic) num_threads(cue_nthreads) if(K_total > 1)
+        for (j = 0; j < K_total; j++) {
+            int tid = 0;
+#ifdef _OPENMP
+            tid = omp_get_thread_num();
+#endif
+            ST_double *my_beta = thread_beta[tid];
+            ST_double *my_resid = thread_resid[tid];
+            ST_double *my_grad2 = thread_grad[tid];
+
+            ST_double scale_j = fabs(beta[j]);
+            if (scale_j < 1.0) scale_j = 1.0;
+            ST_double eps_h = scale_j * 1.2e-4;  /* eps^(1/4) ≈ 1.2e-4 */
+
+            memcpy(my_beta, beta, K_total * sizeof(ST_double));
+            my_beta[j] = beta[j] + eps_h;
+
+            /* Compute gradient at shifted point */
+            for (ST_int kk = 0; kk < K_total; kk++) {
+                ST_double scale_k = fabs(my_beta[kk]);
+                if (scale_k < 1.0) scale_k = 1.0;
+                ST_double eps_g = scale_k * 6e-6;
+
+                ST_double saved = my_beta[kk];
+                my_beta[kk] = saved + eps_g;
+                ST_double Q_plus = cue_objective(ctx, y, my_beta, vce_type, cluster_ids, num_clusters, my_resid);
+
+                my_beta[kk] = saved - eps_g;
+                ST_double Q_minus = cue_objective(ctx, y, my_beta, vce_type, cluster_ids, num_clusters, my_resid);
+
+                my_beta[kk] = saved;
+                my_grad2[kk] = (Q_plus - Q_minus) / (2.0 * eps_g);
+            }
+
+            /* H[:,j] = (gradient2 - gradient) / eps_h */
+            for (ST_int kk = 0; kk < K_total; kk++) {
+                hessian[j * K_total + kk] = (my_grad2[kk] - gradient[kk]) / eps_h;
+            }
+        }
+
+        /* Symmetrize Hessian */
+        for (j = 0; j < K_total; j++) {
+            for (k = j + 1; k < K_total; k++) {
+                ST_double avg = 0.5 * (hessian[j * K_total + k] + hessian[k * K_total + j]);
+                hessian[j * K_total + k] = avg;
+                hessian[k * K_total + j] = avg;
+            }
+        }
+
+        /* Solve H * direction = -gradient for Newton direction */
+        ST_double *H_copy = (ST_double *)malloc(K_total * K_total * sizeof(ST_double));
+        if (!H_copy) {
+            for (int t = 0; t < cue_nthreads; t++) {
+                free(thread_beta[t]); free(thread_resid[t]); free(thread_grad[t]);
+            }
+            free(thread_beta); free(thread_resid); free(thread_grad);
+            free(current_resid); free(gradient);
+            free(hessian); free(direction);
+            return 920;
+        }
+        memcpy(H_copy, hessian, K_total * K_total * sizeof(ST_double));
+
+        ST_int newton_ok = 0;
+        if (cholesky(H_copy, K_total) == 0) {
+            invert_from_cholesky(H_copy, K_total, H_copy);
+            /* direction = -H^{-1} * gradient */
+            for (j = 0; j < K_total; j++) {
+                direction[j] = 0.0;
+                for (k = 0; k < K_total; k++) {
+                    direction[j] -= H_copy[k * K_total + j] * gradient[k];
+                }
+            }
+            newton_ok = 1;
+        }
+        free(H_copy);
+
+        if (!newton_ok) {
+            /* Hessian not positive definite; use steepest descent with scaling */
+            ST_double inv_grad_norm = 1.0 / (grad_norm + 1e-30);
+            for (k = 0; k < K_total; k++) {
+                direction[k] = -gradient[k] * inv_grad_norm;
+            }
+        }
+
+        /* Backtracking line search along Newton direction */
         ST_double step = 1.0;
         ST_double armijo_c = 1e-4;
         ST_int line_search_iter = 0;
-        ST_int max_ls_iter = 20;
+        ST_int max_ls_iter = 40;
         ST_double Q_new;
 
-        while (line_search_iter < max_ls_iter) {
-            /* Try step */
+        /* Compute directional derivative for Armijo: g'd */
+        ST_double dirderiv = 0.0;
+        for (k = 0; k < K_total; k++) {
+            dirderiv += gradient[k] * direction[k];
+        }
+        /* Ensure descent direction */
+        if (dirderiv > 0) {
             for (k = 0; k < K_total; k++) {
-                beta_test[k] = beta[k] - step * gradient[k];
+                direction[k] = -gradient[k];
+            }
+            dirderiv = -grad_norm * grad_norm;
+        }
+
+        /* Use thread_beta[0] as scratch for line search (single-threaded) */
+        ST_double *beta_test = thread_beta[0];
+        while (line_search_iter < max_ls_iter) {
+            for (k = 0; k < K_total; k++) {
+                beta_test[k] = beta[k] + step * direction[k];
             }
 
             Q_new = cue_objective(ctx, y, beta_test, vce_type, cluster_ids, num_clusters, current_resid);
 
             /* Armijo condition */
-            if (Q_new <= Q_current - armijo_c * step * grad_norm * grad_norm) {
+            if (Q_new <= Q_current + armijo_c * step * dirderiv) {
                 break;
             }
 
@@ -827,144 +1034,149 @@ ST_retcode ivest_compute_cue(
         /* Update beta */
         memcpy(beta, beta_test, K_total * sizeof(ST_double));
         Q_current = Q_new;
+
+        if (ctx->verbose) {
+            char buf[256];
+            snprintf(buf, sizeof(buf), "civreghdfe: CUE iter %d: Q=%.8e grad=%.2e step=%.4f %s\n",
+                     iter, Q_current, grad_norm, step, newton_ok ? "newton" : "gradient");
+            SF_display(buf);
+        }
     }
 
     if (iter >= max_iter && ctx->verbose) {
         SF_display("civreghdfe: CUE reached max iterations\n");
     }
 
-    free(gradient);
-    free(beta_test);
-
-    /* Continue with existing code for residuals and Hessian computation */
-    /* Variables needed for the remaining code */
-    ST_double *beta_old = (ST_double *)malloc(K_total * sizeof(ST_double));
-    ST_double *beta_temp = (ST_double *)calloc(K_total, sizeof(ST_double));
-
-    if (!beta_old || !beta_temp) {
-        free(current_resid); free(beta_old); free(beta_temp);
-        return 920;
-    }
-
     /* Compute final residuals */
     cue_compute_residuals(y, ctx->X_all, beta, N, K_total, current_resid);
-
-    /* Now compute the final Hessian for VCE - use existing code structure */
-    /* Compute optimal weighting matrix based on final residuals */
-    ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-    ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
-
-    if (!ZOmegaZ || !ZOmegaZ_inv) {
-        free(ZOmegaZ); free(ZOmegaZ_inv);
-        free(current_resid); free(beta_old); free(beta_temp);
-        return 920;
-    }
-
-    if (!use_robust_weighting) {
-        /* Homoskedastic: W = Z'Z (use pre-computed ZtZ) */
-        memcpy(ZOmegaZ, ctx->ZtZ, K_iv * K_iv * sizeof(ST_double));
-    } else if (cluster_ids && num_clusters > 0) {
-        /* Cluster-robust */
-        ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
-        if (!cluster_ze) {
-            free(ZOmegaZ); free(ZOmegaZ_inv);
-            free(current_resid); free(beta_old); free(beta_temp);
-            return 920;
-        }
-
-        for (i = 0; i < N; i++) {
-            ST_int c = cluster_ids[i] - 1;
-            if (c < 0 || c >= num_clusters) continue;
-            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-            ST_double we = w * current_resid[i];
-            for (j = 0; j < K_iv; j++) {
-                cluster_ze[c * K_iv + j] += Z[j * N + i] * we;
-            }
-        }
-
-        for (ST_int c = 0; c < num_clusters; c++) {
-            for (j = 0; j < K_iv; j++) {
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
-                    ZOmegaZ[j * K_iv + k] += contrib;
-                    if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
-                }
-            }
-        }
-        free(cluster_ze);
-    } else {
-        /* Heteroskedastic robust */
-        for (i = 0; i < N; i++) {
-            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[i] : 1.0;
-            ST_double e2 = w * current_resid[i] * current_resid[i];
-            for (j = 0; j < K_iv; j++) {
-                ST_double z_j = Z[j * N + i];
-                ST_double z_j_e2 = z_j * e2;
-                for (k = 0; k <= j; k++) {
-                    ST_double contrib = z_j_e2 * Z[k * N + i];
-                    ZOmegaZ[j * K_iv + k] += contrib;
-                    if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
-                }
-            }
-        }
-    }
-
-    /* Invert Z'ΩZ */
-    memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
-    if (cholesky(ZOmegaZ_inv, K_iv) != 0) {
-        if (ctx->verbose) SF_display("civreghdfe: CUE final weighting matrix singular\n");
-        free(ZOmegaZ); free(ZOmegaZ_inv);
-        free(current_resid); free(beta_old); free(beta_temp);
-        return 920;
-    }
-    invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
-
-    /* Copy residuals to output if requested */
     if (resid) {
         memcpy(resid, current_resid, N * sizeof(ST_double));
     }
 
-    /* Compute (X'ZWZ'X)^-1 for VCE using the already computed ZOmegaZ_inv */
+    /* Compute XZWZX_inv for VCE using final Omega */
     if (XZWZX_inv_out) {
-        /* Compute X'ZWZ'X */
-        ST_double *XZW_final = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
-        ST_double *XZWZX_final = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        /* Build Omega from final residuals and invert */
+        ST_double *ZOmegaZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+        ST_double *ZOmegaZ_inv = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
 
-        if (XZW_final && XZWZX_final) {
-            for (i = 0; i < K_total; i++) {
-                for (j = 0; j < K_iv; j++) {
-                    ST_double sum = 0.0;
-                    for (k = 0; k < K_iv; k++) {
-                        sum += ctx->ZtX[i * K_iv + k] * ZOmegaZ_inv[j * K_iv + k];
+        if (ZOmegaZ && ZOmegaZ_inv) {
+            if (cluster_ids && num_clusters > 0) {
+                ST_double *cluster_ze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                if (cluster_ze) {
+                    #pragma omp parallel if(N > 5000)
+                    {
+                        ST_double *local_cze = (ST_double *)calloc(num_clusters * K_iv, sizeof(ST_double));
+                        if (local_cze) {
+                            #pragma omp for schedule(static)
+                            for (ST_int ii = 0; ii < N; ii++) {
+                                ST_int c = cluster_ids[ii] - 1;
+                                if (c < 0 || c >= num_clusters) continue;
+                                ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[ii] : 1.0;
+                                ST_double we = w * current_resid[ii];
+                                for (ST_int jj = 0; jj < K_iv; jj++) {
+                                    local_cze[c * K_iv + jj] += Z[jj * N + ii] * we;
+                                }
+                            }
+                            #pragma omp critical
+                            {
+                                for (ST_int idx = 0; idx < num_clusters * K_iv; idx++)
+                                    cluster_ze[idx] += local_cze[idx];
+                            }
+                            free(local_cze);
+                        }
                     }
-                    XZW_final[j * K_total + i] = sum;
+                    for (ST_int c = 0; c < num_clusters; c++) {
+                        for (j = 0; j < K_iv; j++) {
+                            for (k = 0; k <= j; k++) {
+                                ST_double contrib = cluster_ze[c * K_iv + j] * cluster_ze[c * K_iv + k];
+                                ZOmegaZ[j * K_iv + k] += contrib;
+                                if (k != j) ZOmegaZ[k * K_iv + j] += contrib;
+                            }
+                        }
+                    }
+                    free(cluster_ze);
+                }
+            } else {
+                #pragma omp parallel if(N > 5000)
+                {
+                    ST_double *local_ZOZ = (ST_double *)calloc(K_iv * K_iv, sizeof(ST_double));
+                    if (local_ZOZ) {
+                        #pragma omp for schedule(static)
+                        for (ST_int ii = 0; ii < N; ii++) {
+                            ST_double w = (ctx->weights && ctx->weight_type != 0) ? ctx->weights[ii] : 1.0;
+                            ST_double e2 = w * current_resid[ii] * current_resid[ii];
+                            for (ST_int jj = 0; jj < K_iv; jj++) {
+                                ST_double z_j = Z[jj * N + ii];
+                                ST_double z_j_e2 = z_j * e2;
+                                for (ST_int kk = 0; kk <= jj; kk++) {
+                                    ST_double contrib = z_j_e2 * Z[kk * N + ii];
+                                    local_ZOZ[jj * K_iv + kk] += contrib;
+                                    if (kk != jj) local_ZOZ[kk * K_iv + jj] += contrib;
+                                }
+                            }
+                        }
+                        #pragma omp critical
+                        {
+                            for (ST_int idx = 0; idx < K_iv * K_iv; idx++)
+                                ZOmegaZ[idx] += local_ZOZ[idx];
+                        }
+                        free(local_ZOZ);
+                    }
                 }
             }
-            for (i = 0; i < K_total; i++) {
-                for (j = 0; j < K_total; j++) {
-                    ST_double sum = 0.0;
-                    for (k = 0; k < K_iv; k++) {
-                        sum += XZW_final[k * K_total + i] * ctx->ZtX[j * K_iv + k];
-                    }
-                    XZWZX_final[j * K_total + i] = sum;
-                }
-            }
 
-            /* Invert X'ZWZ'X */
-            if (cholesky(XZWZX_final, K_total) == 0) {
-                invert_from_cholesky(XZWZX_final, K_total, XZWZX_inv_out);
+            memcpy(ZOmegaZ_inv, ZOmegaZ, K_iv * K_iv * sizeof(ST_double));
+            if (cholesky(ZOmegaZ_inv, K_iv) == 0) {
+                invert_from_cholesky(ZOmegaZ_inv, K_iv, ZOmegaZ_inv);
+
+                /* Compute (X'Z * W * Z'X)^{-1} where W = ZOmegaZ_inv */
+                ST_double *XZW = (ST_double *)calloc(K_total * K_iv, sizeof(ST_double));
+                ST_double *XZWZX = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+
+                if (XZW && XZWZX) {
+                    for (i = 0; i < K_total; i++) {
+                        for (j = 0; j < K_iv; j++) {
+                            ST_double sum = 0.0;
+                            for (k = 0; k < K_iv; k++) {
+                                sum += ctx->ZtX[i * K_iv + k] * ZOmegaZ_inv[j * K_iv + k];
+                            }
+                            XZW[j * K_total + i] = sum;
+                        }
+                    }
+                    for (i = 0; i < K_total; i++) {
+                        for (j = 0; j < K_total; j++) {
+                            ST_double sum = 0.0;
+                            for (k = 0; k < K_iv; k++) {
+                                sum += XZW[k * K_total + i] * ctx->ZtX[j * K_iv + k];
+                            }
+                            XZWZX[j * K_total + i] = sum;
+                        }
+                    }
+
+                    if (cholesky(XZWZX, K_total) == 0) {
+                        invert_from_cholesky(XZWZX, K_total, XZWZX_inv_out);
+                    }
+                }
+                if (XZW) free(XZW);
+                if (XZWZX) free(XZWZX);
             }
         }
-        if (XZW_final) free(XZW_final);
-        if (XZWZX_final) free(XZWZX_final);
+        if (ZOmegaZ) free(ZOmegaZ);
+        if (ZOmegaZ_inv) free(ZOmegaZ_inv);
     }
 
-    free(ZOmegaZ);
-    free(ZOmegaZ_inv);
-
+    for (int t = 0; t < cue_nthreads; t++) {
+        free(thread_beta[t]);
+        free(thread_resid[t]);
+        free(thread_grad[t]);
+    }
+    free(thread_beta);
+    free(thread_resid);
+    free(thread_grad);
     free(current_resid);
-    free(beta_old);
-    free(beta_temp);
+    free(gradient);
+    free(hessian);
+    free(direction);
 
     return STATA_OK;
 }
@@ -1096,6 +1308,7 @@ ST_retcode ivest_compute_2sls(
     /* Suppress unused variable warnings for not-yet-implemented features */
     /* TODO: center is for centering HAC score vectors before outer product */
     (void)center;
+    (void)Z_original;
 
     /* sdofminus is the FULL df_a (including all absorbed FE), used for test statistics DOF.
        This differs from the df_a parameter which is df_a_for_vce (excluding nested FE).
@@ -1113,25 +1326,27 @@ ST_retcode ivest_compute_2sls(
     ST_double kclass = 1.0;  /* Default: 2SLS */
     ST_double lambda = 1.0;
 
-    if (est_method == 1 || est_method == 2) {
-        /* LIML or Fuller: compute lambda */
-        lambda = compute_liml_lambda(y, X_endog, X_exog, Z, N, K_exog, K_endog, K_iv);
+    if (est_method == 1 || est_method == 2 || (est_method == 5 && vce_type == 0)) {
+        /* LIML, Fuller, or homoskedastic CUE: compute lambda
+           Homoskedastic CUE = LIML (both minimize e'Pze / e'e) */
+        lambda = compute_liml_lambda(y, X_endog, X_exog, Z, weights, weight_type, N, K_exog, K_endog, K_iv);
 
         /* For exactly identified models, lambda should be 1 */
         if (K_iv == K_total) {
             lambda = 1.0;
         }
 
-        if (est_method == 1) {
-            /* LIML */
+        if (est_method == 1 || (est_method == 5 && vce_type == 0)) {
+            /* LIML or homoskedastic CUE */
             kclass = lambda;
         } else {
-            /* Fuller: k = lambda - alpha/(N - K_iv) */
-            if (fuller_alpha > (N - K_iv)) {
+            /* Fuller: k = lambda - alpha/(N_eff - K_iv)
+               Use N_eff (sum of fweights for fweights, N otherwise) to match ivreg2 */
+            if (fuller_alpha > (N_eff - K_iv)) {
                 SF_error("civreghdfe: Invalid Fuller parameter\n");
                 return 198;
             }
-            kclass = lambda - fuller_alpha / (ST_double)(N - K_iv);
+            kclass = lambda - fuller_alpha / (ST_double)(N_eff - K_iv);
         }
 
         if (lambda_out) *lambda_out = lambda;
@@ -1142,7 +1357,7 @@ ST_retcode ivest_compute_2sls(
     }
     /* est_method 0: k=1 (2SLS)
        est_method 4: GMM2S - will be computed after initial 2SLS
-       est_method 5: CUE - not yet implemented */
+       est_method 5 with vce_type>0: CUE via iterated GMM */
 
     const char *method_name = "2SLS";
     if (est_method == 1) method_name = "LIML";
@@ -1219,7 +1434,16 @@ ST_retcode ivest_compute_2sls(
     if (weights && weight_type != 0) {
         matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ZtZ);
     } else {
-        matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+        /* Use Kahan-compensated dot products to match ivreg2's quadcross() precision.
+         * Post-HDFE partialled data has severe cancellation; uncompensated summation
+         * loses significant digits in X'PzX which propagates through inversion. */
+        for (j = 0; j < K_iv; j++) {
+            for (i = 0; i <= j; i++) {
+                ST_double val = kahan_dot(Z + (size_t)i * N, Z + (size_t)j * N, N);
+                ZtZ[j * K_iv + i] = val;
+                ZtZ[i * K_iv + j] = val;
+            }
+        }
     }
 
     /* Step 2: Invert Z'Z */
@@ -1254,15 +1478,16 @@ ST_retcode ivest_compute_2sls(
             Zty[i] = sum;
         }
     } else {
-        matmul_atb(Z, X_all, N, K_iv, K_total, ZtX);
+        /* Use Kahan-compensated dot products for Z'X and Z'y */
+        for (j = 0; j < K_total; j++) {
+            for (i = 0; i < K_iv; i++) {
+                ZtX[j * K_iv + i] = kahan_dot(Z + (size_t)i * N,
+                                               X_all + (size_t)j * N, N);
+            }
+        }
         /* Z'y */
         for (i = 0; i < K_iv; i++) {
-            ST_double sum = 0.0;
-            const ST_double *z_col = Z + i * N;
-            for (k = 0; k < N; k++) {
-                sum += z_col[k] * y[k];
-            }
-            Zty[i] = sum;
+            Zty[i] = kahan_dot(Z + (size_t)i * N, y, N);
         }
     }
 
@@ -1332,7 +1557,15 @@ ST_retcode ivest_compute_2sls(
         if (weights && weight_type != 0) {
             matmul_atdb(X_all, X_all, weights, N, K_total, K_total, XtX);
         } else {
-            matmul_atb(X_all, X_all, N, K_total, K_total, XtX);
+            /* Kahan-compensated X'X for k-class precision */
+            for (j = 0; j < K_total; j++) {
+                for (i = 0; i <= j; i++) {
+                    ST_double val = kahan_dot(X_all + (size_t)i * N,
+                                              X_all + (size_t)j * N, N);
+                    XtX[j * K_total + i] = val;
+                    XtX[i * K_total + j] = val;
+                }
+            }
         }
 
         /* Compute X'y */
@@ -1347,12 +1580,7 @@ ST_retcode ivest_compute_2sls(
             }
         } else {
             for (i = 0; i < K_total; i++) {
-                ST_double sum = 0.0;
-                const ST_double *x_col = X_all + i * N;
-                for (k = 0; k < N; k++) {
-                    sum += x_col[k] * y[k];
-                }
-                Xty[i] = sum;
+                Xty[i] = kahan_dot(X_all + (size_t)i * N, y, N);
             }
         }
 
@@ -1442,8 +1670,8 @@ ST_retcode ivest_compute_2sls(
     for (i = 0; i < N; i++) {
         ST_double pred = 0.0;
         #pragma omp simd reduction(+:pred)
-        for (k = 0; k < K_total; k++) {
-            pred += X_all[k * N + i] * beta[k];
+        for (ST_int kk = 0; kk < K_total; kk++) {
+            pred += X_all[kk * N + i] * beta[kk];
         }
         resid[i] = y[i] - pred;
     }
@@ -1505,11 +1733,12 @@ ST_retcode ivest_compute_2sls(
         /* Note: gmm_ctx uses pointers to existing arrays, no need to free context members */
     }
 
-    /* Step 8c: CUE (Continuously Updated Estimator) using refactored helper */
-    if (est_method == 5) {
+    /* Step 8c: CUE (Continuously Updated Estimator) */
+    if (est_method == 5 && vce_type > 0) {
         /*
-            CUE using refactored helper from civreghdfe_estimate.c
-            Iteratively re-weights until convergence.
+            Robust/cluster CUE: iterated GMM until convergence.
+            At each step: compute optimal weight matrix W(β), re-estimate β.
+            For homoskedastic CUE (vce_type=0), already handled above via LIML.
         */
 
         /* Allocate storage for CUE Hessian inverse */
@@ -1537,7 +1766,7 @@ ST_retcode ivest_compute_2sls(
         cue_ctx.verbose = verbose;
 
         const ST_int max_cue_iter = 100;
-        const ST_double cue_tol = 1e-9;
+        const ST_double cue_tol = 1e-10;
 
         ST_retcode cue_rc = ivest_compute_cue(
             &cue_ctx, y, beta, vce_type, cluster_ids, num_clusters,
@@ -1658,14 +1887,19 @@ ST_retcode ivest_compute_2sls(
         /*
            Two-way clustered VCE using Cameron-Gelbach-Miller (2011) formula:
            V = V1 + V2 - V_intersection
+           Apply nested_adj correction: when FE is nested in a cluster variable,
+           df_a_for_vce is 0 but we still need to account for the partialled-out
+           constant (effective_df_a = 1), matching ivreg2's sdofminus convention.
         */
+        ST_int effective_df_a = df_a;
+        if (df_a == 0 && nested_adj == 1) effective_df_a = 1;
         ivvce_compute_twoway(
             Z, resid, temp1, XkX_inv,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
             cluster_ids, num_clusters,
             cluster2_ids, num_clusters2,
-            df_a,
+            effective_df_a,
             V
         );
     } else if (kiefer && kernel_type > 0 && bw > 0 && cluster_ids != NULL && num_clusters > 0) {
@@ -1701,12 +1935,26 @@ ST_retcode ivest_compute_2sls(
            Standard VCE: Use refactored helper from civreghdfe_vce.c
            Handles unadjusted, robust (HC), HAC, and clustered VCE types.
         */
-        /*
-           Non-GMM2S VCE: Use refactored helper from civreghdfe_vce.c
-           Handles unadjusted, robust (HC), HAC, and clustered VCE types.
-        */
+        /* For homoskedastic CUE, use 2SLS projection (X'PzX)^{-1} not (XkX)^{-1}
+           because CUE VCE = σ²(X'Z(Z'Z)^{-1}Z'X)^{-1} even when coefficients = LIML */
+        ST_double *vce_bread = XkX_inv;
+        ST_double *XtPzX_inv_cue = NULL;
+        if (est_method == 5 && vce_type == 0) {
+            XtPzX_inv_cue = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+            if (XtPzX_inv_cue) {
+                memcpy(XtPzX_inv_cue, XtPzX, K_total * K_total * sizeof(ST_double));
+                if (cholesky(XtPzX_inv_cue, K_total) == 0) {
+                    invert_from_cholesky(XtPzX_inv_cue, K_total, XtPzX_inv_cue);
+                    vce_bread = XtPzX_inv_cue;
+                } else {
+                    free(XtPzX_inv_cue);
+                    XtPzX_inv_cue = NULL;
+                }
+            }
+        }
+
         ivvce_compute_full(
-            Z, resid, temp1, XkX_inv,
+            Z, resid, temp1, vce_bread,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
             vce_type, cluster_ids, num_clusters,
@@ -1714,6 +1962,8 @@ ST_retcode ivest_compute_2sls(
             hac_panel_ids, num_hac_panels,
             V
         );
+
+        if (XtPzX_inv_cue) free(XtPzX_inv_cue);
     }
 
     /* Step 10: Compute first-stage F statistics */
@@ -1809,7 +2059,7 @@ ST_retcode ivest_compute_2sls(
             /* F = (partial_R² / L) / ((1 - R²_full) / df_resid) */
             ST_int L = K_iv - K_exog;  /* Number of excluded instruments */
             if (L <= 0) L = 1;
-            ST_int denom_df = N - K_iv - df_a;
+            ST_int denom_df = N_eff - K_iv - df_a;
             if (denom_df <= 0) denom_df = 1;
 
             ST_double denom = (1.0 - r2_full) / (ST_double)denom_df;
@@ -1844,8 +2094,9 @@ ST_retcode ivest_compute_2sls(
 
     civreghdfe_compute_underid_test(
         X_endog, Z, ZtZ, ZtZ_inv, temp1, first_stage_F,
-        weights, weight_type, N, K_exog, K_endog, K_iv, df_a_full,
+        weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a_full,
         vce_type, cluster_ids, num_clusters,
+        cluster2_ids, num_clusters2,
         kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
         &underid_stat, &underid_df, &cd_f, &kp_f
@@ -1864,7 +2115,7 @@ ST_retcode ivest_compute_2sls(
 
     civreghdfe_compute_sargan_j(
         resid, Z, ZtZ_inv, rss,
-        weights, weight_type, N, K_exog, K_endog, K_iv,
+        weights, weight_type, N, N_eff, K_exog, K_endog, K_iv, df_a,
         vce_type, cluster_ids, num_clusters,
         kernel_type, bw, kiefer,
         hac_panel_ids, num_hac_panels,
@@ -1920,7 +2171,7 @@ ST_retcode ivest_compute_2sls(
             ST_int cstat_df = n_orthog;
 
             civreghdfe_compute_cstat(
-                y, X_exog, X_endog, Z, N, K_exog, K_endog, K_iv,
+                y, X_exog, X_endog, Z, N, N_eff, K_exog, K_endog, K_iv,
                 orthog_indices, n_orthog,
                 vce_type, weights, weight_type, cluster_ids, num_clusters,
                 sargan_stat, rss, &cstat, &cstat_df
@@ -1957,7 +2208,8 @@ ST_retcode ivest_compute_2sls(
 
             civreghdfe_compute_endogtest_subset(
                 y, X_exog, X_endog, Z, resid, ZtZ_inv,
-                N, K_exog, K_endog, K_iv,
+                N, weights, weight_type, N_eff,
+                K_exog, K_endog, K_iv,
                 endogtest_indices, n_endogtest,
                 &endogtest_stat, &endogtest_df_out
             );
@@ -1992,7 +2244,8 @@ ST_retcode ivest_compute_2sls(
             ST_int redund_df = K_endog * n_redundant;
 
             civreghdfe_compute_redundant(
-                X_endog, Z, N, K_exog, K_endog, K_iv,
+                X_endog, Z, N, weights, weight_type, N_eff,
+                K_exog, K_endog, K_iv,
                 redund_indices, n_redundant,
                 &redund_stat, &redund_df
             );

@@ -74,6 +74,8 @@ ST_double civreghdfe_compute_liml_lambda(
     const ST_double *X_endog,
     const ST_double *X_exog,
     const ST_double *Z,
+    const ST_double *weights,
+    ST_int weight_type,
     ST_int N,
     ST_int K_exog,
     ST_int K_endog,

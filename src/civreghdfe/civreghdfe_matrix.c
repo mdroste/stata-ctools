@@ -302,6 +302,8 @@ ST_double civreghdfe_compute_liml_lambda(
     const ST_double *X_endog,
     const ST_double *X_exog,
     const ST_double *Z,
+    const ST_double *weights,
+    ST_int weight_type,
     ST_int N,
     ST_int K_exog,
     ST_int K_endog,
@@ -309,6 +311,7 @@ ST_double civreghdfe_compute_liml_lambda(
 {
     ST_int K_Y = 1 + K_endog;
     ST_int i, j;
+    int use_weights = (weights != NULL && weight_type != 0);
 
     /* Initialize pointers to NULL for safe cleanup */
     ST_double *Y = NULL, *ZtZ = NULL, *ZtZ_inv = NULL, *ZtZ_L = NULL;
@@ -330,7 +333,10 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
+    if (use_weights)
+        ctools_matmul_atdb(Z, Z, weights, N, K_iv, K_iv, ZtZ);
+    else
+        ctools_matmul_atb(Z, Z, N, K_iv, K_iv, ZtZ);
 
     /* Invert Z'Z using Cholesky */
     ZtZ_L = (ST_double *)malloc((size_t)K_iv * K_iv * sizeof(ST_double));
@@ -353,7 +359,10 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv);
         return 1.0;
     }
-    ctools_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
+    if (use_weights)
+        ctools_matmul_atdb(Z, Y, weights, N, K_iv, K_Y, ZtY);
+    else
+        ctools_matmul_atb(Z, Y, N, K_iv, K_Y, ZtY);
 
     /* Compute Y'Y */
     YtY = (ST_double *)calloc((size_t)K_Y * K_Y, sizeof(ST_double));
@@ -361,7 +370,10 @@ ST_double civreghdfe_compute_liml_lambda(
         free(Y); free(ZtZ); free(ZtZ_inv); free(ZtY);
         return 1.0;
     }
-    ctools_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
+    if (use_weights)
+        ctools_matmul_atdb(Y, Y, weights, N, K_Y, K_Y, YtY);
+    else
+        ctools_matmul_atb(Y, Y, N, K_Y, K_Y, YtY);
 
     /* Compute (Z'Z)^-1 * Z'Y */
     ZtZ_inv_ZtY = (ST_double *)calloc((size_t)K_iv * K_Y, sizeof(ST_double));
@@ -412,7 +424,10 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tZ2); free(Z2tZ2_inv); free(Z2tZ2_L);
             return 1.0;
         }
-        ctools_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
+        if (use_weights)
+            ctools_matmul_atdb(X_exog, X_exog, weights, N, K_exog, K_exog, Z2tZ2);
+        else
+            ctools_matmul_atb(X_exog, X_exog, N, K_exog, K_exog, Z2tZ2);
 
         memcpy(Z2tZ2_L, Z2tZ2, (size_t)K_exog * K_exog * sizeof(ST_double));
         if (cholesky(Z2tZ2_L, K_exog) != 0) {
@@ -434,7 +449,10 @@ ST_double civreghdfe_compute_liml_lambda(
             free(Z2tY); free(Z2tZ2_inv_Z2tY); free(Z2tY_t_Z2tZ2_inv_Z2tY);
             return 1.0;
         }
-        ctools_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
+        if (use_weights)
+            ctools_matmul_atdb(X_exog, Y, weights, N, K_exog, K_Y, Z2tY);
+        else
+            ctools_matmul_atb(X_exog, Y, N, K_exog, K_Y, Z2tY);
         ctools_matmul_ab(Z2tZ2_inv, Z2tY, K_exog, K_exog, K_Y, Z2tZ2_inv_Z2tY);
 
         for (i = 0; i < K_Y; i++) {

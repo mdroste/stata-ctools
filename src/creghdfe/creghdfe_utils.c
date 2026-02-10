@@ -115,78 +115,11 @@ ST_int count_connected_components(
 
 /* Structure for sorting (value, index) pairs */
 typedef struct {
-    ST_int value;   /* Integer value (cast from double) */
+    double value;   /* FE value (may be non-integer) */
     ST_int index;   /* Original observation index */
 } ValueIndexPair;
 
-/* Forward declaration for fallback */
-static int compare_value_index_inline(const ValueIndexPair *a, const ValueIndexPair *b);
-
-/*
- * LSD Radix sort for ValueIndexPair array, sorting by value field.
- * O(N × 4) for 32-bit integers, much faster than qsort's O(N log N).
- * Uses 8-bit digits (256 buckets) for 4 passes.
- */
-static void radix_sort_pairs(ValueIndexPair *pairs, ST_int N)
-{
-    /* Allocate temp buffer for ping-pong */
-    ValueIndexPair *temp = (ValueIndexPair *)malloc(N * sizeof(ValueIndexPair));
-    if (!temp) {
-        /* Fallback to qsort if malloc fails */
-        qsort(pairs, N, sizeof(ValueIndexPair),
-              (int (*)(const void*, const void*))compare_value_index_inline);
-        return;
-    }
-
-    ValueIndexPair *src = pairs;
-    ValueIndexPair *dst = temp;
-    ST_int counts[256];
-
-    /* 4 passes for 32-bit integers, 8 bits per pass */
-    for (int pass = 0; pass < 4; pass++) {
-        int shift = pass * 8;
-
-        /* Count occurrences of each digit */
-        memset(counts, 0, sizeof(counts));
-        for (ST_int i = 0; i < N; i++) {
-            /* Handle signed integers: flip sign bit on last pass */
-            ST_int val = src[i].value;
-            if (pass == 3) val ^= 0x80000000;  /* Flip sign bit for signed sort */
-            int digit = (val >> shift) & 0xFF;
-            counts[digit]++;
-        }
-
-        /* Convert counts to starting positions (prefix sum) */
-        ST_int total = 0;
-        for (int d = 0; d < 256; d++) {
-            ST_int count = counts[d];
-            counts[d] = total;
-            total += count;
-        }
-
-        /* Distribute elements to destination */
-        for (ST_int i = 0; i < N; i++) {
-            ST_int val = src[i].value;
-            if (pass == 3) val ^= 0x80000000;
-            int digit = (val >> shift) & 0xFF;
-            dst[counts[digit]++] = src[i];
-        }
-
-        /* Swap src and dst for next pass */
-        ValueIndexPair *swap = src;
-        src = dst;
-        dst = swap;
-    }
-
-    /* If result is in temp, copy back to pairs */
-    if (src != pairs) {
-        memcpy(pairs, src, N * sizeof(ValueIndexPair));
-    }
-
-    free(temp);
-}
-
-/* Inline comparison for fallback qsort */
+/* Comparison function for qsort */
 static int compare_value_index_inline(const ValueIndexPair *a, const ValueIndexPair *b)
 {
     if (a->value < b->value) return -1;
@@ -195,15 +128,12 @@ static int compare_value_index_inline(const ValueIndexPair *a, const ValueIndexP
 }
 
 /*
- * Remap values to contiguous levels using radix sort.
+ * Remap values to contiguous levels using sort.
  * Algorithm:
  *   1. Create (value, index) pairs
- *   2. Radix sort by value - O(4N) for 32-bit integers
+ *   2. Sort by value (qsort, handles doubles including non-integer FE values)
  *   3. Linear scan: assign level 1 to first value, increment when value changes
  *   4. Write levels to output array using original indices
- *
- * Complexity: O(N) time (4 passes), O(N) space
- * Much faster than qsort O(N log N) for large N.
  */
 int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels)
 {
@@ -224,16 +154,17 @@ int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_i
             free(pairs);
             return -1;  /* Error: unexpected missing value */
         }
-        pairs[i].value = (ST_int)values[i];
+        pairs[i].value = values[i];
         pairs[i].index = i;
     }
 
-    /* Radix sort by value - O(4N) instead of O(N log N) */
-    radix_sort_pairs(pairs, N);
+    /* Sort by value - use qsort for double values */
+    qsort(pairs, N, sizeof(ValueIndexPair),
+          (int (*)(const void*, const void*))compare_value_index_inline);
 
     /* Linear scan to assign levels */
     ST_int current_level = 1;
-    ST_int prev_value = pairs[0].value;
+    double prev_value = pairs[0].value;
     levels_out[pairs[0].index] = current_level;
 
     for (ST_int i = 1; i < N; i++) {
