@@ -35,7 +35,7 @@
  * Statistical Functions
  * ============================================================================ */
 
-ST_double cqreg_dnorm(ST_double x)
+static ST_double cqreg_dnorm(ST_double x)
 {
     return exp(-0.5 * x * x) / M_SQRT_2PI;
 }
@@ -44,7 +44,7 @@ ST_double cqreg_dnorm(ST_double x)
  * Standard normal CDF using Abramowitz & Stegun approximation.
  * Maximum error: 7.5e-8
  */
-ST_double cqreg_pnorm(ST_double x)
+static ST_double cqreg_pnorm(ST_double x)
 {
     const ST_double a1 =  0.254829592;
     const ST_double a2 = -0.284496736;
@@ -74,7 +74,7 @@ ST_double cqreg_pnorm(ST_double x)
  * Standard normal quantile function using rational approximation.
  * Accurate to about 1e-9.
  */
-ST_double cqreg_qnorm(ST_double p)
+static ST_double cqreg_qnorm(ST_double p)
 {
     /* Coefficients for rational approximation */
     static const ST_double a[] = {
@@ -140,18 +140,18 @@ ST_double cqreg_qnorm(ST_double p)
  * Kernel Functions
  * ============================================================================ */
 
-ST_double cqreg_kernel_epanechnikov(ST_double u)
+static ST_double cqreg_kernel_epanechnikov(ST_double u)
 {
     if (fabs(u) >= 1.0) return 0.0;
     return 0.75 * (1.0 - u * u);
 }
 
-ST_double cqreg_kernel_gaussian(ST_double u)
+static ST_double cqreg_kernel_gaussian(ST_double u)
 {
     return cqreg_dnorm(u);
 }
 
-ST_double cqreg_kernel_triangular(ST_double u)
+static ST_double cqreg_kernel_triangular(ST_double u)
 {
     ST_double abs_u = fabs(u);
     if (abs_u >= 1.0) return 0.0;
@@ -162,7 +162,7 @@ ST_double cqreg_kernel_triangular(ST_double u)
  * Bandwidth Selection
  * ============================================================================ */
 
-ST_double cqreg_bandwidth_hsheather(ST_int N, ST_double q, ST_double alpha)
+static ST_double cqreg_bandwidth_hsheather(ST_int N, ST_double q, ST_double alpha)
 {
     /*
      * Hall-Sheather (1988) optimal bandwidth for quantile regression.
@@ -189,7 +189,7 @@ ST_double cqreg_bandwidth_hsheather(ST_int N, ST_double q, ST_double alpha)
     return h;
 }
 
-ST_double cqreg_bandwidth_bofinger(ST_int N, ST_double q)
+static ST_double cqreg_bandwidth_bofinger(ST_int N, ST_double q)
 {
     /*
      * Bofinger (1975) bandwidth:
@@ -206,7 +206,7 @@ ST_double cqreg_bandwidth_bofinger(ST_int N, ST_double q)
     return h;
 }
 
-ST_double cqreg_bandwidth_chamberlain(ST_int N, ST_double q, ST_double alpha)
+static ST_double cqreg_bandwidth_chamberlain(ST_int N, ST_double q, ST_double alpha)
 {
     /*
      * Chamberlain (1994) bandwidth:
@@ -386,7 +386,7 @@ static void parallel_merge_sort(ST_double *data, ST_int N)
 }
 #endif /* _OPENMP */
 
-void cqreg_sort_ascending(ST_double *data, ST_int N)
+static void cqreg_sort_ascending(ST_double *data, ST_int N)
 {
 #ifdef _OPENMP
     if (N > PARALLEL_SORT_THRESHOLD) {
@@ -403,7 +403,7 @@ void cqreg_sort_ascending(ST_double *data, ST_int N)
  * Sample Quantile
  * ============================================================================ */
 
-ST_double cqreg_sample_quantile(const ST_double *sorted_data, ST_int N, ST_double q)
+static ST_double cqreg_sample_quantile(const ST_double *sorted_data, ST_int N, ST_double q)
 {
     /*
      * Stata-compatible quantile calculation.
@@ -434,10 +434,10 @@ ST_double cqreg_sample_quantile(const ST_double *sorted_data, ST_int N, ST_doubl
  * Density Estimation
  * ============================================================================ */
 
-ST_double cqreg_kernel_density(ST_double x,
-                               const ST_double *data,
-                               ST_int N,
-                               ST_double bandwidth)
+static ST_double cqreg_kernel_density(ST_double x,
+                                      const ST_double *data,
+                                      ST_int N,
+                                      ST_double bandwidth)
 {
     ST_double sum = 0.0;
     ST_double h_inv = 1.0 / bandwidth;
@@ -451,10 +451,10 @@ ST_double cqreg_kernel_density(ST_double x,
     return sum * h_inv / (ST_double)N;
 }
 
-ST_double cqreg_density_at_quantile(const ST_double *data,
-                                    ST_int N,
-                                    ST_double q,
-                                    ST_double bandwidth)
+static ST_double cqreg_density_at_quantile(const ST_double *data,
+                                           ST_int N,
+                                           ST_double q,
+                                           ST_double bandwidth)
 {
     /* Find the sample quantile */
     ST_double x_q = cqreg_sample_quantile(data, N, q);
@@ -485,12 +485,12 @@ ST_double cqreg_density_at_quantile(const ST_double *data,
  * Returns:
  *   Average sparsity (for compatibility with IID method)
  */
-ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
-                                        const ST_double *y,
-                                        const ST_double *residuals,
-                                        ST_int N,
-                                        ST_double q,
-                                        cqreg_bw_method bw_method)
+static ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
+                                               const ST_double *y,
+                                               const ST_double *residuals,
+                                               ST_int N,
+                                               ST_double q,
+                                               cqreg_bw_method bw_method)
 {
     if (obs_density == NULL || y == NULL || residuals == NULL || N <= 0) {
         return 1.0;
@@ -594,8 +594,8 @@ ST_double cqreg_estimate_fitted_density(ST_double *obs_density,
  * Estimate sparsity using kernel density estimation on residuals.
  * This is an alternative to the difference quotient method.
  */
-ST_double cqreg_estimate_kernel_density_sparsity(cqreg_sparsity_state *sp,
-                                                  const ST_double *residuals)
+static ST_double cqreg_estimate_kernel_density_sparsity(cqreg_sparsity_state *sp,
+                                                        const ST_double *residuals)
 {
     if (sp == NULL || residuals == NULL) {
         return 0.0;

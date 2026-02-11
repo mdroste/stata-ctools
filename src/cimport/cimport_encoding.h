@@ -91,49 +91,6 @@ int cimport_convert_to_utf8(const char *data, size_t size, CImportEncoding encod
                             int bom_skip, char **out_data, size_t *out_size);
 
 /*
- * Convert a single byte from Windows-1252 to UTF-8.
- * Returns number of bytes written to output (1-3).
- *
- * @param byte      Input byte (Windows-1252)
- * @param out       Output buffer (must have at least 3 bytes)
- * @return          Number of bytes written
- */
-int cimport_cp1252_to_utf8(unsigned char byte, char *out);
-
-/*
- * Convert a single byte from ISO-8859-1 to UTF-8.
- * Returns number of bytes written to output (1-2).
- *
- * @param byte      Input byte (ISO-8859-1)
- * @param out       Output buffer (must have at least 2 bytes)
- * @return          Number of bytes written
- */
-int cimport_latin1_to_utf8(unsigned char byte, char *out);
-
-/*
- * Convert a single byte from ISO-8859-15 to UTF-8.
- * Returns number of bytes written to output (1-3).
- *
- * @param byte      Input byte (ISO-8859-15)
- * @param out       Output buffer (must have at least 3 bytes)
- * @return          Number of bytes written
- */
-int cimport_latin9_to_utf8(unsigned char byte, char *out);
-
-/*
- * Convert UTF-16 to UTF-8.
- *
- * @param data          Source UTF-16 data
- * @param size          Size of source data in bytes
- * @param is_little_endian  true for UTF-16LE, false for UTF-16BE
- * @param out_data      Output: pointer to UTF-8 data (caller must free)
- * @param out_size      Output: size of UTF-8 data
- * @return              0 on success, -1 on error
- */
-int cimport_utf16_to_utf8(const char *data, size_t size, bool is_little_endian,
-                          char **out_data, size_t *out_size);
-
-/*
  * Strip invalid UTF-8 sequences from data buffer.
  * Copies only valid UTF-8 bytes from src to dst.
  * dst must be at least src_size bytes.

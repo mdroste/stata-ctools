@@ -29,8 +29,11 @@
 #include "civreghdfe_matrix.h"
 #include "civreghdfe_estimate.h"
 
-/* Forward declaration - defined in creghdfe_utils.c */
+/* Forward declarations - defined in creghdfe_utils.c */
 extern int remap_values_sorted(const double *values, ST_int N, ST_int *levels_out, ST_int *num_levels);
+extern int remap_and_count(const double *values, ST_int N, ST_int *levels_out,
+                           ST_int *num_levels, ST_int **counts_out,
+                           const double *weights, ST_double **wcounts_out);
 #include "civreghdfe_vce.h"
 #include "civreghdfe_tests.h"
 #include "../ctools_hdfe_utils.h"
@@ -177,134 +180,69 @@ static ST_retcode do_iv_regression(void)
         return 2001;
     }
 
-    /* Allocate output arrays (with overflow-safe multiplication) */
-    ST_double *y = (ST_double *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_double));
-    ST_double *X_endog = (K_endog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_endog, sizeof(ST_double)) : NULL;
-    ST_double *X_exog = (K_exog > 0) ? (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_exog, sizeof(ST_double)) : NULL;
-    ST_double *Z = (ST_double *)ctools_safe_malloc3((size_t)N_total, (size_t)K_iv, sizeof(ST_double));
-    ST_double *weights = has_weights ? (ST_double *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_double)) : NULL;
+    /* Allocate cluster ID arrays (needed for string conversion + sentinel marking).
+     * All other data (y, X, Z, FE, weights) is read directly from filtered.data
+     * during missing check and compaction, avoiding redundant N_total-sized copies. */
     ST_int *cluster_ids = has_cluster ? (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int)) : NULL;
     ST_int *cluster2_ids = has_cluster2 ? (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int)) : NULL;
 
-    /* Allocate FE level arrays (with overflow-safe multiplication) */
-    ST_int **fe_levels = (ST_int **)ctools_safe_malloc2((size_t)G, sizeof(ST_int *));
-    int fe_alloc_failed = 0;
-    if (fe_levels) {
-        for (ST_int g = 0; g < G; g++) {
-            fe_levels[g] = (ST_int *)ctools_safe_malloc2((size_t)N_total, sizeof(ST_int));
-            if (!fe_levels[g]) fe_alloc_failed = 1;
-        }
-    } else {
-        fe_alloc_failed = 1;
-    }
-
-    if (!y || !Z || (K_endog > 0 && !X_endog) || (K_exog > 0 && !X_exog) ||
-        (has_weights && !weights) || (has_cluster && !cluster_ids) ||
-        (has_cluster2 && !cluster2_ids) || fe_alloc_failed) {
+    if ((has_cluster && !cluster_ids) || (has_cluster2 && !cluster2_ids)) {
         SF_error("civreghdfe: Memory allocation failed\n");
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids);
-        if (fe_levels) {
-            for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-            free(fe_levels);
-        }
+        free(cluster_ids); free(cluster2_ids);
         ctools_filtered_data_free(&filtered);
         return 920;
     }
 
-    /* Extract data from filtered.data - data is already filtered, use direct copy */
+    /* Extract cluster IDs (needs early processing for string variables) */
     ST_int i;
-    memcpy(y, filtered.data.vars[var_y_idx].data.dbl, N_total * sizeof(ST_double));
-
-    for (ST_int k = 0; k < K_endog; k++) {
-        memcpy(X_endog + k * N_total, filtered.data.vars[var_endog_start_idx + k].data.dbl,
-               N_total * sizeof(ST_double));
-    }
-    for (ST_int k = 0; k < K_exog; k++) {
-        memcpy(X_exog + k * N_total, filtered.data.vars[var_exog_start_idx + k].data.dbl,
-               N_total * sizeof(ST_double));
-    }
-    for (ST_int k = 0; k < K_iv; k++) {
-        memcpy(Z + k * N_total, filtered.data.vars[var_iv_start_idx + k].data.dbl,
-               N_total * sizeof(ST_double));
-    }
-    for (ST_int g = 0; g < G; g++) {
-        double *src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
-        /* Use remap_values_sorted to handle non-integer FE values (e.g. headroom=1.5) */
-        ST_int num_fe_levels_g;
-        if (remap_values_sorted(src, N_total, fe_levels[g], &num_fe_levels_g) != 0) {
-            SF_error("civreghdfe: FE level remapping failed\n");
-            free(y); free(X_endog); free(X_exog); free(Z);
-            free(weights); free(cluster_ids); free(cluster2_ids);
-            for (ST_int fg = 0; fg < G; fg++) free(fe_levels[fg]);
-            free(fe_levels);
-            ctools_filtered_data_free(&filtered);
-            return 920;
-        }
-    }
     if (has_cluster) {
         if (filtered.data.vars[var_cluster_idx].type == STATA_TYPE_STRING) {
-            /* String cluster variable: convert to group IDs in C (like egen group()) */
             ST_int n_groups = 0;
             if (ctools_strings_to_cluster_ids(filtered.data.vars[var_cluster_idx].data.str,
                                                N_total, cluster_ids, &n_groups) != 0) {
                 SF_error("civreghdfe: Failed to convert string cluster variable to group IDs\n");
-                free(y); free(X_endog); free(X_exog); free(Z);
-                free(weights); free(cluster_ids); free(cluster2_ids);
-                for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-                free(fe_levels);
+                free(cluster_ids); free(cluster2_ids);
                 ctools_filtered_data_free(&filtered);
                 return 920;
             }
         } else {
             double *src = filtered.data.vars[var_cluster_idx].data.dbl;
             for (i = 0; i < N_total; i++) {
-                /* Use -1 as sentinel for missing cluster values */
                 cluster_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
             }
         }
     }
     if (has_cluster2) {
         if (filtered.data.vars[var_cluster2_idx].type == STATA_TYPE_STRING) {
-            /* String cluster variable: convert to group IDs in C (like egen group()) */
             ST_int n_groups = 0;
             if (ctools_strings_to_cluster_ids(filtered.data.vars[var_cluster2_idx].data.str,
                                                N_total, cluster2_ids, &n_groups) != 0) {
                 SF_error("civreghdfe: Failed to convert string cluster2 variable to group IDs\n");
-                free(y); free(X_endog); free(X_exog); free(Z);
-                free(weights); free(cluster_ids); free(cluster2_ids);
-                for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-                free(fe_levels);
+                free(cluster_ids); free(cluster2_ids);
                 ctools_filtered_data_free(&filtered);
                 return 920;
             }
         } else {
             double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
             for (i = 0; i < N_total; i++) {
-                /* Use -1 as sentinel for missing cluster2 values */
                 cluster2_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
             }
         }
     }
-    if (has_weights) {
-        memcpy(weights, filtered.data.vars[var_weight_idx].data.dbl, N_total * sizeof(ST_double));
-    }
 
-    /* Free filtered data - we've extracted what we need */
-    ctools_filtered_data_free(&filtered);
-
-    /* End extraction, start missing value check timing */
+    /* End extraction, start missing value check timing.
+     * Data arrays (y, X, Z, FE, weights) are NOT copied — we read directly
+     * from filtered.data during missing value check and compaction. */
     t_extract = ctools_timer_seconds() - t_extract_start;
     double t_missing_start = ctools_timer_seconds();
 
-    /* Drop observations with missing values */
+    /* Drop observations with missing values.
+     * Read directly from filtered.data to avoid redundant N_total-sized copies. */
     ST_int *valid_mask = (ST_int *)calloc(N_total, sizeof(ST_int));
     if (!valid_mask) {
         SF_error("civreghdfe: Memory allocation failed for valid_mask\n");
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        free(cluster_ids); free(cluster2_ids);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
     ST_int N_valid = 0;
@@ -313,31 +251,32 @@ static ST_retcode do_iv_regression(void)
         int is_valid = 1;
 
         /* Check y */
-        if (SF_is_missing(y[i])) is_valid = 0;
+        if (SF_is_missing(filtered.data.vars[var_y_idx].data.dbl[i])) is_valid = 0;
 
         /* Check X_endog */
         for (ST_int k = 0; k < K_endog && is_valid; k++) {
-            if (SF_is_missing(X_endog[k * N_total + i])) is_valid = 0;
+            if (SF_is_missing(filtered.data.vars[var_endog_start_idx + k].data.dbl[i])) is_valid = 0;
         }
 
         /* Check X_exog */
         for (ST_int k = 0; k < K_exog && is_valid; k++) {
-            if (SF_is_missing(X_exog[k * N_total + i])) is_valid = 0;
+            if (SF_is_missing(filtered.data.vars[var_exog_start_idx + k].data.dbl[i])) is_valid = 0;
         }
 
         /* Check Z */
         for (ST_int k = 0; k < K_iv && is_valid; k++) {
-            if (SF_is_missing(Z[k * N_total + i])) is_valid = 0;
+            if (SF_is_missing(filtered.data.vars[var_iv_start_idx + k].data.dbl[i])) is_valid = 0;
         }
 
-        /* Check FE variables for missing values (marked as -1 during extraction) */
+        /* Check FE variables for missing values */
         for (ST_int g = 0; g < G && is_valid; g++) {
-            if (fe_levels[g][i] < 0) is_valid = 0;
+            if (SF_is_missing(filtered.data.vars[var_fe_start_idx + g].data.dbl[i])) is_valid = 0;
         }
 
         /* Check weights */
         if (has_weights && is_valid) {
-            if (SF_is_missing(weights[i]) || weights[i] <= 0) is_valid = 0;
+            double w = filtered.data.vars[var_weight_idx].data.dbl[i];
+            if (SF_is_missing(w) || w <= 0) is_valid = 0;
         }
 
         /* Check cluster variables for missing values (marked as -1 during extraction) */
@@ -354,18 +293,14 @@ static ST_retcode do_iv_regression(void)
 
     if (N_valid < K_total + K_iv + 1) {
         SF_error("civreghdfe: Insufficient observations\n");
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        ctools_filtered_data_free(&filtered);
         return 2001;
     }
 
-    /* Fused compaction: compact FE levels first (needed for singleton detection),
-     * then run singleton detection, then compact all data in one pass.
-     * This avoids two separate O(N×K) data compaction passes. */
-
-    /* Step 1: Compact only FE levels for singleton detection */
+    /* Compact FE levels from raw doubles with O(N) counting-based remap.
+     * This replaces the old approach of: remap_values_sorted (O(N log N)) +
+     * separate integer compaction. Now we compact and remap in one step. */
     ST_int **fe_levels_c = (ST_int **)calloc((size_t)G, sizeof(ST_int *));
     int fe_c_alloc_failed = 0;
     if (fe_levels_c) {
@@ -382,20 +317,44 @@ static ST_retcode do_iv_regression(void)
             for (ST_int g = 0; g < G; g++) if (fe_levels_c[g]) free(fe_levels_c[g]);
             free(fe_levels_c);
         }
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
     {
-        ST_int idx = 0;
-        for (ST_int ii = 0; ii < N_total; ii++) {
-            if (!valid_mask[ii]) continue;
-            for (ST_int g = 0; g < G; g++)
-                fe_levels_c[g][idx] = fe_levels[g][ii];
-            idx++;
+        /* Compact FE doubles to temp array, then O(N) remap to contiguous integers */
+        double *fe_compact = (double *)malloc((size_t)N_valid * sizeof(double));
+        if (!fe_compact) {
+            for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
+            free(fe_levels_c);
+            free(cluster_ids); free(cluster2_ids); free(valid_mask);
+            ctools_filtered_data_free(&filtered);
+            return 920;
         }
+
+        for (ST_int g = 0; g < G; g++) {
+            double *fe_src = filtered.data.vars[var_fe_start_idx + g].data.dbl;
+            ST_int idx = 0;
+            for (ST_int ii = 0; ii < N_total; ii++) {
+                if (!valid_mask[ii]) continue;
+                fe_compact[idx++] = fe_src[ii];
+            }
+
+            ST_int num_levels_g = 0;
+            ST_int *counts_g = NULL;
+            if (remap_and_count(fe_compact, N_valid, fe_levels_c[g], &num_levels_g,
+                                &counts_g, NULL, NULL) != 0) {
+                SF_error("civreghdfe: FE level remapping failed\n");
+                free(fe_compact);
+                for (ST_int fg = 0; fg < G; fg++) free(fe_levels_c[fg]);
+                free(fe_levels_c);
+                free(cluster_ids); free(cluster2_ids); free(valid_mask);
+                ctools_filtered_data_free(&filtered);
+                return 920;
+            }
+            free(counts_g);  /* Counts recomputed later in HDFE setup */
+        }
+        free(fe_compact);
     }
 
     /* End missing value check/compact timing, start singleton timing */
@@ -408,10 +367,8 @@ static ST_retcode do_iv_regression(void)
         SF_error("civreghdfe: Memory allocation failed for singleton mask\n");
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
     ST_int num_singletons_total = ctools_remove_singletons(
@@ -440,14 +397,13 @@ static ST_retcode do_iv_regression(void)
         free(singleton_mask);
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
-        free(y); free(X_endog); free(X_exog); free(Z);
-        free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
-        for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-        free(fe_levels);
+        free(cluster_ids); free(cluster2_ids); free(valid_mask);
+        ctools_filtered_data_free(&filtered);
         return 920;
     }
 
-    /* Single fused compaction pass: skip invalid AND singleton observations */
+    /* Single fused compaction pass: skip invalid AND singleton observations.
+     * Read directly from filtered.data — no intermediate N_total-sized copies. */
     {
         ST_int valid_idx = 0;  /* Index into singleton_mask (N_valid-sized) */
         ST_int out_idx = 0;    /* Index into final arrays (N-sized) */
@@ -458,14 +414,14 @@ static ST_retcode do_iv_regression(void)
                 valid_idx++;
                 continue;
             }
-            y_c[out_idx] = y[ii];
+            y_c[out_idx] = filtered.data.vars[var_y_idx].data.dbl[ii];
             for (ST_int k = 0; k < K_endog; k++)
-                X_endog_c[k * N + out_idx] = X_endog[k * N_total + ii];
+                X_endog_c[k * N + out_idx] = filtered.data.vars[var_endog_start_idx + k].data.dbl[ii];
             for (ST_int k = 0; k < K_exog; k++)
-                X_exog_c[k * N + out_idx] = X_exog[k * N_total + ii];
+                X_exog_c[k * N + out_idx] = filtered.data.vars[var_exog_start_idx + k].data.dbl[ii];
             for (ST_int k = 0; k < K_iv; k++)
-                Z_c[k * N + out_idx] = Z[k * N_total + ii];
-            if (has_weights) weights_c[out_idx] = weights[ii];
+                Z_c[k * N + out_idx] = filtered.data.vars[var_iv_start_idx + k].data.dbl[ii];
+            if (has_weights) weights_c[out_idx] = filtered.data.vars[var_weight_idx].data.dbl[ii];
             if (has_cluster) cluster_ids_c[out_idx] = cluster_ids[ii];
             if (has_cluster2) cluster2_ids_c[out_idx] = cluster2_ids[ii];
             out_idx++;
@@ -508,11 +464,9 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
-    /* Free original arrays */
-    free(y); free(X_endog); free(X_exog); free(Z);
-    free(weights); free(cluster_ids); free(cluster2_ids); free(valid_mask);
-    for (ST_int g = 0; g < G; g++) free(fe_levels[g]);
-    free(fe_levels);
+    /* Free original arrays and filtered data (kept alive for direct reads during compaction) */
+    free(cluster_ids); free(cluster2_ids); free(valid_mask);
+    ctools_filtered_data_free(&filtered);
 
     /* Check we still have enough observations */
     if (N < K_total + K_iv + 1) {
@@ -626,7 +580,7 @@ static ST_retcode do_iv_regression(void)
     }
 
     /* Allocate inv_counts, inv_weighted_counts, and CG solver buffers */
-    ST_int num_threads = omp_get_max_threads();
+    ST_int num_threads = ctools_get_max_threads();
     if (num_threads > 8) num_threads = 8;
     state->num_threads = num_threads;
 

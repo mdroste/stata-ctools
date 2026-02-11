@@ -97,12 +97,12 @@ static ST_int hash_insert(cqreg_hash_table *ht, ST_int key)
  * Factor Creation
  * ============================================================================ */
 
-ST_int cqreg_hdfe_create_factor(ST_int var_idx,
-                                ST_int in1, ST_int in2,
-                                ST_int N_filtered,
-                                ST_int *levels,
-                                ST_double *counts,
-                                ST_int *num_levels)
+static ST_int cqreg_hdfe_create_factor(ST_int var_idx,
+                                       ST_int in1, ST_int in2,
+                                       ST_int N_filtered,
+                                       ST_int *levels,
+                                       ST_double *counts,
+                                       ST_int *num_levels)
 {
     ST_int idx, obs;
 
@@ -153,11 +153,11 @@ ST_int cqreg_hdfe_create_factor(ST_int var_idx,
  * Factor Creation from Pre-loaded Data
  * ============================================================================ */
 
-ST_int cqreg_hdfe_create_factor_from_data(const ST_double *data,
-                                           ST_int N_filtered,
-                                           ST_int *levels,
-                                           ST_double *counts,
-                                           ST_int *num_levels)
+static ST_int cqreg_hdfe_create_factor_from_data(const ST_double *data,
+                                                  ST_int N_filtered,
+                                                  ST_int *levels,
+                                                  ST_double *counts,
+                                                  ST_int *num_levels)
 {
     ST_int idx;
 
@@ -189,7 +189,7 @@ ST_int cqreg_hdfe_create_factor_from_data(const ST_double *data,
  * Singleton Detection
  * ============================================================================ */
 
-ST_int cqreg_hdfe_detect_singletons(cqreg_state *state, ST_int *mask)
+static ST_int cqreg_hdfe_detect_singletons(cqreg_state *state, ST_int *mask)
 {
     HDFE_State *hdfe = (HDFE_State *)state->hdfe_state;
     if (hdfe == NULL) return 0;
@@ -450,10 +450,10 @@ cleanup:
  * Partial Out
  * ============================================================================ */
 
-ST_int cqreg_hdfe_partial_out_column(cqreg_state *state,
-                                     ST_double *col,
-                                     ST_int N,
-                                     ST_int thread_id)
+static ST_int cqreg_hdfe_partial_out_column(cqreg_state *state,
+                                            ST_double *col,
+                                            ST_int N,
+                                            ST_int thread_id)
 {
     (void)N;  /* Unused - HDFE state knows N internally */
     HDFE_State *hdfe = (HDFE_State *)state->hdfe_state;
@@ -525,7 +525,7 @@ ST_int cqreg_hdfe_get_df_absorbed(const cqreg_state *state)
     return df;
 }
 
-ST_int cqreg_hdfe_get_num_singletons(const cqreg_state *state)
+static ST_int cqreg_hdfe_get_num_singletons(const cqreg_state *state)
 {
     if (state == NULL) return 0;
     return state->N_original - state->N;

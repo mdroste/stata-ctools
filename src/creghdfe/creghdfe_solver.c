@@ -18,9 +18,9 @@
  *          which matches or beats explicit 2-vector SIMD (4/iter)
  * ======================================================================== */
 
-ST_double dot_product(const ST_double * RESTRICT x,
-                      const ST_double * RESTRICT y,
-                      ST_int N)
+static ST_double dot_product(const ST_double * RESTRICT x,
+                             const ST_double * RESTRICT y,
+                             ST_int N)
 {
 #if CTOOLS_HAS_AVX2
     return ctools_simd_dot(x, y, (size_t)N);
@@ -35,10 +35,10 @@ ST_double dot_product(const ST_double * RESTRICT x,
  * compiler-vectorized scalar loop.
  * ======================================================================== */
 
-ST_double weighted_dot_product(const ST_double * RESTRICT x,
-                               const ST_double * RESTRICT y,
-                               const ST_double * RESTRICT w,
-                               ST_int N)
+static ST_double weighted_dot_product(const ST_double * RESTRICT x,
+                                      const ST_double * RESTRICT y,
+                                      const ST_double * RESTRICT w,
+                                      ST_int N)
 {
     return ctools_simd_dot_weighted(w, x, y, (size_t)N);
 }
@@ -99,38 +99,156 @@ static void project_and_subtract_fe(ST_double * RESTRICT ans,
 }
 
 /* ========================================================================
- * Symmetric Kaczmarz transformation with thread-local buffers
+ * FE Projection: first projection reads from source, writes to dest
+ *
+ * Replaces memcpy(ans, y) + project_and_subtract_fe(ans, ...) with a single
+ * function that reads from source and writes dest = source - means(source).
+ * Saves one full memcpy(N) per Kaczmarz call.
  * ======================================================================== */
 
-void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
-                                     const ST_double * RESTRICT y,
-                                     ST_double * RESTRICT ans,
-                                     ST_double ** RESTRICT fe_means,
-                                     ST_int thread_id)
+static void project_from_source_fe(const ST_double * RESTRICT source,
+                                    ST_double * RESTRICT dest,
+                                    const FE_Factor * RESTRICT f,
+                                    ST_int N,
+                                    const ST_double * RESTRICT weights,
+                                    ST_double * RESTRICT means)
 {
-    ST_int g, i;
+    ST_int i, level;
+    const ST_int num_levels = f->num_levels;
+    const ST_int * RESTRICT levels = f->levels;
+
+    const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
+        ? f->inv_weighted_counts : f->inv_counts;
+    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
+        ? f->weighted_counts : f->counts;
+
+    memset(means, 0, num_levels * sizeof(ST_double));
+
+    /* Scatter: accumulate source into means by FE level */
+    if (weights == NULL) {
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += source[i];
+        }
+    } else {
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += source[i] * weights[i];
+        }
+    }
+
+    if (inv_counts != NULL) {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            means[level] *= inv_counts[level];
+        }
+    } else {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            if (counts[level] > 0) {
+                means[level] /= counts[level];
+            }
+        }
+    }
+
+    /* Gather: dest = source - means[level] */
+    for (i = 0; i < N; i++) {
+        dest[i] = source[i] - means[levels[i] - 1];
+    }
+}
+
+/* ========================================================================
+ * FE Projection: last backward projection with fused complement
+ *
+ * Computes the normal scatter-gather on ans, then fuses the complement
+ * (ans = source - ans) into the gather step.
+ * Result: ans = source - (ans - means(ans))
+ * Saves one full N-sized pass per Kaczmarz call.
+ * ======================================================================== */
+
+static void project_complement_fe(const ST_double * RESTRICT source,
+                                   ST_double * RESTRICT ans,
+                                   const FE_Factor * RESTRICT f,
+                                   ST_int N,
+                                   const ST_double * RESTRICT weights,
+                                   ST_double * RESTRICT means)
+{
+    ST_int i, level;
+    const ST_int num_levels = f->num_levels;
+    const ST_int * RESTRICT levels = f->levels;
+
+    const ST_double * RESTRICT inv_counts = (weights != NULL && f->inv_weighted_counts != NULL)
+        ? f->inv_weighted_counts : f->inv_counts;
+    const ST_double * RESTRICT counts = (weights != NULL && f->weighted_counts != NULL)
+        ? f->weighted_counts : f->counts;
+
+    memset(means, 0, num_levels * sizeof(ST_double));
+
+    /* Scatter: accumulate ans into means by FE level */
+    if (weights == NULL) {
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += ans[i];
+        }
+    } else {
+        for (i = 0; i < N; i++) {
+            means[levels[i] - 1] += ans[i] * weights[i];
+        }
+    }
+
+    if (inv_counts != NULL) {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            means[level] *= inv_counts[level];
+        }
+    } else {
+        #pragma omp simd
+        for (level = 0; level < num_levels; level++) {
+            if (counts[level] > 0) {
+                means[level] /= counts[level];
+            }
+        }
+    }
+
+    /* Fused gather + complement: ans = source - (ans - means[level]) */
+    for (i = 0; i < N; i++) {
+        ans[i] = source[i] - ans[i] + means[levels[i] - 1];
+    }
+}
+
+/* ========================================================================
+ * Symmetric Kaczmarz transformation with thread-local buffers
+ *
+ * Optimized: first forward projection reads from y directly (no memcpy),
+ * last backward projection fuses the complement. Saves 2 N-sized passes.
+ * ======================================================================== */
+
+static void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
+                                            const ST_double * RESTRICT y,
+                                            ST_double * RESTRICT ans,
+                                            ST_double ** RESTRICT fe_means,
+                                            ST_int thread_id)
+{
+    ST_int g;
     const ST_int N = S->N;
     const ST_int G = S->G;
 
-    memcpy(ans, y, N * sizeof(ST_double));
+    /* Forward sweep — first projection reads from y, writes to ans (no memcpy) */
+    project_from_source_fe(y, ans, &S->factors[0], N, S->weights,
+                           fe_means[thread_id * G + 0]);
 
-    /* Forward sweep */
-    for (g = 0; g < G; g++) {
+    for (g = 1; g < G; g++) {
         project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
                                 fe_means[thread_id * G + g]);
     }
 
-    /* Backward sweep */
-    for (g = G - 2; g >= 0; g--) {
+    /* Backward sweep — all but last use standard projection */
+    for (g = G - 2; g > 0; g--) {
         project_and_subtract_fe(ans, &S->factors[g], N, S->weights,
                                 fe_means[thread_id * G + g]);
     }
 
-    /* Return projection: y - ans */
-    #pragma omp simd
-    for (i = 0; i < N; i++) {
-        ans[i] = y[i] - ans[i];
-    }
+    /* Last backward projection on factor 0 with complement fused:
+     * ans = y - (ans - P0(ans)) = y - (I-P0)(I-P_{G-1})...(I-P0)y */
+    project_complement_fe(y, ans, &S->factors[0], N, S->weights,
+                          fe_means[thread_id * G + 0]);
 }
 
 /* ========================================================================

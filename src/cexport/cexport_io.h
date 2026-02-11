@@ -162,20 +162,4 @@ ssize_t cexport_io_write_batch(cexport_io_file *file,
  */
 int cexport_io_close(cexport_io_file *file, size_t actual_size);
 
-/*
- * Get appropriate line ending string.
- *
- * @param use_crlf  Non-zero for Windows-style "\r\n", zero for Unix "\n"
- * @return          Static string pointer (do not free)
- */
-const char *cexport_io_line_ending(int use_crlf);
-
-/*
- * Get line ending length.
- *
- * @param use_crlf  Non-zero for CRLF (returns 2), zero for LF (returns 1)
- * @return          Length of line ending string
- */
-int cexport_io_line_ending_len(int use_crlf);
-
 #endif /* CEXPORT_IO_H */

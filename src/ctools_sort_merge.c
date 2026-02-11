@@ -739,7 +739,7 @@ static stata_retcode merge_sort_by_numeric_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > MERGE_MAX_THREADS) num_threads = MERGE_MAX_THREADS;
 
     if (data->nobs < MERGE_MIN_BLOCK_SIZE * 2) {
@@ -781,7 +781,7 @@ static stata_retcode merge_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > MERGE_MAX_THREADS) num_threads = MERGE_MAX_THREADS;
 
     if (data->nobs < MERGE_MIN_BLOCK_SIZE * 2) {

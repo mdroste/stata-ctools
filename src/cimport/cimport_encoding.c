@@ -342,7 +342,7 @@ bool cimport_encoding_needs_conversion(CImportEncoding enc)
  * Single-byte to UTF-8 Converters
  * ============================================================================ */
 
-int cimport_latin1_to_utf8(unsigned char byte, char *out)
+static int cimport_latin1_to_utf8(unsigned char byte, char *out)
 {
     if (byte < 0x80) {
         out[0] = (char)byte;
@@ -354,7 +354,7 @@ int cimport_latin1_to_utf8(unsigned char byte, char *out)
     return 2;
 }
 
-int cimport_cp1252_to_utf8(unsigned char byte, char *out)
+static int cimport_cp1252_to_utf8(unsigned char byte, char *out)
 {
     if (byte < 0x80) {
         out[0] = (char)byte;
@@ -373,7 +373,7 @@ int cimport_cp1252_to_utf8(unsigned char byte, char *out)
     return codepoint_to_utf8(codepoint, out);
 }
 
-int cimport_latin9_to_utf8(unsigned char byte, char *out)
+static int cimport_latin9_to_utf8(unsigned char byte, char *out)
 {
     if (byte < 0x80) {
         out[0] = (char)byte;
@@ -424,8 +424,8 @@ static int cimport_macroman_to_utf8(unsigned char byte, char *out)
  * UTF-16 to UTF-8 Conversion
  * ============================================================================ */
 
-int cimport_utf16_to_utf8(const char *data, size_t size, bool is_little_endian,
-                          char **out_data, size_t *out_size)
+static int cimport_utf16_to_utf8(const char *data, size_t size, bool is_little_endian,
+                                 char **out_data, size_t *out_size)
 {
     const unsigned char *bytes = (const unsigned char *)data;
 

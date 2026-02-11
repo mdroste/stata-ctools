@@ -49,7 +49,7 @@ static int impl_compare_indices(const void *a, const void *b) {
  * Type Initialization and Cleanup
  * ======================================================================== */
 
-void cbinscatter_config_init(BinscatterConfig *config) {
+static void cbinscatter_config_init(BinscatterConfig *config) {
     config->nquantiles = 20;
     config->linetype = 0;
     config->compute_se = 0;
@@ -68,7 +68,7 @@ void cbinscatter_config_init(BinscatterConfig *config) {
     config->tolerance = 1e-8;
 }
 
-void cbinscatter_results_init(BinscatterResults *results) {
+static void cbinscatter_results_init(BinscatterResults *results) {
     results->num_by_groups = 0;
     results->groups = NULL;
     results->nquantiles = 0;
@@ -76,7 +76,7 @@ void cbinscatter_results_init(BinscatterResults *results) {
     results->obs_dropped = 0;
 }
 
-void cbinscatter_results_free(BinscatterResults *results) {
+static void cbinscatter_results_free(BinscatterResults *results) {
     if (results->groups) {
         for (ST_int g = 0; g < results->num_by_groups; g++) {
             if (results->groups[g].bins) {
@@ -91,7 +91,7 @@ void cbinscatter_results_free(BinscatterResults *results) {
     cbinscatter_results_init(results);
 }
 
-void cbinscatter_workdata_init(BinscatterWorkData *work) {
+static void cbinscatter_workdata_init(BinscatterWorkData *work) {
     work->N = 0;
     work->y = NULL;
     work->x = NULL;
@@ -99,7 +99,7 @@ void cbinscatter_workdata_init(BinscatterWorkData *work) {
     work->x_owned = 0;
 }
 
-void cbinscatter_workdata_free(BinscatterWorkData *work) {
+static void cbinscatter_workdata_free(BinscatterWorkData *work) {
     if (work->y_owned && work->y) free(work->y);
     if (work->x_owned && work->x) free(work->x);
     cbinscatter_workdata_init(work);

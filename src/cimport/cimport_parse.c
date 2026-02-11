@@ -19,7 +19,7 @@ bool cimport_is_whitespace(char c)
     return c == ' ' || c == '\t' || c == '\r';
 }
 
-bool cimport_row_has_unmatched_quote(const char *start, const char *end, char quote)
+static bool cimport_row_has_unmatched_quote(const char *start, const char *end, char quote)
 {
     int quote_count = 0;
     for (const char *p = start; p < end; p++) {
@@ -33,7 +33,7 @@ bool cimport_row_has_unmatched_quote(const char *start, const char *end, char qu
  * ============================================================================ */
 
 #if CTOOLS_HAS_AVX2
-const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
+static const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const __m256i v_newline = _mm256_set1_epi8('\n');
     const __m256i v_delim = _mm256_set1_epi8(delim);
@@ -85,7 +85,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
 }
 
 #elif CTOOLS_HAS_SSE2
-const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
+static const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const __m128i v_newline = _mm_set1_epi8('\n');
     const __m128i v_delim = _mm_set1_epi8(delim);
@@ -115,7 +115,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
 }
 
 #elif CTOOLS_HAS_NEON
-const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
+static const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     const uint8x16_t v_newline = vdupq_n_u8('\n');
     const uint8x16_t v_delim = vdupq_n_u8(delim);
@@ -152,7 +152,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
 
 #else
 /* Scalar fallback */
-const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
+static const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim)
 {
     while (ptr < end) {
         char c = *ptr;
@@ -167,7 +167,7 @@ const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end,
  * Row Boundary Detection
  * ============================================================================ */
 
-const char *cimport_find_next_row_loose(const char *ptr, const char *end)
+static const char *cimport_find_next_row_loose(const char *ptr, const char *end)
 {
 #if CTOOLS_HAS_AVX2
     {
@@ -528,7 +528,7 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
     return field_count;
 }
 
-bool cimport_field_contains_quote(const char *src, int len, char quote)
+static bool cimport_field_contains_quote(const char *src, int len, char quote)
 {
 #if CTOOLS_HAS_AVX2
     /* AVX2: Scan 32 bytes at a time */
@@ -683,8 +683,8 @@ int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
     return out_len;
 }
 
-int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field,
-                                    char *output, int max_len)
+static int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field,
+                                          char *output, int max_len)
 {
     const char *src = file_base + field->offset;
     int src_len = CIMPORT_FIELD_LENGTH(*field);

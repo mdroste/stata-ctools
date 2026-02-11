@@ -24,7 +24,7 @@
  * Utility
  * ============================================================================ */
 
-const char* blas_get_impl_name(void)
+static const char* blas_get_impl_name(void)
 {
     return BLAS_IMPL_NAME;
 }
@@ -34,7 +34,7 @@ const char* blas_get_impl_name(void)
  * BLAS Level 1 Operations
  * ============================================================================ */
 
-ST_double blas_ddot(ST_int N, const ST_double *x, const ST_double *y)
+static ST_double blas_ddot(ST_int N, const ST_double *x, const ST_double *y)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     return cblas_ddot(N, x, 1, y, 1);
@@ -47,7 +47,7 @@ ST_double blas_ddot(ST_int N, const ST_double *x, const ST_double *y)
 }
 
 
-void blas_daxpy(ST_int N, ST_double alpha, const ST_double *x, ST_double *y)
+static void blas_daxpy(ST_int N, ST_double alpha, const ST_double *x, ST_double *y)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_daxpy(N, alpha, x, 1, y, 1);
@@ -62,7 +62,7 @@ void blas_daxpy(ST_int N, ST_double alpha, const ST_double *x, ST_double *y)
 }
 
 
-void blas_dscal(ST_int N, ST_double alpha, ST_double *x)
+static void blas_dscal(ST_int N, ST_double alpha, ST_double *x)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_dscal(N, alpha, x, 1);
@@ -84,7 +84,7 @@ void blas_dscal(ST_int N, ST_double alpha, ST_double *x)
 }
 
 
-void blas_dcopy(ST_int N, const ST_double *x, ST_double *y)
+static void blas_dcopy(ST_int N, const ST_double *x, ST_double *y)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_dcopy(N, x, 1, y, 1);
@@ -96,7 +96,7 @@ void blas_dcopy(ST_int N, const ST_double *x, ST_double *y)
 }
 
 
-ST_double blas_dasum(ST_int N, const ST_double *x)
+static ST_double blas_dasum(ST_int N, const ST_double *x)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     return cblas_dasum(N, x, 1);
@@ -113,7 +113,7 @@ ST_double blas_dasum(ST_int N, const ST_double *x)
 }
 
 
-ST_double blas_dnrm2(ST_int N, const ST_double *x)
+static ST_double blas_dnrm2(ST_int N, const ST_double *x)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     return cblas_dnrm2(N, x, 1);
@@ -174,10 +174,10 @@ void blas_dgemv(int trans, ST_int M, ST_int N,
 }
 
 
-void blas_dsymv(ST_int N,
-                ST_double alpha, const ST_double *A, ST_int lda,
-                const ST_double *x,
-                ST_double beta, ST_double *y)
+static void blas_dsymv(ST_int N,
+                       ST_double alpha, const ST_double *A, ST_int lda,
+                       const ST_double *x,
+                       ST_double beta, ST_double *y)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_dsymv(CblasColMajor, CblasLower, N, alpha, A, lda, x, 1, beta, y, 1);
@@ -194,11 +194,11 @@ void blas_dsymv(ST_int N,
  * BLAS Level 3 Operations
  * ============================================================================ */
 
-void blas_dgemm(int transA, int transB,
-                ST_int M, ST_int N, ST_int K,
-                ST_double alpha, const ST_double *A, ST_int lda,
-                const ST_double *B, ST_int ldb,
-                ST_double beta, ST_double *C, ST_int ldc)
+static void blas_dgemm(int transA, int transB,
+                       ST_int M, ST_int N, ST_int K,
+                       ST_double alpha, const ST_double *A, ST_int lda,
+                       const ST_double *B, ST_int ldb,
+                       ST_double beta, ST_double *C, ST_int ldc)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_dgemm(CblasColMajor,
@@ -271,9 +271,9 @@ void blas_dgemm(int transA, int transB,
 }
 
 
-void blas_dsyrk(int trans, ST_int N, ST_int K,
-                ST_double alpha, const ST_double *A, ST_int lda,
-                ST_double beta, ST_double *C, ST_int ldc)
+static void blas_dsyrk(int trans, ST_int N, ST_int K,
+                       ST_double alpha, const ST_double *A, ST_int lda,
+                       ST_double beta, ST_double *C, ST_int ldc)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     cblas_dsyrk(CblasColMajor, CblasLower,
@@ -312,7 +312,7 @@ void blas_dsyrk(int trans, ST_int N, ST_int K,
  * LAPACK Operations
  * ============================================================================ */
 
-ST_int lapack_dpotrf(ST_int N, ST_double *A, ST_int lda)
+static ST_int lapack_dpotrf(ST_int N, ST_double *A, ST_int lda)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     /* Apple Accelerate uses CLAPACK interface */
@@ -357,9 +357,9 @@ ST_int lapack_dpotrf(ST_int N, ST_double *A, ST_int lda)
 }
 
 
-ST_int lapack_dpotrs(ST_int N, ST_int NRHS,
-                     const ST_double *A, ST_int lda,
-                     ST_double *B, ST_int ldb)
+static ST_int lapack_dpotrs(ST_int N, ST_int NRHS,
+                            const ST_double *A, ST_int lda,
+                            ST_double *B, ST_int ldb)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     char uplo = 'L';
@@ -403,7 +403,7 @@ ST_int lapack_dpotrs(ST_int N, ST_int NRHS,
 }
 
 
-ST_int lapack_dpotri(ST_int N, ST_double *A, ST_int lda)
+static ST_int lapack_dpotri(ST_int N, ST_double *A, ST_int lda)
 {
 #if USE_BLAS && defined(HAVE_ACCELERATE)
     char uplo = 'L';
@@ -602,9 +602,9 @@ void blas_xtdx(ST_double *XDX,
 }
 
 
-void blas_xtv(ST_double *result,
-              const ST_double *X, ST_int N, ST_int K,
-              const ST_double *v)
+static void blas_xtv(ST_double *result,
+                     const ST_double *X, ST_int N, ST_int K,
+                     const ST_double *v)
 {
     /*
      * Compute result = X' * v
@@ -627,10 +627,10 @@ void blas_xtv(ST_double *result,
 }
 
 
-ST_int blas_solve_weighted_ls(const ST_double *X, ST_int N, ST_int K,
-                               const ST_double *D,
-                               const ST_double *y,
-                               ST_double *beta)
+static ST_int blas_solve_weighted_ls(const ST_double *X, ST_int N, ST_int K,
+                                     const ST_double *D,
+                                     const ST_double *y,
+                                     ST_double *beta)
 {
     /*
      * Solve (X'DX) * beta = X'Dy via Cholesky

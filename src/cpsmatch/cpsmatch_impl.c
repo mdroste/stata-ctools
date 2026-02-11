@@ -1481,7 +1481,7 @@ ST_retcode cpsmatch_main(const char *args)
         /* Get number of threads */
         int n_threads = 1;
         #ifdef _OPENMP
-        n_threads = omp_get_max_threads();
+        n_threads = ctools_get_max_threads();
         #endif
 
         /* Allocate thread-local weight buffers (shared by all methods) */

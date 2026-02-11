@@ -42,36 +42,6 @@ typedef struct {
 } civreghdfe_diagnostics_t;
 
 /*
-    Compute first-stage F statistics for each endogenous variable.
-
-    Parameters:
-    - X_endog: Endogenous regressors (N x K_endog, column-major)
-    - Z: All instruments including exogenous (N x K_iv, column-major)
-    - ZtZ_inv: Precomputed (Z'Z)^-1 (K_iv x K_iv)
-    - ZtX: Precomputed Z'X for all X (K_iv x K_total)
-    - weights: Optional weights (may be NULL)
-    - weight_type: 0=none, 1=aweight, 2=fweight, 3=pweight
-    - N, K_exog, K_endog, K_iv: Dimensions
-    - df_a: Absorbed degrees of freedom
-    - first_stage_F: Output array (K_endog elements, must be preallocated)
-*/
-void civreghdfe_compute_first_stage_F(
-    const ST_double *X_endog,
-    const ST_double *Z,
-    const ST_double *ZtZ_inv,
-    const ST_double *ZtX,
-    const ST_double *weights,
-    ST_int weight_type,
-    ST_int N,
-    ST_int N_eff,
-    ST_int K_exog,
-    ST_int K_endog,
-    ST_int K_iv,
-    ST_int df_a,
-    ST_double *first_stage_F
-);
-
-/*
     Compute underidentification test (Anderson LM / Kleibergen-Paap rk LM).
 
     For homoskedastic VCE: Anderson canonical correlation LM

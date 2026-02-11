@@ -16,28 +16,6 @@
  * ============================================================================ */
 
 /*
- * Solve quantile regression problem using Interior Point Method.
- *
- * Minimizes: sum_i [ q * u_i + (1-q) * v_i ]
- * Subject to: y - X * beta = u - v, u >= 0, v >= 0
- *
- * Parameters:
- *   ipm     - Pre-allocated IPM state (from cqreg_ipm_create)
- *   y       - Dependent variable (N)
- *   X       - Design matrix (N x K, column-major)
- *   q       - Quantile (0 < q < 1)
- *   beta    - Output: coefficient estimates (K)
- *
- * Returns:
- *   Number of iterations on success, negative on failure.
- */
-ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
-                       const ST_double *y,
-                       const ST_double *X,
-                       ST_double q,
-                       ST_double *beta);
-
-/*
  * Get the objective value (sum of weighted absolute deviations).
  * Call after cqreg_ipm_solve().
  */
@@ -52,17 +30,6 @@ ST_double cqreg_ipm_get_objective(const cqreg_ipm_state *ipm, ST_double q);
  *   residuals - Output array (N)
  */
 void cqreg_ipm_get_residuals(const cqreg_ipm_state *ipm, ST_double *residuals);
-
-/* ============================================================================
- * Internal Functions
- * ============================================================================ */
-
-void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
-                          const ST_double *y,
-                          const ST_double *X,
-                          ST_double q);
-
-ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm);
 
 /* ============================================================================
  * Preprocessing Solver (Chernozhukov et al. 2020)

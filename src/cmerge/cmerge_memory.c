@@ -33,7 +33,7 @@ char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s)
     return ctools_arena_strdup(arena, s);
 }
 
-int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr)
+static int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr)
 {
     if (!arena || !ptr) return 0;
 

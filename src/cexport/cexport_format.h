@@ -17,60 +17,6 @@
 #include "cexport_context.h"
 
 /* ========================================================================
-   Double to String Conversion
-   ======================================================================== */
-
-/*
-    Fast double to string - optimized version.
-
-    Key optimizations:
-    1. Fast path for integers (handles ~80% of typical data)
-    2. Fast path for "simple decimals" with few decimal places
-    3. Direct formatting without leading zero (Stata style)
-    4. Single-pass trailing zero removal
-    5. Fallback to snprintf only for complex cases (scientific notation)
-
-    @param val            Value to convert
-    @param buf            Output buffer
-    @param buf_size       Size of output buffer
-    @param missing_as_dot If true, Stata missing values are written as "."
-    @param vtype          Variable storage type (for precision)
-    @return               Number of characters written (not including null terminator)
-*/
-int cexport_double_to_str(double val, char *buf, int buf_size,
-                          bool missing_as_dot, vartype_t vtype);
-
-/* ========================================================================
-   String Quoting and Escaping
-   ======================================================================== */
-
-/*
-    Check if a string needs quoting.
-
-    A string needs quoting if it contains:
-    - The delimiter character
-    - A double quote
-    - A newline or carriage return
-
-    @param str        String to check (NULL returns false)
-    @param delimiter  Delimiter character
-    @return           true if quoting is needed
-*/
-bool cexport_string_needs_quoting(const char *str, char delimiter);
-
-/*
-    Write a quoted string to a buffer.
-
-    Doubles any internal quotes (CSV escaping convention).
-
-    @param str       String to quote (NULL produces empty quoted string)
-    @param buf       Output buffer
-    @param buf_size  Size of output buffer
-    @return          Number of characters written
-*/
-int cexport_write_quoted_string(const char *str, char *buf, int buf_size);
-
-/* ========================================================================
    Row Formatting
    ======================================================================== */
 

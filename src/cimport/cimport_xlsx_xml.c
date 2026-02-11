@@ -409,7 +409,7 @@ bool xlsx_xml_parse(xlsx_xml_parser *p, const char *data, size_t len, bool is_fi
     return !p->stopped;
 }
 
-const char *xlsx_xml_get_error(xlsx_xml_parser *parser)
+static const char *xlsx_xml_get_error(xlsx_xml_parser *parser)
 {
     return parser ? parser->error_msg : "Invalid parser";
 }
@@ -569,7 +569,7 @@ bool xlsx_xml_parse_cell_ref(const char *ref, int *col, int *row)
     return (*row > 0);
 }
 
-int xlsx_xml_col_to_index(const char *col_str)
+static int xlsx_xml_col_to_index(const char *col_str)
 {
     if (!col_str) return -1;
 

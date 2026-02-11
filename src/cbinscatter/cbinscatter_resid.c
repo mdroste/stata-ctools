@@ -138,7 +138,7 @@ done:
  * Weighted X'X Computation
  * ======================================================================== */
 
-ST_retcode compute_xtx_weighted(
+static ST_retcode compute_xtx_weighted(
     const ST_double *X,
     ST_int N,
     ST_int K,
@@ -518,7 +518,7 @@ cleanup:
  * Y-only OLS Residualization (binsreg method)
  * ======================================================================== */
 
-ST_retcode ols_residualize_y_only(
+static ST_retcode ols_residualize_y_only(
     ST_double *y,
     const ST_double *controls,
     ST_int N,
@@ -590,7 +590,7 @@ cleanup:
  * Y-only HDFE Residualization (binsreg method)
  * ======================================================================== */
 
-ST_retcode hdfe_residualize_y_only(
+static ST_retcode hdfe_residualize_y_only(
     ST_double *y,
     const ST_int *fe_vars,
     ST_int N,
@@ -885,7 +885,7 @@ cleanup:
  * Combined Y-only Residualization (binsreg method)
  * ======================================================================== */
 
-ST_retcode combined_residualize_y_only(
+static ST_retcode combined_residualize_y_only(
     ST_double *y,
     ST_double *controls,
     const ST_int *fe_vars,

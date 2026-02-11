@@ -10,6 +10,10 @@
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#elif defined(__APPLE__)
+#include <sys/sysctl.h>
+#elif defined(__linux__)
+#include <unistd.h>
 #endif
 
 #include "ctools_threads.h"
@@ -19,22 +23,65 @@
    Unified Thread Management Implementation
 
    Global thread limit that can be set via threads() option in Stata commands.
-   When not set (0), defaults to omp_get_max_threads().
+   When not set (0), defaults to the system CPU count.
    =========================================================================== */
 
 /* User-specified thread limit (0 = use default) */
 static int g_ctools_max_threads = 0;
 
+/* True system CPU count, queried directly from the OS.
+ * This is immune to pollution from other Stata plugins (reghdfe, gtools, etc.)
+ * that may call omp_set_num_threads() and lower the OpenMP thread count. */
+static int g_ctools_system_threads = 0;
+
+/*
+ * Query the OS for the number of logical CPUs.
+ * This is immune to omp_set_num_threads() pollution.
+ */
+static int query_system_cpu_count(void)
+{
+    int n = 0;
+#if defined(_WIN32)
+    SYSTEM_INFO si;
+    GetSystemInfo(&si);
+    n = (int)si.dwNumberOfProcessors;
+#elif defined(__APPLE__)
+    int mib[2] = { CTL_HW, HW_NCPU };
+    size_t len = sizeof(n);
+    sysctl(mib, 2, &n, &len, NULL, 0);
+#elif defined(__linux__)
+    n = (int)sysconf(_SC_NPROCESSORS_ONLN);
+#endif
+    if (n < 1) n = omp_get_max_threads();  /* last resort fallback */
+    return n;
+}
+
+/*
+ * Initialize the true system thread count from the OS.
+ * Safe to call multiple times (only queries once).
+ */
+void ctools_init_thread_count(void)
+{
+    if (g_ctools_system_threads == 0) {
+        g_ctools_system_threads = query_system_cpu_count();
+    }
+}
+
 /*
  * Get the current maximum thread count for ctools operations.
- * Returns the user-set limit if specified, otherwise omp_get_max_threads().
+ * Returns the user-set limit if specified, otherwise the system default
+ * captured at init (immune to external OpenMP pollution).
  */
 int ctools_get_max_threads(void)
 {
     if (g_ctools_max_threads > 0) {
         return g_ctools_max_threads;
     }
-    /* Default to runtime detection via OpenMP */
+    /* Use the captured system default, immune to omp_set_num_threads()
+     * calls by external plugins (reghdfe, gtools, etc.) */
+    if (g_ctools_system_threads > 0) {
+        return g_ctools_system_threads;
+    }
     return omp_get_max_threads();
 }
 
@@ -58,10 +105,20 @@ void ctools_set_max_threads(int n)
 
 /*
  * Reset thread limit to default (runtime-detected).
+ * Also restores the OpenMP runtime thread count so that direct
+ * omp_get_max_threads() calls elsewhere return the correct value.
  */
 void ctools_reset_max_threads(void)
 {
     g_ctools_max_threads = 0;
+
+#ifdef _OPENMP
+    /* Always restore system thread count — protects against both
+     * our own threads() option and external plugin pollution */
+    if (g_ctools_system_threads > 0) {
+        omp_set_num_threads(g_ctools_system_threads);
+    }
+#endif
 }
 
 /* ===========================================================================

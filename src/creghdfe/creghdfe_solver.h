@@ -11,29 +11,6 @@
 #include "creghdfe_types.h"
 
 /* ========================================================================
- * Dot product computation
- * ======================================================================== */
-
-ST_double dot_product(const ST_double * RESTRICT x,
-                      const ST_double * RESTRICT y,
-                      ST_int N);
-
-ST_double weighted_dot_product(const ST_double * RESTRICT x,
-                               const ST_double * RESTRICT y,
-                               const ST_double * RESTRICT w,
-                               ST_int N);
-
-/* ========================================================================
- * Symmetric Kaczmarz Transformation
- * ======================================================================== */
-
-void transform_sym_kaczmarz_threaded(const HDFE_State * RESTRICT S,
-                                     const ST_double * RESTRICT y,
-                                     ST_double * RESTRICT ans,
-                                     ST_double ** RESTRICT fe_means,
-                                     ST_int thread_id);
-
-/* ========================================================================
  * Conjugate Gradient Solver
  * ======================================================================== */
 

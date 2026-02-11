@@ -476,7 +476,7 @@ stata_retcode ctools_apply_permutation(stata_data *data)
         This limits peak memory to: original_data + (nthreads × buffer_size)
         instead of: original_data × 2
     */
-    int nthreads = omp_get_max_threads();
+    int nthreads = ctools_get_max_threads();
     if (nthreads > (int)nvars) nthreads = (int)nvars;
     if (nthreads < 1) nthreads = 1;
 

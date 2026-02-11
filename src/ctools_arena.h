@@ -20,6 +20,17 @@
 #include <stddef.h>
 #include <string.h>
 
+/* Atomic store for has_fallback flag (written from OMP parallel regions) */
+#if defined(_WIN32)
+#define ARENA_ATOMIC_STORE_INT(ptr, val) \
+    InterlockedExchange((volatile LONG *)(ptr), (LONG)(val))
+#elif defined(__GNUC__) || defined(__clang__)
+#define ARENA_ATOMIC_STORE_INT(ptr, val) \
+    __atomic_store_n((ptr), (val), __ATOMIC_RELAXED)
+#else
+#define ARENA_ATOMIC_STORE_INT(ptr, val) (*(volatile int *)(ptr) = (val))
+#endif
+
 /* Default block size for growing arena (1MB) */
 #define CTOOLS_ARENA_DEFAULT_BLOCK_SIZE (1024 * 1024)
 

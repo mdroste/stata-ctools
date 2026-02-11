@@ -106,23 +106,4 @@ typedef struct {
 #define CBINSCATTER_ERR_HDFE        459   /* HDFE solver failed */
 #define CBINSCATTER_ERR_INVALID     2003  /* Invalid parameter value */
 
-/* ========================================================================
- * Helper functions
- * ======================================================================== */
-
-/* Initialize config to defaults */
-void cbinscatter_config_init(BinscatterConfig *config);
-
-/* Initialize results structure */
-void cbinscatter_results_init(BinscatterResults *results);
-
-/* Free results structure */
-void cbinscatter_results_free(BinscatterResults *results);
-
-/* Initialize work data */
-void cbinscatter_workdata_init(BinscatterWorkData *work);
-
-/* Free work data */
-void cbinscatter_workdata_free(BinscatterWorkData *work);
-
 #endif /* CBINSCATTER_TYPES_H */

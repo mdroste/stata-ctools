@@ -58,9 +58,9 @@ static void vce_debug_close(void) {
  * Helper Functions
  * ============================================================================ */
 
-ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
-                             const ST_double *X,
-                             ST_int N, ST_int K)
+static ST_int cqreg_compute_xtx_inv(ST_double *XtX_inv,
+                                    const ST_double *X,
+                                    ST_int N, ST_int K)
 {
     ST_int j, k;
     ST_double *XtX = NULL;
@@ -145,10 +145,10 @@ cleanup:
     return rc;
 }
 
-void cqreg_sandwich_product(ST_double *V,
-                            const ST_double *A,
-                            const ST_double *B,
-                            ST_int K)
+static void cqreg_sandwich_product(ST_double *V,
+                                   const ST_double *A,
+                                   const ST_double *B,
+                                   ST_int K)
 {
     ST_int i, j, k;
     ST_double *AB = NULL;
@@ -194,10 +194,10 @@ void cqreg_sandwich_product(ST_double *V,
     ctools_aligned_free(AB);
 }
 
-ST_int cqreg_map_clusters(const ST_int *cluster_ids,
-                          ST_int N,
-                          ST_int *cluster_map,
-                          ST_int *num_clusters)
+static ST_int cqreg_map_clusters(const ST_int *cluster_ids,
+                                 ST_int N,
+                                 ST_int *cluster_map,
+                                 ST_int *num_clusters)
 {
     /* Simple approach: find unique values and assign indices */
     /* For large N, could use hash table for O(N) instead of O(N*G) */
@@ -262,12 +262,12 @@ ST_int cqreg_map_clusters(const ST_int *cluster_ids,
  * IID VCE
  * ============================================================================ */
 
-ST_int cqreg_vce_iid(ST_double *V,
-                     const ST_double *X,
-                     const ST_double *residuals,
-                     ST_int N, ST_int K,
-                     ST_double q,
-                     ST_double sparsity)
+static ST_int cqreg_vce_iid(ST_double *V,
+                            const ST_double *X,
+                            const ST_double *residuals,
+                            ST_int N, ST_int K,
+                            ST_double q,
+                            ST_double sparsity)
 {
     (void)residuals;  /* Unused - IID VCE uses only sparsity estimate */
     ST_int i, j;
@@ -333,13 +333,13 @@ ST_int cqreg_vce_iid(ST_double *V,
  * Robust (Sandwich) VCE
  * ============================================================================ */
 
-ST_int cqreg_vce_robust(ST_double *V,
-                        const ST_double *X,
-                        const ST_double *residuals,
-                        ST_int N, ST_int K,
-                        ST_double q,
-                        ST_double bandwidth,
-                        ST_double sparsity)
+static ST_int cqreg_vce_robust(ST_double *V,
+                               const ST_double *X,
+                               const ST_double *residuals,
+                               ST_int N, ST_int K,
+                               ST_double q,
+                               ST_double bandwidth,
+                               ST_double sparsity)
 {
     (void)bandwidth;  /* Unused - uses constant sparsity estimate */
     /*
@@ -538,11 +538,11 @@ cleanup:
  * Robust VCE with Per-Observation Densities (Fitted Method)
  * ============================================================================ */
 
-ST_int cqreg_vce_robust_fitted(ST_double *V,
-                               const ST_double *X,
-                               const ST_double *obs_density,
-                               ST_int N, ST_int K,
-                               ST_double q)
+static ST_int cqreg_vce_robust_fitted(ST_double *V,
+                                      const ST_double *X,
+                                      const ST_double *obs_density,
+                                      ST_int N, ST_int K,
+                                      ST_double q)
 {
     /*
      * Powell sandwich VCE with per-observation densities (Stata's "fitted" method).
@@ -763,14 +763,14 @@ cleanup:
  * Cluster-Robust VCE
  * ============================================================================ */
 
-ST_int cqreg_vce_cluster(ST_double *V,
-                         const ST_double *X,
-                         const ST_double *residuals,
-                         const ST_int *cluster_ids,
-                         ST_int num_clusters,
-                         ST_int N, ST_int K,
-                         ST_double q,
-                         ST_double sparsity)
+static ST_int cqreg_vce_cluster(ST_double *V,
+                                const ST_double *X,
+                                const ST_double *residuals,
+                                const ST_int *cluster_ids,
+                                ST_int num_clusters,
+                                ST_int N, ST_int K,
+                                ST_double q,
+                                ST_double sparsity)
 {
     /*
      * Cluster-robust VCE for quantile regression.

@@ -43,23 +43,9 @@ typedef struct {
  * SIMD-Accelerated Scanning
  * ============================================================================ */
 
-/*
- * Find next delimiter, newline, or quote character using SIMD.
- * Falls back to scalar loop on platforms without SIMD.
- *
- * @param ptr    Current position in buffer
- * @param end    End of buffer
- * @param delim  Delimiter character (e.g., ',')
- * @return       Pointer to found character or end if not found
- */
-const char *cimport_find_delim_or_newline_simd(const char *ptr, const char *end, char delim);
-
 /* ============================================================================
  * Row Boundary Detection
  * ============================================================================ */
-
-/* Find next row - LOOSE mode: each line is a row (ignores quotes) */
-const char *cimport_find_next_row_loose(const char *ptr, const char *end);
 
 /* Find next row - STRICT mode: respects quotes (fields can span lines) */
 const char *cimport_find_next_row_strict(const char *ptr, const char *end, char quote);
@@ -92,9 +78,6 @@ int cimport_parse_row_fast(const char *start, const char *end, char delim, char 
                            CImportBindQuotesMode bindquotes,
                            const char **next_row_out, bool *had_unmatched_quote);
 
-/* Check if field contains quote character (fast 8-byte unrolled check) */
-bool cimport_field_contains_quote(const char *src, int len, char quote);
-
 /*
  * Extract field value with quote handling.
  * Handles: quoted fields, escaped quotes (""), orphan quotes.
@@ -108,10 +91,6 @@ bool cimport_field_contains_quote(const char *src, int len, char quote);
  */
 int cimport_extract_field_fast(const char *file_base, CImportFieldRef *field,
                                 char *output, int max_len, char quote);
-
-/* Extract unquoted field (fast path, no quote handling) */
-int cimport_extract_field_unquoted(const char *file_base, CImportFieldRef *field,
-                                    char *output, int max_len);
 
 /* ============================================================================
  * Type Detection
@@ -152,8 +131,5 @@ bool cimport_analyze_numeric_with_sep(const char *file_base, CImportFieldRef *fi
 
 /* Check if character is whitespace (space or tab, not newline) */
 bool cimport_is_whitespace(char c);
-
-/* Check if row has unmatched quote (odd number of quotes) */
-bool cimport_row_has_unmatched_quote(const char *start, const char *end, char quote);
 
 #endif /* CIMPORT_PARSE_H */

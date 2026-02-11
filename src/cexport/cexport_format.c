@@ -38,8 +38,8 @@ static inline bool is_stata_missing(double val)
     return SF_is_missing(val);
 }
 
-int cexport_double_to_str(double val, char *buf, int buf_size,
-                          bool missing_as_dot, vartype_t vtype)
+static int cexport_double_to_str(double val, char *buf, int buf_size,
+                                 bool missing_as_dot, vartype_t vtype)
 {
     /* buf_size is used for bounds checking in snprintf fallback */
 
@@ -271,7 +271,7 @@ snprintf_fallback:
    String Quoting and Escaping
    ======================================================================== */
 
-bool cexport_string_needs_quoting(const char *str, char delimiter)
+static bool cexport_string_needs_quoting(const char *str, char delimiter)
 {
     if (str == NULL) return false;
 
@@ -359,7 +359,7 @@ bool cexport_string_needs_quoting(const char *str, char delimiter)
     return false;
 }
 
-int cexport_write_quoted_string(const char *str, char *buf, int buf_size)
+static int cexport_write_quoted_string(const char *str, char *buf, int buf_size)
 {
     /* Handle edge cases: need at least 3 bytes for empty quoted string '""' + null */
     if (buf_size < 1) {

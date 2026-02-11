@@ -410,8 +410,13 @@ static inline void ctools_aligned_free(void *ptr)
    - Call ctools_set_max_threads(n) to override (0 = reset to default)
    ============================================================================ */
 
+/* Capture the true system thread count at plugin init, before external
+ * plugins can pollute it. Call once at plugin entry. */
+void ctools_init_thread_count(void);
+
 /* Get the current maximum thread count for ctools operations.
- * Returns the user-set limit if specified, otherwise omp_get_max_threads(). */
+ * Returns the user-set limit if specified, otherwise the system default
+ * captured at init (immune to external OpenMP pollution). */
 int ctools_get_max_threads(void);
 
 /* Set the maximum thread count for ctools operations.
@@ -419,7 +424,8 @@ int ctools_get_max_threads(void);
  * Pass n > 0 to set a specific limit. */
 void ctools_set_max_threads(int n);
 
-/* Reset thread limit to default (runtime-detected) */
+/* Reset thread limit to default (runtime-detected).
+ * Also restores the OpenMP runtime to the system default. */
 void ctools_reset_max_threads(void);
 
 /*

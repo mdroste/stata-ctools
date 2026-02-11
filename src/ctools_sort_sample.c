@@ -810,7 +810,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > SAMPLE_MAX_THREADS) num_threads = SAMPLE_MAX_THREADS;
 
     if (data->nobs < (size_t)SAMPLE_SORT_THRESHOLD) {
@@ -852,7 +852,7 @@ static stata_retcode sample_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > SAMPLE_MAX_THREADS) num_threads = SAMPLE_MAX_THREADS;
 
     if (data->nobs < (size_t)SAMPLE_SORT_THRESHOLD) {

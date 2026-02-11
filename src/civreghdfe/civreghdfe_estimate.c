@@ -792,7 +792,7 @@ ST_retcode ivest_compute_cue(
        cue_objective modifies work_resid. */
     int cue_nthreads = 1;
 #ifdef _OPENMP
-    cue_nthreads = omp_get_max_threads();
+    cue_nthreads = ctools_get_max_threads();
     if (cue_nthreads > K_total) cue_nthreads = K_total;
     if (cue_nthreads < 1) cue_nthreads = 1;
 #endif

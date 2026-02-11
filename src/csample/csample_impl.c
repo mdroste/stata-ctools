@@ -126,7 +126,7 @@ static void detect_groups_from_data(stata_data *data, size_t nvars,
     const double miss = SV_missval;
 
     #ifdef _OPENMP
-    int num_threads = omp_get_max_threads();
+    int num_threads = ctools_get_max_threads();
 
     /* For small datasets or few threads, use sequential version */
     if (nobs < 10000 || num_threads <= 1) {
@@ -339,7 +339,7 @@ ST_retcode csample_main(const char *args) {
     }
 
     #ifdef _OPENMP
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     #endif
 
     /* Use time-based seed if not specified */

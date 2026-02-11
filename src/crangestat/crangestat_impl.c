@@ -282,7 +282,7 @@ static void build_prefix_arrays(const double *data, size_t start, size_t count,
      * For small groups, sequential is faster due to less overhead.
      */
     #ifdef _OPENMP
-    int nthreads = omp_get_max_threads();
+    int nthreads = ctools_get_max_threads();
     #else
     int nthreads = 1;
     #endif
@@ -1384,7 +1384,7 @@ ST_retcode crangestat_main(const char *args)
     }
 
     #ifdef _OPENMP
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     #endif
 
     /*

@@ -35,7 +35,7 @@ xlsx_zip_archive *xlsx_zip_open_file(const char *filename)
     return archive;
 }
 
-xlsx_zip_archive *xlsx_zip_open_memory(const void *data, size_t size)
+static xlsx_zip_archive *xlsx_zip_open_memory(const void *data, size_t size)
 {
     if (!data || size == 0) return NULL;
 
@@ -61,14 +61,14 @@ void xlsx_zip_close(xlsx_zip_archive *archive)
     free(archive);
 }
 
-size_t xlsx_zip_get_num_files(xlsx_zip_archive *archive)
+static size_t xlsx_zip_get_num_files(xlsx_zip_archive *archive)
 {
     if (!archive) return 0;
     return mz_zip_reader_get_num_files(&archive->zip);
 }
 
-size_t xlsx_zip_get_filename(xlsx_zip_archive *archive, size_t file_index,
-                             char *filename_buf, size_t buf_size)
+static size_t xlsx_zip_get_filename(xlsx_zip_archive *archive, size_t file_index,
+                                    char *filename_buf, size_t buf_size)
 {
     if (!archive || !filename_buf || buf_size == 0) return 0;
 
@@ -92,7 +92,7 @@ size_t xlsx_zip_locate_file(xlsx_zip_archive *archive, const char *filename)
     return (size_t)idx;
 }
 
-size_t xlsx_zip_get_file_size(xlsx_zip_archive *archive, size_t file_index)
+static size_t xlsx_zip_get_file_size(xlsx_zip_archive *archive, size_t file_index)
 {
     if (!archive) return 0;
 
@@ -123,8 +123,8 @@ void *xlsx_zip_extract_to_heap(xlsx_zip_archive *archive, size_t file_index,
     return data;
 }
 
-bool xlsx_zip_extract_to_buffer(xlsx_zip_archive *archive, size_t file_index,
-                                void *buffer, size_t buffer_size)
+static bool xlsx_zip_extract_to_buffer(xlsx_zip_archive *archive, size_t file_index,
+                                       void *buffer, size_t buffer_size)
 {
     if (!archive || !buffer) return false;
 
@@ -152,8 +152,8 @@ void *xlsx_zip_extract_file(xlsx_zip_archive *archive, const char *filename,
 
 #include "libdeflate/libdeflate.h"
 
-void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
-                            size_t *out_size)
+static void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
+                                   size_t *out_size)
 {
     if (!archive) return NULL;
 
@@ -307,7 +307,7 @@ struct xlsx_zip_stream {
     mz_zip_reader_extract_iter_state *iter;
 };
 
-xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index)
+static xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index)
 {
     if (!archive) return NULL;
 
@@ -326,13 +326,13 @@ xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_ind
     return stream;
 }
 
-size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size)
+static size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size)
 {
     if (!stream || !stream->iter || !buffer || buffer_size == 0) return 0;
     return mz_zip_reader_extract_iter_read(stream->iter, buffer, buffer_size);
 }
 
-void xlsx_zip_stream_close(xlsx_zip_stream *stream)
+static void xlsx_zip_stream_close(xlsx_zip_stream *stream)
 {
     if (!stream) return;
     if (stream->iter) {

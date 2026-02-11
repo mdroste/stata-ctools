@@ -53,7 +53,7 @@ static int compare_indices(const void *a, const void *b) {
  * Bin Statistics (optimized single-pass)
  * ======================================================================== */
 
-ST_retcode compute_bin_statistics(
+static ST_retcode compute_bin_statistics(
     const ST_double *y,
     const ST_double *x,
     const ST_int *bin_ids,

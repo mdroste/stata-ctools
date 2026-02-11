@@ -363,7 +363,7 @@ cqreg_sparsity_state *cqreg_sparsity_create(ST_int N, ST_double quantile, cqreg_
     return sp;
 }
 
-void cqreg_sparsity_free(cqreg_sparsity_state *sp)
+static void cqreg_sparsity_free(cqreg_sparsity_state *sp)
 {
     if (sp == NULL) return;
     ctools_aligned_free(sp->sorted_resid);

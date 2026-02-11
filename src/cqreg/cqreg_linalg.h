@@ -23,21 +23,6 @@ ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
                     const ST_double * CQREG_RESTRICT y,
                     ST_int N);
 
-/*
- * Kahan-compensated dot product for numerical stability.
- * Use for very large N (> 10^7) or when accumulation errors matter.
- */
-ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
-                          const ST_double * CQREG_RESTRICT y,
-                          ST_int N);
-
-/*
- * Weighted dot product: sum_i(w[i] * x[i] * y[i])
- */
-ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
-                             const ST_double * CQREG_RESTRICT y,
-                             const ST_double * CQREG_RESTRICT w,
-                             ST_int N);
 
 /*
  * Dot product of a vector with itself (squared norm).
@@ -56,71 +41,11 @@ void cqreg_vcopy(ST_double * CQREG_RESTRICT dst,
                  const ST_double * CQREG_RESTRICT src,
                  ST_int N);
 
-/*
- * Vector scale: x = alpha * x
- */
-void cqreg_vscale(ST_double * CQREG_RESTRICT x, ST_double alpha, ST_int N);
-
-/*
- * Vector axpy: y = y + alpha * x
- */
-void cqreg_vaxpy(ST_double * CQREG_RESTRICT y,
-                 ST_double alpha,
-                 const ST_double * CQREG_RESTRICT x,
-                 ST_int N);
-
-/*
- * Vector element-wise multiply: z = x .* y
- */
-void cqreg_vmul(ST_double * CQREG_RESTRICT z,
-                const ST_double * CQREG_RESTRICT x,
-                const ST_double * CQREG_RESTRICT y,
-                ST_int N);
-
-/*
- * Vector element-wise divide: z = x ./ y
- */
-void cqreg_vdiv(ST_double * CQREG_RESTRICT z,
-                const ST_double * CQREG_RESTRICT x,
-                const ST_double * CQREG_RESTRICT y,
-                ST_int N);
-
-/*
- * Set all elements to a scalar: x[i] = val
- */
-void cqreg_vset(ST_double * CQREG_RESTRICT x, ST_double val, ST_int N);
-
-/*
- * Sum of vector elements
- */
-ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N);
-
-/*
- * Maximum absolute value in vector
- */
-ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N);
 
 /* ============================================================================
  * Matrix Operations
  * ============================================================================ */
 
-/*
- * Matrix-vector multiply: y = A * x
- * A is M x N (row-major), x is N, y is M
- */
-void cqreg_matvec(ST_double * CQREG_RESTRICT y,
-                  const ST_double * CQREG_RESTRICT A,
-                  const ST_double * CQREG_RESTRICT x,
-                  ST_int M, ST_int N);
-
-/*
- * Matrix-transpose-vector multiply: y = A' * x
- * A is M x N (row-major), x is M, y is N
- */
-void cqreg_matvec_t(ST_double * CQREG_RESTRICT y,
-                    const ST_double * CQREG_RESTRICT A,
-                    const ST_double * CQREG_RESTRICT x,
-                    ST_int M, ST_int N);
 
 /*
  * Column-major matrix-vector multiply: y = A * x
@@ -131,14 +56,6 @@ void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
                       const ST_double * CQREG_RESTRICT x,
                       ST_int M, ST_int N);
 
-/*
- * Column-major matrix-transpose-vector multiply: y = A' * x
- * A is M x N (column-major), x is M, y is N
- */
-void cqreg_matvec_t_col(ST_double * CQREG_RESTRICT y,
-                        const ST_double * CQREG_RESTRICT A,
-                        const ST_double * CQREG_RESTRICT x,
-                        ST_int M, ST_int N);
 
 /*
  * Compute X' * D * X where D is diagonal.
@@ -172,21 +89,6 @@ void cqreg_xtv(ST_double * CQREG_RESTRICT result,
  */
 ST_int cqreg_cholesky(ST_double * CQREG_RESTRICT A, ST_int K);
 
-/*
- * Solve L * x = b where L is lower triangular.
- * Solution stored in b (in-place).
- */
-void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
-                       ST_double * CQREG_RESTRICT b,
-                       ST_int K);
-
-/*
- * Solve L' * x = b where L is lower triangular (solve with transpose).
- * Solution stored in b (in-place).
- */
-void cqreg_solve_lower_t(const ST_double * CQREG_RESTRICT L,
-                         ST_double * CQREG_RESTRICT b,
-                         ST_int K);
 
 /*
  * Solve A * x = b where A = L * L' has been Cholesky factored.
@@ -216,16 +118,6 @@ void cqreg_invert_cholesky(ST_double * CQREG_RESTRICT Ainv,
  */
 void cqreg_add_regularization(ST_double * CQREG_RESTRICT A, ST_int K, ST_double lambda);
 
-/*
- * Check if matrix is numerically symmetric.
- * Returns: 1 if symmetric within tolerance, 0 otherwise.
- */
-ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_double tol);
-
-/*
- * Copy lower triangle to upper (make symmetric).
- */
-void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K);
 
 /* ============================================================================
  * Quantile and Statistics Functions

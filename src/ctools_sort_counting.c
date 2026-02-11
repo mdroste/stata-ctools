@@ -469,7 +469,7 @@ static stata_retcode counting_sort_by_numeric_var(stata_data *data, int var_idx)
     int num_threads;
 
     /* Determine thread count */
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > COUNTING_MAX_THREADS) num_threads = COUNTING_MAX_THREADS;
 
     if (data->nobs < COUNTING_PARALLEL_THRESHOLD) {

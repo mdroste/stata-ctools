@@ -39,12 +39,6 @@ ST_double civreghdfe_kernel_weight(ST_int kernel_type, ST_int j, ST_int bw);
 ST_double civreghdfe_jacobi_eigenvalues(const ST_double *A, ST_int K, ST_double *eigenvalues);
 
 /*
-    Returns just the minimum eigenvalue of a symmetric matrix.
-    Convenience wrapper for civreghdfe_jacobi_eigenvalues.
-*/
-ST_double civreghdfe_jacobi_min_eigenvalue(const ST_double *A, ST_int K);
-
-/*
     Compute matrix square root inverse: M^(-1/2)
     For a symmetric positive definite matrix M, compute M^(-1/2)
     using eigendecomposition.

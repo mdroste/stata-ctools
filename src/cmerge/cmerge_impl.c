@@ -1512,22 +1512,8 @@ static ST_retcode cmerge_execute(const char *args)
 
     if (merge_var_idx > 0) {
         ST_int mvar = (ST_int)merge_var_idx;
-        /* Batch writes: fill a buffer of 16 doubles, flush with SF_VSTORE_BATCH16 */
-        size_t full_batches = output_nobs / 16;
-        size_t remainder = output_nobs % 16;
-        size_t i = 0;
-        double buf[16];
-
-        for (size_t b = 0; b < full_batches; b++) {
-            for (int j = 0; j < 16; j++) {
-                buf[j] = (double)output_specs[i + j].merge_result;
-            }
-            SF_VSTORE_BATCH16(mvar, (ST_int)(i + 1), buf);
-            i += 16;
-        }
-        /* Handle remainder */
-        for (size_t r = 0; r < remainder; r++) {
-            SF_vstore(mvar, (ST_int)(i + r + 1), (double)output_specs[i + r].merge_result);
+        for (size_t i = 0; i < output_nobs; i++) {
+            SF_vstore(mvar, (ST_int)(i + 1), (double)output_specs[i].merge_result);
         }
     }
 

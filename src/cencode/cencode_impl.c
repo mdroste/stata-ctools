@@ -135,7 +135,8 @@ ST_retcode cencode_main(const char *args)
      * ======================================================================== */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
-    stata_retcode load_rc = ctools_data_load_single_var_rowpar(&filtered, var_idx, 0, 0, 0);
+    int load_var_idx = var_idx;
+    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, 0);
 
     if (load_rc != STATA_OK) {
         ctools_filtered_data_free(&filtered);

@@ -319,7 +319,7 @@ static void compute_kiefer_shat0_homoskedastic(
 /*
     Compute first-stage F statistics for each endogenous variable.
 */
-void civreghdfe_compute_first_stage_F(
+static void civreghdfe_compute_first_stage_F(
     const ST_double *X_endog,
     const ST_double *Z,
     const ST_double *ZtZ_inv,

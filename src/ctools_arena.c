@@ -292,13 +292,13 @@ char *ctools_string_arena_strdup(ctools_string_arena *arena, const char *s)
         case CTOOLS_STRING_ARENA_STRDUP_FALLBACK: {
             char *result = strdup(s);
             if (result != NULL) {
-                arena->has_fallback = 1;  /* Race on flag is benign */
+                ARENA_ATOMIC_STORE_INT(&arena->has_fallback, 1);
             }
             return result;
         }
 
         case CTOOLS_STRING_ARENA_STATIC_FALLBACK:
-            arena->has_fallback = 1;  /* Race on flag is benign */
+            ARENA_ATOMIC_STORE_INT(&arena->has_fallback, 1);
             /* Last resort: return static empty string */
             return ctools_static_empty_string;
     }

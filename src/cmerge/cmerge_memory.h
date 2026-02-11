@@ -46,9 +46,6 @@ cmerge_string_arena *cmerge_arena_create(size_t block_size);
  * Returns NULL only on malloc failure (new block allocation). */
 char *cmerge_arena_strdup(cmerge_string_arena *arena, const char *s);
 
-/* Check if a pointer was allocated from this arena */
-int cmerge_arena_owns(cmerge_string_arena *arena, const char *ptr);
-
 /* Free the arena and all its blocks */
 void cmerge_arena_free(cmerge_string_arena *arena);
 

@@ -88,9 +88,6 @@ void xlsx_xml_parser_destroy(xlsx_xml_parser *parser);
  * false on parse error. */
 bool xlsx_xml_parse(xlsx_xml_parser *parser, const char *data, size_t len, bool is_final);
 
-/* Get the last error message (valid after parse returns false) */
-const char *xlsx_xml_get_error(xlsx_xml_parser *parser);
-
 /* ============================================================================
  * Utility Functions
  * ============================================================================ */
@@ -106,9 +103,6 @@ size_t xlsx_xml_decode_entities(char *str, size_t len);
 /* Parse a cell reference like "A1" into column (0-based) and row (1-based)
  * Returns true on success */
 bool xlsx_xml_parse_cell_ref(const char *ref, int *col, int *row);
-
-/* Convert column letters to 0-based index (A=0, B=1, ..., AA=26, etc.) */
-int xlsx_xml_col_to_index(const char *col_str);
 
 /* Convert 0-based column index to letters (0=A, 1=B, ..., 26=AA, etc.)
  * Buffer must be at least 4 bytes */

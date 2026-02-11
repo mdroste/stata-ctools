@@ -180,7 +180,7 @@ ST_double civreghdfe_jacobi_eigenvalues(const ST_double *A, ST_int K, ST_double 
 /*
     Returns just the minimum eigenvalue of a symmetric matrix.
 */
-ST_double civreghdfe_jacobi_min_eigenvalue(const ST_double *A, ST_int K)
+static ST_double civreghdfe_jacobi_min_eigenvalue(const ST_double *A, ST_int K)
 {
     return civreghdfe_jacobi_eigenvalues(A, K, NULL);
 }

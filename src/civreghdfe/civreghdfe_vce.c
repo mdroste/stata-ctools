@@ -28,7 +28,7 @@
 /*
     Compute unadjusted VCE for k-class estimator.
 */
-void ivvce_compute_unadjusted(
+static void ivvce_compute_unadjusted(
     const ST_double *XkX_inv,
     ST_double rss,
     ST_int df_r,
@@ -47,7 +47,7 @@ void ivvce_compute_unadjusted(
 /*
     Compute efficient GMM2S VCE.
 */
-void ivvce_compute_gmm2s(
+static void ivvce_compute_gmm2s(
     const ST_double *XZWZX_inv,
     ST_int K_total,
     ST_double *V

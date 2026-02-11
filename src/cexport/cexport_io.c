@@ -55,12 +55,12 @@ void cexport_io_init(cexport_io_file *file)
     file->error_message[0] = '\0';
 }
 
-const char *cexport_io_line_ending(int use_crlf)
+static const char *cexport_io_line_ending(int use_crlf)
 {
     return use_crlf ? "\r\n" : "\n";
 }
 
-int cexport_io_line_ending_len(int use_crlf)
+static int cexport_io_line_ending_len(int use_crlf)
 {
     return use_crlf ? 2 : 1;
 }

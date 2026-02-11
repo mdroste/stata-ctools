@@ -56,37 +56,6 @@ void assign_bins(
 );
 
 /* ========================================================================
- * Bin Statistics Computation
- * ======================================================================== */
-
-/*
- * Compute bin means (and optionally SE)
- *
- * Parameters:
- *   y           - y values
- *   x           - x values
- *   bin_ids     - bin assignments (1-based)
- *   weights     - observation weights (NULL if unweighted)
- *   N           - number of observations
- *   nquantiles  - number of bins
- *   compute_se  - whether to compute standard errors
- *   result      - output: ByGroupResult to populate
- *
- * Returns:
- *   0 on success, error code on failure
- */
-ST_retcode compute_bin_statistics(
-    const ST_double *y,
-    const ST_double *x,
-    const ST_int *bin_ids,
-    const ST_double *weights,
-    ST_int N,
-    ST_int nquantiles,
-    ST_int compute_se,
-    ByGroupResult *result
-);
-
-/* ========================================================================
  * Single Group Processing
  * ======================================================================== */
 

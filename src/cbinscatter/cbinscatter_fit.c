@@ -237,7 +237,7 @@ static ST_retcode fit_quadratic_fast(
  * For higher-order polynomials, compute X'X and X'y directly.
  * ======================================================================== */
 
-ST_retcode fit_polynomial(
+static ST_retcode fit_polynomial(
     const ST_double *y,
     const ST_double *x,
     const ST_double *weights,
@@ -501,7 +501,7 @@ cleanup:
  * Evaluate Polynomial
  * ======================================================================== */
 
-void eval_polynomial(
+static void eval_polynomial(
     const ST_double *x,
     ST_int N,
     const ST_double *coefs,

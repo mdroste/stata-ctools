@@ -352,7 +352,7 @@ ST_retcode cwinsor_main(const char *args)
     }
 
     #ifdef _OPENMP
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     #endif
 
     /* === Load Phase === */
@@ -363,14 +363,8 @@ ST_retcode cwinsor_main(const char *args)
      * Multi-variable: column-parallel load (one thread per variable). */
     ctools_filtered_data target_filtered;
     ctools_filtered_data_init(&target_filtered);
-    stata_retcode load_rc;
-    if (nvars == 1) {
-        load_rc = ctools_data_load_single_var_rowpar(&target_filtered,
-                                                      load_indices[0], 0, 0, 0);
-    } else {
-        load_rc = ctools_data_load(&target_filtered, load_indices,
-                                             nvars, 0, 0, 0);
-    }
+    stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
+                                              nvars, 0, 0, 0);
     if (load_rc != STATA_OK) {
         free(store_indices);
         free(load_indices);

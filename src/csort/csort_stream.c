@@ -509,7 +509,7 @@ stata_retcode csort_stream_apply_permutation(
             actual_batch_size = (int)n_numeric;
         }
 
-        nthreads = omp_get_max_threads();
+        nthreads = ctools_get_max_threads();
         if (nthreads > actual_batch_size) nthreads = actual_batch_size;
         if (nthreads < 1) nthreads = 1;
 
@@ -518,6 +518,7 @@ stata_retcode csort_stream_apply_permutation(
         if (!batch_bufs) {
             free(numeric_vars);
             free(string_vars);
+            free(string_widths);
             ctools_aligned_free(inv_perm);
             return STATA_ERR_MEMORY;
         }
@@ -528,6 +529,7 @@ stata_retcode csort_stream_apply_permutation(
                 free(batch_bufs);
                 free(numeric_vars);
                 free(string_vars);
+                free(string_widths);
                 ctools_aligned_free(inv_perm);
                 return STATA_ERR_MEMORY;
             }
@@ -572,7 +574,8 @@ stata_retcode csort_stream_apply_permutation(
                     }
 
                     /* Read data from Stata */
-                    SF_VDATA_BATCH16(stata_var, (ST_int)obs_map[i], batch_vals);
+                    for (int bb = 0; bb < 16; bb++)
+                        SF_vdata(stata_var, (ST_int)(obs_map[i] + bb), &batch_vals[bb]);
 
 #ifdef HAVE_AVX512_SCATTER
                     /* AVX-512: Scatter 8 doubles at a time using SIMD scatter instruction.
@@ -682,6 +685,7 @@ stata_retcode csort_stream_apply_permutation(
         if (!num_buf) {
             free(numeric_vars);
             free(string_vars);
+            free(string_widths);
             ctools_aligned_free(inv_perm);
             return STATA_ERR_MEMORY;
         }
@@ -699,7 +703,8 @@ stata_retcode csort_stream_apply_permutation(
 
             for (i = 0; i < nobs_batch16; i += 16) {
                 /* Read data from Stata */
-                SF_VDATA_BATCH16(stata_var, (ST_int)obs_map[i], batch_vals);
+                for (int bb = 0; bb < 16; bb++)
+                    SF_vdata(stata_var, (ST_int)(obs_map[i] + bb), &batch_vals[bb]);
 
 #ifdef HAVE_AVX512_SCATTER
                 /* AVX-512: Scatter 8 doubles at a time */
@@ -790,7 +795,7 @@ stata_retcode csort_stream_apply_permutation(
 
     #ifdef _OPENMP
     {
-        int string_threads = omp_get_max_threads();
+        int string_threads = ctools_get_max_threads();
         if (string_threads > (int)n_string) string_threads = (int)n_string;
         if (string_threads < 1) string_threads = 1;
 
@@ -1097,6 +1102,7 @@ cleanup:
     free(nonkey_str_widths);
     ctools_aligned_free(saved_perm);
     if (obs_map) ctools_aligned_free(obs_map);  /* We took ownership from key_filtered */
+    key_filtered.obs_map = NULL;  /* Prevent double-free by ctools_filtered_data_free */
     ctools_filtered_data_free(&key_filtered);
 
     local_timings.total_time = ctools_timer_seconds() - t_start;

@@ -33,27 +33,6 @@
 #define CIVREGHDFE_KERNEL_TUKEY     5
 
 /*
-    Compute unadjusted VCE for k-class estimator.
-
-    V = sigma^2 * (XkX)^-1
-    where sigma^2 = RSS / df_r
-
-    Parameters:
-    - XkX_inv: (XkX)^-1, the k-class matrix inverse (K_total x K_total)
-    - rss: Residual sum of squares
-    - df_r: Residual degrees of freedom (N - K_total - df_a)
-    - K_total: Number of regressors
-    - V: Output VCE matrix (K_total x K_total)
-*/
-void ivvce_compute_unadjusted(
-    const ST_double *XkX_inv,
-    ST_double rss,
-    ST_int df_r,
-    ST_int K_total,
-    ST_double *V
-);
-
-/*
     Compute two-way clustered VCE using Cameron-Gelbach-Miller (2011) formula.
 
     V_twoway = V_cluster1 + V_cluster2 - V_intersection
@@ -89,23 +68,6 @@ void ivvce_compute_twoway(
     const ST_int *cluster2_ids,
     ST_int num_clusters2,
     ST_int df_a,
-    ST_double *V
-);
-
-/*
-    Compute efficient GMM2S VCE.
-
-    When using optimal weights W = (Z'ΩZ)^-1, the VCE is:
-    V = (X'ZWZ'X)^-1
-
-    Parameters:
-    - XZWZX_inv: Inverse of X'ZWZ'X (K_total x K_total)
-    - K_total: Number of regressors
-    - V: Output VCE matrix
-*/
-void ivvce_compute_gmm2s(
-    const ST_double *XZWZX_inv,
-    ST_int K_total,
     ST_double *V
 );
 

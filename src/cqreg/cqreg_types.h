@@ -267,9 +267,6 @@ void cqreg_ipm_free(cqreg_ipm_state *ipm);
 /* Create sparsity estimation state */
 cqreg_sparsity_state *cqreg_sparsity_create(ST_int N, ST_double quantile, cqreg_bw_method method);
 
-/* Free sparsity estimation state */
-void cqreg_sparsity_free(cqreg_sparsity_state *sp);
-
 /* Create main cqreg state */
 cqreg_state *cqreg_state_create(ST_int N, ST_int K);
 

@@ -34,8 +34,8 @@ noi di as text "Log file: `logfile'"
 
 
 local N = 10000000
-local G1 = 10000       // small groups (for FEs)
-local G2 = 10000000    // large groups (for merge keys)
+local G1 = 10000      
+local G2 = 10000000   
 noi di as text _n "Creating test data with N = `N' observations..."
 
 set obs `N'

@@ -27,40 +27,15 @@ typedef struct xlsx_zip_archive xlsx_zip_archive;
 xlsx_zip_archive *xlsx_zip_open_file(const char *filename);
 
 /*
- * Open a ZIP archive from memory.
- * The memory must remain valid while the archive is open.
- * Returns NULL on failure.
- */
-xlsx_zip_archive *xlsx_zip_open_memory(const void *data, size_t size);
-
-/*
  * Close a ZIP archive and free resources.
  */
 void xlsx_zip_close(xlsx_zip_archive *archive);
-
-/*
- * Get the number of files in the archive.
- */
-size_t xlsx_zip_get_num_files(xlsx_zip_archive *archive);
-
-/*
- * Get the filename at a given index.
- * Returns the length written (excluding null terminator), or 0 on error.
- */
-size_t xlsx_zip_get_filename(xlsx_zip_archive *archive, size_t file_index,
-                             char *filename_buf, size_t buf_size);
 
 /*
  * Find a file by name in the archive.
  * Returns file index, or (size_t)-1 if not found.
  */
 size_t xlsx_zip_locate_file(xlsx_zip_archive *archive, const char *filename);
-
-/*
- * Get the uncompressed size of a file.
- * Returns 0 on error.
- */
-size_t xlsx_zip_get_file_size(xlsx_zip_archive *archive, size_t file_index);
 
 /*
  * Extract a file to a newly allocated buffer.
@@ -70,13 +45,6 @@ size_t xlsx_zip_get_file_size(xlsx_zip_archive *archive, size_t file_index);
  */
 void *xlsx_zip_extract_to_heap(xlsx_zip_archive *archive, size_t file_index,
                                size_t *out_size);
-
-/*
- * Extract a file to a provided buffer.
- * Returns true on success, false on failure.
- */
-bool xlsx_zip_extract_to_buffer(xlsx_zip_archive *archive, size_t file_index,
-                                void *buffer, size_t buffer_size);
 
 /*
  * Extract a file by name to a newly allocated buffer.
@@ -95,35 +63,6 @@ void *xlsx_zip_extract_file(xlsx_zip_archive *archive, const char *filename,
  * Wraps miniz's iterative extraction API for chunk-by-chunk decompression.
  */
 typedef struct xlsx_zip_stream xlsx_zip_stream;
-
-/*
- * Open a streaming reader for the file at the given index.
- * Returns NULL on failure.
- */
-xlsx_zip_stream *xlsx_zip_stream_open(xlsx_zip_archive *archive, size_t file_index);
-
-/*
- * Read up to buffer_size bytes from the stream.
- * Returns the number of bytes read, or 0 on EOF/error.
- */
-size_t xlsx_zip_stream_read(xlsx_zip_stream *stream, void *buffer, size_t buffer_size);
-
-/*
- * Close the stream and free resources.
- */
-void xlsx_zip_stream_close(xlsx_zip_stream *stream);
-
-/* ============================================================================
- * Fast Extraction (libdeflate-accelerated)
- * ============================================================================ */
-
-/*
- * Extract a file to a newly allocated buffer using libdeflate for inflate.
- * 2-4x faster than miniz for large files. Falls back to miniz on error.
- * Same interface as xlsx_zip_extract_to_heap().
- */
-void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
-                            size_t *out_size);
 
 /*
  * Direct extraction: reads compressed data at computed file offset via miniz

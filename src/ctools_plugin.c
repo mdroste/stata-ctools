@@ -203,6 +203,10 @@ STDLL stata_call(int argc, char *argv[])
     /* Initialize OpenMP safely before any parallel code runs */
     ctools_init_openmp();
 
+    /* Capture the true system thread count on first call, before any
+     * external plugin (reghdfe, gtools, etc.) can pollute it */
+    ctools_init_thread_count();
+
     /* Reset thread limit to default at start of each call */
     ctools_reset_max_threads();
 

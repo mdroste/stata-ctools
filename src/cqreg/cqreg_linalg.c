@@ -28,9 +28,9 @@ ST_double cqreg_dot(const ST_double * CQREG_RESTRICT x,
     return ctools_dot_unrolled(x, y, N);
 }
 
-ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
-                          const ST_double * CQREG_RESTRICT y,
-                          ST_int N)
+static ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
+                                 const ST_double * CQREG_RESTRICT y,
+                                 ST_int N)
 {
     ST_int i;
     ST_double sum = 0.0;
@@ -46,10 +46,10 @@ ST_double cqreg_dot_kahan(const ST_double * CQREG_RESTRICT x,
     return sum;
 }
 
-ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
-                             const ST_double * CQREG_RESTRICT y,
-                             const ST_double * CQREG_RESTRICT w,
-                             ST_int N)
+static ST_double cqreg_dot_weighted(const ST_double * CQREG_RESTRICT x,
+                                    const ST_double * CQREG_RESTRICT y,
+                                    const ST_double * CQREG_RESTRICT w,
+                                    ST_int N)
 {
     /* Use SIMD-accelerated weighted dot product (AVX2/NEON with FMA) */
     return ctools_simd_dot_weighted(w, x, y, (size_t)N);
@@ -71,7 +71,7 @@ void cqreg_vcopy(ST_double * CQREG_RESTRICT dst,
     memcpy(dst, src, N * sizeof(ST_double));
 }
 
-void cqreg_vscale(ST_double * CQREG_RESTRICT x, ST_double alpha, ST_int N)
+static void cqreg_vscale(ST_double * CQREG_RESTRICT x, ST_double alpha, ST_int N)
 {
     ST_int i;
     ST_int N4 = N - (N % 4);
@@ -89,19 +89,19 @@ void cqreg_vscale(ST_double * CQREG_RESTRICT x, ST_double alpha, ST_int N)
     }
 }
 
-void cqreg_vaxpy(ST_double *y,
-                 ST_double alpha,
-                 const ST_double *x,
-                 ST_int N)
+static void cqreg_vaxpy(ST_double *y,
+                        ST_double alpha,
+                        const ST_double *x,
+                        ST_int N)
 {
     /* Use SIMD-accelerated AXPY (AVX2/NEON with FMA) */
     ctools_simd_axpy(y, x, alpha, (size_t)N);
 }
 
-void cqreg_vmul(ST_double * CQREG_RESTRICT z,
-                const ST_double * CQREG_RESTRICT x,
-                const ST_double * CQREG_RESTRICT y,
-                ST_int N)
+static void cqreg_vmul(ST_double * CQREG_RESTRICT z,
+                       const ST_double * CQREG_RESTRICT x,
+                       const ST_double * CQREG_RESTRICT y,
+                       ST_int N)
 {
     ST_int i;
 
@@ -111,10 +111,10 @@ void cqreg_vmul(ST_double * CQREG_RESTRICT z,
     }
 }
 
-void cqreg_vdiv(ST_double * CQREG_RESTRICT z,
-                const ST_double * CQREG_RESTRICT x,
-                const ST_double * CQREG_RESTRICT y,
-                ST_int N)
+static void cqreg_vdiv(ST_double * CQREG_RESTRICT z,
+                       const ST_double * CQREG_RESTRICT x,
+                       const ST_double * CQREG_RESTRICT y,
+                       ST_int N)
 {
     ST_int i;
 
@@ -124,7 +124,7 @@ void cqreg_vdiv(ST_double * CQREG_RESTRICT z,
     }
 }
 
-void cqreg_vset(ST_double * CQREG_RESTRICT x, ST_double val, ST_int N)
+static void cqreg_vset(ST_double * CQREG_RESTRICT x, ST_double val, ST_int N)
 {
     ST_int i;
 
@@ -134,7 +134,7 @@ void cqreg_vset(ST_double * CQREG_RESTRICT x, ST_double val, ST_int N)
     }
 }
 
-ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N)
+static ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N)
 {
     ST_int i;
     ST_double sum0 = 0.0, sum1 = 0.0, sum2 = 0.0, sum3 = 0.0;
@@ -154,7 +154,7 @@ ST_double cqreg_vsum(const ST_double * CQREG_RESTRICT x, ST_int N)
     return (sum0 + sum1) + (sum2 + sum3);
 }
 
-ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N)
+static ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N)
 {
     ST_int i;
     ST_int N4 = N - (N & 3);
@@ -190,10 +190,10 @@ ST_double cqreg_vmax_abs(const ST_double * CQREG_RESTRICT x, ST_int N)
  * Matrix-Vector Operations
  * ============================================================================ */
 
-void cqreg_matvec(ST_double * CQREG_RESTRICT y,
-                  const ST_double * CQREG_RESTRICT A,
-                  const ST_double * CQREG_RESTRICT x,
-                  ST_int M, ST_int N)
+static void cqreg_matvec(ST_double * CQREG_RESTRICT y,
+                         const ST_double * CQREG_RESTRICT A,
+                         const ST_double * CQREG_RESTRICT x,
+                         ST_int M, ST_int N)
 {
     ST_int i, j;
 
@@ -207,10 +207,10 @@ void cqreg_matvec(ST_double * CQREG_RESTRICT y,
     }
 }
 
-void cqreg_matvec_t(ST_double * CQREG_RESTRICT y,
-                    const ST_double * CQREG_RESTRICT A,
-                    const ST_double * CQREG_RESTRICT x,
-                    ST_int M, ST_int N)
+static void cqreg_matvec_t(ST_double * CQREG_RESTRICT y,
+                           const ST_double * CQREG_RESTRICT A,
+                           const ST_double * CQREG_RESTRICT x,
+                           ST_int M, ST_int N)
 {
     ST_int i, j;
 
@@ -260,10 +260,10 @@ void cqreg_matvec_col(ST_double * CQREG_RESTRICT y,
     }
 }
 
-void cqreg_matvec_t_col(ST_double * CQREG_RESTRICT y,
-                        const ST_double * CQREG_RESTRICT A,
-                        const ST_double * CQREG_RESTRICT x,
-                        ST_int M, ST_int N)
+static void cqreg_matvec_t_col(ST_double * CQREG_RESTRICT y,
+                               const ST_double * CQREG_RESTRICT A,
+                               const ST_double * CQREG_RESTRICT x,
+                               ST_int M, ST_int N)
 {
     ST_int j;
 
@@ -366,9 +366,9 @@ ST_int cqreg_cholesky(ST_double * CQREG_RESTRICT A, ST_int K)
     return 0;
 }
 
-void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
-                       ST_double * CQREG_RESTRICT b,
-                       ST_int K)
+static void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
+                              ST_double * CQREG_RESTRICT b,
+                              ST_int K)
 {
     ST_int i, j;
 
@@ -382,9 +382,9 @@ void cqreg_solve_lower(const ST_double * CQREG_RESTRICT L,
     }
 }
 
-void cqreg_solve_lower_t(const ST_double * CQREG_RESTRICT L,
-                         ST_double * CQREG_RESTRICT b,
-                         ST_int K)
+static void cqreg_solve_lower_t(const ST_double * CQREG_RESTRICT L,
+                                ST_double * CQREG_RESTRICT b,
+                                ST_int K)
 {
     ST_int i, j;
 
@@ -443,7 +443,7 @@ void cqreg_add_regularization(ST_double * CQREG_RESTRICT A, ST_int K, ST_double 
     }
 }
 
-ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_double tol)
+static ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_double tol)
 {
     ST_int i, j;
 
@@ -458,7 +458,7 @@ ST_int cqreg_is_symmetric(const ST_double * CQREG_RESTRICT A, ST_int K, ST_doubl
     return 1;
 }
 
-void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K)
+static void cqreg_symmetrize_lower(ST_double * CQREG_RESTRICT A, ST_int K)
 {
     ST_int i, j;
 

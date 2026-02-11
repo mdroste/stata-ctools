@@ -160,7 +160,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     /* Determine threads */
 #ifdef _OPENMP
-    num_threads = omp_get_max_threads();
+    num_threads = ctools_get_max_threads();
     if (num_threads > K) num_threads = K;
     if (num_threads < 1) num_threads = 1;
 #else
@@ -312,16 +312,25 @@ ST_retcode do_full_regression(int argc, char *argv[])
 
     t_copy = get_time_sec();
 
-    /* Use sort-based remapping for FE variables (much faster than hash tables).
-     * Data is already filtered, use direct access. */
+    /* Fused remap + counting for FE variables.
+     * Uses O(N) counting-based approach for integer FEs (common case),
+     * eliminating O(N log N) sort and separate count passes. */
+    ST_double *weighted_counts_orig[10] = {NULL};  /* Max 10 FE groups */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic)
     #endif
     for (g = 0; g < G; g++) {
-        ST_int num_levels_g = 0;
-        if (remap_values_sorted(filtered.data.vars[K + g].data.dbl, N_orig,
-                                factors[g].levels, &num_levels_g) == 0) {
-            factors[g].num_levels = num_levels_g;
+        ST_int *counts_g = NULL;
+        ST_double *wcounts_g = NULL;
+        if (remap_and_count(filtered.data.vars[K + g].data.dbl, N_orig,
+                            factors[g].levels, &factors[g].num_levels,
+                            &counts_g,
+                            has_weights ? weights : NULL,
+                            has_weights ? &wcounts_g : NULL) == 0) {
+            factors[g].counts = counts_g;
+            if (has_weights && wcounts_g) {
+                weighted_counts_orig[g] = wcounts_g;
+            }
         }
     }
 
@@ -384,47 +393,7 @@ ST_retcode do_full_regression(int argc, char *argv[])
         }
     }
 
-    /* Allocate and compute counts per FE level */
-    for (g = 0; g < G; g++) {
-        factors[g].counts = (ST_int *)calloc(factors[g].num_levels, sizeof(ST_int));
-        if (!factors[g].counts) {
-            for (i = 0; i < G; i++) {
-                if (factors[i].levels) free(factors[i].levels);
-                if (factors[i].counts) free(factors[i].counts);
-            }
-            free(factors); free(mask);
-            free(data); free(means); free(stdevs); free(tss);
-            if (weights) free(weights);
-            return 1;
-        }
-        for (i = 0; i < N_orig; i++) {
-            factors[g].counts[factors[g].levels[i] - 1]++;
-        }
-    }
-
-    /* Compute weighted counts per FE level if using weights */
-    ST_double *weighted_counts_orig[10] = {NULL};  /* Max 10 FE groups */
-    if (has_weights) {
-        for (g = 0; g < G; g++) {
-            weighted_counts_orig[g] = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
-            if (!weighted_counts_orig[g]) {
-                for (i = 0; i < g; i++) {
-                    if (weighted_counts_orig[i]) free(weighted_counts_orig[i]);
-                }
-                for (i = 0; i < G; i++) {
-                    if (factors[i].levels) free(factors[i].levels);
-                    if (factors[i].counts) free(factors[i].counts);
-                }
-                free(factors); free(mask);
-                free(data); free(means); free(stdevs); free(tss);
-                free(weights);
-                return 1;
-            }
-            for (i = 0; i < N_orig; i++) {
-                weighted_counts_orig[g][factors[g].levels[i] - 1] += weights[i];
-            }
-        }
-    }
+    /* Counts and weighted counts already computed by remap_and_count above */
 
     t_remap = get_time_sec();
 

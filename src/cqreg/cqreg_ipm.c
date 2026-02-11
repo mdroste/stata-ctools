@@ -34,14 +34,17 @@
 /* Step-back factor from boundary */
 #define IPM_STEP_BACK 0.9995
 
+/* Forward declarations for static functions */
+static ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm);
+
 /* ============================================================================
  * Initialization
  * ============================================================================ */
 
-void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
-                          const ST_double *y,
-                          const ST_double *X,
-                          ST_double q)
+static void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
+                                 const ST_double *y,
+                                 const ST_double *X,
+                                 ST_double q)
 {
     (void)q;  /* Unused - reserved for future use */
     ST_int N = ipm->N;
@@ -177,7 +180,7 @@ void cqreg_ipm_initialize(cqreg_ipm_state *ipm,
  * Complementarity
  * ============================================================================ */
 
-ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm)
+static ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm)
 {
     ST_int N = ipm->N;
     ST_int i;
@@ -210,11 +213,11 @@ ST_double cqreg_ipm_complementarity(const cqreg_ipm_state *ipm)
  * Main Solver
  * ============================================================================ */
 
-ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
-                       const ST_double *y,
-                       const ST_double *X,
-                       ST_double q,
-                       ST_double *beta)
+static ST_int cqreg_ipm_solve(cqreg_ipm_state *ipm,
+                              const ST_double *y,
+                              const ST_double *X,
+                              ST_double q,
+                              ST_double *beta)
 {
     ST_int iter;
     ST_int N = ipm->N;

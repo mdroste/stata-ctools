@@ -106,10 +106,10 @@ ifeq ($(LIBOMP_EXISTS),yes)
                      -Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include
     ifeq ($(LIBOMP_STATIC_ARM),yes)
         # Static linking - bundle libomp into the plugin
-        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S $(LIBOMP_PREFIX)/lib/libomp.a \
+        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_PREFIX)/lib/libomp.a \
                           -framework Accelerate
     else
-        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -L$(LIBOMP_PREFIX)/lib -lomp \
+        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip -L$(LIBOMP_PREFIX)/lib -lomp \
                           -framework Accelerate
     endif
     MAC_ARM_HAS_OMP = yes
@@ -117,7 +117,7 @@ else
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1
-    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -framework Accelerate
+    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip -framework Accelerate
     MAC_ARM_HAS_OMP = no
 endif
 
@@ -135,22 +135,22 @@ LIBOMP_STATIC_X86 := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.a && \
 ifeq ($(LIBOMP_INTEL_EXISTS),yes)
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
-                     -march=x86-64 -mtune=haswell -mavx2 \
+                     -march=haswell \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
     ifeq ($(LIBOMP_STATIC_X86),yes)
         # Static linking - bundle libomp into the plugin
-        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S $(LIBOMP_INTEL)/lib/libomp.a \
+        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_INTEL)/lib/libomp.a \
                           -framework Accelerate
     else
-        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -L$(LIBOMP_INTEL)/lib -lomp \
+        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip -L$(LIBOMP_INTEL)/lib -lomp \
                           -framework Accelerate
     endif
     MAC_X86_HAS_OMP = yes
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
                      -mmacosx-version-min=10.13 \
-                     -march=x86-64 -mtune=haswell -mavx2
-    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -framework Accelerate
+                     -march=haswell
+    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip -framework Accelerate
     MAC_X86_HAS_OMP = no
 endif
 
@@ -166,7 +166,7 @@ ifeq ($(DETECTED_OS),Windows)
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                  -ffast-math -funroll-loops -ftree-vectorize -flto \
                  -fdata-sections -ffunction-sections \
-                 -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+                 -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
     LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S \
                   -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread
     WIN_HAS_OMP = yes
@@ -181,7 +181,7 @@ else
         CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
                      -ffast-math -funroll-loops -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
-                     -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+                     -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
         LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -fopenmp -lpthread
         WIN_HAS_OMP = yes
         WIN_OMP_STATIC = no
@@ -191,7 +191,7 @@ else
         CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
                      -ffast-math -funroll-loops -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
-                     -fno-strict-aliasing -mavx2 $(INCLUDE_DIRS)
+                     -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
         LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -static-libgcc -lpthread
         WIN_HAS_OMP = no
         WIN_OMP_STATIC = no
@@ -225,11 +225,11 @@ LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE
                    -fdata-sections -ffunction-sections \
                    -fno-strict-aliasing $(INCLUDE_DIRS)
 
-# Add -mavx2 for x86_64 targets (native Linux or cross-compile)
+# Add -march=haswell for x86_64 targets (enables AVX2, FMA, BMI1/2, etc.)
 ifeq ($(DETECTED_OS),Linux)
-    LINUX_BASE_FLAGS += -mavx2
+    LINUX_BASE_FLAGS += -march=haswell
 else ifneq ($(CC_LINUX),)
-    LINUX_BASE_FLAGS += -mavx2
+    LINUX_BASE_FLAGS += -march=haswell
 endif
 
 # Check for OpenMP support (test the actual compiler, not just host gcc)

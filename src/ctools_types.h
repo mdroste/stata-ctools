@@ -116,6 +116,11 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1);
 stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
                                            size_t nvars, size_t obs1);
 
+// Unified store with auto-dispatch: row-parallel for nvars==1, column-parallel for nvars>=2
+// var_indices == NULL → sequential 1..data->nvars
+stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
+                                    size_t nvars, size_t obs1);
+
 // Write specific output variable values to Stata using a source row mapping
 // For each output row i, reads from source_rows[i] (0-based, -1 = missing)
 // var_idx: 1-based Stata variable index
@@ -633,24 +638,6 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
                                    int *var_indices, size_t nvars,
                                    size_t obs_start, size_t obs_end,
                                    int flags, const int *str_widths);
-
-/*
-    Experimental: row-parallel loader for a single variable.
-    Splits observations across OpenMP threads instead of parallelizing
-    across columns. Uses strdup (no arena) for strings.
-
-    @param result       [out] Populated filtered data (nvars=1)
-    @param var_idx      [in]  1-based Stata variable index
-    @param obs_start    [in]  First observation (1-based), 0 = use SF_in1()
-    @param obs_end      [in]  Last observation (1-based), 0 = use SF_in2()
-    @param flags        [in]  CTOOLS_LOAD_CHECK_IF (0) or CTOOLS_LOAD_SKIP_IF
-*/
-stata_retcode ctools_data_load_single_var_rowpar(
-    ctools_filtered_data *result,
-    int var_idx,
-    size_t obs_start,
-    size_t obs_end,
-    int flags);
 
 /*
     Write filtered variable values back to Stata using obs_map.
