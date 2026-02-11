@@ -768,7 +768,7 @@ program define creghdfe, eclass
     if `num_singletons' > 0 {
         di as text "(dropped " as result `num_singletons' as text " singleton observations)"
     }
-    di as text "(HDFE estimator converged in " as result `num_iters' as text " iterations)"
+    di as text `"({browse "http://scorreia.com/research/hdfe.pdf":MWFE estimator} converged in "' as result `num_iters' as text " iterations)"
 
     * Display results header
     di as text ""

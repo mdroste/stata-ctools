@@ -451,26 +451,51 @@ static void store_single_variable(stata_variable *var, int var_idx,
         /* String variable */
         char * const * restrict str_data = var->data.str;
         size_t str_width = var->str_maxlen;
-        char *flat_buf = NULL;
 
         /* Use flat buffer when we have actual variable width (not default 2045)
            and the buffer fits in 256 MB */
         if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
             size_t stride = str_width + 1;
+            ctools_string_arena *arena = (ctools_string_arena *)var->_arena;
+
+            /* Fast path: sequential flat buffer (after flat-buffer permutation).
+               Detect by checking if first pointer matches arena base — if so,
+               the data is already contiguous and we can SF_sstore directly
+               without any repacking. */
+            if (arena != NULL && !arena->has_fallback &&
+                nobs > 0 && str_data[0] == arena->base) {
+                char *base = arena->base;
+                for (i = 0; i < nobs; i++) {
+                    SF_sstore(stata_var_idx, (ST_int)(i + obs1),
+                              base + i * stride);
+                }
+                return;
+            }
+
+            /* Repack path: strings are scattered, copy into new flat buffer */
             size_t flat_size = nobs * stride;
+            char *flat_buf = NULL;
             if (flat_size / stride == nobs &&  /* overflow check */
                 flat_size <= (256ULL * 1024 * 1024)) {
                 flat_buf = (char *)calloc(nobs, stride);
             }
 
             if (flat_buf) {
-                /* Pack: copy scattered strings into contiguous buffer */
-                for (i = 0; i < nobs; i++) {
-                    const char *s = str_data[i];
-                    if (s) {
-                        size_t len = strlen(s);
-                        if (len >= stride) len = stride - 1;
-                        memcpy(flat_buf + i * stride, s, len);
+                /* Use stride memcpy when source is flat buffer (no strlen needed) */
+                if (arena != NULL && !arena->has_fallback) {
+                    for (i = 0; i < nobs; i++) {
+                        const char *s = str_data[i];
+                        if (s) memcpy(flat_buf + i * stride, s, stride);
+                    }
+                } else {
+                    /* Non-flat source: strlen + bounded memcpy */
+                    for (i = 0; i < nobs; i++) {
+                        const char *s = str_data[i];
+                        if (s) {
+                            size_t len = strlen(s);
+                            if (len >= stride) len = stride - 1;
+                            memcpy(flat_buf + i * stride, s, len);
+                        }
                     }
                 }
 
@@ -558,8 +583,30 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
                 SF_vstore(stata_var, (ST_int)(i + obs1), dbl_data[i]);
             }
         } else {
-            /* String store: use existing helper (flat buffer optimization) */
-            store_single_variable(var, var_idx, obs1, nobs);
+            /* String store: row-parallel when possible */
+            char * const * restrict str_data = var->data.str;
+            size_t str_width = var->str_maxlen;
+            ctools_string_arena *arena = (ctools_string_arena *)var->_arena;
+
+            /* Fast path: sequential flat buffer — row-parallel SF_sstore
+               without any repacking (data is already contiguous) */
+            if (arena != NULL && !arena->has_fallback &&
+                str_width > 0 && str_width < STATA_STR_MAXLEN &&
+                nobs > 0 && str_data[0] == arena->base) {
+                size_t stride = str_width + 1;
+                char *base = arena->base;
+                #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
+                for (size_t i = 0; i < nobs; i++) {
+                    SF_sstore(stata_var, (ST_int)(i + obs1),
+                              base + i * stride);
+                }
+            } else {
+                /* Non-sequential or non-flat: row-parallel from pointer array */
+                #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
+                for (size_t i = 0; i < nobs; i++) {
+                    SF_sstore(stata_var, (ST_int)(i + obs1), str_data[i]);
+                }
+            }
         }
 
         ctools_memory_barrier();
