@@ -1153,7 +1153,120 @@ foreach alg in lsd msd timsort merge {
 }
 
 /*******************************************************************************
- * SECTION 20: verbose option
+ * SECTION 20: Streaming mode (stream option)
+ ******************************************************************************/
+print_section "Streaming Mode"
+
+* Numeric only
+sysuse auto, clear
+benchmark_sort price, testname("stream: numeric price") algorithm(lsd)
+
+* String only
+sysuse auto, clear
+quietly csort make, stream(2)
+sort make, stable
+tempfile stream_ref
+save `stream_ref', replace
+sysuse auto, clear
+sort make, stable
+capture cf _all using `stream_ref'
+if _rc == 0 {
+    test_pass "stream: string make (exact)"
+}
+else {
+    * Apply stable sort to stream result and check
+    sysuse auto, clear
+    csort make, stream(2)
+    sort make, stable
+    capture cf _all using `stream_ref'
+    if _rc == 0 {
+        test_pass "stream: string make (stability differs)"
+    }
+    else {
+        test_fail "stream: string make" "stream mode corrupted data"
+    }
+}
+
+* Mixed numeric + string
+sysuse auto, clear
+benchmark_sort foreign make, testname("stream: mixed foreign make") algorithm(lsd)
+
+* Streaming with explicit batch size on mixed types
+sysuse auto, clear
+quietly csort price, stream(4)
+sort price, stable
+tempfile stream_num_ref
+save `stream_num_ref', replace
+sysuse auto, clear
+sort price, stable
+capture cf _all using `stream_num_ref'
+if _rc == 0 {
+    test_pass "stream(4): numeric price (exact)"
+}
+else {
+    sysuse auto, clear
+    csort price, stream(4)
+    sort price, stable
+    capture cf _all using `stream_num_ref'
+    if _rc == 0 {
+        test_pass "stream(4): numeric price (stability differs)"
+    }
+    else {
+        test_fail "stream(4): numeric price" "stream mode corrupted data"
+    }
+}
+
+* Streaming with string keys and numeric witnesses
+clear
+set obs 1000
+set seed 42
+gen str20 name = char(65 + mod(_n, 26)) + string(int(runiform() * 1000))
+gen double val = runiform()
+gen int group = mod(_n, 10)
+
+preserve
+sort name, stable
+tempfile str_stream_ref
+save `str_stream_ref', replace
+restore
+
+csort name, stream(2)
+sort name, stable
+capture cf _all using `str_stream_ref'
+if _rc == 0 {
+    test_pass "stream(2): string key + numeric witnesses"
+}
+else {
+    test_fail "stream(2): string key + numeric witnesses" "stream mode corrupted data"
+}
+
+* Streaming with multiple string variables
+clear
+set obs 500
+set seed 99
+gen str10 city = char(65 + mod(_n, 26)) + char(65 + mod(_n * 7, 26))
+gen str15 state = char(65 + mod(_n * 3, 26)) + char(65 + mod(_n * 11, 26))
+gen double pop = runiform() * 1000000
+gen int zipcode = 10000 + mod(_n, 90000)
+
+preserve
+sort pop, stable
+tempfile multi_str_ref
+save `multi_str_ref', replace
+restore
+
+csort pop, stream(2)
+sort pop, stable
+capture cf _all using `multi_str_ref'
+if _rc == 0 {
+    test_pass "stream(2): numeric key + multiple string witnesses"
+}
+else {
+    test_fail "stream(2): numeric key + multiple string witnesses" "stream mode corrupted data"
+}
+
+/*******************************************************************************
+ * SECTION 21: verbose option
  ******************************************************************************/
 print_section "Option Tests"
 

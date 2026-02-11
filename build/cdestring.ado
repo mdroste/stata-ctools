@@ -297,6 +297,9 @@ program define cdestring
         local ++i
     }
 
+    * Set string width metadata for flat buffer optimization
+    _ctools_strw `allvars'
+
     * Call the C plugin with ALL variables (so indices match dataset positions)
     plugin call ctools_plugin `allvars' `if' `in', ///
         "cdestring `threads_code' `cmd_indices' nvars=`nvars' `ignore_code' `force_code' `percent_code' `dpcomma_code' `verbose_code'"

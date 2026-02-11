@@ -179,6 +179,7 @@ program define cdecode, rclass
         }
         else {
             * Scan label file in C to get max label length (no Mata needed)
+            _ctools_strw `srcvar'
             plugin call ctools_plugin `srcvar' `if' `in', ///
                 "cdecode_scan `threads_code' labelsfile=`__lblfile'"
             local strwidth = _cdecode_maxlen
@@ -197,6 +198,7 @@ program define cdecode, rclass
         quietly generate str`strwidth' `destvar' = ""
 
         * Call the C plugin to decode
+        _ctools_strw `srcvar' `destvar'
         if `__do_timing' {
             timer off 91
             timer on 92

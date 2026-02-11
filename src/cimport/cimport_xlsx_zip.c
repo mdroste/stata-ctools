@@ -219,6 +219,86 @@ void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
     return uncomp_buf;
 }
 
+void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index,
+                              size_t *out_size)
+{
+    if (!archive) return NULL;
+
+    mz_zip_archive *pZip = &archive->zip;
+    mz_uint num_files = mz_zip_reader_get_num_files(pZip);
+    if (file_index >= num_files) return NULL;
+
+    /* Get file metadata */
+    mz_zip_archive_file_stat stat;
+    if (!mz_zip_reader_file_stat(pZip, (mz_uint)file_index, &stat))
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+
+    size_t uncomp_size = (size_t)stat.m_uncomp_size;
+    size_t comp_size = (size_t)stat.m_comp_size;
+
+    /* Only handle DEFLATE — for STORE or unknown methods, use fast path */
+    if (stat.m_method != MZ_DEFLATED)
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+
+    /* Read the 30-byte local file header to compute data offset.
+     * ZIP local header: signature(4) + version(2) + flags(2) + method(2) +
+     * modtime(2) + moddate(2) + crc32(4) + comp_size(4) + uncomp_size(4) +
+     * filename_len(2) + extra_len(2) = 30 bytes */
+    mz_uint8 local_hdr[30];
+    if (pZip->m_pRead(pZip->m_pIO_opaque, stat.m_local_header_ofs,
+                       local_hdr, 30) != 30)
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+
+    /* Validate local header signature: 0x04034b50 (little-endian) */
+    if (local_hdr[0] != 0x50 || local_hdr[1] != 0x4B ||
+        local_hdr[2] != 0x03 || local_hdr[3] != 0x04)
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+
+    mz_uint16 filename_len = (mz_uint16)(local_hdr[26] | (local_hdr[27] << 8));
+    mz_uint16 extra_len = (mz_uint16)(local_hdr[28] | (local_hdr[29] << 8));
+    mz_uint64 data_ofs = stat.m_local_header_ofs + 30 + filename_len + extra_len;
+
+    /* Allocate and read compressed data directly from archive */
+    void *comp_buf = malloc(comp_size);
+    if (!comp_buf)
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+
+    if (pZip->m_pRead(pZip->m_pIO_opaque, data_ofs, comp_buf, comp_size)
+        != comp_size) {
+        free(comp_buf);
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+    }
+
+    /* Allocate output buffer (+1 for NUL) */
+    void *uncomp_buf = malloc(uncomp_size + 1);
+    if (!uncomp_buf) {
+        free(comp_buf);
+        return NULL;
+    }
+
+    /* Decompress with libdeflate */
+    struct libdeflate_decompressor *d = libdeflate_alloc_decompressor();
+    if (!d) {
+        free(comp_buf);
+        free(uncomp_buf);
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+    }
+
+    size_t actual_size = 0;
+    enum libdeflate_result result = libdeflate_deflate_decompress(
+        d, comp_buf, comp_size, uncomp_buf, uncomp_size, &actual_size);
+    libdeflate_free_decompressor(d);
+    free(comp_buf);
+
+    if (result != LIBDEFLATE_SUCCESS) {
+        free(uncomp_buf);
+        return xlsx_zip_extract_fast(archive, file_index, out_size);
+    }
+
+    if (out_size) *out_size = actual_size;
+    return uncomp_buf;
+}
+
 /* ============================================================================
  * Streaming Extraction
  * ============================================================================ */

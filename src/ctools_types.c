@@ -511,7 +511,7 @@ stata_retcode ctools_apply_permutation(stata_data *data)
 
     /* Apply permutation using thread-local buffers */
     int success = 1;
-    #pragma omp parallel for schedule(dynamic, 1) num_threads(nthreads)
+    #pragma omp parallel for schedule(static) num_threads(nthreads)
     for (j = 0; j < nvars; j++) {
         if (!success) continue;
 

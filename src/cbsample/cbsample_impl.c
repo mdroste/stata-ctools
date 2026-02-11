@@ -262,6 +262,7 @@ ST_retcode cbsample_main(const char *args) {
     perm_idx_t *sort_perm = NULL;  /* Saved permutation for mapping back */
     ctools_filtered_data by_filtered;
     perm_idx_t *obs_map = NULL;
+    ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
@@ -280,6 +281,7 @@ ST_retcode cbsample_main(const char *args) {
     config.n = parse_size_option(args, "n", 0);
     config.verbose = parse_option(args, "verbose");
     config.seed = (uint64_t)parse_size_option(args, "seed", 0);
+    int skip_if = parse_option(args, "skipif");
 
     /* Parse: freq_idx ncluster nstrata cluster_indices... strata_indices... */
     const char *p = args;
@@ -382,36 +384,42 @@ ST_retcode cbsample_main(const char *args) {
         nobs = by_filtered.data.nobs;
         obs_map = by_filtered.obs_map;
     } else {
-        /* No strata/cluster - build obs_map directly from SF_ifobs */
+        /* No strata/cluster */
         ST_int in1 = SF_in1();
         ST_int in2 = SF_in2();
 
-        /* First pass: count filtered observations */
-        nobs = 0;
-        for (ST_int obs = in1; obs <= in2; obs++) {
-            if (SF_ifobs(obs)) nobs++;
-        }
+        if (skip_if) {
+            /* No if/in and no by-variables: skip data load entirely */
+            nobs = (size_t)(in2 - in1 + 1);
+            obs_map = NULL;
+            obs_start = in1;
+        } else {
+            /* Has if/in: must check SF_ifobs */
+            nobs = 0;
+            for (ST_int obs = in1; obs <= in2; obs++) {
+                if (SF_ifobs(obs)) nobs++;
+            }
 
-        if (nobs == 0) {
-            if (cluster_indices) free(cluster_indices);
-            if (strata_indices) free(strata_indices);
-            ctools_error(CBSAMPLE_MODULE, "no observations");
-            return 2000;
-        }
+            if (nobs == 0) {
+                if (cluster_indices) free(cluster_indices);
+                if (strata_indices) free(strata_indices);
+                ctools_error(CBSAMPLE_MODULE, "no observations");
+                return 2000;
+            }
 
-        /* Allocate and build obs_map */
-        obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
-        if (!obs_map) {
-            if (cluster_indices) free(cluster_indices);
-            if (strata_indices) free(strata_indices);
-            ctools_error_alloc(CBSAMPLE_MODULE);
-            return 920;
-        }
+            obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+            if (!obs_map) {
+                if (cluster_indices) free(cluster_indices);
+                if (strata_indices) free(strata_indices);
+                ctools_error_alloc(CBSAMPLE_MODULE);
+                return 920;
+            }
 
-        size_t idx = 0;
-        for (ST_int obs = in1; obs <= in2; obs++) {
-            if (SF_ifobs(obs)) {
-                obs_map[idx++] = (perm_idx_t)obs;
+            size_t idx = 0;
+            for (ST_int obs = in1; obs <= in2; obs++) {
+                if (SF_ifobs(obs)) {
+                    obs_map[idx++] = (perm_idx_t)obs;
+                }
             }
         }
     }
@@ -670,9 +678,10 @@ ST_retcode cbsample_main(const char *args) {
     /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    /* Write frequency weights to Stata using obs_map */
+    /* Write frequency weights to Stata using obs_map (or arithmetic if NULL) */
     for (size_t i = 0; i < nobs; i++) {
-        SF_vstore(freq_idx, (ST_int)obs_map[i], freq_weights[i]);
+        ST_int obs = obs_map ? (ST_int)obs_map[i] : (obs_start + (ST_int)i);
+        SF_vstore(freq_idx, obs, freq_weights[i]);
     }
 
     t_store = ctools_timer_seconds() - store_start;

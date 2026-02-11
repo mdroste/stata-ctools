@@ -1,5 +1,7 @@
 * single variable merge key
 
+* the NOBATCH key is important!
+* global ctools_nobatch 1
 clear all
 set obs 25000000
 gen long i = _n

@@ -177,14 +177,21 @@ static ST_int load_data_filtered(cqreg_state *state,
     return 0;
 }
 
+/* qsort comparator for ST_int */
+static int cmp_st_int(const void *a, const void *b)
+{
+    ST_int va = *(const ST_int *)a;
+    ST_int vb = *(const ST_int *)b;
+    return (va > vb) - (va < vb);
+}
+
 /* ============================================================================
- * Helper: Load cluster variable using obs_map for filtering
+ * Helper: Load cluster variable from pre-loaded data
  * ============================================================================ */
 
-static ST_int load_clusters(cqreg_state *state,
-                            ST_int cluster_var_idx,
-                            ST_int N,
-                            perm_idx_t *obs_map)
+static ST_int load_clusters_from_data(cqreg_state *state,
+                                      const ST_double *cluster_data,
+                                      ST_int N)
 {
     ST_int idx;
 
@@ -194,38 +201,26 @@ static ST_int load_clusters(cqreg_state *state,
         return -1;
     }
 
-    /* Load cluster IDs using obs_map (already filtered) */
+    /* Convert pre-loaded doubles to integer cluster IDs */
     for (idx = 0; idx < N; idx++) {
-        ST_double val;
-        if (SF_vdata(cluster_var_idx, (ST_int)obs_map[idx], &val) != 0) {
-            ctools_error("cqreg", "Failed to read cluster var at obs %d", (int)obs_map[idx]);
-            return -1;
-        }
-        state->cluster_ids[idx] = (ST_int)val;
+        state->cluster_ids[idx] = (ST_int)cluster_data[idx];
     }
 
-    /* Count unique clusters */
-    ST_int max_clusters = N;
-    ST_int *seen = (ST_int *)calloc(max_clusters, sizeof(ST_int));
-    if (seen == NULL) {
+    /* Count unique clusters via sort: O(N log N) instead of O(N * G) */
+    ST_int *sorted = (ST_int *)malloc((size_t)N * sizeof(ST_int));
+    if (sorted == NULL) {
         return -1;
     }
+    memcpy(sorted, state->cluster_ids, (size_t)N * sizeof(ST_int));
+    qsort(sorted, (size_t)N, sizeof(ST_int), cmp_st_int);
 
-    ST_int num_unique = 0;
-    for (idx = 0; idx < N; idx++) {
-        ST_int cid = state->cluster_ids[idx];
-        ST_int found = 0;
-        for (ST_int j = 0; j < num_unique; j++) {
-            if (seen[j] == cid) {
-                found = 1;
-                break;
-            }
-        }
-        if (!found) {
-            seen[num_unique++] = cid;
+    ST_int num_unique = 1;
+    for (idx = 1; idx < N; idx++) {
+        if (sorted[idx] != sorted[idx - 1]) {
+            num_unique++;
         }
     }
-    free(seen);
+    free(sorted);
 
     state->num_clusters = num_unique;
 
@@ -687,12 +682,15 @@ ST_retcode cqreg_full_regression(const char *args)
         return 198;
     }
 
-    /* Build variable index array for filtered loading */
+    /* Build variable index array for filtered loading.
+     * Load ALL variables in one shot: depvar + indepvars + FE vars + cluster var.
+     * This avoids redundant SPI passes for FE/cluster loading later. */
     ST_int depvar_idx = 1;  /* First variable */
     ST_int K_x = K_total - 1;  /* Number of indepvars */
     ST_int K = K_x + 1;  /* Including constant */
 
-    ST_int nvars_to_load = 1 + K_x;  /* depvar + indepvars */
+    ST_int has_cluster = (vce_type == CQREG_VCE_CLUSTER) ? 1 : 0;
+    ST_int nvars_to_load = 1 + K_x + G + has_cluster;
     int *var_indices = (int *)malloc((size_t)nvars_to_load * sizeof(int));
     if (var_indices == NULL) {
         ctools_error("cqreg", "Memory allocation failed for var_indices");
@@ -702,9 +700,16 @@ ST_retcode cqreg_full_regression(const char *args)
     for (ST_int k = 0; k < K_x; k++) {
         var_indices[1 + k] = k + 2;  /* Variables 2 to K_total */
     }
+    for (ST_int g = 0; g < G; g++) {
+        var_indices[1 + K_x + g] = K_total + g + 1;  /* FE variables */
+    }
+    if (has_cluster) {
+        var_indices[1 + K_x + G] = K_total + G + 1;  /* Cluster variable */
+    }
 
     /* Load data with if/in filtering using ctools_data_load.
-     * This handles SF_ifobs internally and returns only filtered observations. */
+     * This handles SF_ifobs internally and returns only filtered observations.
+     * All vars (depvar, indepvars, FE, cluster) are loaded in one parallel pass. */
     ctools_filtered_data filtered;
     ctools_filtered_data_init(&filtered);
     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
@@ -719,7 +724,6 @@ ST_retcode cqreg_full_regression(const char *args)
     }
 
     ST_int N = (ST_int)filtered.data.nobs;
-    perm_idx_t *obs_map = filtered.obs_map;  /* Keep for cluster loading */
 
     if (N <= 0) {
         ctools_filtered_data_free(&filtered);
@@ -732,13 +736,12 @@ ST_retcode cqreg_full_regression(const char *args)
     /* Number of variables passed to plugin (for validation if needed) */
     (void)SF_nvars();
 
-    /* Parse variable indices:
-     *   vars 1 to K_total: depvar, indepvars (already loaded with filtering)
-     *   vars K_total+1 to K_total+G: FE variables
-     *   var K_total+G+1: cluster variable (if vce_type == cluster)
+    /* FE and cluster data are already loaded in filtered.data.vars[].
+     * Layout: [depvar, x1..xK, fe1..feG, cluster]
+     *   FE var g  → filtered.data.vars[1 + K_x + g].data.dbl
+     *   cluster   → filtered.data.vars[1 + K_x + G].data.dbl
      */
     ST_int *fe_var_idx = NULL;
-    ST_int cluster_var_idx = 0;
 
     if (G > 0) {
         fe_var_idx = (ST_int *)malloc(G * sizeof(ST_int));
@@ -750,10 +753,6 @@ ST_retcode cqreg_full_regression(const char *args)
         for (ST_int g = 0; g < G; g++) {
             fe_var_idx[g] = K_total + g + 1;
         }
-    }
-
-    if (vce_type == CQREG_VCE_CLUSTER) {
-        cluster_var_idx = K_total + G + 1;
     }
 
     main_debug_log("Step 1 done: N=%d, K=%d, G=%d, q=%.3f\n", N, K, G, quantile);
@@ -818,9 +817,10 @@ ST_retcode cqreg_full_regression(const char *args)
     state->sum_rdev = cqreg_sum_raw_deviations(state->y, N, state->q_v, quantile);
     main_debug_log("Computed q_v=%.6f, sum_rdev=%.4f\n", state->q_v, state->sum_rdev);
 
-    /* Load cluster variable if needed (uses obs_map for filtering) */
+    /* Load cluster variable from pre-loaded data (no SPI re-read) */
     if (vce_type == CQREG_VCE_CLUSTER) {
-        if (load_clusters(state, cluster_var_idx, N, obs_map) != 0) {
+        ST_double *cluster_data = filtered.data.vars[1 + K_x + G].data.dbl;
+        if (load_clusters_from_data(state, cluster_data, N) != 0) {
             cqreg_state_free(state);
             ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
@@ -835,17 +835,30 @@ ST_retcode cqreg_full_regression(const char *args)
     if (G > 0) {
         double hdfe_start = ctools_timer_seconds();
 
-        /* Initialize HDFE with filtered observation count
-         * Note: cqreg_hdfe_init still uses SF_ifobs internally for FE loading */
+        /* Build array of pointers to pre-loaded FE data (no SPI re-read) */
+        ST_double **fe_data = (ST_double **)malloc(G * sizeof(ST_double *));
+        if (fe_data == NULL) {
+            cqreg_state_free(state);
+            ctools_filtered_data_free(&filtered);
+            free(fe_var_idx);
+            return 920;
+        }
+        for (ST_int g = 0; g < G; g++) {
+            fe_data[g] = filtered.data.vars[1 + K_x + g].data.dbl;
+        }
+
+        /* Initialize HDFE from pre-loaded data */
         ST_int in1 = SF_in1();
         ST_int in2 = SF_in2();
-        if (cqreg_hdfe_init(state, fe_var_idx, G, N, in1, in2, 10000, 1e-8) != 0) {
+        if (cqreg_hdfe_init(state, fe_var_idx, G, N, in1, in2, 10000, 1e-8, fe_data) != 0) {
+            free(fe_data);
             cqreg_state_free(state);
             ctools_filtered_data_free(&filtered);
             free(fe_var_idx);
             ctools_error("cqreg", "HDFE initialization failed");
             return 198;
         }
+        free(fe_data);  /* Pointer array only; data owned by filtered */
 
         /* Partial out fixed effects */
         if (cqreg_hdfe_partial_out(state, state->y, state->X, N, K) != 0) {

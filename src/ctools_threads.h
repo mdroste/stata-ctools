@@ -28,6 +28,7 @@ typedef struct {
     size_t obs1;                /* First observation (1-based) */
     size_t nobs;                /* Number of observations */
     int is_string;              /* Non-zero if string variable (load only) */
+    int str_width;              /* Actual string width (e.g. 17 for str17), 0 = unknown */
     int success;                /* 1 on success, 0 on failure (out) */
 } ctools_var_io_args;
 

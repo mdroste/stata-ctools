@@ -125,6 +125,15 @@ void xlsx_zip_stream_close(xlsx_zip_stream *stream);
 void *xlsx_zip_extract_fast(xlsx_zip_archive *archive, size_t file_index,
                             size_t *out_size);
 
+/*
+ * Direct extraction: reads compressed data at computed file offset via miniz
+ * I/O callback, then inflates with libdeflate. Avoids the intermediate
+ * heap allocation + copy of xlsx_zip_extract_fast().
+ * Falls back to xlsx_zip_extract_fast() on any error.
+ */
+void *xlsx_zip_extract_direct(xlsx_zip_archive *archive, size_t file_index,
+                              size_t *out_size);
+
 /* ============================================================================
  * Common XLSX Archive Paths
  * ============================================================================ */

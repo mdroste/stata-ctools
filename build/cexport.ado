@@ -300,6 +300,9 @@ program define cexport, rclass
     timer clear 99
     timer on 99
 
+    * Set string width metadata for flat buffer optimization
+    _ctools_strw `export_varlist'
+
     * Call the C plugin
     * Plugin expects: filename delimiter [options]
     * Use export_varlist (may contain decoded temp vars for value labels)
@@ -746,6 +749,9 @@ program define cexport_excel, rclass
     * Record start time
     timer clear 99
     timer on 99
+
+    * Set string width metadata for flat buffer optimization
+    _ctools_strw `export_varlist'
 
     * Call plugin with if `touse' so SF_ifobs() filters correctly
     capture noisily plugin call ctools_plugin `export_varlist' if `touse', ///

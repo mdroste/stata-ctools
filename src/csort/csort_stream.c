@@ -288,10 +288,44 @@ static inline int get_stream_prefetch_dist(void)
 #define STREAM_PREFETCH_DIST (get_stream_prefetch_dist())
 
 /*
-    Process a string variable with arena allocation.
-    Uses ctools_string_arena with NO_FALLBACK mode - returns error if arena exhausted.
+    Process a fixed-width string variable using a flat buffer.
+    SF_var_is_string() returns the max width (e.g. 20 for str20).
+    We allocate nobs * stride contiguously and scatter/gather directly,
+    avoiding arena overhead, strlen, CAS, and pointer indirection.
 */
-static int stream_permute_string_var(
+static int stream_permute_string_var_flat(
+    ST_int stata_var,
+    const perm_idx_t *inv_perm,
+    size_t nobs,
+    const perm_idx_t *obs_map,
+    int max_width)
+{
+    size_t i;
+    size_t stride = (size_t)max_width + 1;  /* +1 for null terminator */
+    char *buf;
+
+    buf = (char *)calloc(nobs, stride);
+    if (!buf) return -1;
+
+    /* Read from Stata sequentially, scatter to permuted position in flat buffer */
+    for (i = 0; i < nobs; i++) {
+        SF_sdata(stata_var, (ST_int)obs_map[i], buf + inv_perm[i] * stride);
+    }
+
+    /* Write back sequentially from flat buffer (cache-friendly) */
+    for (i = 0; i < nobs; i++) {
+        SF_sstore(stata_var, (ST_int)obs_map[i], buf + i * stride);
+    }
+
+    free(buf);
+    return 0;
+}
+
+/*
+    Process a strL variable with arena allocation.
+    strL variables have no fixed width, so we must use variable-length storage.
+*/
+static int stream_permute_string_var_strl(
     ST_int stata_var,
     const perm_idx_t *inv_perm,
     size_t nobs,
@@ -299,11 +333,10 @@ static int stream_permute_string_var(
 {
     size_t i;
 
-    /* String variable with arena allocation */
-    size_t arena_size = nobs * 256;  /* Estimate avg 256 bytes per string */
+    /* Estimate arena size for variable-length strings */
+    size_t arena_size = nobs * 256;
     if (arena_size < STRING_ARENA_SIZE) arena_size = STRING_ARENA_SIZE;
 
-    /* Use NO_FALLBACK mode - if arena is exhausted, we fall back to strdup manually */
     ctools_string_arena *arena = ctools_string_arena_create(arena_size,
                                     CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
     char **str_ptrs = (char **)calloc(nobs, sizeof(char *));
@@ -316,13 +349,12 @@ static int stream_permute_string_var(
 
     char strbuf[2048];
 
-    /* Sequential read from Stata using obs_map, scatter to buffer via inverse perm */
+    /* Sequential read from Stata, scatter to buffer via inverse perm */
     for (i = 0; i < nobs; i++) {
         SF_sdata(stata_var, (ST_int)obs_map[i], strbuf);
         str_ptrs[inv_perm[i]] = ctools_string_arena_strdup(arena, strbuf);
 
         if (!str_ptrs[inv_perm[i]]) {
-            /* Cleanup on allocation failure */
             for (size_t k = 0; k < nobs; k++) {
                 if (str_ptrs[k] && !ctools_string_arena_owns(arena, str_ptrs[k])) {
                     free(str_ptrs[k]);
@@ -334,12 +366,12 @@ static int stream_permute_string_var(
         }
     }
 
-    /* Sequential write back to Stata using obs_map */
+    /* Sequential write back to Stata */
     for (i = 0; i < nobs; i++) {
         SF_sstore(stata_var, (ST_int)obs_map[i], str_ptrs[i] ? str_ptrs[i] : "");
     }
 
-    /* Free fallback allocations (those not owned by arena) */
+    /* Free fallback allocations */
     if (arena->has_fallback) {
         for (i = 0; i < nobs; i++) {
             if (str_ptrs[i] && !ctools_string_arena_owns(arena, str_ptrs[i])) {
@@ -353,6 +385,25 @@ static int stream_permute_string_var(
     return 0;
 }
 
+/*
+    Process a string variable: dispatches to flat buffer (fixed-width)
+    or arena (strL) based on str_width.
+    str_width: actual Stata variable width (e.g. 17 for str17), 0 for strL.
+*/
+static int stream_permute_string_var(
+    ST_int stata_var,
+    const perm_idx_t *inv_perm,
+    size_t nobs,
+    const perm_idx_t *obs_map,
+    int str_width)
+{
+    if (str_width > 0) {
+        return stream_permute_string_var_flat(stata_var, inv_perm, nobs, obs_map, str_width);
+    } else {
+        return stream_permute_string_var_strl(stata_var, inv_perm, nobs, obs_map);
+    }
+}
+
 stata_retcode csort_stream_apply_permutation(
     const perm_idx_t *perm,
     size_t nobs,
@@ -361,6 +412,7 @@ stata_retcode csort_stream_apply_permutation(
     const perm_idx_t *obs_map,
     size_t block_size,
     int vars_per_batch,
+    const int *nonkey_str_widths,
     csort_stream_timings *timings)
 {
     size_t v;
@@ -415,18 +467,23 @@ stata_retcode csort_stream_apply_permutation(
     /* Separate string and numeric variables */
     int *numeric_vars = (int *)malloc(nvars_nonkey * sizeof(int));
     int *string_vars = (int *)malloc(nvars_nonkey * sizeof(int));
+    int *string_widths = (int *)malloc(nvars_nonkey * sizeof(int));
     size_t n_numeric = 0, n_string = 0;
 
-    if (!numeric_vars || !string_vars) {
+    if (!numeric_vars || !string_vars || !string_widths) {
         free(numeric_vars);
         free(string_vars);
+        free(string_widths);
         ctools_aligned_free(inv_perm);
         return STATA_ERR_MEMORY;
     }
 
     for (v = 0; v < nvars_nonkey; v++) {
+        int w = nonkey_str_widths ? nonkey_str_widths[v] : 0;
         if (SF_var_is_string((ST_int)nonkey_var_indices[v])) {
-            string_vars[n_string++] = nonkey_var_indices[v];
+            string_vars[n_string] = nonkey_var_indices[v];
+            string_widths[n_string] = w;
+            n_string++;
         } else {
             numeric_vars[n_numeric++] = nonkey_var_indices[v];
         }
@@ -739,7 +796,7 @@ stata_retcode csort_stream_apply_permutation(
 
         #pragma omp parallel for schedule(static) num_threads(string_threads)
         for (int sv = 0; sv < (int)n_string; sv++) {
-            if (stream_permute_string_var((ST_int)string_vars[sv], inv_perm, nobs, obs_map) != 0) {
+            if (stream_permute_string_var((ST_int)string_vars[sv], inv_perm, nobs, obs_map, string_widths[sv]) != 0) {
                 #pragma omp atomic write
                 success = 0;
             }
@@ -747,7 +804,7 @@ stata_retcode csort_stream_apply_permutation(
     }
     #else
     for (v = 0; v < n_string; v++) {
-        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs_map) != 0) {
+        if (stream_permute_string_var((ST_int)string_vars[v], inv_perm, nobs, obs_map, string_widths[v]) != 0) {
             /* error */
         }
     }
@@ -767,6 +824,7 @@ stata_retcode csort_stream_apply_permutation(
 
     free(numeric_vars);
     free(string_vars);
+    free(string_widths);
     ctools_aligned_free(inv_perm);
 
     #ifdef _OPENMP
@@ -842,6 +900,7 @@ stata_retcode csort_stream_sort(
     sort_algorithm_t algorithm,
     size_t block_size,
     int vars_per_batch,
+    const int *str_widths,
     csort_stream_timings *timings)
 {
     ctools_filtered_data key_filtered;
@@ -852,6 +911,7 @@ stata_retcode csort_stream_sort(
     size_t i, j;
     perm_idx_t *saved_perm = NULL;
     int *nonkey_var_indices = NULL;
+    int *nonkey_str_widths = NULL;
     int *local_sort_vars = NULL;
 
     csort_stream_timings local_timings = {0};
@@ -936,8 +996,13 @@ stata_retcode csort_stream_sort(
 
     /* Store each key variable using obs_map */
     for (size_t k = 0; k < nkeys && rc == STATA_OK; k++) {
-        rc = ctools_store_filtered(key_filtered.data.vars[k].data.dbl,
-                                   nobs, key_var_indices[k], obs_map);
+        if (key_filtered.data.vars[k].type == STATA_TYPE_STRING) {
+            rc = ctools_store_filtered_str(key_filtered.data.vars[k].data.str,
+                                           nobs, key_var_indices[k], obs_map);
+        } else {
+            rc = ctools_store_filtered(key_filtered.data.vars[k].data.dbl,
+                                       nobs, key_var_indices[k], obs_map);
+        }
     }
 
     local_timings.store_keys_time = ctools_timer_seconds() - t_phase;
@@ -986,7 +1051,8 @@ stata_retcode csort_stream_sort(
 
     if (nvars_nonkey > 0) {
         nonkey_var_indices = (int *)malloc(nvars_nonkey * sizeof(int));
-        if (!nonkey_var_indices) {
+        nonkey_str_widths = (int *)calloc(nvars_nonkey, sizeof(int));
+        if (!nonkey_var_indices || !nonkey_str_widths) {
             rc = STATA_ERR_MEMORY;
             goto cleanup;
         }
@@ -1001,7 +1067,13 @@ stata_retcode csort_stream_sort(
                 }
             }
             if (!is_key) {
-                nonkey_var_indices[nk++] = all_var_indices[i];
+                nonkey_var_indices[nk] = all_var_indices[i];
+                /* Map global var index to str_widths: all_var_indices[i] is
+                   1-based, str_widths is 0-based indexed by variable position */
+                if (str_widths) {
+                    nonkey_str_widths[nk] = str_widths[all_var_indices[i] - 1];
+                }
+                nk++;
             }
         }
 
@@ -1013,7 +1085,8 @@ stata_retcode csort_stream_sort(
 
         rc = csort_stream_apply_permutation(saved_perm, nobs, nonkey_var_indices,
                                              nvars_nonkey, obs_map, block_size,
-                                             vars_per_batch, &local_timings);
+                                             vars_per_batch, nonkey_str_widths,
+                                             &local_timings);
     }
 
     local_timings.stream_nonkeys_time = ctools_timer_seconds() - t_phase;
@@ -1021,6 +1094,7 @@ stata_retcode csort_stream_sort(
 cleanup:
     free(local_sort_vars);
     free(nonkey_var_indices);
+    free(nonkey_str_widths);
     ctools_aligned_free(saved_perm);
     if (obs_map) ctools_aligned_free(obs_map);  /* We took ownership from key_filtered */
     ctools_filtered_data_free(&key_filtered);

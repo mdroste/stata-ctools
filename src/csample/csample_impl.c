@@ -273,6 +273,7 @@ ST_retcode csample_main(const char *args) {
     size_t *work_indices = NULL;
     ctools_filtered_data by_filtered;
     perm_idx_t *obs_map = NULL;
+    ST_int obs_start = 0;  /* For null obs_map: first observation number */
     stata_retcode rc;
     int num_threads = 1;
     xoshiro256_state *thread_rngs = NULL;
@@ -292,6 +293,7 @@ ST_retcode csample_main(const char *args) {
     config.count = parse_size_option(args, "count", 0);
     config.verbose = parse_option(args, "verbose");
     config.seed = (uint64_t)parse_size_option(args, "seed", 0);
+    int skip_if = parse_option(args, "skipif");
 
     /* Validate - must have either percent or count */
     if (config.percent < 0 && config.count == 0) {
@@ -362,34 +364,40 @@ ST_retcode csample_main(const char *args) {
         nobs = by_filtered.data.nobs;
         obs_map = by_filtered.obs_map;
     } else {
-        /* No by-variables - build obs_map directly from SF_ifobs */
+        /* No by-variables */
         ST_int in1 = SF_in1();
         ST_int in2 = SF_in2();
 
-        /* First pass: count filtered observations */
-        nobs = 0;
-        for (ST_int obs = in1; obs <= in2; obs++) {
-            if (SF_ifobs(obs)) nobs++;
-        }
+        if (skip_if) {
+            /* No if/in and no by-variables: skip data load entirely */
+            nobs = (size_t)(in2 - in1 + 1);
+            obs_map = NULL;
+            obs_start = in1;
+        } else {
+            /* Has if/in: must check SF_ifobs */
+            nobs = 0;
+            for (ST_int obs = in1; obs <= in2; obs++) {
+                if (SF_ifobs(obs)) nobs++;
+            }
 
-        if (nobs == 0) {
-            if (by_indices) free(by_indices);
-            ctools_error(CSAMPLE_MODULE, "no observations");
-            return 2000;
-        }
+            if (nobs == 0) {
+                if (by_indices) free(by_indices);
+                ctools_error(CSAMPLE_MODULE, "no observations");
+                return 2000;
+            }
 
-        /* Allocate and build obs_map */
-        obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
-        if (!obs_map) {
-            if (by_indices) free(by_indices);
-            ctools_error_alloc(CSAMPLE_MODULE);
-            return 920;
-        }
+            obs_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+            if (!obs_map) {
+                if (by_indices) free(by_indices);
+                ctools_error_alloc(CSAMPLE_MODULE);
+                return 920;
+            }
 
-        size_t idx = 0;
-        for (ST_int obs = in1; obs <= in2; obs++) {
-            if (SF_ifobs(obs)) {
-                obs_map[idx++] = (perm_idx_t)obs;
+            size_t idx = 0;
+            for (ST_int obs = in1; obs <= in2; obs++) {
+                if (SF_ifobs(obs)) {
+                    obs_map[idx++] = (perm_idx_t)obs;
+                }
             }
         }
     }
@@ -596,10 +604,11 @@ ST_retcode csample_main(const char *args) {
     /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
-    /* Write keep flags to Stata using obs_map */
+    /* Write keep flags to Stata using obs_map (or arithmetic if NULL) */
     for (size_t i = 0; i < nobs; i++) {
+        ST_int obs = obs_map ? (ST_int)obs_map[i] : (obs_start + (ST_int)i);
         double val = keep_flags[i] ? 1.0 : 0.0;
-        SF_vstore(keep_idx, (ST_int)obs_map[i], val);
+        SF_vstore(keep_idx, obs, val);
     }
 
     t_store = ctools_timer_seconds() - store_start;

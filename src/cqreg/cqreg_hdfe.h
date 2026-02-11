@@ -22,17 +22,20 @@ struct HDFE_State;
  * Initialize HDFE state for quantile regression.
  *
  * This sets up the factor structures and CG solver state needed for
- * partialling out fixed effects. It reads FE variables from Stata
- * and initializes the creghdfe solver.
+ * partialling out fixed effects. If fe_data is non-NULL, uses pre-loaded
+ * arrays directly (no SPI reads). Otherwise reads FE variables from Stata.
  *
  * Parameters:
  *   state     - cqreg state (will have hdfe_state set)
- *   fe_vars    - Array of Stata variable indices for FE variables (1-indexed)
+ *   fe_vars    - Array of Stata variable indices for FE variables (1-indexed),
+ *                or NULL if fe_data is provided
  *   G          - Number of FE variables
  *   N_filtered - Number of observations after if-condition filtering
  *   in1, in2   - Observation range (from Stata's _N())
  *   maxiter    - Maximum CG iterations (default: 10000)
  *   tolerance  - CG convergence tolerance (default: 1e-8)
+ *   fe_data    - Pre-loaded FE data arrays [G][N_filtered], or NULL to
+ *                read from Stata via SF_vdata/SF_ifobs
  *
  * Returns:
  *   0 on success, error code otherwise
@@ -43,7 +46,8 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
                        ST_int N_filtered,
                        ST_int in1, ST_int in2,
                        ST_int maxiter,
-                       ST_double tolerance);
+                       ST_double tolerance,
+                       ST_double **fe_data);
 
 /*
  * Partial out fixed effects from y and X.
@@ -143,6 +147,17 @@ ST_int cqreg_hdfe_create_factor(ST_int var_idx,
                                 ST_int *levels,
                                 ST_double *counts,
                                 ST_int *num_levels);
+
+/*
+ * Create factor from pre-loaded data array.
+ * Same as cqreg_hdfe_create_factor but reads from a pre-loaded
+ * ST_double array instead of Stata's SPI, avoiding redundant I/O.
+ */
+ST_int cqreg_hdfe_create_factor_from_data(const ST_double *data,
+                                           ST_int N_filtered,
+                                           ST_int *levels,
+                                           ST_double *counts,
+                                           ST_int *num_levels);
 
 /*
  * Detect and mark singleton observations.

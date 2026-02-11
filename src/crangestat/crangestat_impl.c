@@ -476,8 +476,8 @@ static int build_sparse_table(const double *data, size_t start, size_t count,
     }
 
     for (int j = 0; j < nlevels; j++) {
-        st->sparse_min[j] = block + (size_t)(2 * j) * count;
-        st->sparse_max[j] = block + (size_t)(2 * j + 1) * count;
+        st->sparse_min[j] = block + (size_t)j * count;
+        st->sparse_max[j] = block + (size_t)(nlevels + j) * count;
     }
 
     /* Initialize level 0: individual elements */
@@ -557,6 +557,136 @@ static void free_sparse_table(sparse_table *st)
         free(st->sparse_max);
     }
     if (st->log_table) free(st->log_table);
+}
+
+/* Allocate sparse table buffers without filling data.
+ * max_count is the maximum group size; actual groups may be smaller.
+ * Returns 0 on success, -1 on allocation failure. */
+static int alloc_sparse_table(sparse_table *st, size_t max_count)
+{
+    if (max_count == 0) return 0;
+
+    /* Compute max_log for the largest possible group */
+    int max_log = 0;
+    size_t temp = max_count;
+    while (temp > 1) {
+        temp >>= 1;
+        max_log++;
+    }
+    if (max_log >= CRANGESTAT_SPARSE_TABLE_LOG)
+        max_log = CRANGESTAT_SPARSE_TABLE_LOG - 1;
+
+    st->max_log = max_log;
+    st->nobs = max_count;
+
+    /* Allocate log table for [0, max_count] */
+    st->log_table = (int *)malloc((max_count + 1) * sizeof(int));
+    if (!st->log_table) return -1;
+
+    /* Pre-fill log table */
+    st->log_table[0] = 0;
+    if (max_count >= 1) st->log_table[1] = 0;
+    for (size_t i = 2; i <= max_count; i++) {
+        st->log_table[i] = st->log_table[i / 2] + 1;
+    }
+
+    /* Allocate pointer arrays */
+    int nlevels = max_log + 1;
+    st->sparse_min = (double **)malloc(nlevels * sizeof(double *));
+    st->sparse_max = (double **)malloc(nlevels * sizeof(double *));
+    if (!st->sparse_min || !st->sparse_max) {
+        free(st->log_table);
+        if (st->sparse_min) free(st->sparse_min);
+        if (st->sparse_max) free(st->sparse_max);
+        st->log_table = NULL;
+        st->sparse_min = NULL;
+        st->sparse_max = NULL;
+        return -1;
+    }
+
+    /* Single contiguous allocation: stride = max_count per level */
+    double *block = (double *)malloc(2 * (size_t)nlevels * max_count * sizeof(double));
+    if (!block) {
+        free(st->sparse_min);
+        free(st->sparse_max);
+        free(st->log_table);
+        st->sparse_min = NULL;
+        st->sparse_max = NULL;
+        st->log_table = NULL;
+        return -1;
+    }
+
+    for (int j = 0; j < nlevels; j++) {
+        st->sparse_min[j] = block + (size_t)j * max_count;
+        st->sparse_max[j] = block + (size_t)(nlevels + j) * max_count;
+    }
+
+    return 0;
+}
+
+/* Rebuild sparse table data for a specific group using pre-allocated buffers.
+ * st must have been allocated with alloc_sparse_table(st, max_count) where
+ * max_count >= count. Pointer stride remains max_count (the allocation capacity).
+ * Only count entries per level are meaningful; queries must use indices < count. */
+static void rebuild_sparse_table(sparse_table *st, const double *data,
+                                 size_t start, size_t count, double miss)
+{
+    if (count == 0) {
+        st->nobs = 0;
+        return;
+    }
+
+    /* Recompute max_log for this group's count */
+    int max_log = 0;
+    size_t temp = count;
+    while (temp > 1) {
+        temp >>= 1;
+        max_log++;
+    }
+    if (max_log >= CRANGESTAT_SPARSE_TABLE_LOG)
+        max_log = CRANGESTAT_SPARSE_TABLE_LOG - 1;
+
+    st->max_log = max_log;
+    st->nobs = count;
+
+    /* Rebuild log table for [0, count] */
+    st->log_table[0] = 0;
+    if (count >= 1) st->log_table[1] = 0;
+    for (size_t i = 2; i <= count; i++) {
+        st->log_table[i] = st->log_table[i / 2] + 1;
+    }
+
+    /* Initialize level 0 */
+    for (size_t i = 0; i < count; i++) {
+        double val = data[start + i];
+        if (val >= miss) {
+            st->sparse_min[0][i] = DBL_MAX;
+            st->sparse_max[0][i] = -DBL_MAX;
+        } else {
+            st->sparse_min[0][i] = val;
+            st->sparse_max[0][i] = val;
+        }
+    }
+
+    /* Build higher levels */
+    for (int j = 1; j <= max_log; j++) {
+        size_t range_size = (size_t)1 << j;
+        size_t half_range = (size_t)1 << (j - 1);
+        size_t limit = (range_size <= count) ? count - range_size + 1 : 0;
+
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(static) if(count > 10000)
+        #endif
+        for (size_t i = 0; i < limit; i++) {
+            double min1 = st->sparse_min[j-1][i];
+            double min2 = st->sparse_min[j-1][i + half_range];
+            double max1 = st->sparse_max[j-1][i];
+            double max2 = st->sparse_max[j-1][i + half_range];
+
+            st->sparse_min[j][i] = (min1 < min2) ? min1 : min2;
+            st->sparse_max[j][i] = (max1 > max2) ? max1 : max2;
+        }
+    }
 }
 
 /* ===========================================================================
@@ -1090,6 +1220,7 @@ ST_retcode crangestat_main(const char *args)
     stat_spec *specs = NULL;
     group_info *groups = NULL;
     size_t *inv_perm = NULL;
+    perm_idx_t *fwd_perm = NULL;
     ctools_filtered_data filtered;
     perm_idx_t *obs_map = NULL;
     int num_threads = 1;
@@ -1390,6 +1521,15 @@ ST_retcode crangestat_main(const char *args)
         inv_perm[filtered.data.sort_order[i]] = i;
     }
 
+    /* Save forward permutation for sequential store-phase reads.
+     * sort_order[sorted_idx] = original_idx, so iterating sorted_idx gives
+     * sequential reads from data[] and scattered writes via obs_map[]. */
+    fwd_perm = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+    if (fwd_perm) {
+        memcpy(fwd_perm, filtered.data.sort_order, nobs * sizeof(perm_idx_t));
+    }
+    /* Non-fatal: falls back to inv_perm-based store if alloc fails */
+
     /* Apply permutation to sort data in place */
     rc = ctools_apply_permutation(&filtered.data);
     if (rc != STATA_OK) {
@@ -1598,7 +1738,53 @@ ST_retcode crangestat_main(const char *args)
         /*
          * Cross-group parallel processing: single parallel region over all groups.
          * Each thread processes complete groups independently.
+         *
+         * Pre-allocate per-thread O(1) buffers (prefix arrays reused across groups,
+         * sparse tables built/freed per group since groups are small).
          */
+
+        /* Determine which source variables need O(1) structures */
+        int *a_needs_prefix = (int *)calloc(nsource, sizeof(int));
+        int *a_needs_sparse = (int *)calloc(nsource, sizeof(int));
+        int a_has_o1 = (a_needs_prefix && a_needs_sparse &&
+                        max_group_size >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+
+        if (a_has_o1) {
+            for (size_t s = 0; s < nstats; s++) {
+                int src_idx = specs[s].source_var_idx;
+                if (src_idx < 0 || src_idx >= (int)nsource) continue;
+                if (stat_uses_prefix_sums(specs[s].type)) a_needs_prefix[src_idx] = 1;
+                if (stat_uses_sparse_table(specs[s].type)) a_needs_sparse[src_idx] = 1;
+            }
+        }
+
+        /* Per-thread prefix arrays: thread t, source var v → a_prefix[t * nsource + v] */
+        prefix_arrays *a_prefix = NULL;
+        if (a_has_o1) {
+            a_prefix = (prefix_arrays *)calloc((size_t)num_threads * nsource, sizeof(prefix_arrays));
+            if (a_prefix) {
+                for (int t = 0; t < num_threads; t++) {
+                    for (size_t v = 0; v < nsource; v++) {
+                        if (!a_needs_prefix[v]) continue;
+                        size_t idx = (size_t)t * nsource + v;
+                        a_prefix[idx].prefix_sum = (double *)malloc((max_group_size + 1) * sizeof(double));
+                        a_prefix[idx].prefix_sum2 = (double *)malloc((max_group_size + 1) * sizeof(double));
+                        a_prefix[idx].prefix_count = (size_t *)malloc((max_group_size + 1) * sizeof(size_t));
+                        if (!a_prefix[idx].prefix_sum || !a_prefix[idx].prefix_sum2 ||
+                            !a_prefix[idx].prefix_count) {
+                            /* Disable prefix for this var on alloc failure */
+                            a_needs_prefix[v] = 0;
+                            if (a_prefix[idx].prefix_sum) { free(a_prefix[idx].prefix_sum); a_prefix[idx].prefix_sum = NULL; }
+                            if (a_prefix[idx].prefix_sum2) { free(a_prefix[idx].prefix_sum2); a_prefix[idx].prefix_sum2 = NULL; }
+                            if (a_prefix[idx].prefix_count) { free(a_prefix[idx].prefix_count); a_prefix[idx].prefix_count = NULL; }
+                        }
+                    }
+                }
+            } else {
+                a_has_o1 = 0;
+            }
+        }
+
         #ifdef _OPENMP
         #pragma omp parallel for schedule(dynamic, 1)
         #endif
@@ -1614,20 +1800,59 @@ ST_retcode crangestat_main(const char *args)
             size_t g_count = groups[g].count;
             size_t g_end = g_start + g_count;
 
-            /* Process each observation in this group (sequential within group) */
+            /* Build O(1) structures for this group */
+            int group_has_o1 = a_has_o1 && (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+            sparse_table group_sparse[16]; /* Stack-allocated for small nsource */
+            sparse_table *group_sparse_ptr = (nsource <= 16) ? group_sparse : NULL;
+            int sparse_built = 0;
+
+            if (group_has_o1) {
+                /* Build prefix arrays (reuse per-thread buffers) */
+                for (size_t v = 0; v < nsource; v++) {
+                    if (a_needs_prefix[v]) {
+                        size_t idx = (size_t)tid * nsource + v;
+                        a_prefix[idx].nobs = g_count;
+                        build_prefix_arrays(source_data[v], g_start, g_count, &a_prefix[idx]);
+                    }
+                }
+
+                /* Build sparse tables per group (groups are small, so alloc overhead is minimal) */
+                if (group_sparse_ptr) {
+                    memset(group_sparse_ptr, 0, nsource * sizeof(sparse_table));
+                    for (size_t v = 0; v < nsource; v++) {
+                        if (a_needs_sparse[v]) {
+                            if (build_sparse_table(source_data[v], g_start, g_count,
+                                                   &group_sparse_ptr[v], SV_missval) != 0) {
+                                /* Build failed, disable for this group */
+                                group_sparse_ptr = NULL;
+                                break;
+                            }
+                        }
+                    }
+                    if (group_sparse_ptr) sparse_built = 1;
+                }
+            }
+
+            /* Process each observation in this group with sliding window.
+             * Since data is sorted by key, window bounds only advance forward. */
+            size_t win_lo = g_start;
+            size_t win_hi = g_start;
             for (size_t i = g_start; i < g_end; i++) {
                 double key_val = key_data[i];
 
-                /* Skip if key is missing */
-                if (key_val >= SV_missval) continue;
+                /* Missing keys sort to end — stop processing */
+                if (key_val >= SV_missval) break;
 
                 /* Compute window bounds */
                 double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
                 double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
 
-                /* Find window using binary search within group */
-                size_t win_start = lower_bound(key_data, g_start, g_end, low_bound);
-                size_t win_end = upper_bound(key_data, g_start, g_end, high_bound);
+                /* Slide window pointers forward (O(1) amortized) */
+                while (win_lo < g_end && key_data[win_lo] < low_bound) win_lo++;
+                while (win_hi < g_end && key_data[win_hi] <= high_bound) win_hi++;
+
+                size_t win_start = win_lo;
+                size_t win_end = win_hi;
 
                 /* Compute each statistic for this observation */
                 for (size_t s = 0; s < nstats; s++) {
@@ -1635,9 +1860,11 @@ ST_retcode crangestat_main(const char *args)
                     if (src_idx < 0 || src_idx >= (int)nsource) continue;
 
                     double val;
-                    if (stat_needs_work_array(specs[s].type)) {
+                    stat_type stype = specs[s].type;
+
+                    if (stat_needs_work_array(stype)) {
                         val = compute_window_stat_complex(
-                            specs[s].type,
+                            stype,
                             source_data[src_idx],
                             win_start,
                             win_end,
@@ -1645,9 +1872,34 @@ ST_retcode crangestat_main(const char *args)
                             config.exclude_self,
                             work
                         );
+                    } else if (group_has_o1 && a_needs_prefix[src_idx] &&
+                               stat_uses_prefix_sums(stype)) {
+                        size_t pidx = (size_t)tid * nsource + (size_t)src_idx;
+                        val = compute_stat_with_prefix(
+                            stype,
+                            &a_prefix[pidx],
+                            source_data[src_idx],
+                            g_start,
+                            win_start,
+                            win_end,
+                            i,
+                            config.exclude_self
+                        );
+                    } else if (group_has_o1 && sparse_built && a_needs_sparse[src_idx] &&
+                               stat_uses_sparse_table(stype)) {
+                        val = compute_minmax_with_sparse(
+                            stype,
+                            &group_sparse_ptr[src_idx],
+                            source_data[src_idx],
+                            g_start,
+                            win_start,
+                            win_end,
+                            i,
+                            config.exclude_self
+                        );
                     } else {
                         val = compute_window_stat_simple(
-                            specs[s].type,
+                            stype,
                             source_data[src_idx],
                             win_start,
                             win_end,
@@ -1659,9 +1911,108 @@ ST_retcode crangestat_main(const char *args)
                     result_data[s][i] = val;
                 }
             }
+
+            /* Free per-group sparse tables */
+            if (sparse_built) {
+                for (size_t v = 0; v < nsource; v++) {
+                    if (a_needs_sparse[v]) {
+                        free_sparse_table(&group_sparse_ptr[v]);
+                    }
+                }
+            }
         }
+
+        /* Cleanup per-thread prefix arrays */
+        if (a_prefix) {
+            for (int t = 0; t < num_threads; t++) {
+                for (size_t v = 0; v < nsource; v++) {
+                    size_t idx = (size_t)t * nsource + v;
+                    if (a_prefix[idx].prefix_sum) free(a_prefix[idx].prefix_sum);
+                    if (a_prefix[idx].prefix_sum2) free(a_prefix[idx].prefix_sum2);
+                    if (a_prefix[idx].prefix_count) free(a_prefix[idx].prefix_count);
+                }
+            }
+            free(a_prefix);
+        }
+        if (a_needs_prefix) free(a_needs_prefix);
+        if (a_needs_sparse) free(a_needs_sparse);
     } else {
         /* Standard path: process groups sequentially with internal parallelism */
+
+        /*
+         * OPTIMIZATION: O(1) range queries using prefix sums and sparse tables
+         *
+         * Pre-allocate O(1) data structures once at max_group_size, then
+         * rebuild per group to avoid per-group alloc/free overhead.
+         */
+        int use_o1_queries = (max_group_size >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+
+        /* Determine which source variables need which data structures */
+        int *needs_prefix = NULL;
+        int *needs_sparse = NULL;
+        prefix_arrays *prefix_arr = NULL;
+        sparse_table *sparse_tbl = NULL;
+
+        if (use_o1_queries) {
+            needs_prefix = (int *)calloc(nsource, sizeof(int));
+            needs_sparse = (int *)calloc(nsource, sizeof(int));
+            prefix_arr = (prefix_arrays *)calloc(nsource, sizeof(prefix_arrays));
+            sparse_tbl = (sparse_table *)calloc(nsource, sizeof(sparse_table));
+
+            if (!needs_prefix || !needs_sparse || !prefix_arr || !sparse_tbl) {
+                use_o1_queries = 0;
+                if (needs_prefix) free(needs_prefix);
+                if (needs_sparse) free(needs_sparse);
+                if (prefix_arr) free(prefix_arr);
+                if (sparse_tbl) free(sparse_tbl);
+                needs_prefix = NULL;
+                needs_sparse = NULL;
+                prefix_arr = NULL;
+                sparse_tbl = NULL;
+            }
+        }
+
+        if (use_o1_queries) {
+            for (size_t s = 0; s < nstats; s++) {
+                int src_idx = specs[s].source_var_idx;
+                if (src_idx < 0 || src_idx >= (int)nsource) continue;
+
+                if (stat_uses_prefix_sums(specs[s].type)) {
+                    needs_prefix[src_idx] = 1;
+                }
+                if (stat_uses_sparse_table(specs[s].type)) {
+                    needs_sparse[src_idx] = 1;
+                }
+            }
+
+            /* Pre-allocate buffers at max_group_size */
+            for (size_t v = 0; v < nsource; v++) {
+                if (needs_prefix[v]) {
+                    prefix_arr[v].prefix_sum = (double *)malloc((max_group_size + 1) * sizeof(double));
+                    prefix_arr[v].prefix_sum2 = (double *)malloc((max_group_size + 1) * sizeof(double));
+                    prefix_arr[v].prefix_count = (size_t *)malloc((max_group_size + 1) * sizeof(size_t));
+                    prefix_arr[v].nobs = max_group_size;
+
+                    if (!prefix_arr[v].prefix_sum || !prefix_arr[v].prefix_sum2 ||
+                        !prefix_arr[v].prefix_count) {
+                        needs_prefix[v] = 0;
+                        if (prefix_arr[v].prefix_sum) free(prefix_arr[v].prefix_sum);
+                        if (prefix_arr[v].prefix_sum2) free(prefix_arr[v].prefix_sum2);
+                        if (prefix_arr[v].prefix_count) free(prefix_arr[v].prefix_count);
+                        prefix_arr[v].prefix_sum = NULL;
+                        prefix_arr[v].prefix_sum2 = NULL;
+                        prefix_arr[v].prefix_count = NULL;
+                    }
+                }
+
+                if (needs_sparse[v]) {
+                    if (alloc_sparse_table(&sparse_tbl[v], max_group_size) != 0) {
+                        needs_sparse[v] = 0;
+                    }
+                }
+            }
+        }
+
         for (size_t g = 0; g < ngroups; g++) {
             size_t g_start = groups[g].start;
             size_t g_count = groups[g].count;
@@ -1704,6 +2055,21 @@ ST_retcode crangestat_main(const char *args)
                 }
                 run_starts[num_runs] = g_end;  /* Sentinel */
 
+                /* Build O(1) structures for this group (reuse pre-allocated buffers) */
+                int group_has_o1 = use_o1_queries && (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+                if (group_has_o1) {
+                    for (size_t v = 0; v < nsource; v++) {
+                        if (needs_prefix[v]) {
+                            prefix_arr[v].nobs = g_count;
+                            build_prefix_arrays(source_data[v], g_start, g_count, &prefix_arr[v]);
+                        }
+                        if (needs_sparse[v]) {
+                            rebuild_sparse_table(&sparse_tbl[v], source_data[v], g_start,
+                                                 g_count, SV_missval);
+                        }
+                    }
+                }
+
                 /* Process runs in parallel */
                 #ifdef _OPENMP
                 #pragma omp parallel for schedule(dynamic, 1)
@@ -1739,9 +2105,11 @@ ST_retcode crangestat_main(const char *args)
                         if (src_idx < 0 || src_idx >= (int)nsource) continue;
 
                         double val;
-                        if (stat_needs_work_array(specs[s].type)) {
+                        stat_type stype = specs[s].type;
+
+                        if (stat_needs_work_array(stype)) {
                             val = compute_window_stat_complex(
-                                specs[s].type,
+                                stype,
                                 source_data[src_idx],
                                 win_start,
                                 win_end,
@@ -1749,9 +2117,33 @@ ST_retcode crangestat_main(const char *args)
                                 0,  /* exclude_self=0 */
                                 work
                             );
+                        } else if (group_has_o1 && needs_prefix[src_idx] &&
+                                   stat_uses_prefix_sums(stype)) {
+                            val = compute_stat_with_prefix(
+                                stype,
+                                &prefix_arr[src_idx],
+                                source_data[src_idx],
+                                g_start,
+                                win_start,
+                                win_end,
+                                0,
+                                0
+                            );
+                        } else if (group_has_o1 && needs_sparse[src_idx] &&
+                                   stat_uses_sparse_table(stype)) {
+                            val = compute_minmax_with_sparse(
+                                stype,
+                                &sparse_tbl[src_idx],
+                                source_data[src_idx],
+                                g_start,
+                                win_start,
+                                win_end,
+                                0,
+                                0
+                            );
                         } else {
                             val = compute_window_stat_simple(
-                                specs[s].type,
+                                stype,
                                 source_data[src_idx],
                                 win_start,
                                 win_end,
@@ -1770,192 +2162,156 @@ ST_retcode crangestat_main(const char *args)
                 free(run_starts);
             } else {
 standard_obs_loop:;
-                /*
-                 * OPTIMIZATION: O(1) range queries using prefix sums and sparse tables
-                 *
-                 * For large groups, build prefix sums (sum, sum², count) and sparse tables
-                 * (min, max) to enable O(1) range queries instead of O(window_size) scans.
-                 *
-                 * Speedup: For N obs with window W, reduces O(N*W) to O(N + preprocessing)
-                 * Example: 100K obs with window 100 → 10B ops reduced to ~200K ops
-                 */
-                int use_o1_queries = (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
-
-                /* Check which source variables need O(1) data structures */
-                int *needs_prefix = NULL;
-                int *needs_sparse = NULL;
-                prefix_arrays *prefix_arr = NULL;
-                sparse_table *sparse_tbl = NULL;
-
-                if (use_o1_queries) {
-                    needs_prefix = (int *)calloc(nsource, sizeof(int));
-                    needs_sparse = (int *)calloc(nsource, sizeof(int));
-                    prefix_arr = (prefix_arrays *)calloc(nsource, sizeof(prefix_arrays));
-                    sparse_tbl = (sparse_table *)calloc(nsource, sizeof(sparse_table));
-
-                    if (!needs_prefix || !needs_sparse || !prefix_arr || !sparse_tbl) {
-                        /* Allocation failed, fall back to scan-based */
-                        use_o1_queries = 0;
-                        if (needs_prefix) free(needs_prefix);
-                        if (needs_sparse) free(needs_sparse);
-                        if (prefix_arr) free(prefix_arr);
-                        if (sparse_tbl) free(sparse_tbl);
-                        needs_prefix = NULL;
-                        needs_sparse = NULL;
-                        prefix_arr = NULL;
-                        sparse_tbl = NULL;
-                    }
-                }
-
-                if (use_o1_queries) {
-                    /* Determine which source variables need which data structures */
-                    for (size_t s = 0; s < nstats; s++) {
-                        int src_idx = specs[s].source_var_idx;
-                        if (src_idx < 0 || src_idx >= (int)nsource) continue;
-
-                        if (stat_uses_prefix_sums(specs[s].type)) {
-                            needs_prefix[src_idx] = 1;
-                        }
-                        if (stat_uses_sparse_table(specs[s].type)) {
-                            needs_sparse[src_idx] = 1;
-                        }
-                    }
-
-                    /* Build data structures for each source variable that needs them */
+                /* Rebuild O(1) structures for this group (reuse pre-allocated buffers) */
+                int group_has_o1 = use_o1_queries && (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
+                if (group_has_o1) {
                     for (size_t v = 0; v < nsource; v++) {
                         if (needs_prefix[v]) {
-                            /* Allocate prefix arrays (size = g_count + 1 for prefix semantics) */
-                            prefix_arr[v].prefix_sum = (double *)malloc((g_count + 1) * sizeof(double));
-                            prefix_arr[v].prefix_sum2 = (double *)malloc((g_count + 1) * sizeof(double));
-                            prefix_arr[v].prefix_count = (size_t *)malloc((g_count + 1) * sizeof(size_t));
                             prefix_arr[v].nobs = g_count;
-
-                            if (prefix_arr[v].prefix_sum && prefix_arr[v].prefix_sum2 &&
-                                prefix_arr[v].prefix_count) {
-                                build_prefix_arrays(source_data[v], g_start, g_count, &prefix_arr[v]);
-                            } else {
-                                /* Allocation failed, mark as unavailable */
-                                needs_prefix[v] = 0;
-                                if (prefix_arr[v].prefix_sum) free(prefix_arr[v].prefix_sum);
-                                if (prefix_arr[v].prefix_sum2) free(prefix_arr[v].prefix_sum2);
-                                if (prefix_arr[v].prefix_count) free(prefix_arr[v].prefix_count);
-                            }
+                            build_prefix_arrays(source_data[v], g_start, g_count, &prefix_arr[v]);
                         }
-
                         if (needs_sparse[v]) {
-                            if (build_sparse_table(source_data[v], g_start, g_count,
-                                                   &sparse_tbl[v], SV_missval) != 0) {
-                                /* Build failed, mark as unavailable */
-                                needs_sparse[v] = 0;
-                            }
+                            rebuild_sparse_table(&sparse_tbl[v], source_data[v], g_start,
+                                                 g_count, SV_missval);
                         }
                     }
                 }
 
-                /* Process observations with O(1) queries when available */
+                /*
+                 * OPTIMIZATION: Chunked parallel sliding window
+                 *
+                 * Each thread gets a contiguous chunk of non-missing observations.
+                 * Each thread initializes its window with ONE binary search for its
+                 * first observation, then slides the pointers forward (O(1) amortized).
+                 * Total: O(P * log N + N) instead of O(N * log N).
+                 */
+
+                /* Find boundary before missing keys (they sort to end) */
+                size_t g_end_nonmiss = g_end;
+                while (g_end_nonmiss > g_start && key_data[g_end_nonmiss - 1] >= SV_missval)
+                    g_end_nonmiss--;
+
+                size_t nonmiss_count = g_end_nonmiss - g_start;
+
                 #ifdef _OPENMP
-                #pragma omp parallel for schedule(dynamic, 64)
+                #pragma omp parallel if(nonmiss_count > CRANGESTAT_PARALLEL_THRESHOLD)
                 #endif
-                for (size_t i = g_start; i < g_end; i++) {
+                {
                     #ifdef _OPENMP
                     int tid = omp_get_thread_num();
+                    int nthreads_actual = omp_get_num_threads();
                     #else
                     int tid = 0;
+                    int nthreads_actual = 1;
                     #endif
 
                     double *work = work_arrays[tid];
-                    double key_val = key_data[i];
 
-                    /* Skip if key is missing */
-                    if (key_val >= SV_missval) continue;
+                    /* Each thread gets a contiguous chunk */
+                    size_t chunk = (nonmiss_count + (size_t)nthreads_actual - 1) / (size_t)nthreads_actual;
+                    size_t my_start = g_start + (size_t)tid * chunk;
+                    size_t my_end = my_start + chunk;
+                    if (my_start > g_end_nonmiss) my_start = g_end_nonmiss;
+                    if (my_end > g_end_nonmiss) my_end = g_end_nonmiss;
 
-                    /* Compute window bounds */
-                    double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
-                    double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
+                    if (my_start < my_end) {
+                        /* Initialize window with ONE binary search for first obs */
+                        double first_key = key_data[my_start];
+                        double first_low = config.low_is_missing ? -DBL_MAX : first_key + config.interval_low;
+                        double first_high = config.high_is_missing ? DBL_MAX : first_key + config.interval_high;
 
-                    /* Find window using binary search within group */
-                    size_t win_start = lower_bound(key_data, g_start, g_end, low_bound);
-                    size_t win_end = upper_bound(key_data, g_start, g_end, high_bound);
+                        size_t win_lo = lower_bound(key_data, g_start, g_end_nonmiss, first_low);
+                        size_t win_hi = upper_bound(key_data, g_start, g_end_nonmiss, first_high);
 
-                    /* Compute each statistic for this observation */
-                    for (size_t s = 0; s < nstats; s++) {
-                        int src_idx = specs[s].source_var_idx;
-                        if (src_idx < 0 || src_idx >= (int)nsource) continue;
+                        for (size_t i = my_start; i < my_end; i++) {
+                            double key_val = key_data[i];
+                            double low_bound = config.low_is_missing ? -DBL_MAX : key_val + config.interval_low;
+                            double high_bound = config.high_is_missing ? DBL_MAX : key_val + config.interval_high;
 
-                        double val;
-                        stat_type stype = specs[s].type;
+                            /* Slide window pointers forward */
+                            while (win_lo < g_end_nonmiss && key_data[win_lo] < low_bound) win_lo++;
+                            while (win_hi < g_end_nonmiss && key_data[win_hi] <= high_bound) win_hi++;
 
-                        if (stat_needs_work_array(stype)) {
-                            /* Percentiles still need O(window) work */
-                            val = compute_window_stat_complex(
-                                stype,
-                                source_data[src_idx],
-                                win_start,
-                                win_end,
-                                i,
-                                config.exclude_self,
-                                work
-                            );
-                        } else if (use_o1_queries && needs_prefix && needs_prefix[src_idx] &&
-                                   stat_uses_prefix_sums(stype)) {
-                            /* O(1) query using prefix sums */
-                            val = compute_stat_with_prefix(
-                                stype,
-                                &prefix_arr[src_idx],
-                                source_data[src_idx],
-                                g_start,
-                                win_start,
-                                win_end,
-                                i,
-                                config.exclude_self
-                            );
-                        } else if (use_o1_queries && needs_sparse && needs_sparse[src_idx] &&
-                                   stat_uses_sparse_table(stype)) {
-                            /* O(1) query using sparse table */
-                            val = compute_minmax_with_sparse(
-                                stype,
-                                &sparse_tbl[src_idx],
-                                source_data[src_idx],
-                                g_start,
-                                win_start,
-                                win_end,
-                                i,
-                                config.exclude_self
-                            );
-                        } else {
-                            /* Fall back to scan-based computation */
-                            val = compute_window_stat_simple(
-                                stype,
-                                source_data[src_idx],
-                                win_start,
-                                win_end,
-                                i,
-                                config.exclude_self
-                            );
+                            size_t win_start = win_lo;
+                            size_t win_end = win_hi;
+
+                            /* Compute each statistic for this observation */
+                            for (size_t s = 0; s < nstats; s++) {
+                                int src_idx = specs[s].source_var_idx;
+                                if (src_idx < 0 || src_idx >= (int)nsource) continue;
+
+                                double val;
+                                stat_type stype = specs[s].type;
+
+                                if (stat_needs_work_array(stype)) {
+                                    val = compute_window_stat_complex(
+                                        stype,
+                                        source_data[src_idx],
+                                        win_start,
+                                        win_end,
+                                        i,
+                                        config.exclude_self,
+                                        work
+                                    );
+                                } else if (group_has_o1 && needs_prefix[src_idx] &&
+                                           stat_uses_prefix_sums(stype)) {
+                                    val = compute_stat_with_prefix(
+                                        stype,
+                                        &prefix_arr[src_idx],
+                                        source_data[src_idx],
+                                        g_start,
+                                        win_start,
+                                        win_end,
+                                        i,
+                                        config.exclude_self
+                                    );
+                                } else if (group_has_o1 && needs_sparse[src_idx] &&
+                                           stat_uses_sparse_table(stype)) {
+                                    val = compute_minmax_with_sparse(
+                                        stype,
+                                        &sparse_tbl[src_idx],
+                                        source_data[src_idx],
+                                        g_start,
+                                        win_start,
+                                        win_end,
+                                        i,
+                                        config.exclude_self
+                                    );
+                                } else {
+                                    val = compute_window_stat_simple(
+                                        stype,
+                                        source_data[src_idx],
+                                        win_start,
+                                        win_end,
+                                        i,
+                                        config.exclude_self
+                                    );
+                                }
+
+                                result_data[s][i] = val;
+                            }
                         }
-
-                        result_data[s][i] = val;
                     }
-                }
-
-                /* Cleanup O(1) data structures */
-                if (use_o1_queries) {
-                    for (size_t v = 0; v < nsource; v++) {
-                        if (needs_prefix && needs_prefix[v]) {
-                            free(prefix_arr[v].prefix_sum);
-                            free(prefix_arr[v].prefix_sum2);
-                            free(prefix_arr[v].prefix_count);
-                        }
-                        if (needs_sparse && needs_sparse[v]) {
-                            free_sparse_table(&sparse_tbl[v]);
-                        }
-                    }
-                    free(needs_prefix);
-                    free(needs_sparse);
-                    free(prefix_arr);
-                    free(sparse_tbl);
                 }
             }
+        }
+
+        /* Cleanup O(1) data structures (once, after all groups) */
+        if (use_o1_queries) {
+            for (size_t v = 0; v < nsource; v++) {
+                if (needs_prefix[v]) {
+                    free(prefix_arr[v].prefix_sum);
+                    free(prefix_arr[v].prefix_sum2);
+                    free(prefix_arr[v].prefix_count);
+                }
+                if (needs_sparse[v]) {
+                    free_sparse_table(&sparse_tbl[v]);
+                }
+            }
+            free(needs_prefix);
+            free(needs_sparse);
+            free(prefix_arr);
+            free(sparse_tbl);
         }
     }
 
@@ -1967,6 +2323,9 @@ standard_obs_loop:;
     /*
      * OPTIMIZATION: Parallel result storage
      * Store multiple result variables in parallel - each variable is independent.
+     *
+     * When fwd_perm is available, iterate in sorted order for sequential data[] reads.
+     * fwd_perm[sorted_idx] = original_idx, so data[sorted_idx] is sequential.
      */
     #ifdef _OPENMP
     #pragma omp parallel for schedule(dynamic, 1) if(nstats > 1)
@@ -1975,9 +2334,16 @@ standard_obs_loop:;
         int result_idx = specs[s].result_var_idx;
         double *data = result_data[s];
 
-        for (size_t i = 0; i < nobs; i++) {
-            /* inv_perm[i] gives position in sorted array for original obs i */
-            SF_vstore(result_idx, (ST_int)obs_map[i], data[inv_perm[i]]);
+        if (fwd_perm) {
+            /* Sequential reads from data[sorted_idx], scattered writes via obs_map */
+            for (size_t sorted_idx = 0; sorted_idx < nobs; sorted_idx++) {
+                perm_idx_t orig_idx = fwd_perm[sorted_idx];
+                SF_vstore(result_idx, (ST_int)obs_map[orig_idx], data[sorted_idx]);
+            }
+        } else {
+            for (size_t i = 0; i < nobs; i++) {
+                SF_vstore(result_idx, (ST_int)obs_map[i], data[inv_perm[i]]);
+            }
         }
     }
 
@@ -1990,6 +2356,7 @@ standard_obs_loop:;
     free(work_arrays);
     free(groups);
     free(inv_perm);
+    if (fwd_perm) free(fwd_perm);
 
     /* Free result arrays (allocated separately from stata_data) */
     for (size_t s = 0; s < nstats; s++) free(result_data[s]);

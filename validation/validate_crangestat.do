@@ -1079,6 +1079,45 @@ benchmark_rangestat sd x, interval(t -5 5) testname("large multi-stat: sd")
 benchmark_rangestat min x, interval(t -5 5) testname("large multi-stat: min")
 benchmark_rangestat max x, interval(t -5 5) testname("large multi-stat: max")
 
+* Test 8.6: Path B with duplicate keys (run optimization)
+* 10K obs, 200 unique keys → 50 obs per key. Enters Path B (!excludeself, g_count>=1000)
+* and each run broadcasts to 50 obs.
+clear
+set obs 10000
+set seed 88888
+gen t = ceil(_n / 50)
+gen x = rnormal()
+benchmark_rangestat mean x, interval(t -5 5) testname("Path B: dup keys, mean")
+benchmark_rangestat min x, interval(t -5 5) testname("Path B: dup keys, min")
+benchmark_rangestat max x, interval(t -5 5) testname("Path B: dup keys, max")
+benchmark_rangestat sd x, interval(t -5 5) testname("Path B: dup keys, sd")
+
+* Test 8.7: Path C parallel sliding window (large + excludeself)
+* 20K obs, 1 group, excludeself → Path C since excludeself prevents Path B.
+* nonmiss_count=20000 > PARALLEL_THRESHOLD=10000, so parallel sliding window.
+clear
+set obs 20000
+set seed 99988
+gen t = _n
+gen x = rnormal()
+benchmark_rangestat mean x, interval(t -10 10) excludeself testname("Path C: parallel sliding, mean")
+benchmark_rangestat count x, interval(t -10 10) excludeself testname("Path C: parallel sliding, count")
+benchmark_rangestat min x, interval(t -10 10) excludeself testname("Path C: parallel sliding, min")
+benchmark_rangestat sd x, interval(t -10 10) excludeself testname("Path C: parallel sliding, sd")
+
+* Test 8.8: Path A cross-group parallel with rangestat comparison
+* 500 groups × 100 obs = 50K obs. avg_group_size=100 < 500 and ngroups=500 >= 8.
+clear
+set obs 50000
+set seed 77788
+gen group = mod(_n - 1, 500)
+gen t = ceil(_n / 500)
+gen x = rnormal()
+sort group t
+benchmark_rangestat mean x, interval(t -5 5) by(group) testname("Path A: cross-group, mean")
+benchmark_rangestat min x, interval(t -5 5) by(group) testname("Path A: cross-group, min")
+benchmark_rangestat sd x, interval(t -5 5) by(group) testname("Path A: cross-group, sd")
+
 /*******************************************************************************
  * SECTION 9: Real-world scenarios (5 tests)
  ******************************************************************************/

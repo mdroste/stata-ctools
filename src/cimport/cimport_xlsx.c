@@ -799,14 +799,18 @@ static inline int scan_atoi(const char *s, size_t len)
 static inline const char *scan_find_attr(const char *start, const char *end,
                                          char attr, size_t *vlen)
 {
-    for (const char *p = start; p + 3 < end; p++) {
-        if (*p == ' ' && p[1] == attr && p[2] == '=' && p[3] == '"') {
+    const char *p = start;
+    while (p + 3 < end) {
+        p = (const char *)memchr(p, ' ', (size_t)(end - p - 3));
+        if (!p || p + 3 >= end) break;
+        if (p[1] == attr && p[2] == '=' && p[3] == '"') {
             const char *val = p + 4;
             const char *q = (const char *)memchr(val, '"', (size_t)(end - val));
             if (q) { *vlen = (size_t)(q - val); return val; }
             *vlen = 0;
             return NULL;
         }
+        p++;
     }
     *vlen = 0;
     return NULL;
@@ -884,11 +888,54 @@ static void handle_dimension_ref(XLSXContext *ctx, const char *ref_str)
     }
 }
 
-/* Process one complete cell element from <c...> to </c>.
- * cell_start points to '<c', close_tag points to '</c>'.
- * Writes directly to cm arrays (or row-major fallback). */
-static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
-                           const char *close_tag, int fallback_row)
+/* ============================================================================
+ * Core Cell Processing (shared between serial and parallel paths)
+ *
+ * xlsx_scan_cell_core() takes explicit pointers for all mutable state so that
+ * the parallel path can pass thread-local col_stats / arena / extent trackers.
+ * The serial xlsx_scan_cell() is a thin wrapper that passes ctx-> fields.
+ * ============================================================================ */
+
+/* Thread-local mutable state passed to xlsx_scan_cell_core(). */
+typedef struct {
+    CImportColumnInfo *col_stats;
+    int                col_stats_cap;
+    ctools_arena      *arena;           /* for inline strings (points to ctx->parse_arena or _arena_storage) */
+    ctools_arena       _arena_storage;  /* per-thread arena (parallel path only) */
+    int                max_col;
+    int                min_row;
+    int                max_row;
+    int                skip_row;        /* row number to skip for type inference (firstrow header) */
+} xlsx_scan_local;
+
+/* Ensure col_stats covers at least col_idx+1 entries (local version) */
+static CImportColumnInfo *ensure_col_stat_local(xlsx_scan_local *loc, int col_idx)
+{
+    if (col_idx < loc->col_stats_cap) {
+        return &loc->col_stats[col_idx];
+    }
+    int new_cap = loc->col_stats_cap == 0 ? 64 : loc->col_stats_cap;
+    while (new_cap <= col_idx) new_cap *= 2;
+    CImportColumnInfo *new_stats = (CImportColumnInfo *)realloc(
+        loc->col_stats, (size_t)new_cap * sizeof(CImportColumnInfo));
+    if (!new_stats) return NULL;
+    for (int i = loc->col_stats_cap; i < new_cap; i++) {
+        memset(&new_stats[i], 0, sizeof(CImportColumnInfo));
+        new_stats[i].type = CIMPORT_COL_UNKNOWN;
+        new_stats[i].num_subtype = CIMPORT_NUM_BYTE;
+        new_stats[i].is_integer = true;
+        new_stats[i].min_value = DBL_MAX;
+        new_stats[i].max_value = -DBL_MAX;
+    }
+    loc->col_stats = new_stats;
+    loc->col_stats_cap = new_cap;
+    return &loc->col_stats[col_idx];
+}
+
+/* Core cell processor. ctx is read-only except for cm arrays (disjoint rows). */
+static void xlsx_scan_cell_core(const XLSXContext *ctx, xlsx_scan_local *loc,
+                                const char *cell_start, const char *close_tag,
+                                int fallback_row)
 {
     /* Find end of opening <c ...> tag */
     const char *gt = (const char *)memchr(cell_start, '>',
@@ -908,7 +955,7 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
     if (col < 0) return;
 
     /* Apply cell range filter */
-    XLSXCellRange *range = &ctx->cell_range;
+    const XLSXCellRange *range = &ctx->cell_range;
     if ((range->start_col >= 0 && col < range->start_col) ||
         (range->end_col >= 0 && col > range->end_col))
         return;
@@ -945,16 +992,13 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
         }
     }
 
-    /* Extract value text from cell body.
-     * Optimized: <v> content is always plain text (no nested elements), so
-     * we use single memchr('<') to find both <v> open and value end. */
+    /* Extract value text from cell body. */
     const char *body = gt + 1;
     size_t body_len = (size_t)(close_tag - body);
     const char *val_text = NULL;
     size_t val_len = 0;
 
     if (is_inline_str) {
-        /* Find <t>...</t> (or <t xml:space="preserve">...</t>) within <is> */
         const char *t_open = xlsx_memfind(body, body_len, "<t>", 3);
         if (!t_open) t_open = xlsx_memfind(body, body_len, "<t ", 3);
         if (t_open) {
@@ -962,24 +1006,20 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
                                                     (size_t)(close_tag - t_open));
             if (t_gt) {
                 const char *ts = t_gt + 1;
-                /* Text ends at next '<' (which is </t>) */
                 const char *te = (const char *)memchr(ts, '<',
                                                       (size_t)(close_tag - ts));
                 if (te) { val_text = ts; val_len = (size_t)(te - ts); }
             }
         }
     } else {
-        /* Find first '<' in body — this is <v> (or <f> for formulas) */
         const char *first_lt = (const char *)memchr(body, '<', body_len);
         if (first_lt && first_lt + 2 < close_tag &&
             first_lt[1] == 'v' && first_lt[2] == '>') {
-            /* <v> found — value ends at next '<' (which is </v>) */
             const char *vs = first_lt + 3;
             const char *ve = (const char *)memchr(vs, '<',
                                                   (size_t)(close_tag - vs));
             if (ve) { val_text = vs; val_len = (size_t)(ve - vs); }
         } else if (first_lt && first_lt + 1 < close_tag && first_lt[1] == 'f') {
-            /* <f>formula</f><v>value</v> — skip formula, find <v> */
             const char *v_open = xlsx_memfind(first_lt, (size_t)(close_tag - first_lt),
                                               "<v>", 3);
             if (v_open) {
@@ -1004,16 +1044,9 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
         numeric_val = (double)ss_idx;
         break;
     case XLSX_CELL_NUMBER: {
-        /* Need null-terminated string for parser */
-        char num_buf[64];
-        size_t copy = val_len < 63 ? val_len : 63;
-        memcpy(num_buf, val_text, copy);
-        num_buf[copy] = '\0';
         double parsed;
-        if (ctools_parse_double_fast(num_buf, (int)copy, &parsed, SV_missval))
+        if (ctools_parse_double_fast(val_text, (int)val_len, &parsed, SV_missval))
             numeric_val = parsed;
-        else
-            numeric_val = strtod(num_buf, NULL);
         if (style >= 0 && style < ctx->num_styles && ctx->date_styles[style])
             cell_type = XLSX_CELL_DATE;
         break;
@@ -1022,7 +1055,7 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
         numeric_val = (val_text[0] == '1') ? 1.0 : 0.0;
         break;
     case XLSX_CELL_STRING: {
-        char *str_buf = (char *)ctools_arena_alloc(&ctx->parse_arena, val_len + 1);
+        char *str_buf = (char *)ctools_arena_alloc(loc->arena, val_len + 1);
         if (!str_buf) return;
         memcpy(str_buf, val_text, val_len);
         str_buf[val_len] = '\0';
@@ -1034,7 +1067,7 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
         return;
     }
 
-    /* Write to column-major arrays */
+    /* Write to column-major arrays (disjoint row ranges — thread-safe) */
     if (ctx->cm_active && col >= 0 && col < ctx->cm_num_cols &&
         row > 0 && (size_t)row <= ctx->cm_num_rows) {
         size_t row_idx = (size_t)(row - 1);
@@ -1042,43 +1075,14 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
         ctx->cm_types[col][row_idx] = (uint8_t)cell_type;
     }
 
-    /* Row-major fallback (when dimension unknown) */
-    if (!ctx->cm_active) {
-        XLSXParsedRow *row_ptr = ensure_row(ctx, row);
-        if (row_ptr) {
-            XLSXCell *cell = add_cell(row_ptr, col, ctx);
-            if (cell) {
-                cell->col = col;
-                cell->row = row;
-                cell->type = cell_type;
-                cell->style_idx = style;
-                switch (cell_type) {
-                case XLSX_CELL_SHARED_STRING:
-                    cell->value.shared_string_idx = ss_idx;
-                    break;
-                case XLSX_CELL_NUMBER:
-                case XLSX_CELL_DATE:
-                    cell->value.number = numeric_val;
-                    break;
-                case XLSX_CELL_BOOLEAN:
-                    cell->value.boolean = (numeric_val == 1.0);
-                    break;
-                case XLSX_CELL_STRING:
-                    cell->value.inline_string = inline_str;
-                    break;
-                default:
-                    break;
-                }
-            }
-        }
-    }
+    /* Track extent (thread-local) */
+    if (col > loc->max_col) loc->max_col = col;
+    if (row < loc->min_row) loc->min_row = row;
+    if (row > loc->max_row) loc->max_row = row;
 
-    /* Track extent */
-    if (col > ctx->max_col) ctx->max_col = col;
-
-    /* Inline type inference */
-    if (!ctx->allstring && !(ctx->firstrow && row == ctx->min_row)) {
-        CImportColumnInfo *cs = ensure_col_stat(ctx, col);
+    /* Inline type inference (thread-local col_stats) */
+    if (!ctx->allstring && !(loc->skip_row > 0 && row == loc->skip_row)) {
+        CImportColumnInfo *cs = ensure_col_stat_local(loc, col);
         if (cs) {
             switch (cell_type) {
             case XLSX_CELL_SHARED_STRING:
@@ -1093,8 +1097,6 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
                 } else if (inline_str) {
                     slen = strlen(inline_str);
                 }
-                /* Only promote to STRING if the resolved string is non-empty.
-                 * Empty strings are treated as missing (matching Stata behavior). */
                 if (slen > 0)
                     cs->type = CIMPORT_COL_STRING;
                 if ((int)slen > cs->max_strlen) cs->max_strlen = (int)slen;
@@ -1119,6 +1121,293 @@ static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
             }
         }
     }
+}
+
+/* Serial wrapper: passes ctx-> fields as the local state.
+ * Also handles the row-major fallback path (not in core because
+ * it mutates ctx->rows which is not thread-safe). */
+static void xlsx_scan_cell(XLSXContext *ctx, const char *cell_start,
+                           const char *close_tag, int fallback_row)
+{
+    /* Build a temporary local state that points into ctx */
+    xlsx_scan_local loc;
+    loc.col_stats = ctx->col_stats;
+    loc.col_stats_cap = ctx->col_stats_capacity;
+    loc.arena = &ctx->parse_arena;
+    loc.max_col = ctx->max_col;
+    loc.min_row = ctx->min_row;
+    loc.max_row = ctx->max_row;
+    loc.skip_row = ctx->firstrow ? ctx->min_row : 0;
+
+    xlsx_scan_cell_core(ctx, &loc, cell_start, close_tag, fallback_row);
+
+    /* Write back any changes */
+    ctx->col_stats = loc.col_stats;
+    ctx->col_stats_capacity = loc.col_stats_cap;
+    ctx->max_col = loc.max_col;
+    ctx->min_row = loc.min_row;
+    ctx->max_row = loc.max_row;
+}
+
+/* ============================================================================
+ * Parallel Worksheet Scanner
+ *
+ * When cm_active == true (dimension tag present, pre-allocated column-major
+ * arrays), buffer > 100KB, and the thread pool is available, we split the
+ * <sheetData> region into chunks at <row boundaries and dispatch workers.
+ *
+ * Each worker writes to disjoint cm_numeric/cm_types rows (thread-safe) and
+ * accumulates type stats into thread-local col_stats. Results are merged
+ * after all workers complete.
+ * ============================================================================ */
+
+#define XLSX_PARALLEL_MIN_BYTES (100 * 1024)  /* 100 KB minimum for parallel */
+
+typedef struct {
+    const XLSXContext *ctx;       /* read-only context (cm arrays, shared strings, etc.) */
+    const char *chunk_start;      /* start of this thread's region (at a <row boundary) */
+    const char *chunk_end;        /* end of this thread's region */
+    xlsx_scan_local local;        /* thread-local mutable state */
+    int rc;                       /* 0 on success */
+} xlsx_parallel_chunk;
+
+/* Worker function: scan a chunk of rows inside <sheetData>. */
+static void *xlsx_parallel_scan_worker(void *arg)
+{
+    xlsx_parallel_chunk *chunk = (xlsx_parallel_chunk *)arg;
+    const XLSXContext *ctx = chunk->ctx;
+    const char *pos = chunk->chunk_start;
+    const char *end = chunk->chunk_end;
+    int current_row = 0;
+
+    while (pos < end) {
+        const char *lt = (const char *)memchr(pos, '<', (size_t)(end - pos));
+        if (!lt || lt + 1 >= end) break;
+
+        char c1 = lt[1];
+
+        if (c1 == 'c' && lt + 2 < end &&
+            (lt[2] == ' ' || lt[2] == '>' || lt[2] == '/')) {
+            const char *gt = (const char *)memchr(lt, '>',
+                                                  (size_t)(end - lt));
+            if (!gt) break;
+            if (gt > lt && gt[-1] == '/') {
+                pos = gt + 1;
+            } else {
+                const char *close_c = xlsx_memfind(gt + 1,
+                                                   (size_t)(end - gt - 1),
+                                                   "</c>", 4);
+                if (!close_c) break;
+                xlsx_scan_cell_core(ctx, &chunk->local, lt, close_c, current_row);
+                pos = close_c + 4;
+            }
+        }
+        else if (c1 == 'r' && lt + 4 <= end &&
+                 lt[2] == 'o' && lt[3] == 'w' &&
+                 (lt[4] == ' ' || lt[4] == '>' || lt[4] == '/')) {
+            const char *gt = (const char *)memchr(lt, '>',
+                                                  (size_t)(end - lt));
+            if (!gt) break;
+
+            size_t rlen;
+            const char *r_val = scan_find_attr(lt + 4, gt, 'r', &rlen);
+            current_row = r_val ? scan_atoi(r_val, rlen) : (current_row + 1);
+
+            const XLSXCellRange *range = &ctx->cell_range;
+            if (range->end_row > 0 && current_row > range->end_row) break;
+            if (range->start_row > 0 && current_row < range->start_row) {
+                const char *row_close = xlsx_memfind(gt + 1,
+                                                    (size_t)(end - gt - 1),
+                                                    "</row>", 6);
+                if (!row_close) break;
+                pos = row_close + 6;
+                continue;
+            }
+
+            if (current_row < chunk->local.min_row) chunk->local.min_row = current_row;
+            if (current_row > chunk->local.max_row) chunk->local.max_row = current_row;
+
+            pos = gt + 1;
+        }
+        else if (c1 == '/') {
+            if (lt + 5 < end && lt[2] == 'r' && lt[3] == 'o' &&
+                lt[4] == 'w' && lt[5] == '>') {
+                pos = lt + 6;
+            }
+            else if (lt + 12 <= end &&
+                     memcmp(lt + 2, "sheetData>", 10) == 0) {
+                break;
+            }
+            else {
+                const char *gt = (const char *)memchr(lt + 1, '>',
+                                                      (size_t)(end - lt - 1));
+                if (!gt) break;
+                pos = gt + 1;
+            }
+        }
+        else {
+            const char *gt = (const char *)memchr(lt + 1, '>',
+                                                  (size_t)(end - lt - 1));
+            if (!gt) break;
+            pos = gt + 1;
+        }
+    }
+
+    chunk->rc = 0;
+    return NULL;
+}
+
+/* Merge thread-local col_stats into ctx->col_stats. */
+static void xlsx_merge_col_stats(XLSXContext *ctx, xlsx_scan_local *loc)
+{
+    for (int c = 0; c < loc->col_stats_cap; c++) {
+        CImportColumnInfo *src = &loc->col_stats[c];
+        if (src->type == CIMPORT_COL_UNKNOWN &&
+            src->max_strlen == 0) continue;  /* untouched entry */
+
+        CImportColumnInfo *dst = ensure_col_stat(ctx, c);
+        if (!dst) continue;
+
+        /* Type promotion: STRING wins over NUMERIC wins over UNKNOWN */
+        if (src->type == CIMPORT_COL_STRING)
+            dst->type = CIMPORT_COL_STRING;
+        else if (src->type == CIMPORT_COL_NUMERIC && dst->type == CIMPORT_COL_UNKNOWN)
+            dst->type = CIMPORT_COL_NUMERIC;
+
+        /* Merge numeric range */
+        if (src->min_value < dst->min_value) dst->min_value = src->min_value;
+        if (src->max_value > dst->max_value) dst->max_value = src->max_value;
+        dst->is_integer = dst->is_integer && src->is_integer;
+        if (src->max_strlen > dst->max_strlen) dst->max_strlen = src->max_strlen;
+    }
+
+    /* Merge extent */
+    if (loc->max_col > ctx->max_col) ctx->max_col = loc->max_col;
+    if (loc->min_row < ctx->min_row) ctx->min_row = loc->min_row;
+    if (loc->max_row > ctx->max_row) ctx->max_row = loc->max_row;
+}
+
+/* Parallel scan: split <sheetData> into chunks and dispatch workers. */
+static bool xlsx_scan_buffer_parallel(XLSXContext *ctx, const char *sheet_start,
+                                      const char *sheet_end)
+{
+    ctools_persistent_pool *pool = ctools_get_global_pool();
+    if (!pool) return false;
+
+    size_t sheet_len = (size_t)(sheet_end - sheet_start);
+    if (sheet_len < XLSX_PARALLEL_MIN_BYTES) return false;
+
+    /* Determine number of chunks (threads) */
+    int nthreads = (int)((ctools_persistent_pool *)pool)->num_workers;
+    if (nthreads < 2) return false;
+    if (nthreads > 16) nthreads = 16;
+
+    /* Find chunk boundaries at <row tag starts.
+     * We scan for "<row " or "<row>" patterns. */
+    size_t target_chunk_size = sheet_len / (size_t)nthreads;
+    const char **boundaries = (const char **)malloc(((size_t)nthreads + 1) * sizeof(const char *));
+    if (!boundaries) return false;
+
+    boundaries[0] = sheet_start;
+    int nchunks = 1;
+
+    for (int i = 1; i < nthreads && nchunks < nthreads; i++) {
+        const char *target = sheet_start + target_chunk_size * (size_t)i;
+        if (target >= sheet_end) break;
+
+        /* Scan forward from target to find next <row boundary */
+        const char *p = target;
+        const char *found = NULL;
+        while (p < sheet_end - 4) {
+            p = (const char *)memchr(p, '<', (size_t)(sheet_end - p - 4));
+            if (!p) break;
+            if (p[1] == 'r' && p[2] == 'o' && p[3] == 'w' &&
+                (p[4] == ' ' || p[4] == '>')) {
+                found = p;
+                break;
+            }
+            p++;
+        }
+        if (found && found > boundaries[nchunks - 1]) {
+            boundaries[nchunks++] = found;
+        }
+    }
+    boundaries[nchunks] = sheet_end;
+
+    if (nchunks < 2) {
+        free(boundaries);
+        return false;  /* Not enough rows for parallel */
+    }
+
+    /* Allocate and initialize per-chunk state */
+    xlsx_parallel_chunk *chunks = (xlsx_parallel_chunk *)calloc(
+        (size_t)nchunks, sizeof(xlsx_parallel_chunk));
+    if (!chunks) {
+        free(boundaries);
+        return false;
+    }
+
+    /* Pre-allocate col_stats for each chunk based on dimension_cols */
+    int init_cap = ctx->dimension_cols > 0 ? ctx->dimension_cols : 64;
+
+    /* Determine the header row to skip for type inference.
+     * With dimension tag present, row 1 is normally the first row.
+     * With cellrange, the start_row is the first row. */
+    int skip_row = 0;
+    if (ctx->firstrow) {
+        skip_row = (ctx->cell_range.start_row > 0) ? ctx->cell_range.start_row : 1;
+    }
+
+    for (int i = 0; i < nchunks; i++) {
+        chunks[i].ctx = ctx;
+        chunks[i].chunk_start = boundaries[i];
+        chunks[i].chunk_end = boundaries[i + 1];
+        chunks[i].local.col_stats = (CImportColumnInfo *)calloc(
+            (size_t)init_cap, sizeof(CImportColumnInfo));
+        chunks[i].local.col_stats_cap = chunks[i].local.col_stats ? init_cap : 0;
+        /* Initialize col_stats entries */
+        for (int c = 0; c < chunks[i].local.col_stats_cap; c++) {
+            chunks[i].local.col_stats[c].type = CIMPORT_COL_UNKNOWN;
+            chunks[i].local.col_stats[c].num_subtype = CIMPORT_NUM_BYTE;
+            chunks[i].local.col_stats[c].is_integer = true;
+            chunks[i].local.col_stats[c].min_value = DBL_MAX;
+            chunks[i].local.col_stats[c].max_value = -DBL_MAX;
+        }
+        ctools_arena_init(&chunks[i].local._arena_storage, 0);
+        chunks[i].local.arena = &chunks[i].local._arena_storage;
+        chunks[i].local.max_col = -1;
+        chunks[i].local.min_row = INT32_MAX;
+        chunks[i].local.max_row = 0;
+        chunks[i].local.skip_row = skip_row;
+        chunks[i].rc = -1;
+    }
+
+    free(boundaries);
+
+    /* Dispatch all chunks to thread pool */
+    if (ctools_persistent_pool_submit_batch(pool, xlsx_parallel_scan_worker,
+                                             chunks, (size_t)nchunks,
+                                             sizeof(xlsx_parallel_chunk)) != 0) {
+        /* Submit failed — clean up and fall back */
+        for (int i = 0; i < nchunks; i++) {
+            free(chunks[i].local.col_stats);
+            ctools_arena_free(chunks[i].local.arena);
+        }
+        free(chunks);
+        return false;
+    }
+
+    ctools_persistent_pool_wait(pool);
+
+    /* Merge results from all chunks */
+    for (int i = 0; i < nchunks; i++) {
+        xlsx_merge_col_stats(ctx, &chunks[i].local);
+        free(chunks[i].local.col_stats);
+        ctools_arena_free(chunks[i].local.arena);
+    }
+
+    free(chunks);
+    return true;
 }
 
 /* Scan a complete in-memory XML buffer for worksheet data.
@@ -1166,6 +1455,18 @@ static void xlsx_scan_buffer(XLSXContext *ctx, const char *buf, size_t len)
                                                       (size_t)(end - lt));
                 if (!gt) break;
                 if (gt > lt && gt[-1] == '/') return;  /* Empty sheet */
+
+                /* Try parallel scan when cm_active (dimension known) */
+                if (ctx->cm_active) {
+                    /* Find </sheetData> to bound the parallel region */
+                    const char *sheet_close = xlsx_memfind(
+                        gt + 1, (size_t)(end - gt - 1),
+                        "</sheetData>", 12);
+                    const char *sheet_end_ptr = sheet_close ? sheet_close : end;
+                    if (xlsx_scan_buffer_parallel(ctx, gt + 1, sheet_end_ptr))
+                        return;  /* Parallel scan succeeded */
+                }
+
                 in_sheetdata = true;
                 pos = gt + 1;
                 continue;
@@ -1262,7 +1563,7 @@ static ST_retcode xlsx_scan_worksheet_fast(XLSXContext *ctx,
                                            size_t file_idx)
 {
     size_t xml_size = 0;
-    void *xml_data = xlsx_zip_extract_fast(zip, file_idx, &xml_size);
+    void *xml_data = xlsx_zip_extract_direct(zip, file_idx, &xml_size);
     if (!xml_data) return 610;
 
     /* NUL-terminate for safety */
@@ -2313,9 +2614,9 @@ static ST_retcode xlsx_full_parse(XLSXContext *ctx, const char *filename,
     void *st_data = NULL;
     size_t st_size = 0;
 
-    /* Sequential extraction */
+    /* Sequential extraction (using libdeflate for faster inflate) */
     if (ss_idx != (size_t)-1) {
-        ss_data = xlsx_zip_extract_to_heap(zip, ss_idx, &ss_size);
+        ss_data = xlsx_zip_extract_direct(zip, ss_idx, &ss_size);
         if (!ss_data) {
             snprintf(ctx->error_message, sizeof(ctx->error_message),
                      "Failed to extract sharedStrings.xml");
@@ -2323,7 +2624,7 @@ static ST_retcode xlsx_full_parse(XLSXContext *ctx, const char *filename,
         }
     }
     if (st_idx != (size_t)-1) {
-        st_data = xlsx_zip_extract_to_heap(zip, st_idx, &st_size);
+        st_data = xlsx_zip_extract_direct(zip, st_idx, &st_size);
         /* Non-fatal if styles extraction fails */
     }
 

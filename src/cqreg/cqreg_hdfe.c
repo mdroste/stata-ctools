@@ -150,6 +150,42 @@ ST_int cqreg_hdfe_create_factor(ST_int var_idx,
 }
 
 /* ============================================================================
+ * Factor Creation from Pre-loaded Data
+ * ============================================================================ */
+
+ST_int cqreg_hdfe_create_factor_from_data(const ST_double *data,
+                                           ST_int N_filtered,
+                                           ST_int *levels,
+                                           ST_double *counts,
+                                           ST_int *num_levels)
+{
+    ST_int idx;
+
+    /* Create hash table with room for all unique values. */
+    double capacity_d = (double)N_filtered / CQREG_HASH_LOAD + 1.0;
+    ST_int capacity = (capacity_d > (double)INT_MAX) ? INT_MAX : (ST_int)capacity_d;
+    cqreg_hash_table *ht = hash_create(capacity);
+    if (ht == NULL) return -1;
+
+    /* Build level assignments from pre-loaded data (already filtered) */
+    for (idx = 0; idx < N_filtered; idx++) {
+        ST_int int_val = (ST_int)data[idx];
+        levels[idx] = hash_insert(ht, int_val);
+    }
+
+    *num_levels = ht->size;
+
+    /* Count observations per level */
+    memset(counts, 0, ht->size * sizeof(ST_double));
+    for (idx = 0; idx < N_filtered; idx++) {
+        counts[levels[idx] - 1] += 1.0;  /* levels are 1-indexed */
+    }
+
+    hash_free(ht);
+    return 0;
+}
+
+/* ============================================================================
  * Singleton Detection
  * ============================================================================ */
 
@@ -217,12 +253,17 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
                        ST_int N_filtered,
                        ST_int in1, ST_int in2,
                        ST_int maxiter,
-                       ST_double tolerance)
+                       ST_double tolerance,
+                       ST_double **fe_data)
 {
     ST_int g, t;
     HDFE_State *hdfe = NULL;
 
-    if (G <= 0 || fe_vars == NULL || N_filtered <= 0) {
+    if (G <= 0 || N_filtered <= 0) {
+        return -1;
+    }
+    /* Need either pre-loaded data or Stata var indices */
+    if (fe_data == NULL && fe_vars == NULL) {
         return -1;
     }
 
@@ -263,10 +304,17 @@ ST_int cqreg_hdfe_init(cqreg_state *state,
             goto cleanup;
         }
 
-        /* Create factor from Stata variable, filtering by if-condition */
+        /* Create factor from pre-loaded data or Stata variable */
         ST_int num_levels;
-        if (cqreg_hdfe_create_factor(fe_vars[g], in1, in2, N_filtered,
-                                     f->levels, tmp_counts, &num_levels) != 0) {
+        ST_int rc;
+        if (fe_data != NULL) {
+            rc = cqreg_hdfe_create_factor_from_data(fe_data[g], N_filtered,
+                                                    f->levels, tmp_counts, &num_levels);
+        } else {
+            rc = cqreg_hdfe_create_factor(fe_vars[g], in1, in2, N_filtered,
+                                          f->levels, tmp_counts, &num_levels);
+        }
+        if (rc != 0) {
             free(tmp_counts);
             goto cleanup;
         }

@@ -2,6 +2,7 @@
  * benchmark_speed.do
  *
  * Speed benchmarks comparing ctools commands vs Stata native equivalents
+ * on synthetic data
  * Saves timestamped log to validation/ folder
  ******************************************************************************/
 
@@ -26,15 +27,17 @@ quietly {
 noi di as text "Benchmark started: `c(current_date)' `c(current_time)'"
 noi di as text "Log file: `logfile'"
 
-local N = 10000000
-local G1 = 10000       // small groups (for FEs)
-local G2 = 10000000    // large groups (for merge keys)
-
-noi di as text _n "Creating test data with N = `N' observations..."
 
 *-------------------------------------------------------------------------------
 * Create main test dataset (10 variables + outcome)
 *-------------------------------------------------------------------------------
+
+
+local N = 10000000
+local G1 = 10000       // small groups (for FEs)
+local G2 = 10000000    // large groups (for merge keys)
+noi di as text _n "Creating test data with N = `N' observations..."
+
 set obs `N'
 forval i = 1/4 {
     gen double x`i' = rnormal()
@@ -162,20 +165,35 @@ local t_cmerge = r(t1)
 
 noi di as text "  Running reghdfe benchmarks"
 
-* reghdfe vs creghdfe
+* reghdfe vs creghdfe (1-way FE)
+use `main', clear
+timer clear
+timer on 1
+reghdfe y x1 x2 x3, absorb(g1)
+timer off 1
+quietly timer list 1
+local t_reghdfe = r(t1)
+timer clear
+timer on 1
+creghdfe y x1 x2 x3, absorb(g1) verbose
+timer off 1
+quietly timer list 1
+local t_creghdfe = r(t1)
+
+* reghdfe vs creghdfe (2-way FE)
 use `main', clear
 timer clear
 timer on 1
 reghdfe y x1 x2 x3, absorb(g1 g2)
 timer off 1
 quietly timer list 1
-local t_reghdfe = r(t1)
+local t_reghdfe_2fe = r(t1)
 timer clear
 timer on 1
 creghdfe y x1 x2 x3, absorb(g1 g2) verbose
 timer off 1
 quietly timer list 1
-local t_creghdfe = r(t1)
+local t_creghdfe_2fe = r(t1)
 
 noi di as text "  Running qreg benchmarks"
 
@@ -196,20 +214,35 @@ local t_cqreg = r(t1)
 
 noi di as text "  Running ivreghdfe benchmarks"
 
-* ivreghdfe vs civreghdfe
+* ivreghdfe vs civreghdfe (1-way FE)
+use `main', clear
+timer clear
+timer on 1
+ivreghdfe y (x1=x4) x2 x3, absorb(g1)
+timer off 1
+quietly timer list 1
+local t_ivreghdfe = r(t1)
+timer clear
+timer on 1
+civreghdfe y (x1=x4) x2 x3, absorb(g1) verbose
+timer off 1
+quietly timer list 1
+local t_civreghdfe = r(t1)
+
+* ivreghdfe vs civreghdfe (2-way FE)
 use `main', clear
 timer clear
 timer on 1
 ivreghdfe y (x1=x4) x2 x3, absorb(g1 g2)
 timer off 1
 quietly timer list 1
-local t_ivreghdfe = r(t1)
+local t_ivreghdfe_2fe = r(t1)
 timer clear
 timer on 1
 civreghdfe y (x1=x4) x2 x3, absorb(g1 g2) verbose
 timer off 1
 quietly timer list 1
-local t_civreghdfe = r(t1)
+local t_civreghdfe_2fe = r(t1)
 
 *===============================================================================
 * BINSCATTER BENCHMARKS
@@ -267,7 +300,7 @@ if `binsreg_installed' {
     use `main', clear
     timer clear
     timer on 1
-    binsreg y x1, nbins(20) controls(x2 x3) absorb(g1)
+    binsreg y x1 x2 x3, nbins(20) absorb(g1)
     timer off 1
     quietly timer list 1
     local t_binsreg2 = r(t1)
@@ -550,6 +583,61 @@ timer off 1
 quietly timer list 1
 local t_crangestat = r(t1)
 
+* Path A: many small groups (cross-group parallelism)
+* 10K groups × ~1000 obs each = ~10M. avg_group_size < 500? No, 1000 >= 500.
+* Need avg < 500: use 50K groups × 200 obs = 10M, avg = 200.
+if `rangestat_installed' {
+    use `main', clear
+    gen long grp = mod(_n - 1, 50000)
+    gen long obs = ceil(_n / 50000)
+    sort grp obs
+    timer clear
+    timer on 1
+    rangestat (mean) rs_mean=x1, interval(obs -10 10) by(grp)
+    timer off 1
+    quietly timer list 1
+    local t_rangestat_a = r(t1)
+}
+else {
+    local t_rangestat_a = .
+}
+
+use `main', clear
+gen long grp = mod(_n - 1, 50000)
+gen long obs = ceil(_n / 50000)
+sort grp obs
+timer clear
+timer on 1
+crangestat (mean) cr_mean=x1, interval(obs -10 10) by(grp) verbose
+timer off 1
+quietly timer list 1
+local t_crangestat_a = r(t1)
+
+* Path C: excludeself (forces standard obs loop with parallel sliding window)
+local N_pathc = 1000000
+if `rangestat_installed' {
+    use `main' in 1/`N_pathc', clear
+    gen long obs = _n
+    timer clear
+    timer on 1
+    rangestat (mean) rs_mean=x1, interval(obs -50 50) excludeself
+    timer off 1
+    quietly timer list 1
+    local t_rangestat_c = r(t1)
+}
+else {
+    local t_rangestat_c = .
+}
+
+use `main' in 1/`N_pathc', clear
+gen long obs = _n
+timer clear
+timer on 1
+crangestat (mean) cr_mean=x1, interval(obs -50 50) excludeself verbose
+timer off 1
+quietly timer list 1
+local t_crangestat_c = r(t1)
+
 *===============================================================================
 * PSMATCH BENCHMARKS
 *===============================================================================
@@ -612,8 +700,10 @@ noi di as text "MERGE (N=`N', m:1):"
 noi di as text "  merge m:1                 " %8.2f `t_merge' "    " %8.2f `t_cmerge' "    " %5.1f (`t_merge'/`t_cmerge') "x"
 noi di as text ""
 noi di as text "REGRESSION (N=`N'):"
-noi di as text "  reghdfe                   " %8.2f `t_reghdfe' "    " %8.2f `t_creghdfe' "    " %5.1f (`t_reghdfe'/`t_creghdfe') "x"
-noi di as text "  ivreghdfe                 " %8.2f `t_ivreghdfe' "    " %8.2f `t_civreghdfe' "    " %5.1f (`t_ivreghdfe'/`t_civreghdfe') "x"
+noi di as text "  reghdfe (1-way FE)        " %8.2f `t_reghdfe' "    " %8.2f `t_creghdfe' "    " %5.1f (`t_reghdfe'/`t_creghdfe') "x"
+noi di as text "  reghdfe (2-way FE)        " %8.2f `t_reghdfe_2fe' "    " %8.2f `t_creghdfe_2fe' "    " %5.1f (`t_reghdfe_2fe'/`t_creghdfe_2fe') "x"
+noi di as text "  ivreghdfe (1-way FE)      " %8.2f `t_ivreghdfe' "    " %8.2f `t_civreghdfe' "    " %5.1f (`t_ivreghdfe'/`t_civreghdfe') "x"
+noi di as text "  ivreghdfe (2-way FE)      " %8.2f `t_ivreghdfe_2fe' "    " %8.2f `t_civreghdfe_2fe' "    " %5.1f (`t_ivreghdfe_2fe'/`t_civreghdfe_2fe') "x"
 noi di as text ""
 noi di as text "QREG (N=`N'):"
 noi di as text "  qreg                      " %8.2f `t_qreg' "    " %8.2f `t_cqreg' "    " %5.1f (`t_qreg'/`t_cqreg') "x"
@@ -668,10 +758,23 @@ noi di as text "  bsample                   " %8.2f `t_bsample' "    " %8.2f `t_
 noi di as text ""
 noi di as text "RANGESTAT (N=`N'):"
 if `t_rangestat' != . {
-    noi di as text "  rangestat (mean)          " %8.2f `t_rangestat' "    " %8.2f `t_crangestat' "    " %5.1f (`t_rangestat'/`t_crangestat') "x"
+    noi di as text "  Path B (mean)             " %8.2f `t_rangestat' "    " %8.2f `t_crangestat' "    " %5.1f (`t_rangestat'/`t_crangestat') "x"
 }
 else {
-    noi di as text "  crangestat (mean)              N/A    " %8.2f `t_crangestat' "       N/A"
+    noi di as text "  Path B (mean)                  N/A    " %8.2f `t_crangestat' "       N/A"
+}
+if `t_rangestat_a' != . {
+    noi di as text "  Path A (by 50K groups)    " %8.2f `t_rangestat_a' "    " %8.2f `t_crangestat_a' "    " %5.1f (`t_rangestat_a'/`t_crangestat_a') "x"
+}
+else {
+    noi di as text "  Path A (by 50K groups)         N/A    " %8.2f `t_crangestat_a' "       N/A"
+}
+noi di as text "RANGESTAT (N=`N_pathc'):"
+if `t_rangestat_c' != . {
+    noi di as text "  Path C (excludeself)      " %8.2f `t_rangestat_c' "    " %8.2f `t_crangestat_c' "    " %5.1f (`t_rangestat_c'/`t_crangestat_c') "x"
+}
+else {
+    noi di as text "  Path C (excludeself)           N/A    " %8.2f `t_crangestat_c' "       N/A"
 }
 noi di as text ""
 noi di as text "PSMATCH (N=`N_psm'):"

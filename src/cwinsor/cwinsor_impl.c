@@ -355,14 +355,22 @@ ST_retcode cwinsor_main(const char *args)
     num_threads = omp_get_max_threads();
     #endif
 
-    /* === Load Phase using ctools_data_load() === */
+    /* === Load Phase === */
     double load_start = ctools_timer_seconds();
 
-    /* Load target variables using plugin-local indices (handles if/in at load time) */
+    /* Load target variables using plugin-local indices (handles if/in at load time).
+     * Single-variable: row-parallel load (parallelizes across observations).
+     * Multi-variable: column-parallel load (one thread per variable). */
     ctools_filtered_data target_filtered;
     ctools_filtered_data_init(&target_filtered);
-    stata_retcode load_rc = ctools_data_load(&target_filtered, load_indices,
-                                                       nvars, 0, 0, 0);
+    stata_retcode load_rc;
+    if (nvars == 1) {
+        load_rc = ctools_data_load_single_var_rowpar(&target_filtered,
+                                                      load_indices[0], 0, 0, 0);
+    } else {
+        load_rc = ctools_data_load(&target_filtered, load_indices,
+                                             nvars, 0, 0, 0);
+    }
     if (load_rc != STATA_OK) {
         free(store_indices);
         free(load_indices);
@@ -679,25 +687,47 @@ ST_retcode cwinsor_main(const char *args)
          * data[j] = winsorized value at sorted position j.
          * obs_map[sort_indices[j]] = Stata observation for that original index.
          * This avoids computing and storing an inverse permutation. */
-        #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
-        #endif
-        for (size_t v = 0; v < nvars; v++) {
-            int idx = store_indices[v];
-            double *data = var_data[v];
-            for (size_t j = 0; j < nobs; j++) {
-                SF_vstore(idx, (ST_int)obs_map[sort_indices[j]], data[j]);
+        if (nvars == 1) {
+            /* Single variable: compose obs_map for row-parallel store */
+            perm_idx_t *composed_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
+            if (composed_map) {
+                for (size_t j = 0; j < nobs; j++) {
+                    composed_map[j] = obs_map[sort_indices[j]];
+                }
+                ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], composed_map);
+                free(composed_map);
+            } else {
+                /* Fallback: sequential store */
+                for (size_t j = 0; j < nobs; j++) {
+                    SF_vstore(store_indices[0], (ST_int)obs_map[sort_indices[j]], var_data[0][j]);
+                }
+            }
+        } else {
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            #endif
+            for (size_t v = 0; v < nvars; v++) {
+                int idx = store_indices[v];
+                double *data = var_data[v];
+                for (size_t j = 0; j < nobs; j++) {
+                    SF_vstore(idx, (ST_int)obs_map[sort_indices[j]], data[j]);
+                }
             }
         }
     } else {
-        #ifdef _OPENMP
-        #pragma omp parallel for schedule(static)
-        #endif
-        for (size_t v = 0; v < nvars; v++) {
-            int idx = store_indices[v];
-            double *data = var_data[v];
-            for (size_t i = 0; i < nobs; i++) {
-                SF_vstore(idx, (ST_int)obs_map[i], data[i]);
+        if (nvars == 1) {
+            /* Single variable: row-parallel store */
+            ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], obs_map);
+        } else {
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            #endif
+            for (size_t v = 0; v < nvars; v++) {
+                int idx = store_indices[v];
+                double *data = var_data[v];
+                for (size_t i = 0; i < nobs; i++) {
+                    SF_vstore(idx, (ST_int)obs_map[i], data[i]);
+                }
             }
         }
     }

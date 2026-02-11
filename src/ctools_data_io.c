@@ -21,13 +21,8 @@
 
     Performance Optimizations:
     - Parallel variable I/O overlaps operations across columns
-    - 16x loop unrolling reduces loop overhead and improves instruction pipelining
-    - Batched SPI calls via SF_VDATA_BATCH16/SF_VSTORE_BATCH16 macros
     - SD_FASTMODE (compile flag) disables SPI bounds checking
     - Cache-line aligned allocations for optimal memory access
-    - Software prefetching for improved memory latency hiding
-    - SIMD operations for bulk memory copies and initialization
-    - Non-temporal stores for large write operations
     - String arena allocator for reduced malloc overhead
 */
 
@@ -39,175 +34,49 @@
 #include "ctools_threads.h"
 #include "ctools_config.h"
 #include "ctools_arena.h"
-#include "ctools_spi.h"
-
-/* SIMD and prefetch intrinsics - platform-specific */
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-    #define CTOOLS_X86 1
-    #include <immintrin.h>
-    #include <xmmintrin.h>
-    #include <emmintrin.h>
-    #ifdef __AVX2__
-        #define CTOOLS_AVX2 1
-    #endif
-#elif defined(__aarch64__) || defined(_M_ARM64)
-    #define CTOOLS_ARM64 1
-    #include <arm_neon.h>
-    /* ARM has hardware prefetch, but we can hint */
-    #define _mm_prefetch(addr, hint) __builtin_prefetch(addr, 0, 3)
-    #define _MM_HINT_T0 3
-#else
-    /* Fallback: no-op prefetch */
-    #define _mm_prefetch(addr, hint) ((void)0)
-    #define _MM_HINT_T0 0
-#endif
 
 /* Maximum string buffer size for Stata string variables */
 #define STATA_STR_MAXLEN 2045
 
-/* Threshold for non-temporal stores (bypass cache for very large writes) */
-#define NONTEMPORAL_THRESHOLD 1000000
-
 /* ===========================================================================
-   SIMD-Accelerated Utilities
+   String Width Auto-Detection via Stata Local Macro
+
+   When the calling .ado runs `_ctools_strw varlist` before `plugin call`,
+   it sets a Stata local `__ctools_strw` with comma-separated string widths
+   (0 = numeric, >0 = actual width like 17 for str17).
+
+   ctools_data_load reads this local automatically via SF_macro_use to
+   enable flat buffer string I/O without per-command changes.
    =========================================================================== */
 
 /*
-    Copy 8 doubles from local buffer to destination array.
-    Uses SIMD when available for improved throughput.
+    Read and parse the __ctools_strw Stata local set by _ctools_strw.ado.
+    Returns malloc'd array of nvars ints (0 = numeric), or NULL if not available.
+    Caller must free.
 */
-static inline void copy_doubles_8(double * restrict dst, const double * restrict src)
+static int *ctools_read_strw_from_stata(size_t nvars)
 {
-#if defined(CTOOLS_AVX2) || defined(CTOOLS_X86)
-    #ifdef __AVX__
-    _mm256_storeu_pd(&dst[0], _mm256_loadu_pd(&src[0]));
-    _mm256_storeu_pd(&dst[4], _mm256_loadu_pd(&src[4]));
-    #else
-    _mm_storeu_pd(&dst[0], _mm_loadu_pd(&src[0]));
-    _mm_storeu_pd(&dst[2], _mm_loadu_pd(&src[2]));
-    _mm_storeu_pd(&dst[4], _mm_loadu_pd(&src[4]));
-    _mm_storeu_pd(&dst[6], _mm_loadu_pd(&src[6]));
-    #endif
-#elif defined(CTOOLS_ARM64)
-    vst1q_f64(&dst[0], vld1q_f64(&src[0]));
-    vst1q_f64(&dst[2], vld1q_f64(&src[2]));
-    vst1q_f64(&dst[4], vld1q_f64(&src[4]));
-    vst1q_f64(&dst[6], vld1q_f64(&src[6]));
-#else
-    dst[0] = src[0]; dst[1] = src[1]; dst[2] = src[2]; dst[3] = src[3];
-    dst[4] = src[4]; dst[5] = src[5]; dst[6] = src[6]; dst[7] = src[7];
-#endif
-}
+    /* SF_macro_use convention: prefix local name with underscore.
+       Local "__ctools_strw" -> SPI name "___ctools_strw" */
+    char buf[16384];  /* ~3200 variables at max width "2045," */
+    ST_int rc = SF_macro_use("___ctools_strw", buf, sizeof(buf));
+    if (rc != 0 || buf[0] == '\0') {
+        return NULL;  /* Macro not set — .ado didn't call _ctools_strw */
+    }
 
-/*
-    Copy 16 doubles using SIMD (aggressive unrolling).
-*/
-static inline void copy_doubles_16(double * restrict dst, const double * restrict src)
-{
-#if defined(CTOOLS_AVX2) || defined(CTOOLS_X86)
-    #ifdef __AVX__
-    _mm256_storeu_pd(&dst[0], _mm256_loadu_pd(&src[0]));
-    _mm256_storeu_pd(&dst[4], _mm256_loadu_pd(&src[4]));
-    _mm256_storeu_pd(&dst[8], _mm256_loadu_pd(&src[8]));
-    _mm256_storeu_pd(&dst[12], _mm256_loadu_pd(&src[12]));
-    #else
-    _mm_storeu_pd(&dst[0], _mm_loadu_pd(&src[0]));
-    _mm_storeu_pd(&dst[2], _mm_loadu_pd(&src[2]));
-    _mm_storeu_pd(&dst[4], _mm_loadu_pd(&src[4]));
-    _mm_storeu_pd(&dst[6], _mm_loadu_pd(&src[6]));
-    _mm_storeu_pd(&dst[8], _mm_loadu_pd(&src[8]));
-    _mm_storeu_pd(&dst[10], _mm_loadu_pd(&src[10]));
-    _mm_storeu_pd(&dst[12], _mm_loadu_pd(&src[12]));
-    _mm_storeu_pd(&dst[14], _mm_loadu_pd(&src[14]));
-    #endif
-#elif defined(CTOOLS_ARM64)
-    vst1q_f64(&dst[0], vld1q_f64(&src[0]));
-    vst1q_f64(&dst[2], vld1q_f64(&src[2]));
-    vst1q_f64(&dst[4], vld1q_f64(&src[4]));
-    vst1q_f64(&dst[6], vld1q_f64(&src[6]));
-    vst1q_f64(&dst[8], vld1q_f64(&src[8]));
-    vst1q_f64(&dst[10], vld1q_f64(&src[10]));
-    vst1q_f64(&dst[12], vld1q_f64(&src[12]));
-    vst1q_f64(&dst[14], vld1q_f64(&src[14]));
-#else
-    copy_doubles_8(dst, src);
-    copy_doubles_8(dst + 8, src + 8);
-#endif
-}
+    int *widths = (int *)calloc(nvars, sizeof(int));
+    if (!widths) return NULL;
 
-/*
-    Non-temporal store for 8 doubles (bypasses cache).
-    Use for large writes that won't be read again soon.
-*/
-static inline void stream_doubles_8(double * restrict dst, const double * restrict src)
-{
-#if defined(CTOOLS_X86) && defined(__SSE2__)
-    _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
-    _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
-    _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
-    _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
-#elif defined(CTOOLS_ARM64)
-    /* ARM64: Use STNP (Store Pair Non-temporal) for cache bypass */
-    __asm__ __volatile__(
-        "stnp %d[v0], %d[v1], [%[dst]]\n\t"
-        "stnp %d[v2], %d[v3], [%[dst], #16]\n\t"
-        "stnp %d[v4], %d[v5], [%[dst], #32]\n\t"
-        "stnp %d[v6], %d[v7], [%[dst], #48]"
-        :
-        : [v0] "w" (src[0]), [v1] "w" (src[1]),
-          [v2] "w" (src[2]), [v3] "w" (src[3]),
-          [v4] "w" (src[4]), [v5] "w" (src[5]),
-          [v6] "w" (src[6]), [v7] "w" (src[7]),
-          [dst] "r" (dst)
-        : "memory"
-    );
-#else
-    copy_doubles_8(dst, src);
-#endif
-}
+    const char *p = buf;
+    for (size_t j = 0; j < nvars && *p != '\0'; j++) {
+        char *endptr;
+        long val = strtol(p, &endptr, 10);
+        widths[j] = (val > 0 && val < STATA_STR_MAXLEN) ? (int)val : 0;
+        p = endptr;
+        if (*p == ',') p++;
+    }
 
-/*
-    Non-temporal store for 16 doubles (bypasses cache).
-    Use for large writes that won't be read again soon.
-*/
-__attribute__((unused))
-static inline void stream_doubles_16(double * restrict dst, const double * restrict src)
-{
-#if defined(CTOOLS_X86) && defined(__SSE2__)
-    _mm_stream_pd(&dst[0], _mm_loadu_pd(&src[0]));
-    _mm_stream_pd(&dst[2], _mm_loadu_pd(&src[2]));
-    _mm_stream_pd(&dst[4], _mm_loadu_pd(&src[4]));
-    _mm_stream_pd(&dst[6], _mm_loadu_pd(&src[6]));
-    _mm_stream_pd(&dst[8], _mm_loadu_pd(&src[8]));
-    _mm_stream_pd(&dst[10], _mm_loadu_pd(&src[10]));
-    _mm_stream_pd(&dst[12], _mm_loadu_pd(&src[12]));
-    _mm_stream_pd(&dst[14], _mm_loadu_pd(&src[14]));
-#elif defined(CTOOLS_ARM64)
-    /* ARM64: Use STNP (Store Pair Non-temporal) for cache bypass */
-    __asm__ __volatile__(
-        "stnp %d[v0], %d[v1], [%[dst]]\n\t"
-        "stnp %d[v2], %d[v3], [%[dst], #16]\n\t"
-        "stnp %d[v4], %d[v5], [%[dst], #32]\n\t"
-        "stnp %d[v6], %d[v7], [%[dst], #48]\n\t"
-        "stnp %d[v8], %d[v9], [%[dst], #64]\n\t"
-        "stnp %d[v10], %d[v11], [%[dst], #80]\n\t"
-        "stnp %d[v12], %d[v13], [%[dst], #96]\n\t"
-        "stnp %d[v14], %d[v15], [%[dst], #112]"
-        :
-        : [v0] "w" (src[0]), [v1] "w" (src[1]),
-          [v2] "w" (src[2]), [v3] "w" (src[3]),
-          [v4] "w" (src[4]), [v5] "w" (src[5]),
-          [v6] "w" (src[6]), [v7] "w" (src[7]),
-          [v8] "w" (src[8]), [v9] "w" (src[9]),
-          [v10] "w" (src[10]), [v11] "w" (src[11]),
-          [v12] "w" (src[12]), [v13] "w" (src[13]),
-          [v14] "w" (src[14]), [v15] "w" (src[15]),
-          [dst] "r" (dst)
-        : "memory"
-    );
-#else
-    copy_doubles_16(dst, src);
-#endif
+    return widths;
 }
 
 /* ===========================================================================
@@ -217,12 +86,15 @@ static inline void stream_doubles_16(double * restrict dst, const double * restr
 /*
     Load a single variable from Stata into C memory (internal helper).
     Used by both single-var and multi-var loading.
+
+    When str_width > 0 (actual Stata variable width, e.g. 17 for str17),
+    uses a flat contiguous buffer for strings instead of the arena allocator.
+    This eliminates per-string strlen, memcpy, and atomic CAS overhead.
 */
 static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
-                                 size_t nobs, int is_string)
+                                 size_t nobs, int is_string, int str_width)
 {
     size_t i;
-    char strbuf[STATA_STR_MAXLEN + 1];
 
     var->nobs = nobs;
 
@@ -249,8 +121,68 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
     }
 
     if (is_string) {
-        /* String variable - use arena allocator for fast bulk free */
         var->type = STATA_TYPE_STRING;
+
+        /* ---- Flat buffer path: known string width ----
+           When the actual Stata variable width is known (e.g. 17 for str17),
+           allocate a single contiguous nobs×stride buffer and have SF_sdata
+           read directly into it. Benefits:
+           - Single copy (SPI → flat buffer) instead of two (SPI → stack → arena)
+           - No strlen per string (stride is known)
+           - No atomic CAS overhead (no arena allocation)
+           - Better cache locality for subsequent sort comparisons
+           - O(1) cleanup via ctools_string_arena_free wrapper */
+        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
+            size_t stride = (size_t)str_width + 1;
+            size_t flat_size = nobs * stride;
+
+            /* Overflow and size guard (2 GB cap) */
+            if (flat_size / stride == nobs && flat_size <= (2048ULL * 1024 * 1024)) {
+                char *flat_buf = (char *)calloc(nobs, stride);
+                if (flat_buf) {
+                    /* Allocate pointer array */
+                    size_t str_array_size;
+                    if (ctools_safe_mul_size(nobs, sizeof(char *), &str_array_size) != 0) {
+                        free(flat_buf);
+                        return -1;
+                    }
+                    char **str_ptrs = (char **)ctools_cacheline_alloc(str_array_size);
+                    if (!str_ptrs) {
+                        free(flat_buf);
+                        return -1;
+                    }
+
+                    /* Read directly from Stata into flat buffer — single copy */
+                    for (i = 0; i < nobs; i++) {
+                        str_ptrs[i] = flat_buf + i * stride;
+                        SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), str_ptrs[i]);
+                    }
+
+                    /* Wrap flat buffer as a ctools_string_arena for compatible cleanup.
+                       stata_data_free checks has_fallback=0 → takes O(1) bulk free path:
+                       ctools_string_arena_free does free(base) + free(arena). */
+                    ctools_string_arena *arena = (ctools_string_arena *)malloc(sizeof(ctools_string_arena));
+                    if (!arena) {
+                        ctools_aligned_free(str_ptrs);
+                        free(flat_buf);
+                        return -1;
+                    }
+                    arena->base = flat_buf;
+                    arena->capacity = flat_size;
+                    arena->used = flat_size;
+                    arena->mode = CTOOLS_STRING_ARENA_NO_FALLBACK;
+                    arena->has_fallback = 0;
+
+                    var->str_maxlen = (size_t)str_width;
+                    var->data.str = str_ptrs;
+                    var->_arena = arena;
+                    return 0;
+                }
+                /* calloc failed — fall through to arena path */
+            }
+        }
+
+        /* ---- Arena path: width unknown or flat buffer not feasible ---- */
         var->str_maxlen = STATA_STR_MAXLEN;
         var->_arena = NULL;
 
@@ -266,6 +198,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         memset(var->data.str, 0, str_array_size);
 
         char **str_ptr = var->data.str;
+        char strbuf[STATA_STR_MAXLEN + 1];
 
         /* Create arena for all strings - estimate avg 64 bytes per string */
         /* Overflow check: nobs * 64 - skip arena if overflow, rely on strdup fallback */
@@ -278,12 +211,8 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
             var->_arena = arena;
         }
 
-        /* Load strings with prefetching */
+        /* Load strings */
         for (i = 0; i < nobs; i++) {
-            if (i + PREFETCH_DISTANCE < nobs) {
-                _mm_prefetch((const char *)&str_ptr[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            }
-
             SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
@@ -326,47 +255,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
         double * restrict dbl_ptr = var->data.dbl;
 
-        /* Double buffers for software pipelining - use pointer swap */
-        double buf_a[16], buf_b[16];
-        double *v0 = buf_a, *v1 = buf_b;
-
-        /* Calculate loop bounds */
-        size_t i_end_16 = nobs - (nobs % 16);
-
-        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
-
-        /* Phase 1: Main loop with prefetching (bulk of iterations) */
-        i = 0;
-        if (prefetch_end > 0) {
-            /* Prime the pipeline */
-            SF_VDATA_BATCH16((ST_int)var_idx, obs1, v0);
-
-            for (; i < prefetch_end; i += 16) {
-                /* Prefetch 2 cache lines ahead */
-                _mm_prefetch((const char *)&dbl_ptr[i + 32], _MM_HINT_T0);
-                _mm_prefetch((const char *)&dbl_ptr[i + 40], _MM_HINT_T0);
-
-                /* Load next batch into v1 */
-                SF_VDATA_BATCH16((ST_int)var_idx, i + 16 + obs1, v1);
-
-                /* Store previous batch */
-                copy_doubles_16(&dbl_ptr[i], v0);
-
-                /* Swap buffer pointers instead of memcpy */
-                double *tmp = v0;
-                v0 = v1;
-                v1 = tmp;
-            }
-        }
-
-        /* Phase 2: Remaining 16-element blocks without prefetch */
-        for (; i < i_end_16; i += 16) {
-            SF_VDATA_BATCH16((ST_int)var_idx, i + obs1, v0);
-            copy_doubles_16(&dbl_ptr[i], v0);
-        }
-
-        /* Phase 3: Handle remaining elements (< 16) */
-        for (; i < nobs; i++) {
+        for (i = 0; i < nobs; i++) {
             SF_vdata((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
         }
     }
@@ -376,16 +265,9 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
 /*
     Thread function: Load a single variable from Stata into C memory.
-    (Legacy interface for backward compatibility)
 
     Allocates memory and reads all observations for one variable using
-    SF_vdata (numeric) or SF_sdata (string). Uses optimized loops with:
-    - 8x unrolling for reduced loop overhead
-    - Batched SPI calls via macros
-    - Separated load/store phases for better pipelining
-    - Software prefetching for write destination
-    - Cache-line aligned allocations
-    - String arena for reduced malloc overhead
+    SF_vdata (numeric) or SF_sdata (string).
 
     @param arg  Pointer to ctools_var_io_args with input/output parameters
     @return     NULL on success, non-NULL on failure (for ctools_threads)
@@ -396,7 +278,8 @@ static void *load_variable_thread(void *arg)
     args->success = 0;
 
     if (load_single_variable(args->var, args->var_idx, args->obs1,
-                              args->nobs, args->is_string) != 0) {
+                              args->nobs, args->is_string,
+                              args->str_width) != 0) {
         return (void *)1;
     }
 
@@ -459,10 +342,13 @@ typedef enum { IO_MODE_LOAD, IO_MODE_STORE } io_mode_t;
     @param obs1         [in]  First observation (1-based)
     @param nobs         [in]  Number of observations
     @param mode         [in]  IO_MODE_LOAD or IO_MODE_STORE
+    @param str_widths   [in]  Optional array of string widths per variable position
+                              (0 = numeric/unknown). NULL = no width hints.
 */
 static void init_io_thread_args(ctools_var_io_args *args, stata_data *data,
                                 int *var_indices, size_t nvars,
-                                size_t obs1, size_t nobs, io_mode_t mode)
+                                size_t obs1, size_t nobs, io_mode_t mode,
+                                const int *str_widths)
 {
     for (size_t j = 0; j < nvars; j++) {
         args[j].var = &data->vars[j];
@@ -471,7 +357,9 @@ static void init_io_thread_args(ctools_var_io_args *args, stata_data *data,
         args[j].nobs = nobs;
         args[j].is_string = (mode == IO_MODE_LOAD)
             ? SF_var_is_string((ST_int)args[j].var_idx)
-            : 0;  /* Not used by store */
+            : 0;  /* Store uses var->str_maxlen instead */
+        args[j].str_width = (str_widths && mode == IO_MODE_LOAD)
+            ? str_widths[args[j].var_idx - 1] : 0;
         args[j].success = 0;
     }
 }
@@ -540,77 +428,65 @@ static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
 /*
     Store a single variable from C memory to Stata (internal helper).
     Used by both single-var and multi-var storing.
+
+    For string variables, var->str_maxlen holds the actual Stata variable
+    width (e.g. 17 for str17) when set by the caller from .ado metadata.
+    When available, we pack scattered arena pointers into a contiguous flat
+    buffer so SF_sstore reads are sequential and cache-friendly.
 */
-static void store_single_variable(stata_variable *var, int var_idx, size_t obs1, size_t nobs)
+static void store_single_variable(stata_variable *var, int var_idx,
+                                  size_t obs1, size_t nobs)
 {
     size_t i;
     ST_int stata_var_idx = (ST_int)var_idx;
 
     if (var->type == STATA_TYPE_DOUBLE) {
-        /* Numeric variable - aggressive optimization */
         const double * restrict dbl_data = var->data.dbl;
 
-        /* Double buffers for software pipelining - use pointer swap */
-        double buf_a[16], buf_b[16];
-        double *v0 = buf_a, *v1 = buf_b;
-
-        /* Calculate loop bounds */
-        size_t i_end_16 = nobs - (nobs % 16);
-        size_t prefetch_end = (nobs > 32) ? (i_end_16 - 32) : 0;
-
-        /* Phase 1: Main loop with prefetching and pipelining */
-        i = 0;
-        if (prefetch_end > 0) {
-            /* Prime the pipeline */
-            copy_doubles_16(v0, &dbl_data[0]);
-
-            for (; i < prefetch_end; i += 16) {
-                /* Prefetch source data ahead */
-                _mm_prefetch((const char *)&dbl_data[i + 32], _MM_HINT_T0);
-                _mm_prefetch((const char *)&dbl_data[i + 40], _MM_HINT_T0);
-
-                /* Load next batch while writing current */
-                copy_doubles_16(v1, &dbl_data[i + 16]);
-
-                /* Write current batch to Stata */
-                SF_VSTORE_BATCH16(stata_var_idx, i + obs1, v0);
-
-                /* Swap buffer pointers instead of memcpy */
-                double *tmp = v0;
-                v0 = v1;
-                v1 = tmp;
-            }
-        }
-
-        /* Phase 2: Remaining 16-element blocks without prefetch */
-        for (; i < i_end_16; i += 16) {
-            copy_doubles_16(v0, &dbl_data[i]);
-            SF_VSTORE_BATCH16(stata_var_idx, i + obs1, v0);
-        }
-
-        /* Phase 3: Handle remaining elements */
-        for (; i < nobs; i++) {
+        for (i = 0; i < nobs; i++) {
             SF_vstore(stata_var_idx, (ST_int)(i + obs1), dbl_data[i]);
         }
 
     } else {
-        /* String variable - optimized with prefetching */
+        /* String variable */
         char * const * restrict str_data = var->data.str;
+        size_t str_width = var->str_maxlen;
+        char *flat_buf = NULL;
 
-        /* Calculate prefetch region */
-        size_t prefetch_end = (nobs > PREFETCH_DISTANCE) ? (nobs - PREFETCH_DISTANCE) : 0;
+        /* Use flat buffer when we have actual variable width (not default 2045)
+           and the buffer fits in 256 MB */
+        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
+            size_t stride = str_width + 1;
+            size_t flat_size = nobs * stride;
+            if (flat_size / stride == nobs &&  /* overflow check */
+                flat_size <= (256ULL * 1024 * 1024)) {
+                flat_buf = (char *)calloc(nobs, stride);
+            }
 
-        /* Phase 1: Main loop with prefetching */
-        for (i = 0; i < prefetch_end; i++) {
-            /* Prefetch pointer array and string content ahead */
-            _mm_prefetch((const char *)&str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            _mm_prefetch(str_data[i + PREFETCH_DISTANCE], _MM_HINT_T0);
+            if (flat_buf) {
+                /* Pack: copy scattered strings into contiguous buffer */
+                for (i = 0; i < nobs; i++) {
+                    const char *s = str_data[i];
+                    if (s) {
+                        size_t len = strlen(s);
+                        if (len >= stride) len = stride - 1;
+                        memcpy(flat_buf + i * stride, s, len);
+                    }
+                }
 
-            SF_sstore(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
+                /* Store: sequential scan through flat buffer */
+                for (i = 0; i < nobs; i++) {
+                    SF_sstore(stata_var_idx, (ST_int)(i + obs1),
+                              flat_buf + i * stride);
+                }
+
+                free(flat_buf);
+                return;
+            }
         }
 
-        /* Phase 2: Tail without prefetch */
-        for (; i < nobs; i++) {
+        /* Fallback: strL, width unknown, buffer too large, or alloc failed */
+        for (i = 0; i < nobs; i++) {
             SF_sstore(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
         }
     }
@@ -618,14 +494,9 @@ static void store_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
 /*
     Thread function: Store a single variable from C memory to Stata.
-    (Legacy interface for backward compatibility)
 
     Writes all observations for one variable using SF_vstore (numeric) or
-    SF_sstore (string). Aggressive optimizations include:
-    - 16x unrolled loop with batched SPI writes
-    - Software pipelining with double buffering
-    - Branch-free prefetch regions
-    - restrict keyword for aliasing optimization
+    SF_sstore (string).
 
     @param arg  Pointer to ctools_var_io_args with input/output parameters
     @return     NULL on success (for ctools_threads compatibility)
@@ -676,7 +547,7 @@ stata_retcode ctools_data_store(stata_data *data, size_t obs1)
     }
 
     /* Initialize thread arguments */
-    init_io_thread_args(thread_args, data, NULL, nvars, obs1, nobs, IO_MODE_STORE);
+    init_io_thread_args(thread_args, data, NULL, nvars, obs1, nobs, IO_MODE_STORE, NULL);
 
     /* Execute parallel/sequential store (no error checking for store) */
     execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
@@ -726,7 +597,7 @@ stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
     }
 
     /* Initialize thread arguments with specified variable indices */
-    init_io_thread_args(thread_args, data, var_indices, nvars, obs1, nobs, IO_MODE_STORE);
+    init_io_thread_args(thread_args, data, var_indices, nvars, obs1, nobs, IO_MODE_STORE, NULL);
 
     /* Execute parallel/sequential store (no error checking for store) */
     execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
@@ -752,10 +623,7 @@ stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
 
     Optimizations:
     - Cache-line aligned buffer allocation
-    - Software prefetching for source_rows lookups
     - String arena for reduced malloc overhead
-    - Batched SPI writes with SIMD buffer reads
-    - Non-temporal stores for large datasets
 
     @param var_idx      [in] 1-based Stata variable index
     @param source_rows  [in] Array mapping output row -> source row (0-based)
@@ -790,13 +658,8 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         }
         /* Arena failure is ok - we fall back to strdup */
 
-        /* GATHER: Read from source positions with prefetching */
+        /* GATHER: Read from source positions */
         for (i = 0; i < output_nobs; i++) {
-            /* Prefetch source_rows array ahead */
-            if (i + PREFETCH_DISTANCE < output_nobs) {
-                _mm_prefetch((const char *)&source_rows[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            }
-
             if (source_rows[i] >= 0) {
                 /* Overflow check: ensure addition doesn't overflow int64_t */
                 if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
@@ -851,15 +714,8 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
             }
         }
 
-        /* SCATTER: Write to sequential output positions with prefetching */
+        /* SCATTER: Write to sequential output positions */
         for (i = 0; i < output_nobs; i++) {
-            /* Prefetch buffer pointers and string content ahead */
-            if (i + PREFETCH_DISTANCE < output_nobs) {
-                _mm_prefetch((const char *)&buf[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-                if (buf[i + PREFETCH_DISTANCE / 2] != NULL) {
-                    _mm_prefetch(buf[i + PREFETCH_DISTANCE / 2], _MM_HINT_T0);
-                }
-            }
             SF_sstore(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
@@ -877,17 +733,8 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         double *buf = (double *)ctools_safe_cacheline_alloc2(output_nobs, sizeof(double));
         if (!buf) return STATA_ERR_MEMORY;
 
-        /* GATHER: Read from source positions with prefetching */
+        /* GATHER: Read from source positions */
         for (i = 0; i < output_nobs; i++) {
-            /* Prefetch source_rows array ahead for next lookup */
-            if (i + PREFETCH_DISTANCE < output_nobs) {
-                _mm_prefetch((const char *)&source_rows[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            }
-            /* Prefetch destination buffer ahead for writes */
-            if (i + PREFETCH_DISTANCE < output_nobs) {
-                _mm_prefetch((const char *)&buf[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-            }
-
             if (source_rows[i] >= 0) {
                 /* Overflow check: ensure addition doesn't overflow int64_t */
                 if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
@@ -917,42 +764,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         }
 
         /* SCATTER: Write to sequential output positions */
-        size_t i_end = output_nobs - (output_nobs % 8);
-
-        /* Use non-temporal stores for very large datasets */
-        if (output_nobs >= NONTEMPORAL_THRESHOLD) {
-            /* Local buffer for batched reads */
-            double v[8];
-
-            for (i = 0; i < i_end; i += 8) {
-                /* Stream read from buffer (bypasses cache on way back) */
-                stream_doubles_8(v, &buf[i]);
-                /* Batch write to Stata */
-                SF_VSTORE_BATCH8(stata_var, i + obs1, v);
-            }
-
-#if defined(CTOOLS_X86) && defined(__SSE2__)
-            _mm_sfence();  /* Ensure all streaming stores complete */
-#endif
-        } else {
-            /* Standard path with prefetching */
-            double v[8];
-
-            for (i = 0; i < i_end; i += 8) {
-                /* Prefetch source data ahead */
-                if (i + PREFETCH_DISTANCE < output_nobs) {
-                    _mm_prefetch((const char *)&buf[i + PREFETCH_DISTANCE], _MM_HINT_T0);
-                }
-
-                /* Batch read using SIMD */
-                copy_doubles_8(v, &buf[i]);
-                /* Batch write to Stata */
-                SF_VSTORE_BATCH8(stata_var, i + obs1, v);
-            }
-        }
-
-        /* Handle remaining elements */
-        for (; i < output_nobs; i++) {
+        for (i = 0; i < output_nobs; i++) {
             SF_vstore(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
@@ -1031,13 +843,13 @@ static int probe_for_identity(ST_int obs1, ST_int obs2, size_t n_range)
 /*
     Load a single variable from Stata for filtered observations only.
     Uses obs_map to read only the observations that passed filtering.
+    When str_width > 0, uses flat buffer for string variables.
 */
 static int load_filtered_variable(stata_variable *var, int var_idx,
                                    perm_idx_t *obs_map, size_t n_filtered,
-                                   int is_string)
+                                   int is_string, int str_width)
 {
     size_t i;
-    char strbuf[STATA_STR_MAXLEN + 1];
 
     var->nobs = n_filtered;
 
@@ -1060,8 +872,53 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
     }
 
     if (is_string) {
-        /* String variable - use arena allocator */
         var->type = STATA_TYPE_STRING;
+
+        /* ---- Flat buffer path: known string width ---- */
+        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
+            size_t stride = (size_t)str_width + 1;
+            size_t flat_size = n_filtered * stride;
+
+            if (flat_size / stride == n_filtered && flat_size <= (2048ULL * 1024 * 1024)) {
+                char *flat_buf = (char *)calloc(n_filtered, stride);
+                if (flat_buf) {
+                    size_t str_array_size;
+                    if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
+                        free(flat_buf);
+                        return -1;
+                    }
+                    char **str_ptrs = (char **)ctools_cacheline_alloc(str_array_size);
+                    if (!str_ptrs) {
+                        free(flat_buf);
+                        return -1;
+                    }
+
+                    for (i = 0; i < n_filtered; i++) {
+                        str_ptrs[i] = flat_buf + i * stride;
+                        SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], str_ptrs[i]);
+                    }
+
+                    ctools_string_arena *arena = (ctools_string_arena *)malloc(sizeof(ctools_string_arena));
+                    if (!arena) {
+                        ctools_aligned_free(str_ptrs);
+                        free(flat_buf);
+                        return -1;
+                    }
+                    arena->base = flat_buf;
+                    arena->capacity = flat_size;
+                    arena->used = flat_size;
+                    arena->mode = CTOOLS_STRING_ARENA_NO_FALLBACK;
+                    arena->has_fallback = 0;
+
+                    var->str_maxlen = (size_t)str_width;
+                    var->data.str = str_ptrs;
+                    var->_arena = arena;
+                    return 0;
+                }
+            }
+        }
+
+        /* ---- Arena path: width unknown or flat buffer not feasible ---- */
         var->str_maxlen = STATA_STR_MAXLEN;
         var->_arena = NULL;
 
@@ -1077,6 +934,7 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
         memset(var->data.str, 0, str_array_size);
 
         char **str_ptr = var->data.str;
+        char strbuf[STATA_STR_MAXLEN + 1];
 
         /* Create arena for string storage */
         ctools_string_arena *arena = NULL;
@@ -1146,6 +1004,7 @@ typedef struct {
     perm_idx_t *obs_map;
     size_t n_filtered;
     int is_string;
+    int str_width;
     int success;
 } filtered_var_io_args;
 
@@ -1155,7 +1014,8 @@ static void *load_filtered_variable_thread(void *arg)
     args->success = 0;
 
     if (load_filtered_variable(args->var, args->var_idx, args->obs_map,
-                                args->n_filtered, args->is_string) != 0) {
+                                args->n_filtered, args->is_string,
+                                args->str_width) != 0) {
         return (void *)1;
     }
 
@@ -1164,12 +1024,12 @@ static void *load_filtered_variable_thread(void *arg)
 }
 
 /*
-    Load variables with if/in filtering applied at load time.
+    Extended data load with optional string width hints for flat buffer optimization.
 */
-stata_retcode ctools_data_load(ctools_filtered_data *result,
-                                         int *var_indices, size_t nvars,
-                                         size_t obs_start, size_t obs_end,
-                                         int flags)
+stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
+                                   int *var_indices, size_t nvars,
+                                   size_t obs_start, size_t obs_end,
+                                   int flags, const int *str_widths)
 {
     ST_int obs1, obs2;
     size_t n_range, n_filtered;
@@ -1206,6 +1066,15 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         return STATA_ERR_INVALID_INPUT;
     }
 
+    /* Auto-detect string widths from Stata local if caller didn't provide them.
+       The .ado calls `_ctools_strw varlist` which sets local __ctools_strw
+       with comma-separated widths. We read it via SF_macro_use. */
+    int *auto_str_widths = NULL;
+    if (str_widths == NULL) {
+        auto_str_widths = ctools_read_strw_from_stata((size_t)SF_nvars());
+        str_widths = auto_str_widths;  /* may still be NULL if macro not set */
+    }
+
     /* Resolve observation range */
     if (obs_start == 0 || obs_end == 0) {
         obs1 = SF_in1();
@@ -1213,6 +1082,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         if (obs1 < 1 || obs2 < obs1) {
             result->n_range = 0;
             result->was_filtered = 0;
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_OK;  /* Empty but valid */
         }
@@ -1236,6 +1106,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         /* Build identity obs_map */
         obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
         if (obs_map == NULL) {
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_ERR_MEMORY;
         }
@@ -1255,7 +1126,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
             /* Allocate obs_map as identity for write-back consistency */
             obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
             if (obs_map == NULL) {
-                if (auto_indices) free(auto_indices);
+                free(auto_str_widths);
+            if (auto_indices) free(auto_indices);
                 return STATA_ERR_MEMORY;
             }
             for (size_t i = 0; i < n_filtered; i++) {
@@ -1284,6 +1156,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
             result->obs_map = NULL;
             /* Initialize empty data structure */
             stata_retcode rc = init_data_structure(&result->data, nvars, 0);
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return rc;
         }
@@ -1295,6 +1168,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         /* Allocate obs_map */
         obs_map = (perm_idx_t *)ctools_safe_cacheline_alloc2(n_filtered, sizeof(perm_idx_t));
         if (obs_map == NULL) {
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_ERR_MEMORY;
         }
@@ -1322,6 +1196,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         if (rc != STATA_OK) {
             ctools_aligned_free(obs_map);
             result->obs_map = NULL;
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return rc;
         }
@@ -1331,15 +1206,17 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
             ctools_safe_malloc2(nvars, sizeof(ctools_var_io_args));
         if (thread_args == NULL) {
             ctools_filtered_data_free(result);
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_ERR_MEMORY;
         }
 
-        init_io_thread_args(thread_args, &result->data, var_indices, nvars, obs1, n_filtered, IO_MODE_LOAD);
+        init_io_thread_args(thread_args, &result->data, var_indices, nvars, obs1, n_filtered, IO_MODE_LOAD, str_widths);
 
         if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
             free(thread_args);
             ctools_filtered_data_free(result);
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_ERR_MEMORY;
         }
@@ -1353,6 +1230,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
         if (rc != STATA_OK) {
             ctools_aligned_free(obs_map);
             result->obs_map = NULL;
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return rc;
         }
@@ -1361,6 +1239,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
             ctools_safe_malloc2(nvars, sizeof(filtered_var_io_args));
         if (thread_args == NULL) {
             ctools_filtered_data_free(result);
+            free(auto_str_widths);
             if (auto_indices) free(auto_indices);
             return STATA_ERR_MEMORY;
         }
@@ -1372,6 +1251,7 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
             thread_args[j].obs_map = obs_map;
             thread_args[j].n_filtered = n_filtered;
             thread_args[j].is_string = SF_var_is_string((ST_int)var_indices[j]);
+            thread_args[j].str_width = str_widths ? str_widths[var_indices[j] - 1] : 0;
             thread_args[j].success = 0;
         }
 
@@ -1387,7 +1267,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
                                                          sizeof(filtered_var_io_args)) != 0) {
                     free(thread_args);
                     ctools_filtered_data_free(result);
-                    if (auto_indices) free(auto_indices);
+                    free(auto_str_widths);
+            if (auto_indices) free(auto_indices);
                     return STATA_ERR_MEMORY;
                 }
 
@@ -1395,7 +1276,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
                 if (pool_result != 0) {
                     free(thread_args);
                     ctools_filtered_data_free(result);
-                    if (auto_indices) free(auto_indices);
+                    free(auto_str_widths);
+            if (auto_indices) free(auto_indices);
                     return STATA_ERR_MEMORY;
                 }
             } else {
@@ -1405,7 +1287,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
                     if (res != NULL) {
                         free(thread_args);
                         ctools_filtered_data_free(result);
-                        if (auto_indices) free(auto_indices);
+                        free(auto_str_widths);
+            if (auto_indices) free(auto_indices);
                         return STATA_ERR_MEMORY;
                     }
                 }
@@ -1417,7 +1300,8 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
                 if (res != NULL) {
                     free(thread_args);
                     ctools_filtered_data_free(result);
-                    if (auto_indices) free(auto_indices);
+                    free(auto_str_widths);
+            if (auto_indices) free(auto_indices);
                     return STATA_ERR_MEMORY;
                 }
             }
@@ -1429,8 +1313,21 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
     /* Memory barrier */
     ctools_memory_barrier();
 
+    free(auto_str_widths);
     if (auto_indices) free(auto_indices);
     return STATA_OK;
+}
+
+/*
+    Backward-compatible wrapper: calls ctools_data_load_ex with no string width hints.
+*/
+stata_retcode ctools_data_load(ctools_filtered_data *result,
+                                         int *var_indices, size_t nvars,
+                                         size_t obs_start, size_t obs_end,
+                                         int flags)
+{
+    return ctools_data_load_ex(result, var_indices, nvars, obs_start, obs_end,
+                                flags, NULL);
 }
 
 /* ===========================================================================
@@ -1534,6 +1431,16 @@ stata_retcode ctools_data_load_single_var_rowpar(
         var->str_maxlen = STATA_STR_MAXLEN;
         var->_arena = NULL;
 
+        /* Try to get known string width from __ctools_strw macro for flat buffer */
+        int str_width = 0;
+        {
+            int *auto_widths = ctools_read_strw_from_stata((size_t)SF_nvars());
+            if (auto_widths != NULL) {
+                str_width = auto_widths[var_idx - 1];  /* var_idx is 1-based */
+                free(auto_widths);
+            }
+        }
+
         size_t str_array_size;
         if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
             ctools_filtered_data_free(result);
@@ -1546,8 +1453,52 @@ stata_retcode ctools_data_load_single_var_rowpar(
         }
         memset(var->data.str, 0, str_array_size);
 
-        /* Create arena and partition into per-thread slabs so each thread
-           does plain pointer bumping with no atomic contention. */
+        /* Fast path: flat buffer when string width is known */
+        int used_flat_buffer = 0;
+        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
+            size_t stride = (size_t)str_width + 1;
+            size_t flat_size;
+            if (ctools_safe_mul_size(n_filtered, stride, &flat_size) == 0) {
+                char *flat_buf = (char *)calloc(n_filtered, stride);
+                if (flat_buf != NULL) {
+                    /* SF_sdata reads directly into flat buffer — single copy */
+                    volatile int load_error = 0;
+                    #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
+                    for (size_t i = 0; i < n_filtered; i++) {
+                        if (load_error) continue;
+                        char *slot = flat_buf + i * stride;
+                        if (SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], slot) != 0) {
+                            load_error = 1;
+                        }
+                        var->data.str[i] = slot;
+                    }
+
+                    if (load_error) {
+                        free(flat_buf);
+                        ctools_filtered_data_free(result);
+                        return STATA_ERR_MEMORY;
+                    }
+
+                    /* Wrap flat buffer as arena for compatible cleanup */
+                    ctools_string_arena *wrapper = (ctools_string_arena *)calloc(1, sizeof(ctools_string_arena));
+                    if (wrapper != NULL) {
+                        wrapper->base = flat_buf;
+                        wrapper->capacity = flat_size;
+                        wrapper->used = flat_size;
+                        wrapper->has_fallback = 0;
+                        var->_arena = wrapper;
+                        used_flat_buffer = 1;
+                    } else {
+                        free(flat_buf);
+                        ctools_filtered_data_free(result);
+                        return STATA_ERR_MEMORY;
+                    }
+                }
+            }
+        }
+
+        if (!used_flat_buffer) {
+        /* Fallback: arena with per-thread slabs */
         ctools_string_arena *arena = NULL;
         if (n_filtered <= SIZE_MAX / 64) {
             size_t arena_capacity = n_filtered * 64;
@@ -1614,6 +1565,7 @@ stata_retcode ctools_data_load_single_var_rowpar(
             ctools_filtered_data_free(result);
             return STATA_ERR_MEMORY;
         }
+        } /* end !used_flat_buffer */
     } else {
         var->type = STATA_TYPE_DOUBLE;
         var->_arena = NULL;

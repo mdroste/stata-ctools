@@ -614,6 +614,27 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
                                          int flags);
 
 /*
+    Extended data load with string width hints for flat buffer optimization.
+
+    Same as ctools_data_load but accepts an optional array of string variable
+    widths. When provided, string variables are loaded into contiguous flat
+    buffers (one SF_sdata read per observation, no arena overhead) instead
+    of the default arena path (strlen + memcpy + atomic CAS per string).
+
+    @param str_widths   [in]  Array of string widths per variable position
+                              (e.g. 17 for str17, 0 for numeric/unknown/strL).
+                              NULL = use default arena path for all strings.
+                              Array length must match nvars (or SF_nvars() if
+                              var_indices is NULL).
+
+    All other parameters are identical to ctools_data_load.
+*/
+stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
+                                   int *var_indices, size_t nvars,
+                                   size_t obs_start, size_t obs_end,
+                                   int flags, const int *str_widths);
+
+/*
     Experimental: row-parallel loader for a single variable.
     Splits observations across OpenMP threads instead of parallelizing
     across columns. Uses strdup (no arena) for strings.

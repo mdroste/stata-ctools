@@ -169,6 +169,7 @@ program define csample
     }
     local opts "`opts' seed=`stata_seed'"
     if "`verbose'" != "" local opts "`opts' verbose"
+    if `"`if'"' == "" & `"`in'"' == "" local opts "`opts' skipif"
 
     local threads_opt ""
     if `threads' > 0 {

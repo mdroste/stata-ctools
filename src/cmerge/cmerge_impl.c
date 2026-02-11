@@ -14,7 +14,7 @@
         - Store in static cache for phase 2
 
     Phase 2 - "execute":
-        - Load ONLY master key variables + _orig_row index
+        - Load ONLY master key variables (deferred) or all variables (full)
         - Perform sorted merge join to produce output row mapping
         - Write _merge and keepusing variables directly
         - STREAM master non-key variables (parallel gather-scatter)
@@ -500,7 +500,6 @@ static ST_retcode cmerge_execute(const char *args)
     cmerge_type_t merge_type = MERGE_1_1;
     int nkeys = 0;
     static int master_key_indices[CMERGE_MAX_KEYVARS];
-    int orig_row_idx = 0;
     size_t master_nobs = 0;
     size_t master_nvars = 0;
     int n_keepusing = 0;
@@ -545,16 +544,6 @@ static ST_retcode cmerge_execute(const char *args)
                 cache_cleanup_on_error();
                 SF_error("cmerge: invalid master key index value\n");
                 return 198;
-            }
-        }
-        else if (strcmp(token, "orig_row_idx") == 0) {
-            token = strtok(NULL, " ");
-            if (token) {
-                if (!ctools_safe_atoi(token, &orig_row_idx)) {
-                    cache_cleanup_on_error();
-                    SF_error("cmerge: invalid orig_row_idx value\n");
-                    return 198;
-                }
             }
         }
         else if (strcmp(token, "master_nobs") == 0) {
@@ -667,7 +656,7 @@ static ST_retcode cmerge_execute(const char *args)
      * Step 1: Load master variables (parallel I/O)
      *
      * Deferred loading optimization: When the master is already sorted and
-     * merge type is 1:1 or m:1, load only key vars + _orig_row first.
+     * merge type is 1:1 or m:1, load only key vars first.
      * After merge join + identity detection:
      *   - Identity case: skip ALL non-key loading (huge savings)
      *   - Non-identity case: stream non-key vars with fused permutation
@@ -684,8 +673,8 @@ static ST_retcode cmerge_execute(const char *args)
     size_t n_load_vars = 0;
 
     if (deferred_loading) {
-        /* Deferred: load only key vars + _orig_row */
-        n_load_vars = (size_t)nkeys + 1;  /* keys + _orig_row */
+        /* Deferred: load only key vars */
+        n_load_vars = (size_t)nkeys;
         all_var_indices = malloc(n_load_vars * sizeof(int));
         if (!all_var_indices) {
             cache_cleanup_on_error();
@@ -695,7 +684,6 @@ static ST_retcode cmerge_execute(const char *args)
         for (int k = 0; k < nkeys; k++) {
             all_var_indices[k] = master_key_indices[k];
         }
-        all_var_indices[nkeys] = orig_row_idx;
     } else {
         /* Full load: all variables */
         n_load_vars = master_nvars;
@@ -764,7 +752,11 @@ static ST_retcode cmerge_execute(const char *args)
             return 920;
         }
 
-        rc = ctools_sort_ips4o_with_perm(&master_data.data, sort_vars, nkeys, sort_perm);
+        /* Use order_only to compute sort permutation without applying to ALL vars.
+         * This avoids the O(N * nvars) permutation cost inside IPS4o -- only the
+         * key vars are permuted below; non-key vars stay in original order and
+         * are accessed via sort_perm indirection in Step 6. */
+        rc = ctools_sort_ips4o_order_only(&master_data.data, sort_vars, nkeys);
         free(sort_vars);
 
         if (rc != STATA_OK) {
@@ -773,6 +765,61 @@ static ST_retcode cmerge_execute(const char *args)
             free(all_var_indices);
             cache_cleanup_on_error();
             return rc;
+        }
+
+        /* Copy sort_order to sort_perm (perm_idx_t -> size_t) */
+        #ifdef _OPENMP
+        #pragma omp parallel for schedule(static)
+        #endif
+        for (size_t i = 0; i < master_nobs; i++) {
+            sort_perm[i] = (size_t)master_data.data.sort_order[i];
+        }
+
+        /* Apply permutation only to key vars (not all master vars).
+         * This is the key optimization: instead of IPS4o permuting all nvars
+         * columns, we only permute the few vars needed for merge join.
+         * Non-key vars remain in original order. */
+        {
+            int alloc_ok = 1;
+
+            /* Permute key variables */
+            for (int k = 0; k < nkeys && alloc_ok; k++) {
+                int vi = master_key_indices[k] - 1;  /* 0-based */
+                stata_variable *var = &master_data.data.vars[vi];
+                if (var->type == STATA_TYPE_DOUBLE) {
+                    double *new_data = ctools_safe_aligned_alloc2(64, master_nobs, sizeof(double));
+                    if (!new_data) { alloc_ok = 0; break; }
+                    for (size_t i = 0; i < master_nobs; i++) {
+                        new_data[i] = var->data.dbl[sort_perm[i]];
+                    }
+                    ctools_aligned_free(var->data.dbl);
+                    var->data.dbl = new_data;
+                } else {
+                    char **new_data = ctools_safe_aligned_alloc2(CACHE_LINE_SIZE, master_nobs, sizeof(char *));
+                    if (!new_data) { alloc_ok = 0; break; }
+                    for (size_t i = 0; i < master_nobs; i++) {
+                        new_data[i] = var->data.str[sort_perm[i]];
+                    }
+                    ctools_aligned_free(var->data.str);
+                    var->data.str = new_data;
+                }
+            }
+
+            if (!alloc_ok) {
+                free(sort_perm);
+                ctools_filtered_data_free(&master_data);
+                free(all_var_indices);
+                cache_cleanup_on_error();
+                return 920;
+            }
+
+            /* Reset sort_order to identity */
+            #ifdef _OPENMP
+            #pragma omp parallel for schedule(static)
+            #endif
+            for (size_t i = 0; i < master_nobs; i++) {
+                master_data.data.sort_order[i] = (perm_idx_t)i;
+            }
         }
 
         t_sort = ctools_timer_ms() - t_start;
@@ -896,7 +943,11 @@ static ST_retcode cmerge_execute(const char *args)
     double t_merge = ctools_timer_ms() - t_start;
 
     /* ===================================================================
-     * Step 4: Build master_orig_row mapping using _orig_row variable
+     * Step 4: Build master_orig_row mapping from sort_perm
+     *
+     * sort_perm[sorted_idx] gives the original 0-based row of the element
+     * at sorted position sorted_idx.  When data is pre-sorted (sort_perm
+     * is NULL), sorted position IS original position.
      * =================================================================== */
 
     int32_t *master_orig_rows = ctools_safe_malloc2(output_nobs, sizeof(int32_t));
@@ -909,29 +960,12 @@ static ST_retcode cmerge_execute(const char *args)
         return 920;
     }
 
-    /* _orig_row location depends on loading mode:
-     *   deferred: at position nkeys (last loaded var)
-     *   full:     at position orig_row_idx - 1 (1-based Stata index) */
-    int orig_row_var_pos = deferred_loading ? nkeys : (orig_row_idx - 1);
-
-    /* Bounds check for orig_row position */
-    if (orig_row_var_pos < 0 || (size_t)orig_row_var_pos >= master_data.data.nvars) {
-        free(output_specs);
-        if (sort_perm) free(sort_perm);
-        ctools_filtered_data_free(&master_data);
-        free(all_var_indices);
-        free(master_orig_rows);
-        cache_cleanup_on_error();
-        SF_error("cmerge: orig_row_idx out of bounds\n");
-        return 459;
-    }
-
-    double *orig_row_data = master_data.data.vars[orig_row_var_pos].data.dbl;
-
     for (size_t i = 0; i < output_nobs; i++) {
         if (output_specs[i].master_sorted_row >= 0) {
             size_t sorted_idx = (size_t)output_specs[i].master_sorted_row;
-            master_orig_rows[i] = (int32_t)(orig_row_data[sorted_idx] - 1);  /* 0-based */
+            master_orig_rows[i] = sort_perm
+                ? (int32_t)sort_perm[sorted_idx]
+                : (int32_t)sorted_idx;
         } else {
             master_orig_rows[i] = -1;  /* Using-only */
         }
@@ -1033,7 +1067,7 @@ static ST_retcode cmerge_execute(const char *args)
     /* ===================================================================
      * Deferred loading: stream non-key vars with fused permutation
      *
-     * When we used deferred loading, master_data only contains keys + _orig_row.
+     * When we used deferred loading, master_data only contains keys.
      * For non-identity case, stream each non-key var through Stata SPI
      * using ctools_stream_var_permuted(). This avoids loading ALL master vars
      * into memory, which is a huge win for wide datasets.
@@ -1060,10 +1094,9 @@ static ST_retcode cmerge_execute(const char *args)
             fused_perm[i] = (master_orig_rows[i] >= 0) ? (int64_t)master_orig_rows[i] : -1;
         }
 
-        /* Stream each non-key, non-_orig_row, non-shared-keepusing variable */
+        /* Stream each non-key, non-shared-keepusing variable */
         for (size_t v = 0; v < master_nvars; v++) {
             int stata_idx = (int)(v + 1);
-            if (stata_idx == orig_row_idx) continue;  /* Skip _orig_row */
 
             /* Skip shared keepusing (handled by keepusing write path) */
             int is_shared_keepusing = 0;
@@ -1100,7 +1133,7 @@ static ST_retcode cmerge_execute(const char *args)
 
     t_start = ctools_timer_ms();
 
-    /* Determine which variables to include in output (exclude _orig_row and shared keepusing) */
+    /* Determine which variables to include in output (exclude shared keepusing) */
     size_t n_output_vars = 0;
     int *output_var_indices = malloc(master_nvars * sizeof(int));
     int *output_var_stata_idx = malloc(master_nvars * sizeof(int));
@@ -1123,7 +1156,6 @@ static ST_retcode cmerge_execute(const char *args)
 
     for (size_t v = 0; v < master_nvars; v++) {
         int stata_idx = (int)(v + 1);
-        if (stata_idx == orig_row_idx) continue;  /* Skip _orig_row */
 
         /* Check if shared keepusing (handled separately) */
         int is_shared_keepusing = 0;
@@ -1256,7 +1288,12 @@ static ST_retcode cmerge_execute(const char *args)
                 double *using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
                                           g_using_cache.keys.data.vars[key_idx].data.dbl : NULL;
 
-                /* Use master_sorted_row to index into sorted master_data */
+                /* For non-key vars when sort was performed, data is in original
+                 * (unsorted) order -- use sort_perm to map sorted position to
+                 * original data position.  Key vars were permuted to sorted order. */
+                int use_perm = (!is_key && sort_perm != NULL);
+
+                /* Use master_sorted_row to index into master_data */
                 #define GATHER_PF_DIST 16
                 for (size_t i = 0; i < output_nobs; i++) {
                     /* Prefetch output_specs and source data ahead */
@@ -1264,17 +1301,23 @@ static ST_retcode cmerge_execute(const char *args)
                     if (i + GATHER_PF_DIST < output_nobs) {
                         __builtin_prefetch(&output_specs[i + GATHER_PF_DIST], 0, 0);
                         int32_t pf_row = output_specs[i + GATHER_PF_DIST].master_sorted_row;
-                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound)
-                            __builtin_prefetch(&src_var->data.dbl[pf_row], 0, 0);
+                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound) {
+                            size_t pf_data_row = use_perm ? sort_perm[pf_row] : (size_t)pf_row;
+                            __builtin_prefetch(&src_var->data.dbl[pf_data_row], 0, 0);
+                        }
                     }
                     #endif
                     int32_t sorted_row = output_specs[i].master_sorted_row;
                     if (sorted_row >= 0) {
-                        /* Bounds check: sorted_row must be valid index into master data */
-                        if ((size_t)sorted_row >= master_nobs_bound) {
+                        /* Map sorted position to data position:
+                         * - Key vars: already in sorted order, use sorted_row directly
+                         * - Non-key vars: in original order, use sort_perm[sorted_row] */
+                        size_t data_row = use_perm ? sort_perm[sorted_row] : (size_t)sorted_row;
+                        /* Bounds check: data_row must be valid index into master data */
+                        if (data_row >= master_nobs_bound) {
                             dst_var->data.dbl[i] = SV_missval;  /* Out of bounds - treat as missing */
                         } else {
-                            dst_var->data.dbl[i] = src_var->data.dbl[sorted_row];
+                            dst_var->data.dbl[i] = src_var->data.dbl[data_row];
                         }
                     } else if (using_key_data != NULL) {
                         int32_t using_row = output_specs[i].using_sorted_row;
@@ -1336,7 +1379,10 @@ static ST_retcode cmerge_execute(const char *args)
                 char **using_key_data = (is_key && g_using_cache.loaded && key_idx >= 0) ?
                                          g_using_cache.keys.data.vars[key_idx].data.str : NULL;
 
-                /* Use master_sorted_row to index into sorted master_data */
+                /* Same sort_perm indirection as double vars */
+                int use_perm = (!is_key && sort_perm != NULL);
+
+                /* Use master_sorted_row to index into master_data */
                 #define GATHER_STR_PF_DIST 16
                 for (size_t i = 0; i < output_nobs; i++) {
                     /* Prefetch output_specs and source string pointers ahead */
@@ -1344,15 +1390,21 @@ static ST_retcode cmerge_execute(const char *args)
                     if (i + GATHER_STR_PF_DIST < output_nobs) {
                         __builtin_prefetch(&output_specs[i + GATHER_STR_PF_DIST], 0, 0);
                         int32_t pf_row = output_specs[i + GATHER_STR_PF_DIST].master_sorted_row;
-                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound)
-                            __builtin_prefetch(&src_var->data.str[pf_row], 0, 0);
+                        if (pf_row >= 0 && (size_t)pf_row < master_nobs_bound) {
+                            size_t pf_data_row = use_perm ? sort_perm[pf_row] : (size_t)pf_row;
+                            __builtin_prefetch(&src_var->data.str[pf_data_row], 0, 0);
+                        }
                     }
                     #endif
                     int32_t sorted_row = output_specs[i].master_sorted_row;
-                    /* Bounds check: sorted_row must be valid index into master data */
-                    if (sorted_row >= 0 && (size_t)sorted_row < master_nobs_bound &&
-                        src_var->data.str[sorted_row]) {
-                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, src_var->data.str[sorted_row]);
+                    /* Guard sort_perm access: only when sorted_row >= 0 */
+                    size_t data_row = (sorted_row >= 0 && use_perm)
+                                      ? sort_perm[(size_t)sorted_row]
+                                      : (size_t)sorted_row;
+                    /* Bounds check: data_row must be valid index into master data */
+                    if (sorted_row >= 0 && data_row < master_nobs_bound &&
+                        src_var->data.str[data_row]) {
+                        dst_var->data.str[i] = cmerge_arena_strdup(var_arena, src_var->data.str[data_row]);
                     } else if (using_key_data != NULL) {
                         int32_t using_row = output_specs[i].using_sorted_row;
                         /* Bounds check for using data */

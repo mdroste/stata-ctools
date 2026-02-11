@@ -240,6 +240,9 @@ program define cencode, rclass
         tempfile __labelfile
         local labelfile_code "labelfile=`__labelfile'"
 
+        * Set string width metadata for flat buffer optimization
+        _ctools_strw `allvars'
+
         * Call the C plugin with ALL variables
         if `__do_timing' {
             timer off 91

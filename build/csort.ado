@@ -76,6 +76,18 @@ program define csort, rclass
     }
 
     * =========================================================================
+    * EARLY EXIT: check if data is already sorted by the requested variables
+    * =========================================================================
+
+    * Skip check if if/in specified (sortedby applies to full dataset only)
+    if `"`if'"' == "" & `"`in'"' == "" {
+        local __sortedby : sortedby
+        if "`__sortedby'" == "`varlist'" {
+            exit 0
+        }
+    }
+
+    * =========================================================================
     * END UPFRONT VALIDATION
     * =========================================================================
 
@@ -165,6 +177,11 @@ program define csort, rclass
         }
     }
 
+    * Set string width metadata for flat buffer optimization
+    * _ctools_strw sets local __ctools_strw (read automatically by C plugin)
+    _ctools_strw `allvars'
+    local strw_code "strw:`__ctools_strw'"
+
     * Build stream option string
     * stream(#) enables streaming mode with # variables loaded at a time (1-16)
     local stream_code ""
@@ -196,7 +213,7 @@ program define csort, rclass
     }
 
     * Call the C plugin with ALL variables (so it can sort the entire dataset)
-    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code'"
+    plugin call ctools_plugin `allvars' `if' `in', "csort `threads_code' `var_indices' `alg_code' `stream_code' `nostream_code' `strw_code'"
 
     * End plugin timer, start post-plugin timer
     if `__do_timing' {

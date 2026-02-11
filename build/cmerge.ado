@@ -377,13 +377,24 @@ program define cmerge, rclass
 
     if `__use_frames' {
         * Load using data into separate frame (master stays in default)
-        frame _cmerge_using: qui use `"`using'"', clear
+        * If keepusing specified, load only key + keepusing vars (much faster for wide datasets)
+        if "`keepusing'" != "" & !`merge_by_n' {
+            frame _cmerge_using: qui use `keyvars' `keepusing' using `"`using'"', clear
+        }
+        else {
+            frame _cmerge_using: qui use `"`using'"', clear
+        }
         frame change _cmerge_using
     }
     else {
         * Fallback: preserve/restore for Stata < 16
         preserve
-        qui use `"`using'"', clear
+        if "`keepusing'" != "" & !`merge_by_n' {
+            qui use `keyvars' `keepusing' using `"`using'"', clear
+        }
+        else {
+            qui use `"`using'"', clear
+        }
     }
 
     * Check key variables exist in using (skip for _n merge)
@@ -440,19 +451,9 @@ program define cmerge, rclass
     local keepusing_types ""
 
     if "`keepusing'" != "" {
+        * When selective use was done, vars are already validated by Stata's use
+        * Just build the name/type lists
         foreach var of local keepusing {
-            capture confirm variable `var'
-            if _rc {
-                di as error "cmerge: keepusing variable `var' not found in using dataset"
-                if `__use_frames' {
-                    frame change default
-                    frame drop _cmerge_using
-                }
-                else {
-                    restore
-                }
-                exit 111
-            }
             local using_keep_vars "`using_keep_vars' `var'"
             local keepusing_names "`keepusing_names' `var'"
             local ++keepusing_count
@@ -519,9 +520,6 @@ program define cmerge, rclass
             qui label save `using_label_list' using "`using_labels_file'", replace
         }
     }
-
-    * Keep ONLY the necessary variables
-    qui keep `using_keep_vars'
 
     local using_nobs = _N
 
@@ -755,6 +753,9 @@ program define cmerge, rclass
         timer on 92   /* Plugin Phase 1 */
     }
 
+    * Set string width metadata for flat buffer optimization
+    _ctools_strw `using_varlist'
+
     * Call plugin Phase 1 with reduced varlist (using_varlist already computed)
     capture noisily plugin call ctools_plugin `using_varlist', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
@@ -795,14 +796,13 @@ program define cmerge, rclass
         timer clear 96
         timer clear 97
         timer clear 98
-        timer clear 99
         timer on 97   /* create vars template */
     }
 
     * Build lists of new variables to create (excluding existing shared vars)
     * Use shared_var_flags (already computed) to determine which vars need creation
-    local new_var_names "_cmerge_orig_row"
-    local new_var_types "long"
+    local new_var_names ""
+    local new_var_types ""
     local placeholder_num = 1
     foreach vtype of local keepusing_types {
         local vname : word `placeholder_num' of `keepusing_names'
@@ -840,7 +840,6 @@ program define cmerge, rclass
     tempfile empty_vars_template
     if `n_new_vars' > 0 {
         clear
-        qui set obs 1
         local var_idx = 1
         foreach vtype of local new_var_types {
             local vname : word `var_idx' of `new_var_names'
@@ -852,7 +851,6 @@ program define cmerge, rclass
             }
             local ++var_idx
         }
-        qui drop in 1
         qui save `empty_vars_template', emptyok replace
     }
 
@@ -877,19 +875,6 @@ program define cmerge, rclass
     * Append empty template to add variable definitions (faster than st_addvar)
     if `n_new_vars' > 0 {
         qui append using `empty_vars_template'
-    }
-
-    if `__do_timing' {
-        timer off 97
-        timer on 99   /* store row index */
-    }
-
-    * Fill _cmerge_orig_row with row numbers
-    local orig_row_idx = c(k) - `n_new_vars' + 1
-    mata: st_store(., `orig_row_idx', (1::st_nobs()))
-
-    if `__do_timing' {
-        timer off 99
     }
 
     * Compute keepusing variable indices using Mata (O(1) lookup vs O(n*m) loops)
@@ -920,11 +905,8 @@ program define cmerge, rclass
     }
 
     * Build plugin command for execute
-    * IMPORTANT: Use current c(k) not original master_nvars, because we added
-    * _cmerge_orig_row and other new variables that need to be loaded
     local current_nvars = c(k)
     local plugin_args "execute `merge_code' `nkeys' `master_key_indices'"
-    local plugin_args "`plugin_args' orig_row_idx `orig_row_idx'"
     local plugin_args "`plugin_args' master_nobs `master_nobs'"
     local plugin_args "`plugin_args' master_nvars `current_nvars'"
     local plugin_args "`plugin_args' n_keepusing `keepusing_count'"
@@ -961,6 +943,10 @@ program define cmerge, rclass
         timer on 94   /* Plugin Phase 2 */
     }
 
+    * Set string width metadata for flat buffer optimization
+    unab __all_phase2_vars : _all
+    _ctools_strw `__all_phase2_vars'
+
     * Call plugin Phase 2 (current_varlist already computed)
     capture noisily plugin call ctools_plugin `current_varlist', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
@@ -973,7 +959,6 @@ program define cmerge, rclass
 
     if `plugin_rc' {
         di as error "cmerge: C plugin merge failed (error `plugin_rc')"
-        capture drop _cmerge_orig_row
         exit `plugin_rc'
     }
 
@@ -982,9 +967,6 @@ program define cmerge, rclass
     local merge_using = scalar(_cmerge_N_2)
     local merge_matched = scalar(_cmerge_N_3)
     local total_obs = scalar(_cmerge_N)
-
-    * Drop temporary row index variable
-    qui capture drop _cmerge_orig_row
 
     * Trim excess observations (drop in is 3x faster than keep in)
     if `total_obs' < _N {
@@ -1116,8 +1098,6 @@ program define cmerge, rclass
         local __time_restore = r(t96)
         quietly timer list 97
         local __time_addvar = r(t97)
-        quietly timer list 99
-        local __time_storerow = r(t99)
         quietly timer list 98
         local __time_setobs = r(t98)
 
@@ -1245,7 +1225,6 @@ program define cmerge, rclass
         timer clear 96
         timer clear 97
         timer clear 98
-        timer clear 99
     }
 
     * Return results

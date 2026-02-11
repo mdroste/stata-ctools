@@ -149,10 +149,11 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
         return -1;
     }
 
-    /* Find where options start - stop at any of: alg=, stream, threads */
+    /* Find where options start - stop at any of: alg=, stream, threads, strw: */
     opts_start = strstr(args, "alg=");
     const char *stream_start = strstr(args, "stream");
     const char *threads_start = strstr(args, "threads");
+    const char *strw_start = strstr(args, "strw:");
 
     /* Use the earliest option as the stopping point */
     if (stream_start != NULL && (opts_start == NULL || stream_start < opts_start)) {
@@ -160,6 +161,9 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
     }
     if (threads_start != NULL && (opts_start == NULL || threads_start < opts_start)) {
         opts_start = threads_start;
+    }
+    if (strw_start != NULL && (opts_start == NULL || strw_start < opts_start)) {
+        opts_start = strw_start;
     }
 
     p = args;
@@ -203,6 +207,31 @@ static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
     *sort_vars = vars;
     *nsort = count;
     return 0;
+}
+
+/*
+    Parse string widths from args.  Format: "strw:17,0,0,8,0,..."
+    Returns malloc'd array of nvars ints (0 = numeric), or NULL if not found.
+    Caller must free.
+*/
+static int *parse_string_widths(const char *args, size_t nvars)
+{
+    const char *p = strstr(args, "strw:");
+    if (!p) return NULL;
+    p += 5;  /* skip "strw:" */
+
+    int *widths = (int *)calloc(nvars, sizeof(int));
+    if (!widths) return NULL;
+
+    for (size_t j = 0; j < nvars && *p != '\0' && *p != ' '; j++) {
+        char *endptr;
+        long val = strtol(p, &endptr, 10);
+        widths[j] = (int)val;
+        p = endptr;
+        if (*p == ',') p++;
+    }
+
+    return widths;
 }
 
 /*
@@ -271,10 +300,10 @@ ST_retcode csort_main(const char *args)
     /* Check for streaming mode option (returns -1 if nostream, 0 if auto, 1-16 for batch size) */
     int stream_batch_size = parse_stream_option(args);
 
-    /* Auto-detect streaming mode: enable when K > 16 and N > 1M */
+    /* Auto-detect streaming mode: enable when K > 30 and N > 10M */
     if (stream_batch_size == 0) {
         size_t nobs = obs2 - obs1 + 1;
-        if (nvars > 16 && nobs > 1000000) {
+        if (nvars > 30 && nobs > 10000000) {
             int nthreads = ctools_get_max_threads();
             stream_batch_size = nthreads > 16 ? 16 : nthreads;
             if (stream_batch_size < 1) stream_batch_size = 1;
@@ -302,10 +331,15 @@ ST_retcode csort_main(const char *args)
             all_var_indices[j] = (int)(j + 1);
         }
 
+        /* Parse string widths for streaming mode */
+        int *strwidths = parse_string_widths(args, nvars);
+
         /* Call streaming sort with batch size */
         rc = csort_stream_sort(sort_vars, nsort, all_var_indices, nvars,
-                                algorithm, 0, stream_batch_size, &stream_timings);
+                                algorithm, 0, stream_batch_size, strwidths,
+                                &stream_timings);
 
+        free(strwidths);
         free(all_var_indices);
         free(sort_vars);
 
@@ -352,6 +386,8 @@ ST_retcode csort_main(const char *args)
 #endif
     timer.load_time = ctools_timer_seconds();
 
+    /* ctools_data_load auto-detects string widths from the __ctools_strw
+       Stata local (set by _ctools_strw.ado) for flat buffer optimization. */
     rc = ctools_data_load(&filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
 
     timer.load_time = ctools_timer_seconds() - timer.load_time;

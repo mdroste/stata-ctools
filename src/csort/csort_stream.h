@@ -109,6 +109,7 @@ typedef struct {
     @param algorithm         [in] Sort algorithm to use
     @param block_size        [in] Block size for streaming (0 = use default)
     @param vars_per_batch    [in] Number of variables to process at a time (1-16)
+    @param str_widths        [in] Array of string widths per variable (0=numeric), or NULL
     @param timings           [out] Optional timing breakdown (can be NULL)
 
     @return STATA_OK on success, error code otherwise
@@ -121,6 +122,7 @@ stata_retcode csort_stream_sort(
     sort_algorithm_t algorithm,
     size_t block_size,
     int vars_per_batch,
+    const int *str_widths,
     csort_stream_timings *timings
 );
 
@@ -172,6 +174,7 @@ int csort_stream_recommended(size_t nobs, size_t nvars, size_t nkeys);
     @param obs_map           [in] Maps filtered index to 1-based Stata obs
     @param block_size        [in] Unused (kept for API compatibility)
     @param vars_per_batch    [in] Number of variables to process at a time (1-16)
+    @param nonkey_str_widths [in] String widths for nonkey vars (0=numeric), or NULL
     @param timings           [out] Optional timing breakdown (can be NULL)
 
     @return STATA_OK on success, error code otherwise
@@ -184,6 +187,7 @@ stata_retcode csort_stream_apply_permutation(
     const perm_idx_t *obs_map,
     size_t block_size,
     int vars_per_batch,
+    const int *nonkey_str_widths,
     csort_stream_timings *timings
 );
 
