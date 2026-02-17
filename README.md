@@ -35,6 +35,7 @@
 | `binscatter` | `cbinscatter` | Binned scatter plots | **10-30x** |
 | `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
 | `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
+| `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | **20-30x** |
 
 Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.MD](FEATURES.MD) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
 

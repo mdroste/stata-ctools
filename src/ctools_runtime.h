@@ -188,6 +188,7 @@ typedef enum {
     CTOOLS_CMD_CBSAMPLE,
     CTOOLS_CMD_CRANGESTAT,
     CTOOLS_CMD_CPSMATCH,
+    CTOOLS_CMD_CPPLMHDFE,
     CTOOLS_CMD_OTHER
 } ctools_command_t;
 
@@ -236,6 +237,9 @@ void creghdfe_cleanup_state(void);
 
 /* civreghdfe: Clears the IV-HDFE state - usually already cleaned */
 void civreghdfe_cleanup_state(void);
+
+/* cpplmhdfe: Clears the PPML state - usually already cleaned */
+void cpplmhdfe_cleanup_state(void);
 
 /* cexport: Clears any export context - usually stack-allocated */
 void cexport_cleanup_state(void);

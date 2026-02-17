@@ -182,7 +182,7 @@ static void match_workspace_free(match_workspace *ws)
 static int match_workspace_ensure_candidates(match_workspace *ws, size_t needed)
 {
     if (needed <= ws->candidates_cap) return 0;
-    size_t new_cap = ws->candidates_cap;
+    size_t new_cap = ws->candidates_cap ? ws->candidates_cap : MATCH_WORKSPACE_INITIAL_CAP;
     while (new_cap < needed) new_cap *= 2;
     idx_dist_pair *p = realloc(ws->candidates, new_cap * sizeof(idx_dist_pair));
     if (!p) return -1;
@@ -194,7 +194,7 @@ static int match_workspace_ensure_candidates(match_workspace *ws, size_t needed)
 static int match_workspace_ensure_match(match_workspace *ws, size_t needed)
 {
     if (needed <= ws->match_cap) return 0;
-    size_t new_cap = ws->match_cap;
+    size_t new_cap = ws->match_cap ? ws->match_cap : MATCH_WORKSPACE_INITIAL_CAP;
     while (new_cap < needed) new_cap *= 2;
     size_t *p1 = realloc(ws->match_ids, new_cap * sizeof(size_t));
     double *p2 = realloc(ws->match_weights, new_cap * sizeof(double));
@@ -1496,10 +1496,27 @@ ST_retcode cpsmatch_main(const char *args)
         match_workspace *thread_ws = NULL;
         if (opts.method != MATCH_RADIUS) {
             thread_ws = malloc(n_threads * sizeof(match_workspace));
-            if (thread_ws) {
-                for (int i = 0; i < n_threads; i++) {
-                    match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
+            if (!thread_ws) {
+                if (thread_weights) {
+                    for (int i = 0; i < n_threads; i++) free(thread_weights[i]);
+                    free(thread_weights);
                 }
+                free(sorted_controls);
+                ctools_filtered_data_free(&filtered);
+                free(treated_idx);
+                free(control_idx);
+                free(treated_pscore);
+                free(control_pscore);
+                free(control_available);
+                free(out_weight);
+                free(out_match);
+                free(out_support);
+                free(treated_order);
+                SF_error("cpsmatch: memory allocation failed\n");
+                return 920;
+            }
+            for (int i = 0; i < n_threads; i++) {
+                match_workspace_init(&thread_ws[i], MATCH_WORKSPACE_INITIAL_CAP);
             }
         }
 

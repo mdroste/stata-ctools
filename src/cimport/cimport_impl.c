@@ -1012,13 +1012,22 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
             }
 
             if (chunk->num_rows >= chunk->capacity) {
-                chunk->capacity *= 2;
-                CImportParsedRow **new_rows = realloc(chunk->rows, sizeof(CImportParsedRow *) * chunk->capacity);
+                if (chunk->capacity > SIZE_MAX / 2) {
+                    cimport_free_context(ctx);
+                    return NULL;
+                }
+                size_t new_capacity = chunk->capacity * 2;
+                if (new_capacity > SIZE_MAX / sizeof(CImportParsedRow *)) {
+                    cimport_free_context(ctx);
+                    return NULL;
+                }
+                CImportParsedRow **new_rows = realloc(chunk->rows, sizeof(CImportParsedRow *) * new_capacity);
                 if (!new_rows) {
                     cimport_free_context(ctx);
                     return NULL;
                 }
                 chunk->rows = new_rows;
+                chunk->capacity = new_capacity;
             }
 
             size_t row_size = sizeof(CImportParsedRow) + sizeof(CImportFieldRef) * num_fields;
@@ -1683,6 +1692,12 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
     /* else: used_cache — force lists already set during scan, reuse them */
 
     if (!ctx->cache_ready) {
+        /* Switch from MADV_SEQUENTIAL to MADV_NORMAL before multi-threaded
+         * cache build + SPI store.  Multiple threads will read different
+         * columns from overlapping pages; SEQUENTIAL would discard pages
+         * behind one thread that another thread still needs. */
+        cimport_madvise_normal(ctx);
+
         cimport_build_column_cache(ctx);
         if (!ctx->cache_ready) {
             cimport_display_error("Failed to build column cache\n");

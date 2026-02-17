@@ -25,8 +25,8 @@ local all_failure_count = 0
 capture mkdir "temp"
 
 * Define list of validation scripts and their names
-local scripts "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch crangestat cwinsor"
-local script_names "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch crangestat cwinsor"
+local scripts "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch crangestat cwinsor cpplmhdfe"
+local script_names "csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch crangestat cwinsor cpplmhdfe"
 local num_scripts : word count `scripts'
 
 * Count total validations (number of scripts)

@@ -278,6 +278,11 @@ void ctools_cleanup_stale_state(ctools_command_t current_cmd)
         civreghdfe_cleanup_state();
     }
 
+    /* cpplmhdfe cleans itself up, but call for safety */
+    if (current_cmd != CTOOLS_CMD_CPPLMHDFE) {
+        cpplmhdfe_cleanup_state();
+    }
+
     /* cexport usually has no persistent state, but call for completeness */
     if (current_cmd != CTOOLS_CMD_CEXPORT) {
         cexport_cleanup_state();
@@ -291,6 +296,7 @@ void ctools_cleanup_all(void)
     cimport_cleanup_cache();
     creghdfe_cleanup_state();
     civreghdfe_cleanup_state();
+    cpplmhdfe_cleanup_state();
     cexport_cleanup_state();
 
     /* Reset command tracking */

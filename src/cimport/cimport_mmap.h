@@ -36,4 +36,17 @@ int cimport_mmap_file(struct CImportContext *ctx, const char *filename);
  */
 void cimport_munmap_file(struct CImportContext *ctx);
 
+/*
+ * Switch madvise hint for multi-threaded load phase.
+ *
+ * The initial mmap uses MADV_SEQUENTIAL for the single-pass parse.
+ * Before multi-threaded cache build / SPI store (where multiple threads
+ * read different columns from the same pages), switch to MADV_NORMAL
+ * so the kernel doesn't aggressively discard pages behind one thread's
+ * read position that another thread still needs.
+ *
+ * No-op on Windows.
+ */
+void cimport_madvise_normal(struct CImportContext *ctx);
+
 #endif /* CIMPORT_MMAP_H */

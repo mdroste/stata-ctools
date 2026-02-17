@@ -96,6 +96,11 @@ void cimport_munmap_file(CImportContext *ctx)
     }
 }
 
+void cimport_madvise_normal(CImportContext *ctx)
+{
+    (void)ctx; /* No-op on Windows */
+}
+
 #else /* Unix/POSIX */
 
 #include <sys/mman.h>
@@ -146,12 +151,11 @@ int cimport_mmap_file(CImportContext *ctx, const char *filename)
      * (file_data may be modified for BOM skip or encoding conversion) */
     ctx->mmap_data = ctx->file_data;
 
-    /* Advise kernel about sequential access pattern */
-#ifdef __linux__
-    madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL | MADV_WILLNEED);
-#elif defined(__APPLE__)
+    /* Advise kernel: sequential read-ahead for the initial parse phase,
+     * and pre-fault pages to avoid page faults during parsing.
+     * These are separate calls because the advice values are not bitmasks. */
     madvise(ctx->file_data, ctx->file_size, MADV_SEQUENTIAL);
-#endif
+    madvise(ctx->file_data, ctx->file_size, MADV_WILLNEED);
 
     return 0;
 }
@@ -164,6 +168,16 @@ void cimport_munmap_file(CImportContext *ctx)
         munmap(ctx->mmap_data, ctx->mmap_size);
         ctx->mmap_data = NULL;
         ctx->file_data = NULL;
+    }
+}
+
+void cimport_madvise_normal(CImportContext *ctx)
+{
+    /* Switch from MADV_SEQUENTIAL to MADV_NORMAL before multi-threaded access.
+     * Use mmap_data (page-aligned original pointer) since file_data may have
+     * been adjusted for BOM skip and would fail madvise alignment checks. */
+    if (ctx->mmap_data) {
+        madvise(ctx->mmap_data, ctx->mmap_size, MADV_NORMAL);
     }
 }
 

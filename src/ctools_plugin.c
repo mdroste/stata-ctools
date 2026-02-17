@@ -153,6 +153,7 @@ static int parse_threads_arg(char *cmd_args)
 #include "cbsample_impl.h"
 #include "crangestat_impl.h"
 #include "cpsmatch_impl.h"
+#include "cpplmhdfe_impl.h"
 
 /*
     Map command name to command ID for cleanup system.
@@ -178,6 +179,7 @@ static ctools_command_t get_command_type(const char *cmd_name)
     if (strcmp(cmd_name, "cbsample") == 0) return CTOOLS_CMD_CBSAMPLE;
     if (strcmp(cmd_name, "crangestat") == 0) return CTOOLS_CMD_CRANGESTAT;
     if (strcmp(cmd_name, "cpsmatch") == 0) return CTOOLS_CMD_CPSMATCH;
+    if (strcmp(cmd_name, "cpplmhdfe") == 0) return CTOOLS_CMD_CPPLMHDFE;
     return CTOOLS_CMD_OTHER;
 }
 
@@ -309,6 +311,9 @@ STDLL stata_call(int argc, char *argv[])
     }
     else if (strcmp(cmd_name, "cpsmatch") == 0) {
         rc = cpsmatch_main(cmd_args);
+    }
+    else if (strcmp(cmd_name, "cpplmhdfe") == 0) {
+        rc = cpplmhdfe_main(cmd_args);
     }
     else {
         char msg[256];

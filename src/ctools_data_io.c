@@ -153,9 +153,10 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
                     }
 
                     /* Read directly from Stata into flat buffer — single copy */
+                    ST_IIIS sdata_fn = (_stata_)->sdata;
                     for (i = 0; i < nobs; i++) {
                         str_ptrs[i] = flat_buf + i * stride;
-                        SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), str_ptrs[i]);
+                        sdata_fn((ST_int)var_idx, (ST_int)(i + obs1), str_ptrs[i]);
                     }
 
                     /* Wrap flat buffer as a ctools_string_arena for compatible cleanup.
@@ -212,8 +213,9 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         }
 
         /* Load strings */
+        ST_IIIS sdata_fn2 = (_stata_)->sdata;
         for (i = 0; i < nobs; i++) {
-            SF_sdata((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
+            sdata_fn2((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
                 /* Cleanup on allocation failure:
@@ -255,8 +257,10 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 
         double * restrict dbl_ptr = var->data.dbl;
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIIDp vdata_fn = (_stata_)->vdata;
         for (i = 0; i < nobs; i++) {
-            SF_vdata((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
+            vdata_fn((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
         }
     }
 
@@ -443,8 +447,10 @@ static void store_single_variable(stata_variable *var, int var_idx,
     if (var->type == STATA_TYPE_DOUBLE) {
         const double * restrict dbl_data = var->data.dbl;
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIID store_fn = (_stata_)->store;
         for (i = 0; i < nobs; i++) {
-            SF_vstore(stata_var_idx, (ST_int)(i + obs1), dbl_data[i]);
+            store_fn(stata_var_idx, (ST_int)(i + obs1), dbl_data[i]);
         }
 
     } else {
@@ -452,27 +458,17 @@ static void store_single_variable(stata_variable *var, int var_idx,
         char * const * restrict str_data = var->data.str;
         size_t str_width = var->str_maxlen;
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIIS sstore_fn = (_stata_)->sstore;
+
         /* Use flat buffer when we have actual variable width (not default 2045)
            and the buffer fits in 256 MB */
         if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
             size_t stride = str_width + 1;
             ctools_string_arena *arena = (ctools_string_arena *)var->_arena;
 
-            /* Fast path: sequential flat buffer (after flat-buffer permutation).
-               Detect by checking if first pointer matches arena base — if so,
-               the data is already contiguous and we can SF_sstore directly
-               without any repacking. */
-            if (arena != NULL && !arena->has_fallback &&
-                nobs > 0 && str_data[0] == arena->base) {
-                char *base = arena->base;
-                for (i = 0; i < nobs; i++) {
-                    SF_sstore(stata_var_idx, (ST_int)(i + obs1),
-                              base + i * stride);
-                }
-                return;
-            }
-
-            /* Repack path: strings are scattered, copy into new flat buffer */
+            /* Repack path: strings may be scattered after permutation,
+               copy into new flat buffer for sequential SF_sstore */
             size_t flat_size = nobs * stride;
             char *flat_buf = NULL;
             if (flat_size / stride == nobs &&  /* overflow check */
@@ -501,7 +497,7 @@ static void store_single_variable(stata_variable *var, int var_idx,
 
                 /* Store: sequential scan through flat buffer */
                 for (i = 0; i < nobs; i++) {
-                    SF_sstore(stata_var_idx, (ST_int)(i + obs1),
+                    sstore_fn(stata_var_idx, (ST_int)(i + obs1),
                               flat_buf + i * stride);
                 }
 
@@ -512,7 +508,7 @@ static void store_single_variable(stata_variable *var, int var_idx,
 
         /* Fallback: strL, width unknown, buffer too large, or alloc failed */
         for (i = 0; i < nobs; i++) {
-            SF_sstore(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
+            sstore_fn(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
         }
     }
 }
@@ -578,34 +574,19 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
 
         if (var->type == STATA_TYPE_DOUBLE) {
             const double * restrict dbl_data = var->data.dbl;
+            /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+            ST_IIID store_fn = (_stata_)->store;
             #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
             for (size_t i = 0; i < nobs; i++) {
-                SF_vstore(stata_var, (ST_int)(i + obs1), dbl_data[i]);
+                store_fn(stata_var, (ST_int)(i + obs1), dbl_data[i]);
             }
         } else {
-            /* String store: row-parallel when possible */
+            /* String store: row-parallel from pointer array */
             char * const * restrict str_data = var->data.str;
-            size_t str_width = var->str_maxlen;
-            ctools_string_arena *arena = (ctools_string_arena *)var->_arena;
-
-            /* Fast path: sequential flat buffer — row-parallel SF_sstore
-               without any repacking (data is already contiguous) */
-            if (arena != NULL && !arena->has_fallback &&
-                str_width > 0 && str_width < STATA_STR_MAXLEN &&
-                nobs > 0 && str_data[0] == arena->base) {
-                size_t stride = str_width + 1;
-                char *base = arena->base;
-                #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
-                for (size_t i = 0; i < nobs; i++) {
-                    SF_sstore(stata_var, (ST_int)(i + obs1),
-                              base + i * stride);
-                }
-            } else {
-                /* Non-sequential or non-flat: row-parallel from pointer array */
-                #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
-                for (size_t i = 0; i < nobs; i++) {
-                    SF_sstore(stata_var, (ST_int)(i + obs1), str_data[i]);
-                }
+            ST_IIIS sstore_fn = (_stata_)->sstore;
+            #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
+            for (size_t i = 0; i < nobs; i++) {
+                sstore_fn(stata_var, (ST_int)(i + obs1), str_data[i]);
             }
         }
 
@@ -699,6 +680,9 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         }
         /* Arena failure is ok - we fall back to strdup */
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIIS sdata_fn = (_stata_)->sdata;
+
         /* GATHER: Read from source positions */
         for (i = 0; i < output_nobs; i++) {
             if (source_rows[i] >= 0) {
@@ -737,7 +721,7 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
                     ctools_aligned_free(buf);
                     return STATA_ERR_INVALID_INPUT;
                 }
-                SF_sdata(stata_var, (ST_int)src_obs, strbuf);
+                sdata_fn(stata_var, (ST_int)src_obs, strbuf);
                 buf[i] = ctools_string_arena_strdup(arena, strbuf);
             } else {
                 buf[i] = ctools_string_arena_strdup(arena, "");  /* Missing -> empty string */
@@ -756,8 +740,9 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         }
 
         /* SCATTER: Write to sequential output positions */
+        ST_IIIS sstore_fn = (_stata_)->sstore;
         for (i = 0; i < output_nobs; i++) {
-            SF_sstore(stata_var, (ST_int)(i + obs1), buf[i]);
+            sstore_fn(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
         /* Free fallback strings (those not owned by arena), then free arena */
@@ -773,6 +758,9 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
         /* Numeric variable: allocate aligned buffer, gather, scatter (overflow-safe) */
         double *buf = (double *)ctools_safe_cacheline_alloc2(output_nobs, sizeof(double));
         if (!buf) return STATA_ERR_MEMORY;
+
+        /* Cache SPI function pointers — avoid reloading _stata_ per iteration */
+        ST_IIIDp vdata_fn = (_stata_)->vdata;
 
         /* GATHER: Read from source positions */
         for (i = 0; i < output_nobs; i++) {
@@ -798,15 +786,16 @@ stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
                     ctools_aligned_free(buf);
                     return STATA_ERR_INVALID_INPUT;
                 }
-                SF_vdata(stata_var, (ST_int)src_obs, &buf[i]);
+                vdata_fn(stata_var, (ST_int)src_obs, &buf[i]);
             } else {
                 buf[i] = SV_missval;  /* Missing value */
             }
         }
 
         /* SCATTER: Write to sequential output positions */
+        ST_IIID store_fn = (_stata_)->store;
         for (i = 0; i < output_nobs; i++) {
-            SF_vstore(stata_var, (ST_int)(i + obs1), buf[i]);
+            store_fn(stata_var, (ST_int)(i + obs1), buf[i]);
         }
 
         ctools_aligned_free(buf);
@@ -1005,11 +994,12 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                 char *flat_buf = (char *)calloc(n_filtered, stride);
                 if (flat_buf != NULL) {
                     volatile int load_error = 0;
+                    ST_IIIS sdata_fn = (_stata_)->sdata;
                     #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
                     for (size_t i = 0; i < n_filtered; i++) {
                         if (load_error) continue;
                         char *slot = flat_buf + i * stride;
-                        if (SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], slot) != 0) {
+                        if (sdata_fn((ST_int)var_idx, (ST_int)obs_map[i], slot) != 0) {
                             load_error = 1;
                         }
                         var->data.str[i] = slot;
@@ -1074,11 +1064,12 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                         : slab_ptr + slab_size;
                 }
 
+                ST_IIIS sdata_fn2 = (_stata_)->sdata;
                 #pragma omp for schedule(static)
                 for (size_t i = 0; i < n_filtered; i++) {
                     if (load_error) continue;
                     char strbuf[STATA_STR_MAXLEN + 1];
-                    SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+                    sdata_fn2((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
                     size_t len = strlen(strbuf) + 1;
 
                     char *s;
@@ -1138,9 +1129,11 @@ static int load_row_parallel(stata_variable *var, int var_idx,
 
         double * restrict dbl_ptr = var->data.dbl;
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIIDp vdata_fn = (_stata_)->vdata;
         #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
         for (size_t i = 0; i < n_filtered; i++) {
-            SF_vdata((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+            vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
         }
     }
 
@@ -1262,9 +1255,10 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
                         return -1;
                     }
 
+                    ST_IIIS sdata_fn = (_stata_)->sdata;
                     for (i = 0; i < n_filtered; i++) {
                         str_ptrs[i] = flat_buf + i * stride;
-                        SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], str_ptrs[i]);
+                        sdata_fn((ST_int)var_idx, (ST_int)obs_map[i], str_ptrs[i]);
                     }
 
                     ctools_string_arena *arena = (ctools_string_arena *)malloc(sizeof(ctools_string_arena));
@@ -1316,8 +1310,9 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
         }
 
         /* Load strings using obs_map */
+        ST_IIIS sdata_fn3 = (_stata_)->sdata;
         for (i = 0; i < n_filtered; i++) {
-            SF_sdata((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+            sdata_fn3((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
                 /* Cleanup on failure */
@@ -1355,9 +1350,11 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
 
         double * restrict dbl_ptr = var->data.dbl;
 
+        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
+        ST_IIIDp vdata_fn = (_stata_)->vdata;
         /* Load using obs_map - obs_map contains 1-based Stata obs numbers */
         for (i = 0; i < n_filtered; i++) {
-            SF_vdata((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+            vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
         }
     }
 
@@ -1608,6 +1605,7 @@ stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
 
     ST_int stata_var = (ST_int)var_idx;
     ST_int nobs_max = SF_nobs();
+    ST_IIID store_fn = (_stata_)->store;
 
     /* Write values using obs_map for indexing */
     for (size_t i = 0; i < n_filtered; i++) {
@@ -1621,7 +1619,7 @@ stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
             SF_error(buf);
             return STATA_ERR_INVALID_INPUT;
         }
-        SF_vstore(stata_var, (ST_int)obs, values[i]);
+        store_fn(stata_var, (ST_int)obs, values[i]);
     }
 
     return STATA_OK;
@@ -1640,10 +1638,11 @@ stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
     }
 
     ST_int stata_var = (ST_int)var_idx;
+    ST_IIID store_fn = (_stata_)->store;
 
     #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
     for (size_t i = 0; i < n_filtered; i++) {
-        SF_vstore(stata_var, (ST_int)obs_map[i], values[i]);
+        store_fn(stata_var, (ST_int)obs_map[i], values[i]);
     }
 
     return STATA_OK;
@@ -1661,6 +1660,7 @@ stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
 
     ST_int stata_var = (ST_int)var_idx;
     ST_int nobs_max = SF_nobs();
+    ST_IIIS sstore_fn = (_stata_)->sstore;
 
     /* Write strings using obs_map for indexing */
     for (size_t i = 0; i < n_filtered; i++) {
@@ -1674,7 +1674,7 @@ stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
             SF_error(buf);
             return STATA_ERR_INVALID_INPUT;
         }
-        SF_sstore(stata_var, (ST_int)obs, strings[i] ? strings[i] : "");
+        sstore_fn(stata_var, (ST_int)obs, strings[i] ? strings[i] : "");
     }
 
     return STATA_OK;

@@ -2486,6 +2486,183 @@ program define benchmark_reghdfe_opts
 end
 
 /*******************************************************************************
+ * benchmark_ppmlhdfe - Compare cpplmhdfe vs ppmlhdfe
+ *
+ * Runs ppmlhdfe and cpplmhdfe with the same options and compares e() results.
+ * Compares: N, N_clust (exact), ll, r2_p (sigfigs), e(b), e(V) (sigfigs).
+ * Handles _cons column: ppmlhdfe may include _cons in e(b) while cpplmhdfe
+ * absorbs it; comparison uses cpplmhdfe's dimension.
+ *
+ * Syntax: benchmark_ppmlhdfe depvar indepvars [weight], absorb(varlist)
+ *         [vce(string) exposure(varname) offset(varname) testname(string) minsf(real)]
+ ******************************************************************************/
+capture program drop benchmark_ppmlhdfe
+program define benchmark_ppmlhdfe
+    syntax varlist(min=2 fv) [aw fw pw] [if] [in], ///
+        Absorb(varlist) [vce(string) EXPosure(varname) OFFset(varname) ///
+        testname(string) minsf(real 5)]
+
+    gettoken depvar indepvars : varlist
+
+    if "`testname'" == "" local testname "ppmlhdfe `depvar' `indepvars', absorb(`absorb')"
+
+    * Build weight string
+    local wtexp ""
+    if "`weight'" != "" local wtexp "[`weight'`exp']"
+
+    * Build options
+    local vceopt ""
+    if "`vce'" != "" local vceopt "vce(`vce')"
+
+    local expopt ""
+    if "`exposure'" != "" local expopt "exposure(`exposure')"
+
+    local offopt ""
+    if "`offset'" != "" local offopt "offset(`offset')"
+
+    preserve
+
+    * Run ppmlhdfe
+    capture quietly ppmlhdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `expopt' `offopt'
+    local ppml_rc = _rc
+
+    if `ppml_rc' != 0 {
+        restore
+        test_fail "`testname'" "ppmlhdfe returned error `ppml_rc'"
+        exit
+    }
+
+    matrix ppml_b = e(b)
+    matrix ppml_V = e(V)
+    local ppml_N = e(N)
+    local ppml_ll = e(ll)
+    local ppml_r2_p = e(r2_p)
+    local ppml_N_clust = e(N_clust)
+
+    * Run cpplmhdfe
+    capture quietly cpplmhdfe `depvar' `indepvars' `wtexp' `if' `in', absorb(`absorb') `vceopt' `expopt' `offopt'
+    local cppml_rc = _rc
+
+    if `cppml_rc' != 0 {
+        restore
+        test_fail "`testname'" "cpplmhdfe returned error `cppml_rc'"
+        exit
+    }
+
+    matrix cppml_b = e(b)
+    matrix cppml_V = e(V)
+    local cppml_N = e(N)
+    local cppml_ll = e(ll)
+    local cppml_r2_p = e(r2_p)
+    local cppml_N_clust = e(N_clust)
+
+    restore
+
+    * Track differences
+    local all_diffs ""
+    local has_failure = 0
+
+    * Compare N (exact)
+    if `ppml_N' != `cppml_N' {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(N):`ppml_N'!=`cppml_N'"
+    }
+
+    * Compare N_clust (exact, if both available)
+    if !missing(`ppml_N_clust') & !missing(`cppml_N_clust') {
+        if `ppml_N_clust' != `cppml_N_clust' {
+            local has_failure = 1
+            local all_diffs "`all_diffs' e(N_clust):`ppml_N_clust'!=`cppml_N_clust'"
+        }
+    }
+
+    * Compare continuous scalars (ll, r2_p)
+    foreach scalar in ll r2_p {
+        local val1 = `ppml_`scalar''
+        local val2 = `cppml_`scalar''
+        if !missing(`val1') & !missing(`val2') & abs(`val1') > 1e-12 {
+            sigfigs `val1' `val2'
+            local sf = r(sigfigs)
+            if `sf' < `minsf' {
+                local has_failure = 1
+                local sf_fmt : display %4.1f `sf'
+                local all_diffs "`all_diffs' e(`scalar'):sigfigs=`sf_fmt'"
+            }
+        }
+    }
+
+    * Compare coefficients e(b)
+    * cpplmhdfe may exclude _cons; use min dimension
+    local cppml_bcols = colsof(cppml_b)
+    local ppml_bcols = colsof(ppml_b)
+    local ncmp = min(`cppml_bcols', `ppml_bcols')
+
+    local min_sf_b = 15
+    local min_sf_b_idx = 0
+    forvalues j = 1/`ncmp' {
+        local v1 = ppml_b[1, `j']
+        local v2 = cppml_b[1, `j']
+        if abs(`v1') > 1e-12 | abs(`v2') > 1e-12 {
+            sigfigs `v1' `v2'
+            local sf = r(sigfigs)
+            if `sf' < `min_sf_b' {
+                local min_sf_b = `sf'
+                local min_sf_b_idx = `j'
+            }
+        }
+    }
+
+    if `min_sf_b' < `minsf' {
+        local has_failure = 1
+        local sf_fmt : display %4.1f `min_sf_b'
+        local all_diffs "`all_diffs' e(b)[`min_sf_b_idx']:sigfigs=`sf_fmt'"
+    }
+
+    * Compare VCE e(V) - use cppml dimension
+    local Vdim = `cppml_bcols'
+    local ppml_Vrows = rowsof(ppml_V)
+
+    if `Vdim' <= `ppml_Vrows' {
+        local min_sf_V = 15
+        local min_sf_V_i = 0
+        local min_sf_V_j = 0
+        forvalues i = 1/`Vdim' {
+            forvalues j = 1/`Vdim' {
+                local v1 = ppml_V[`i', `j']
+                local v2 = cppml_V[`i', `j']
+                if abs(`v1') > 1e-12 | abs(`v2') > 1e-12 {
+                    sigfigs `v1' `v2'
+                    local sf = r(sigfigs)
+                    if `sf' < `min_sf_V' {
+                        local min_sf_V = `sf'
+                        local min_sf_V_i = `i'
+                        local min_sf_V_j = `j'
+                    }
+                }
+            }
+        }
+
+        if `min_sf_V' < `minsf' {
+            local has_failure = 1
+            local sf_fmt : display %4.1f `min_sf_V'
+            local all_diffs "`all_diffs' e(V)[`min_sf_V_i',`min_sf_V_j']:sigfigs=`sf_fmt'"
+        }
+    }
+    else {
+        local has_failure = 1
+        local all_diffs "`all_diffs' e(V):dim_mismatch(`ppml_Vrows'<`cppml_bcols')"
+    }
+
+    * Report
+    if `has_failure' == 0 {
+        test_pass "`testname'"
+    }
+    else {
+        test_fail "`testname'" "`=trim("`all_diffs'")'"
+    }
+end
+
+/*******************************************************************************
  * test_error_match - Compare error codes between Stata native and ctools commands
  *
  * This helper runs both commands (expected to fail) and verifies they return
