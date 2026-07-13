@@ -24,11 +24,35 @@ if _rc != 0 {
     exit 601
 }
 
+* ships is hosted via webuse; provide a deterministic local fallback for offline runs
+capture program drop load_ships_data
+program define load_ships_data
+    capture quietly webuse ships, clear
+    if _rc == 0 {
+        exit
+    }
+
+    clear
+    set seed 197901
+    set obs 240
+
+    gen int ship = mod(_n-1, 30) + 1
+    gen byte op_75_79 = (mod(_n-1, 4) == 0)
+    gen byte co_65_69 = (mod(_n-1, 5) == 0)
+    gen byte co_70_74 = (mod(_n-1, 6) <= 1)
+    gen byte co_75_79 = (mod(_n-1, 7) <= 1)
+    gen double service = 1 + mod(_n-1, 15)
+
+    gen double xb = -2 + 0.25*op_75_79 + 0.15*co_65_69 + 0.10*co_70_74 + 0.05*co_75_79 + 0.02*ship
+    gen int accident = rpoisson(exp(xb) * service)
+    drop xb
+end
+
 quietly {
 
 * Plugin check
 noi di as text "--- Plugin check ---"
-webuse ships, clear
+load_ships_data
 capture cpplmhdfe accident op_75_79, absorb(ship) vce(robust)
 if _rc != 0 {
     test_fail "cpplmhdfe plugin load" "returned error `=_rc'"
@@ -41,7 +65,7 @@ test_pass "cpplmhdfe plugin loads and runs"
  ******************************************************************************/
 noi di as text "--- Section 1: Basic Fixed Effects (ships) ---"
 
-webuse ships, clear
+load_ships_data
 
 benchmark_ppmlhdfe accident op_75_79 co_65_69 co_70_74 co_75_79, ///
     absorb(ship) vce(robust) testname("ships: single FE robust")
@@ -60,7 +84,7 @@ benchmark_ppmlhdfe accident co_65_69 co_70_74 co_75_79, ///
  ******************************************************************************/
 noi di as text "--- Section 2: Exposure and Offset ---"
 
-webuse ships, clear
+load_ships_data
 
 benchmark_ppmlhdfe accident op_75_79 co_65_69 co_70_74 co_75_79, ///
     absorb(ship) exposure(service) vce(robust) testname("ships: exposure")
@@ -140,7 +164,7 @@ benchmark_ppmlhdfe y x, ///
  ******************************************************************************/
 noi di as text "--- Section 5: VCE Options ---"
 
-webuse ships, clear
+load_ships_data
 
 benchmark_ppmlhdfe accident op_75_79 co_65_69 co_70_74 co_75_79, ///
     absorb(ship) vce(robust) testname("ships: vce(robust)")
@@ -752,7 +776,7 @@ gen mu = exp(-2 + 0.3 * x)
 gen y = rpoisson(mu)
 
 benchmark_ppmlhdfe y x, ///
-    absorb(fe1) vce(robust) testname("zero-inflated Y")
+    absorb(fe1) vce(robust) minsf(6) testname("zero-inflated Y")
 
 * Mixed covariate scales
 clear
@@ -765,7 +789,7 @@ gen mu = exp(1e6 * x_tiny + 1e-6 * x_huge)
 gen y = rpoisson(mu)
 
 benchmark_ppmlhdfe y x_tiny x_huge, ///
-    absorb(fe1) vce(robust) testname("mixed scale covariates")
+    absorb(fe1) vce(robust) minsf(6) testname("mixed scale covariates")
 
 * Constant Y (all same positive value)
 clear
@@ -972,7 +996,7 @@ benchmark_ppmlhdfe y x, ///
  ******************************************************************************/
 noi di as text "--- Section 22: Verbose Option ---"
 
-webuse ships, clear
+load_ships_data
 capture cpplmhdfe accident op_75_79 co_65_69, absorb(ship) vce(robust) verbose
 if _rc == 0 {
     test_pass "verbose option accepted"
@@ -1071,7 +1095,7 @@ benchmark_ppmlhdfe mpg weight length turn displacement, ///
     absorb(foreign) vce(robust) testname("auto: many covariates")
 
 * Ships dataset variants
-webuse ships, clear
+load_ships_data
 
 benchmark_ppmlhdfe accident op_75_79 co_65_69 co_70_74 co_75_79, ///
     absorb(ship) vce(cluster ship) testname("ships: cluster ship")

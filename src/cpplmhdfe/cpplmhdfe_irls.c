@@ -1235,17 +1235,27 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         }
     }
 
-    /* Final OLS: beta and inv(X'X)
-     * ppmlhdfe calls reghdfe_solve_ols with w=1 (unweighted) for the final
-     * beta and VCE computation. The IRLS loop uses weighted OLS, but the
-     * final solve uses unweighted OLS on the partialled data. For fweights,
-     * ppmlhdfe passes true_w to reghdfe which uses weighted OLS. */
+    /* Final solve: beta and inv(X'WX)
+     * Use converged IRLS weights for the final normal equations so stored
+     * coefficients match the terminal PPML optimum. */
     ST_double *beta_final = (ST_double *)calloc(K_keep, sizeof(ST_double));
     ST_double *inv_xx_final = NULL;
     ST_double *V_keep = NULL;
     ST_double *xtx_keep = NULL;
     ST_double *xty_keep = NULL;
-    ST_int final_use_weights = (has_weights && weight_type == 2);
+    ST_int final_use_weights = 1;
+    ST_double N_ref = (ST_double)N;
+    if (has_weights && weight_type == 2 && w_user_compact) {
+        N_ref = 0.0;
+        for (i = 0; i < N; i++) N_ref += w_user_compact[i];
+    }
+    ST_double sum_irls_w = 0.0;
+    for (i = 0; i < N; i++) sum_irls_w += irls_w[i];
+    ST_double w_scale = (sum_irls_w > 0.0) ? (N_ref / sum_irls_w) : 1.0;
+    ST_double *w_reg = (ST_double *)malloc(N * sizeof(ST_double));
+    if (w_reg) {
+        for (i = 0; i < N; i++) w_reg[i] = irls_w[i] * w_scale;
+    }
 
     if (K_keep > 0 && keep_idx && beta_final) {
         xtx_keep = (ST_double *)calloc(K_keep * K_keep, sizeof(ST_double));
@@ -1262,7 +1272,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     const ST_double *xi = &aug_copy[(keep_idx[i]+1)*N];
                     const ST_double *xj = &aug_copy[(keep_idx[j]+1)*N];
                     for (idx = 0; idx < N; idx++) {
-                        ST_double val = final_use_weights ? irls_w[idx] * xi[idx] : xi[idx];
+                        ST_double wi = final_use_weights ? (w_reg ? w_reg[idx] : irls_w[idx]) : 1.0;
+                        ST_double val = wi * xi[idx];
                         dd_real prod = two_prod(val, xj[idx]);
                         acc = dd_add_d(acc, prod.hi);
                         acc = dd_add_d(acc, prod.lo);
@@ -1275,7 +1286,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     const ST_double *xi = &aug_copy[(keep_idx[i]+1)*N];
                     const ST_double *z_part = aug_copy;
                     for (idx = 0; idx < N; idx++) {
-                        ST_double val = final_use_weights ? irls_w[idx] * xi[idx] : xi[idx];
+                        ST_double wi = final_use_weights ? (w_reg ? w_reg[idx] : irls_w[idx]) : 1.0;
+                        ST_double val = wi * xi[idx];
                         dd_real prod = two_prod(val, z_part[idx]);
                         acc = dd_add_d(acc, prod.hi);
                         acc = dd_add_d(acc, prod.lo);
@@ -1302,7 +1314,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                         const ST_double *z_part = aug_copy;
                         dd_real acc = {0.0, 0.0};
                         for (idx = 0; idx < N; idx++) {
-                            ST_double val = final_use_weights ? irls_w[idx] * xi[idx] : xi[idx];
+                            ST_double wi = final_use_weights ? (w_reg ? w_reg[idx] : irls_w[idx]) : 1.0;
+                            ST_double val = wi * xi[idx];
                             dd_real prod = two_prod(val, z_part[idx]);
                             acc = dd_add_d(acc, prod.hi);
                             acc = dd_add_d(acc, prod.lo);
@@ -1331,13 +1344,6 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * constant column, extend inv_xx via block partition formula.
      * This accounts for the intercept in the sandwich VCE.
      * ================================================================ */
-
-    /* Compute N_eff (used for DOF, corner, etc.) */
-    ST_double N_eff = (ST_double)N;
-    if (has_weights && weight_type == 2 && w_user_compact) {
-        N_eff = 0.0;
-        for (i = 0; i < N; i++) N_eff += w_user_compact[i];
-    }
 
     /* Compute IRLS-weighted means of original X columns (before partialling).
      * These means are added back to the partialled X for VCE computation.
@@ -1371,17 +1377,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 }
             }
 
-            /* N_corner = 1'W1 where W = diag(effective weights used in bread)
-             * Non-fweight: sum(w_norm) = N. Fweight: sum(irls_w) = sum(mu*fw). */
-            ST_double N_corner = (has_weights && weight_type == 2) ?
-                N_eff : (ST_double)N;
-            /* Actually for fweight, the bread uses raw irls_w = mu*fw,
-             * so N_corner should be sum(irls_w), not sum(fw).
-             * But N_eff = sum(fw). Let me compute correctly. */
-            if (has_weights && weight_type == 2) {
-                N_corner = 0.0;
-                for (i = 0; i < N; i++) N_corner += irls_w[i];
-            }
+            /* N_corner = 1'W1 where W is the converged IRLS weight matrix. */
+            ST_double N_corner = N_ref;
             ST_double corner = 1.0 / N_corner;
             for (i = 0; i < K_keep; i++) {
                 corner -= means_x[i] * side[i];
@@ -1420,18 +1417,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         }
     }
 
-    /* Compute VCE residual.
-     * For fweight: resid = (y - mu), pass fw separately to ctools_vce.
-     * Otherwise: OLS residual from partialled data: z̃ - X̃β.
-     * This matches reghdfe's internal VCE residual computation. */
+    /* Compute final OLS residual from partialled data. */
     ST_double *vce_resid = (ST_double *)malloc(N * sizeof(ST_double));
     if (vce_resid) {
-        if (has_weights && weight_type == 2 && w_user_compact) {
-            /* fweight: resid = (y - mu), fw passed separately */
-            for (i = 0; i < N; i++)
-                vce_resid[i] = y[i] - mu[i];
-        } else if (beta_final && K_keep > 0) {
-            /* OLS residual from partialled data: z̃ - X̃β */
+        if (beta_final && K_keep > 0) {
             for (i = 0; i < N; i++) {
                 ST_double xb = 0.0;
                 for (k = 0; k < K_keep; k++) {
@@ -1439,9 +1428,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 }
                 vce_resid[i] = aug_copy[i] - xb;
             }
-        } else {
+        }
+        else {
             for (i = 0; i < N; i++)
-                vce_resid[i] = (y[i] - mu[i]) / mu[i];
+                vce_resid[i] = (y[i] - mu[i]) / ((mu[i] > 1e-18) ? mu[i] : 1e-18);
         }
     }
 
@@ -1527,47 +1517,43 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
         } else if (V_ext && ((vcetype == 1) || (vcetype == 2 && cluster_ids))) {
 
+            ctools_vce_data d;
+            d.X_eff = X_eff;
+            d.D = inv_xx_ext;
+            ST_double *vce_resid_work = vce_resid;
             if (has_weights && weight_type == 2 && w_user_compact) {
-                /* Fweight path: D = extended H^{-1} (raw), resid = (y-mu), fw separate */
-                ctools_vce_data d;
-                d.X_eff = X_eff;
-                d.D = inv_xx_ext;
-                d.resid = vce_resid;
+                vce_resid_work = (ST_double *)malloc(N * sizeof(ST_double));
+                if (vce_resid_work) {
+                    memcpy(vce_resid_work, vce_resid, N * sizeof(ST_double));
+                }
+                for (i = 0; i < N; i++) {
+                    ST_double fw = w_user_compact[i];
+                    ST_double wr = w_reg ? w_reg[i] : irls_w[i];
+                    if (fw > 0.0 && vce_resid_work) {
+                        vce_resid_work[i] *= wr / fw;
+                    }
+                }
                 d.weights = w_user_compact;
                 d.weight_type = 2;
-                d.N = N;
-                d.K = K_with_cons;
                 d.normalize_weights = 0;
-
-                if (vcetype == 1) {
-                    ST_double dof_adj = N_eff / (N_eff - 1);
-                    ctools_vce_robust(&d, dof_adj, V_ext);
-                } else {
-                    ST_double dof_adj = (ST_double)num_clusters / (num_clusters - 1);
-                    ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V_ext);
-                }
-            } else {
-                /* Non-fweight path: unweighted, matching ppmlhdfe.
-                 * ppmlhdfe calls reghdfe_solve_ols with w=1 for the final VCE,
-                 * so meat uses resid^2 without IRLS weight scaling. */
-                ctools_vce_data d;
-                d.X_eff = X_eff;
-                d.D = inv_xx_ext;
-                d.resid = vce_resid;
-                d.weights = NULL;
-                d.weight_type = 0;  /* no weights */
-                d.N = N;
-                d.K = K_with_cons;
-                d.normalize_weights = 0;
-
-                if (vcetype == 1) {
-                    ST_double dof_adj = (ST_double)N / (N - 1);
-                    ctools_vce_robust(&d, dof_adj, V_ext);
-                } else {
-                    ST_double dof_adj = (ST_double)num_clusters / (num_clusters - 1);
-                    ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V_ext);
-                }
             }
+            else {
+                d.weights = w_reg ? w_reg : irls_w;
+                d.weight_type = 1;
+                d.normalize_weights = 1;
+            }
+            d.resid = vce_resid_work ? vce_resid_work : vce_resid;
+            d.N = N;
+            d.K = K_with_cons;
+
+            if (vcetype == 1) {
+                ST_double dof_adj = N_ref / (N_ref - 1.0);
+                ctools_vce_robust(&d, dof_adj, V_ext);
+            } else {
+                ST_double dof_adj = (ST_double)num_clusters / (num_clusters - 1);
+                ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V_ext);
+            }
+            if (vce_resid_work && vce_resid_work != vce_resid) free(vce_resid_work);
 
             /* Extract K_keep×K_keep submatrix (dropping constant row/col) */
             for (i = 0; i < K_keep; i++)
@@ -1700,6 +1686,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     if (V_keep) free(V_keep);
     if (xtx_keep) free(xtx_keep);
     if (xty_keep) free(xty_keep);
+    if (w_reg) free(w_reg);
     if (is_collinear) free(is_collinear);
     if (keep_idx) free(keep_idx);
     if (X_eff) free(X_eff);

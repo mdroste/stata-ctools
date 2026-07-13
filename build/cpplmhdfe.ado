@@ -18,11 +18,16 @@ program define cpplmhdfe, eclass
     syntax varlist(min=2 fv ts) [aw fw pw] [if] [in] [, Absorb(string) VCE(string) Verbose ///
         TOLerance(real 1e-8) ITERATE(integer 10000) THReads(integer 0) ///
         EXPosure(varname) OFFset(varname) ///
-        IRLSTOLerance(real 1e-12) IRLSMAXiter(integer 1000) ///
+        IRLSTOLerance(real -1) IRLSMAXiter(integer 1000) ///
         SEPTOLerance(real 1e-8) ///
         DOFadjustments(string)]
 
     local __do_timing = ("`verbose'" != "")
+
+    * Match ppmlhdfe defaults: if IRLS tolerance is not specified, use tolerance()
+    if `irlstolerance' < 0 {
+        local irlstolerance `tolerance'
+    }
 
     * Parse absorb option
     if `"`absorb'"' == "" {

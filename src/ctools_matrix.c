@@ -175,7 +175,7 @@ static int vce_sort_by_cluster(const ST_int *cluster_ids, ST_int N, ST_int num_c
  */
 void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V)
 {
-    ST_int idx, j, k;
+    ST_int idx, i, j, k;
     ST_int N = d->N;
     ST_int K = d->K;
 
@@ -193,9 +193,9 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
         for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
     }
 
-    /* Allocate meat and temp matrices */
-    ST_double *meat = (ST_double *)calloc(K * K, sizeof(ST_double));
-    ST_double *temp = (ST_double *)malloc(K * K * sizeof(ST_double));
+    /* Allocate high-precision meat and temp matrices */
+    long double *meat = (long double *)calloc(K * K, sizeof(long double));
+    long double *temp = (long double *)malloc(K * K * sizeof(long double));
 
     if (!meat || !temp) {
         if (meat) free(meat);
@@ -228,10 +228,11 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
         }
 
         for (j = 0; j < K; j++) {
-            ST_double wxj = w_i * d->X_eff[j * N + idx];
-            meat[j * K + j] += wxj * d->X_eff[j * N + idx];
+            long double xj = (long double)d->X_eff[j * N + idx];
+            long double wxj = (long double)w_i * xj;
+            meat[j * K + j] += wxj * xj;
             for (k = j + 1; k < K; k++) {
-                meat[j * K + k] += wxj * d->X_eff[k * N + idx];
+                meat[j * K + k] += wxj * (long double)d->X_eff[k * N + idx];
             }
         }
     }
@@ -244,11 +245,24 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
 
     if (w_norm) free(w_norm);
 
-    /* V = D * meat * D * dof_adj */
-    ctools_matmul_ab(d->D, meat, K, K, K, temp);
-    ctools_matmul_ab(temp, d->D, K, K, K, V);
-    for (ST_int i = 0; i < K * K; i++) {
-        V[i] *= dof_adj;
+    /* High-precision V = D * meat * D * dof_adj (column-major). */
+    for (j = 0; j < K; j++) {
+        for (i = 0; i < K; i++) {
+            long double acc = 0.0L;
+            for (k = 0; k < K; k++) {
+                acc += (long double)d->D[k * K + i] * meat[j * K + k];
+            }
+            temp[j * K + i] = acc;
+        }
+    }
+    for (j = 0; j < K; j++) {
+        for (i = 0; i < K; i++) {
+            long double acc = 0.0L;
+            for (k = 0; k < K; k++) {
+                acc += temp[k * K + i] * (long double)d->D[j * K + k];
+            }
+            V[j * K + i] = (ST_double)(acc * (long double)dof_adj);
+        }
     }
 
     free(meat);
@@ -280,10 +294,10 @@ void ctools_vce_cluster(const ctools_vce_data *d,
         for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
     }
 
-    /* Allocate buffers */
-    ST_double *meat = (ST_double *)calloc(K * K, sizeof(ST_double));
-    ST_double *temp = (ST_double *)malloc(K * K * sizeof(ST_double));
-    ST_double *ecX = (ST_double *)malloc(K * sizeof(ST_double));
+    /* Allocate high-precision buffers */
+    long double *meat = (long double *)calloc(K * K, sizeof(long double));
+    long double *temp = (long double *)malloc(K * K * sizeof(long double));
+    long double *ecX = (long double *)malloc(K * sizeof(long double));
     ST_int *sort_perm = (ST_int *)malloc(N * sizeof(ST_int));
     ST_int *boundaries = (ST_int *)malloc((num_clusters + 1) * sizeof(ST_int));
 
@@ -331,13 +345,13 @@ void ctools_vce_cluster(const ctools_vce_data *d,
             }
 
             for (k = 0; k < K; k++) {
-                ecX[k] += e_w * d->X_eff[k * N + idx];
+                ecX[k] += (long double)e_w * (long double)d->X_eff[k * N + idx];
             }
         }
 
         /* Accumulate outer product ecX * ecX' into meat (upper triangle) */
         for (ST_int jj = 0; jj < K; jj++) {
-            ST_double ecXj = ecX[jj];
+            long double ecXj = ecX[jj];
             meat[jj * K + jj] += ecXj * ecXj;
             for (ST_int kk = jj + 1; kk < K; kk++) {
                 meat[jj * K + kk] += ecXj * ecX[kk];
@@ -357,11 +371,24 @@ void ctools_vce_cluster(const ctools_vce_data *d,
         }
     }
 
-    /* V = D * meat * D * dof_adj */
-    ctools_matmul_ab(d->D, meat, K, K, K, temp);
-    ctools_matmul_ab(temp, d->D, K, K, K, V);
-    for (i = 0; i < K * K; i++) {
-        V[i] *= dof_adj;
+    /* High-precision V = D * meat * D * dof_adj (column-major). */
+    for (ST_int jj = 0; jj < K; jj++) {
+        for (ST_int ii = 0; ii < K; ii++) {
+            long double acc = 0.0L;
+            for (ST_int kk = 0; kk < K; kk++) {
+                acc += (long double)d->D[kk * K + ii] * meat[jj * K + kk];
+            }
+            temp[jj * K + ii] = acc;
+        }
+    }
+    for (ST_int jj = 0; jj < K; jj++) {
+        for (ST_int ii = 0; ii < K; ii++) {
+            long double acc = 0.0L;
+            for (ST_int kk = 0; kk < K; kk++) {
+                acc += temp[kk * K + ii] * (long double)d->D[jj * K + kk];
+            }
+            V[jj * K + ii] = (ST_double)(acc * (long double)dof_adj);
+        }
     }
 
     free(meat);
