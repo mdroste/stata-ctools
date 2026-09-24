@@ -22,10 +22,24 @@ set trace off
 capture adopath ++ "build"
 capture adopath ++ "../build"
 
+* Offline, checksum-pinned examples prepared by scripts/fetch_validation_data.py.
+* The helper deliberately never falls back to a network request.
+capture program drop ctools_fixture
+program define ctools_fixture
+    syntax name(name=dataset) [, CLEAR]
+    local path "validation/fixtures/data/`dataset'.dta"
+    capture confirm file "`path'"
+    if _rc local path "fixtures/data/`dataset'.dta"
+    confirm file "`path'"
+    use "`path'", `clear'
+end
+
 * Global counters
 global TESTS_PASSED = 0
 global TESTS_FAILED = 0
 global TESTS_TOTAL = 0
+global TESTS_SKIPPED = 0
+global TESTS_EXPECTED_SKIPPED = 0
 
 * Default significant figures threshold - do NOT change this value except by human decision.
 * This ensures numerical precision of ctools implementations.
@@ -68,6 +82,22 @@ program define test_fail
         global FAILURE_`idx' = "`testname': `reason'"
     }
     * No immediate output - failures shown in summary
+end
+
+capture program drop test_skip
+program define test_skip
+    args testname reason
+    global TESTS_SKIPPED = $TESTS_SKIPPED + 1
+    di as text "SKIP: `testname': `reason'"
+end
+
+* Only explicitly documented reference-method differences use this counter.
+capture program drop test_method_difference
+program define test_method_difference
+    args testname
+    global TESTS_SKIPPED = $TESTS_SKIPPED + 1
+    global TESTS_EXPECTED_SKIPPED = $TESTS_EXPECTED_SKIPPED + 1
+    di as text "METHOD DIFFERENCE: `testname': cpsmatch ATT SE is not the psmatch2 estimator"
 end
 
 /*******************************************************************************
@@ -119,6 +149,7 @@ program define print_summary
     else {
         di as error "$TESTS_FAILED"
     }
+    di as text "  Skipped: " as result "$TESTS_SKIPPED"
     di as text "  Total:  " as result "$TESTS_TOTAL"
     di as text "{hline 45}"
     if $TESTS_FAILED == 0 {
@@ -130,6 +161,8 @@ program define print_summary
     }
     di as text "{hline 45}"
     di as text ""
+    if $TESTS_FAILED > 0 exit 9
+
 end
 
 /*******************************************************************************
@@ -193,7 +226,7 @@ program define sigfigs, rclass
 
     * Handle missing result from log10 (extreme values)
     if missing(`sf') {
-        return scalar sigfigs = 15
+        return scalar sigfigs = 0
         exit
     }
 
@@ -250,6 +283,10 @@ program define assert_matrix_equal
     local min_j = 1
     local rows = rowsof(`mat1')
     local cols = colsof(`mat1')
+    if `rows' != rowsof(`mat2') | `cols' != colsof(`mat2') {
+        test_fail "`testname'" "matrix dimensions differ"
+        exit
+    }
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
             local v1 = `mat1'[`i', `j']
@@ -287,6 +324,12 @@ program define matrix_min_sigfigs, rclass
     local min_j = 1
     local rows = rowsof(`mat1')
     local cols = colsof(`mat1')
+    if `rows' != rowsof(`mat2') | `cols' != colsof(`mat2') {
+        return scalar min_sigfigs = 0
+        return scalar min_i = .
+        return scalar min_j = .
+        exit
+    }
     forvalues i = 1/`rows' {
         forvalues j = 1/`cols' {
             local v1 = `mat1'[`i', `j']
@@ -328,7 +371,8 @@ program define assert_var_equal
         replace `sf' = -log10(abs(`var1' - `var2') / max(abs(`var1'), abs(`var2'))) if `sf' == .
         * Clamp to valid range
         replace `sf' = 0 if `sf' < 0
-        replace `sf' = 15 if `sf' > 15
+        replace `sf' = 15 if `sf' > 15 & !missing(`sf')
+        replace `sf' = 0 if missing(`sf')
     }
 
     * Count observations that fail the threshold

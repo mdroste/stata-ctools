@@ -153,7 +153,9 @@ scores (and vice versa).
 {phang}
 {opt noreplacement} specifies matching without replacement. Each control
 can only be matched to one treated observation. The default is matching
-with replacement.
+with replacement. Without replacement, only nearest-neighbor matching with
+{cmd:neighbor(1)} is supported. Equal distances choose the control below the
+treated score before the control above it.
 
 {phang}
 {opt ties} specifies that when there are tied matches at the boundary
@@ -203,7 +205,14 @@ Key differences from {help psmatch2:psmatch2}:
 {pstd}
 The ATT (Average Treatment Effect on the Treated) is calculated as the
 weighted mean difference in outcomes between matched treated and control
-observations.
+observations. Only ATT is reported; ATE/ATU and observation-weight syntax are not supported.
+
+{pstd}
+{cmd:r(att_se)} is an approximate matched-sample standard error,
+sqrt(s1^2/n1 + s0^2/n0), using matching-weighted sample variances and counts.
+It is not the {cmd:psmatch2} variance estimator and does not incorporate
+propensity-score estimation uncertainty. Agreement of ATT does not imply
+agreement of standard errors.
 
 
 {marker examples}{...}
@@ -256,7 +265,7 @@ observations.
 {synopt:{cmd:r(common_min)}}minimum propensity score in common support{p_end}
 {synopt:{cmd:r(common_max)}}maximum propensity score in common support{p_end}
 {synopt:{cmd:r(att)}}estimated ATT (if outcome specified){p_end}
-{synopt:{cmd:r(att_se)}}standard error of ATT (if outcome specified){p_end}
+{synopt:{cmd:r(att_se)}}approximate matched-sample SE of ATT (see Methods){p_end}
 {synopt:{cmd:r(att_t)}}t-statistic for ATT (if outcome specified){p_end}
 
 {p2col 5 24 28 2: Macros}{p_end}
@@ -289,3 +298,9 @@ Michael Droste{break}
 {psee}
 Online: {help psmatch2}, {help teffects psmatch}, {help logit}, {help probit}, {help ctools}
 {p_end}
+
+{pstd}
+{cmd:_nn} records the actual number of controls used for each treated observation.
+It includes ties; for radius/kernel matching it counts controls with positive
+matching weight. Unmatched treated observations have zero; controls and rows
+outside the matching sample have missing values.

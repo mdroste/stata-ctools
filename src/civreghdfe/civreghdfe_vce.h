@@ -183,7 +183,7 @@ void ivvce_compute_kiefer(
     - hac_panel_ids, num_hac_panels: Panel IDs for panel-aware HAC (NULL if not used)
     - V: Output VCE matrix (K_total x K_total)
 */
-void ivvce_compute_full(
+ST_retcode ivvce_compute_full(
     const ST_double *Z,
     const ST_double *resid,
     const ST_double *temp_kiv_ktotal,

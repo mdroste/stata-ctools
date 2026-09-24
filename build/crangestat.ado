@@ -2,6 +2,18 @@
 
 program define crangestat
     version 14.1
+    preserve
+    capture noisily _crangestat_impl `0'
+    local rc = _rc
+    if `rc' {
+        restore
+        exit `rc'
+    }
+    restore, not
+end
+
+program define _crangestat_impl
+    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -199,20 +211,7 @@ program define crangestat
             exit 109
         }
 
-        * Create result variable if it doesn't exist
-        capture confirm variable `result_var'
-        if _rc != 0 {
-            quietly gen double `result_var' = .
-        }
-        else {
-            * Variable exists - check it's numeric and replace with missing
-            capture confirm numeric variable `result_var'
-            if _rc != 0 {
-                di as error "crangestat: result variable `result_var' must be numeric"
-                exit 109
-            }
-            quietly replace `result_var' = .
-        }
+        * Destination creation is deferred until the entire request is valid.
 
         * Track source variable index
         local src_idx = 0
@@ -243,63 +242,17 @@ program define crangestat
         exit 198
     }
 
-    * Load plugin
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "crangestat: Could not load ctools plugin"
-            exit 601
-        }
+    _ctools_newvars `result_vars'
+    foreach output of local result_vars {
+        quietly generate double `output' = .
     }
+
+    * Load plugin
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Get variable indices
     * Build list of ALL dataset variables - this determines plugin varlist order

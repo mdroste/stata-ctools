@@ -52,7 +52,7 @@
 {synopt:{opt bw(#)}}bandwidth for kernel-based HAC estimation{p_end}
 {synopt:{opt kernel(string)}}kernel type for HAC: {opt bartlett}, {opt parzen}, {opt quadraticspectral}, {opt truncated}, {opt tukey}{p_end}
 {synopt:{opt dkraay(#)}}Driscoll-Kraay SEs with {it:#} lags (for panel data){p_end}
-{synopt:{opt center}}center score vectors before HAC outer product computation{p_end}
+{synopt:{opt center}}currently unsupported; returns an error{p_end}
 {synopt:{opt kiefer}}Kiefer (sandwich) SEs for panel data (requires tsset){p_end}
 
 {syntab:Estimation Settings}
@@ -655,4 +655,10 @@ Components, Boston College Department of Economics.
 Online: {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe} (if installed),
 {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
 {help ivreg2} (if installed), {help creghdfe}
+{p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+maxiter() and tolerance() must be positive. A fixed-effect projection that exhausts its iteration limit returns error 430; covariance allocation failures propagate as errors rather than successful zero standard errors.
 {p_end}

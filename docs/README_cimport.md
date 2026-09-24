@@ -4,12 +4,12 @@ High-performance C-accelerated CSV/delimited text import.
 
 ## Overview
 
-`cimport delimited` is a high-performance replacement for Stata's `import delimited` command that uses multi-threaded parallel parsing. It can achieve up to 50x speedup on large files through efficient memory management and parallel data loading.
+`cimport delimited` is a high-performance replacement for Stata's `import delimited` command that uses multi-threaded parallel parsing.
 
 ## Syntax
 
 ```stata
-cimport delimited using filename [, options]
+cimport delimited [using] filename [, options]
 ```
 
 ## Options
@@ -18,7 +18,7 @@ cimport delimited using filename [, options]
 | Option | Description |
 |--------|-------------|
 | `clear` | Clear data in memory before loading |
-| `delimiters(chars)` | Field delimiter (default: comma). Use `tab` or `\t` for tab-delimited |
+| `delimiters(chars)` | Field delimiter (default: automatic detection). Use `tab` or `\t` for tab-delimited |
 
 ### Variable Name Options
 | Option | Description |
@@ -29,15 +29,10 @@ cimport delimited using filename [, options]
 ### Parsing Options
 | Option | Description |
 |--------|-------------|
-| `bindquotes(option)` | Quote handling: `strict` (default) or `loose` |
-| `stripquotes` | Remove surrounding quotes from string values |
-| `encoding(encoding)` | File encoding (currently only UTF-8 supported) |
+| `bindquotes(option)` | Quote handling: `loose` (default) or `strict` |
+| `stripquotes` | Accepted for compatibility; no additional stripping is implemented |
+| `encoding(encoding)` | Automatic detection or explicit supported encoding; UTF-32 is rejected |
 | `rowrange([start][:end])` | Range of rows to import |
-
-### Performance Options
-| Option | Description |
-|--------|-------------|
-| `fast` | Use fast DTA mode (writes temp DTA file, then loads) |
 
 ### Reporting Options
 | Option | Description |
@@ -62,8 +57,8 @@ cimport delimited using bigdata.csv, clear rowrange(1000:2000)
 * Import from row 500 to end
 cimport delimited using bigdata.csv, clear rowrange(500:)
 
-* Fast import for large files
-cimport delimited using bigdata.csv, clear fast verbose
+* Import with timing output
+cimport delimited using bigdata.csv, clear verbose
 
 * First row is data, not variable names
 cimport delimited using data.csv, clear varnames(nonames)
@@ -97,15 +92,6 @@ cimport delimited using data.csv, clear varnames(nonames)
 - **Arena allocator for strings**: String values are bulk-allocated in a thread-safe arena with atomic CAS, avoiding per-string `malloc` calls
 - **Persistent thread pool**: Worker threads are reused across scan and load phases
 
-### Fast Mode
-
-The `fast` option provides additional speedups for very large files by:
-1. Writing a temporary DTA file using C
-2. Loading the DTA file with Stata's native `use` command
-3. Cleaning up the temporary file
-
-This bypasses some Stata overhead and can be significantly faster for files with millions of rows.
-
 ### Throughput
 
 With `verbose` output, you'll see:
@@ -134,7 +120,7 @@ With `verbose` output, you'll see:
 
 | Delimiter | Syntax |
 |-----------|--------|
-| Comma | `delimiters(",")` or default |
+| Comma | `delimiters(",")` |
 | Tab | `delimiters(tab)` or `delimiters("\t")` |
 | Semicolon | `delimiters(";")` |
 | Pipe | `delimiters("|")` |
@@ -149,7 +135,8 @@ With `verbose` output, you'll see:
 
 ## Technical Notes
 
-- UTF-8 encoding is assumed (other encodings not yet supported)
+- Encoding is detected automatically. Explicit encodings include UTF-8, UTF-16LE/BE, ASCII, Latin-1/9, Windows-1252, and Mac Roman. UTF-32 is rejected; convert it to UTF-8 first.
+- Fields exceeding 2045 UTF-8 bytes are rejected before clearing the current data.
 - Empty cells are imported as missing (`.` for numeric, `""` for string)
 - Quoted fields handle embedded delimiters and newlines correctly
 - Variable names are sanitized to be valid Stata names
@@ -160,11 +147,13 @@ With `verbose` output, you'll see:
 |---------|--------------------------|---------------------|
 | Implementation | Stata | C with OpenMP |
 | Parallelization | No | Yes |
-| Typical Speedup | 1x (baseline) | 10-50x |
 | Memory Efficiency | Standard | Optimized |
-| Fast Mode | No | Yes |
 
 ## See Also
 
 - [ctools Overview](../README.md)
 - [cexport](README_cexport.md) - Fast CSV export
+
+## Validation and failure behavior
+
+Excel import honors workbookPr date1904. Daily date cells become Stata daily dates, and datetime cells become Stata milliseconds. In the 1900 system, serial 60 (the nonexistent 29 February 1900) is missing; serials below and above it use their correct offsets. Inline-string headers and values are retained in both the serial and parallel parser paths. Imported display formats are not inferred from arbitrary Excel formatting.

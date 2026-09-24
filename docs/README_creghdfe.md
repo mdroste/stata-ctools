@@ -4,7 +4,7 @@ High-performance C-accelerated high-dimensional fixed effects regression.
 
 ## Overview
 
-`creghdfe` is a drop-in replacement for `reghdfe` that performs linear regression with multiple high-dimensional fixed effects. All computation is performed in optimized C code using a conjugate gradient (CG) solver with Kaczmarz-style sweeping, achieving up to 10x speedup over pure Stata/Mata implementations.
+`creghdfe` is a drop-in replacement for `reghdfe` that performs linear regression with multiple high-dimensional fixed effects. All computation is performed in optimized C code using a conjugate gradient (CG) solver with Kaczmarz-style sweeping.
 
 ## Syntax
 
@@ -33,7 +33,6 @@ Where `vcetype` can be:
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information and timing |
-| `timeit` | Display total elapsed time |
 
 ### Weights
 | Weight Type | Description |
@@ -78,7 +77,7 @@ creghdfe y x1 x2, absorb(firm year industry)
 
 **CG Solver and HDFE Absorption:**
 - **Symmetric Kaczmarz transform**: Forward + backward sweep per CG iteration doubles convergence rate compared to a one-directional sweep
-- **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, since division is 5-20x slower than multiplication on modern CPUs
+- **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, to avoid repeated division
 - **Counting sort for CSR index construction**: Builds compressed sparse row indices in O(N+L) instead of O(N log N), where L is the number of FE levels
 - **Two-pass singleton detection**: First pass counts group sizes, second pass marks singletons—avoids expensive repeated scans
 - **Iterative singleton removal**: Handles connected components where dropping one singleton creates new singletons
@@ -157,7 +156,6 @@ where αᵢ represents the fixed effects for each absorbed variable.
 | Implementation | Stata + Mata | C with OpenMP |
 | Algorithm | Method of Alternating Projections | CG with Kaczmarz |
 | Parallelization | Limited | Yes |
-| Typical Speedup | 1x (baseline) | 5-10x |
 | Memory | Higher | Optimized |
 
 ## Degrees of Freedom
@@ -172,5 +170,9 @@ where redundant FEs are fixed effects that are collinear with others.
 
 - [ctools Overview](../README.md)
 - [reghdfe](http://scorreia.com/software/reghdfe/) - Original Stata implementation
-- [cqreg](README_cqreg.md) - Quantile regression with HDFE
+- [cqreg](README_cqreg.md) - Quantile regression
 - [civreghdfe](README_civreghdfe.md) - IV regression with HDFE
+
+## Validation and failure behavior
+
+residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed operations restore the dataset. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.

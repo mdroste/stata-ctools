@@ -4,7 +4,7 @@ High-performance C-accelerated merge for Stata datasets.
 
 ## Overview
 
-`cmerge` is a drop-in replacement for Stata's `merge` command that performs all merge operations entirely in C. It uses parallel data loading, radix sort, and optimized merge algorithms to achieve 2-5x speedup over native Stata merging.
+`cmerge` is a drop-in replacement for Stata's `merge` command that performs all merge operations entirely in C. It uses parallel data loading, radix sort, and optimized merge algorithms.
 
 ## Syntax
 
@@ -28,11 +28,10 @@ Where `merge_type` is one of:
 | `nogenerate` | Do not create merge indicator variable |
 | `keepusing(varlist)` | Variables to keep from using dataset |
 | `sorted` | Assert data is already sorted (skip internal sorting) |
-| `force` | Allow string/numeric type mismatches in key variables |
+| `force` | Retain master type for incompatible non-key variables; key types must match |
 | `noreport` | Suppress merge result table |
 | `verbose` | Display timing and progress information |
 | `nolabel` | Do not copy value labels from using data |
-| `timeit` | Display total elapsed time |
 
 ## Examples
 
@@ -128,10 +127,13 @@ The `_merge` variable (or variable specified by `generate()`) indicates:
 | Implementation | Stata + Mata | Pure C |
 | Parallelization | No | Yes (OpenMP) |
 | Sort Algorithm | Stata default | Radix sort |
-| Typical Speedup | 1x (baseline) | 2-5x |
 | Memory Efficiency | Standard | Optimized |
 
 ## See Also
 
 - [ctools Overview](../README.md)
 - [csort](README_csort.md) - High-performance sorting
+
+## Validation and failure behavior
+
+Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. Failed merges restore the master dataset.

@@ -225,9 +225,8 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     memset(thread_found_valid, 0, num_threads * sizeof(int));
 
     /* Phase 1: Parallel min/max finding */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -341,9 +340,8 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     }
 
     /* Phase 2: Parallel histogram */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -421,9 +419,8 @@ static stata_retcode counting_sort_numeric_parallel(perm_idx_t * COUNTING_RESTRI
     }
 
     /* Phase 4: Parallel scatter */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -469,7 +466,7 @@ static stata_retcode counting_sort_by_numeric_var(stata_data *data, int var_idx)
     int num_threads;
 
     /* Determine thread count */
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (num_threads > COUNTING_MAX_THREADS) num_threads = COUNTING_MAX_THREADS;
 
     if (data->nobs < COUNTING_PARALLEL_THRESHOLD) {

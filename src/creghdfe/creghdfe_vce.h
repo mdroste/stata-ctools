@@ -34,7 +34,7 @@ void compute_vce_unadjusted(
  * - fweight:        W = diag(e^2 * w)
  * - aweight/pweight: W = diag((e * w_norm)^2) where w_norm is normalized to sum to N
  */
-void compute_vce_robust(
+ST_retcode compute_vce_robust(
     const ST_double *data,    /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,   /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,  /* K_with_cons x K_with_cons inverse (X vars + constant) */
@@ -55,7 +55,7 @@ void compute_vce_robust(
  * Weight handling (matches reghdfe.mata line 3956):
  * - Cluster sums use: e * w_norm (where w_norm is normalized to sum to N for aw/pw)
  */
-void compute_vce_cluster(
+ST_retcode compute_vce_cluster(
     const ST_double *data,      /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,     /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,    /* K_with_cons x K_with_cons inverse (X vars + constant) */

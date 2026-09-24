@@ -1010,7 +1010,7 @@ sysuse census, clear
 benchmark_decode region, testname("census: region")
 
 * Test 9.4: nlswork - race
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_decode race, testname("nlswork: race")
 
 * Test 9.5: nlswork - msp
@@ -1373,7 +1373,7 @@ if _rc == 0 {
 }
 
 * nlsw88 dataset - comprehensive labeled variables
-webuse nlsw88, clear
+ctools_fixture nlsw88, clear
 benchmark_decode race, testname("nlsw88: race")
 benchmark_decode occupation, testname("nlsw88: occupation")
 benchmark_decode industry, testname("nlsw88: industry")
@@ -1385,7 +1385,7 @@ benchmark_decode smsa, testname("nlsw88: smsa")
 benchmark_decode c_city, testname("nlsw88: c_city")
 
 * nlswork dataset - panel data with labels
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_decode race, testname("nlswork: race")
 benchmark_decode msp, testname("nlswork: msp")
 benchmark_decode nev_mar, testname("nlswork: nev_mar")
@@ -1394,7 +1394,7 @@ benchmark_decode union, testname("nlswork: union")
 benchmark_decode south, testname("nlswork: south")
 
 * grunfeld dataset
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 capture confirm numeric variable company
 if _rc == 0 {
     capture local lbl : value label company
@@ -1404,7 +1404,7 @@ if _rc == 0 {
 }
 
 * lifeexp dataset
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 capture confirm numeric variable region
 if _rc == 0 {
     capture local lbl : value label region
@@ -2782,3 +2782,6 @@ test_error_match, stata_cmd(decode x, generate(test)) ctools_cmd(cdecode x, gene
 * End of cdecode validation
 noi print_summary "cdecode"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cdecode"

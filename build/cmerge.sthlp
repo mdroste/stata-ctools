@@ -43,7 +43,7 @@ where {it:merge_type} is one of
 {synopt:{opt keepus:ing(varlist)}}variables to keep from using data{p_end}
 {syntab:Merge behavior}
 {synopt:{opt sorted}}assert that both datasets are sorted on key variables{p_end}
-{synopt:{opt force}}allow string/numeric variable type mismatches{p_end}
+{synopt:{opt force}}allow string/numeric mismatches for non-key variables only{p_end}
 {synopt:{opt nolabel}}do not copy value labels from using data{p_end}
 {synopt:{opt nonotes}}do not copy variable notes from using data{p_end}
 {synopt:{opt update}}update missing values of same-named variables with using data{p_end}
@@ -103,62 +103,18 @@ variables. This skips the internal sorting step and can improve performance
 for pre-sorted data.
 
 {phang}
-{opt force} allows merging when key variables have different types (string vs.
-numeric) in master and using datasets.
-
-{phang}
-{opt noreport} suppresses the table showing the merge result summary.
-
-{phang}
-{opt verbose} displays detailed progress information and timing breakdown.
-
-{phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cmerge} uses all available CPU cores.
-
-{phang}
-{opt nolabel} prevents value labels from being copied from the using dataset.
-By default, value labels attached to variables in the using dataset are copied
-to the merged result.
-
-{phang}
-{opt nonotes} prevents variable notes (characteristics) from being copied from
-the using dataset. By default, variable notes are preserved.
-
-{phang}
-{opt update} specifies that for observations that match, missing values of
-variables that exist in both datasets should be updated with corresponding
-non-missing values from the using dataset. Variables unique to using are
-always added.
-
-{phang}
-{opt replace} specifies that for observations that match, all values of
-variables that exist in both datasets should be replaced with corresponding
-values from the using dataset. This is more aggressive than {opt update}
-as it replaces non-missing values too.
-
-{phang}
-{opt preserve_order(#)} controls whether the observation order from the master
-dataset is preserved in the merged result. The default value of 0 allows {cmd:cmerge}
-to reorder observations for performance. Set to 1 to maintain the original master
-dataset observation order.
-
-
-{marker remarks}{...}
-{title:Remarks}
-
-{pstd}
-{cmd:cmerge} performs all merge operations entirely in C for maximum speed.
-The algorithm uses:
-
-{p 8 12 2}1. Parallel data loading into C memory{p_end}
+{opt force} allows incompatible string/numeric types in shared non-key variables.
+The master storage type is retained, and incompatible using-side values are
+missing. Key variables must have matching string/numeric types even with
+{opt force}; otherwise the command returns error 106 before modifying data.
+{p_end}
 {p 8 12 2}2. High-performance radix sort on key variables{p_end}
 {p 8 12 2}3. Single-pass sorted merge join{p_end}
 {p 8 12 2}4. Parallel output construction{p_end}
 
 {pstd}
-For large datasets (millions of observations), {cmd:cmerge} can be 3-5x faster
-than the native {cmd:merge} command.
+Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
+should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
 
 {pstd}
 Due to the overhead of reading data from Stata into C memory and writing results
@@ -239,4 +195,10 @@ Manual: {bf:[D] merge}
 
 {psee}
 Online: {help merge}, {help joinby}, {help ctools}, {help csort}
+{p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+Shared numeric and fixed-string variables are widened before updates or using-only rows are written. A long/float combination uses double to preserve both inputs. Key variables must have matching string/numeric types even with force. For incompatible non-key types, force retains the master type and treats the using-side values as missing. String writes retain the shared plugin limit of str2045; strL output is unsupported. Failed merges restore the master dataset.
 {p_end}

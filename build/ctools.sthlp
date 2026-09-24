@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 1.0.1 07Feb2026}{...}
+{* *! version 1.0.2 20260920}{...}
 {viewerjumpto "Syntax" "ctools##syntax"}{...}
 {viewerjumpto "Description" "ctools##description"}{...}
 {viewerjumpto "Options" "ctools##options"}{...}
@@ -43,8 +43,9 @@ significant speed improvements over native Stata commands and popular user-writt
 packages for common data operations and statistical estimation.
 
 {pstd}
-All commands are designed as drop-in replacements with syntax that closely
-matches the original commands they replace.
+Commands implement selected reference interfaces; options and inference differ.
+See the command help and the repository documentation in docs/COMPATIBILITY.md.
+Use {cmd:ctools, version} to report the installed ado and plugin versions.
 
 
 {marker commands}{...}
@@ -71,6 +72,7 @@ matches the original commands they replace.
 
 {p2col:{help creghdfe}}OLS with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/reghdfe":reghdfe}){p_end}
 {p2col:{help civreghdfe}}2SLS/GMM with multi-way fixed effects (replaces {browse "https://github.com/sergiocorreia/ivreghdfe":ivreghdfe}){p_end}
+{p2col:{help cpplmhdfe}}PPML with multi-way fixed effects (selected {cmd:ppmlhdfe} options){p_end}
 {p2col:{help cqreg}}Quantile regression (replaces {help qreg}){p_end}
 {p2col:{help cpsmatch}}Propensity score matching (replaces {browse "https://ideas.repec.org/c/boc/bocode/s457730.html":psmatch2}){p_end}
 

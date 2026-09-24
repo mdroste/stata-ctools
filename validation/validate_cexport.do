@@ -156,7 +156,7 @@ benchmark_export, testname("large dataset (50K)")
  ******************************************************************************/
 print_section "Panel Data (nlswork)"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 
 benchmark_export, testname("panel data")
@@ -927,7 +927,7 @@ benchmark_export, testname("datafmt: negative format (%-td)") exportopts(datafmt
 * Test 18: Real-world dataset with dates (nlswork)
 * Note: We only test the date variable since datafmt affects all numeric formatting
 * and cexport doesn't implement full numeric display format support (only dates)
-capture webuse nlswork, clear
+capture ctools_fixture nlswork, clear
 if _rc == 0 {
     keep in 1/1000
     keep idcode year
@@ -1245,7 +1245,7 @@ sysuse census, clear
 benchmark_export state pop, testname("census: state and pop only")
 
 * nlswork dataset
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 capture cexport delimited using "temp/nlswork.csv", replace
 if _rc == 0 {
     test_pass "nlswork dataset export"
@@ -1255,28 +1255,28 @@ else {
 }
 
 * nlswork first 5000 rows (benchmark comparison)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_export, testname("nlswork: first 5K rows")
 
 * lifeexp dataset
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 benchmark_export, testname("lifeexp dataset")
 
 * voter dataset
-capture webuse voter, clear
+capture ctools_fixture voter, clear
 if _rc == 0 {
     benchmark_export, testname("voter dataset")
 }
 
 * bplong dataset (repeated measures)
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_export, testname("bplong (repeated measures)")
 }
 
 * cancer dataset (survival)
-capture webuse cancer, clear
+capture ctools_fixture cancer, clear
 if _rc == 0 {
     benchmark_export, testname("cancer (survival data)")
 }
@@ -2105,18 +2105,18 @@ benchmark_xlsx_export, testname("xlsx export: census full") exportopts(firstrow(
 sysuse census, clear
 benchmark_xlsx_export state pop, testname("xlsx export: census select") exportopts(firstrow(variables))
 
-capture webuse nlswork, clear
+capture ctools_fixture nlswork, clear
 if _rc == 0 {
     keep in 1/2000
     benchmark_xlsx_export, testname("xlsx export: nlswork 2K") exportopts(firstrow(variables))
 }
 
-capture webuse lifeexp, clear
+capture ctools_fixture lifeexp, clear
 if _rc == 0 {
     benchmark_xlsx_export, testname("xlsx export: lifeexp") exportopts(firstrow(variables))
 }
 
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_xlsx_export, testname("xlsx export: bplong") exportopts(firstrow(variables))
 }
@@ -2586,3 +2586,6 @@ foreach f of local files {
 * End of cexport validation
 noi print_summary "cexport"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cexport"

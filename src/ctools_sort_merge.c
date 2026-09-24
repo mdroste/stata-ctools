@@ -189,8 +189,8 @@ static void block_radix_sort_string(perm_idx_t * MERGE_RESTRICT order,
         return;
     }
 
-    /* MSD radix sort */
-    for (size_t char_pos = 0; char_pos < max_len; char_pos++) {
+    /* Stable LSD passes: the first character must have final precedence. */
+    for (size_t char_pos = max_len; char_pos-- > 0;) {
         memset(counts, 0, sizeof(counts));
 
         for (size_t i = 0; i < len; i++) {
@@ -236,11 +236,11 @@ static void block_radix_sort_string(perm_idx_t * MERGE_RESTRICT order,
 static inline size_t binary_search_numeric(const perm_idx_t * MERGE_RESTRICT order,
                                            const uint64_t * MERGE_RESTRICT keys,
                                            size_t start, size_t end,
-                                           uint64_t target)
+                                           uint64_t target, int upper)
 {
     while (start < end) {
         size_t mid = start + (end - start) / 2;
-        if (keys[order[mid]] < target) {
+        if (keys[order[mid]] < target || (upper && keys[order[mid]] == target)) {
             start = mid + 1;
         } else {
             end = mid;
@@ -252,11 +252,12 @@ static inline size_t binary_search_numeric(const perm_idx_t * MERGE_RESTRICT ord
 static inline size_t binary_search_string(const perm_idx_t * MERGE_RESTRICT order,
                                           char * const * MERGE_RESTRICT strings,
                                           size_t start, size_t end,
-                                          const char *target)
+                                          const char *target, int upper)
 {
     while (start < end) {
         size_t mid = start + (end - start) / 2;
-        if (strcmp(strings[order[mid]], target) < 0) {
+        int cmp = strcmp(strings[order[mid]], target);
+        if (cmp < 0 || (upper && cmp == 0)) {
             start = mid + 1;
         } else {
             end = mid;
@@ -353,7 +354,7 @@ static void parallel_merge_numeric(const perm_idx_t * MERGE_RESTRICT order,
     if (len1 >= len2) {
         size_t mid1 = len1 / 2;
         uint64_t pivot = keys[order[start1 + mid1]];
-        size_t mid2 = binary_search_numeric(order, keys, start2, start2 + len2, pivot) - start2;
+        size_t mid2 = binary_search_numeric(order, keys, start2, start2 + len2, pivot, 0) - start2;
 
         /* Spawn parallel tasks */
         #pragma omp task if(depth < 2)
@@ -372,7 +373,7 @@ static void parallel_merge_numeric(const perm_idx_t * MERGE_RESTRICT order,
     } else {
         size_t mid2 = len2 / 2;
         uint64_t pivot = keys[order[start2 + mid2]];
-        size_t mid1 = binary_search_numeric(order, keys, start1, start1 + len1, pivot) - start1;
+        size_t mid1 = binary_search_numeric(order, keys, start1, start1 + len1, pivot, 1) - start1;
 
         #pragma omp task if(depth < 2)
         parallel_merge_numeric(order, output, keys,
@@ -409,7 +410,7 @@ static void parallel_merge_string(const perm_idx_t * MERGE_RESTRICT order,
     if (len1 >= len2) {
         size_t mid1 = len1 / 2;
         const char *pivot = strings[order[start1 + mid1]];
-        size_t mid2 = binary_search_string(order, strings, start2, start2 + len2, pivot) - start2;
+        size_t mid2 = binary_search_string(order, strings, start2, start2 + len2, pivot, 0) - start2;
 
         #pragma omp task if(depth < 2)
         parallel_merge_string(order, output, strings,
@@ -427,7 +428,7 @@ static void parallel_merge_string(const perm_idx_t * MERGE_RESTRICT order,
     } else {
         size_t mid2 = len2 / 2;
         const char *pivot = strings[order[start2 + mid2]];
-        size_t mid1 = binary_search_string(order, strings, start1, start1 + len1, pivot) - start1;
+        size_t mid1 = binary_search_string(order, strings, start1, start1 + len1, pivot, 1) - start1;
 
         #pragma omp task if(depth < 2)
         parallel_merge_string(order, output, strings,
@@ -466,7 +467,7 @@ static stata_retcode parallel_merge_sort_numeric(perm_idx_t * MERGE_RESTRICT ord
     perm_idx_t *merge_temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
-    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
 
     if (!temp || !merge_temp || !block_starts || !block_lens || !thread_temps) {
         rc = STATA_ERR_MEMORY;
@@ -603,7 +604,7 @@ static stata_retcode parallel_merge_sort_string(perm_idx_t * MERGE_RESTRICT orde
     perm_idx_t *merge_temp = (perm_idx_t *)ctools_aligned_alloc(64, nobs * sizeof(perm_idx_t));
     size_t *block_starts = (size_t *)malloc(num_threads * sizeof(size_t));
     size_t *block_lens = (size_t *)malloc(num_threads * sizeof(size_t));
-    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
 
     if (!temp || !merge_temp || !block_starts || !block_lens || !thread_temps) {
         rc = STATA_ERR_MEMORY;
@@ -739,7 +740,7 @@ static stata_retcode merge_sort_by_numeric_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (num_threads > MERGE_MAX_THREADS) num_threads = MERGE_MAX_THREADS;
 
     if (data->nobs < MERGE_MIN_BLOCK_SIZE * 2) {
@@ -781,7 +782,7 @@ static stata_retcode merge_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (num_threads > MERGE_MAX_THREADS) num_threads = MERGE_MAX_THREADS;
 
     if (data->nobs < MERGE_MIN_BLOCK_SIZE * 2) {

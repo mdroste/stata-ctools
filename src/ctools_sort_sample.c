@@ -404,7 +404,7 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
 
     /* Per-thread temp buffers for bucket sorting (FIX: avoids race condition) */
-    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
     size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !sample_temp || !splitters || !temp_order ||
@@ -422,21 +422,19 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     }
 
     /* Phase 1: Parallel sampling */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
 
         size_t local_chunk = end - start;
-        size_t step = local_chunk / samples_per_thread;
-        if (step == 0) step = 1;
 
         uint64_t *my_samples = all_samples + tid * samples_per_thread;
 
-        for (size_t i = 0; i < samples_per_thread && start + i * step < end; i++) {
-            size_t idx = order[start + i * step];
+        for (size_t i = 0; i < samples_per_thread; i++) {
+            /* Include every sample, including short final partitions. */
+            size_t idx = order[start + i * local_chunk / samples_per_thread];
             my_samples[i] = keys[idx];
         }
     }
@@ -450,9 +448,8 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     }
 
     /* Phase 3: Parallel classification - count elements per bucket per thread */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -511,9 +508,8 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
     }
 
     /* Phase 5: Parallel scatter */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -536,9 +532,6 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
         }
     }
 
-    /* Copy scattered order back */
-    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
-
     /* Phase 6: Allocate per-thread temp buffers for bucket sort */
     size_t max_bucket_size = 0;
     for (int b = 0; b < num_threads; b++) {
@@ -547,9 +540,8 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
         }
     }
 
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
@@ -561,6 +553,9 @@ static stata_retcode sample_sort_numeric_impl(perm_idx_t * SAMPLE_RESTRICT order
             goto cleanup;
         }
     }
+
+    /* Scratch is complete; this phase cannot fail. */
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
     /* Phase 6: Parallel local bucket sort */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
@@ -620,7 +615,7 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
                                 num_threads * padded_buckets * sizeof(size_t));
     size_t *bucket_sizes = (size_t *)calloc(num_threads, sizeof(size_t));
     size_t *bucket_offsets = (size_t *)malloc(num_threads * sizeof(size_t));
-    perm_idx_t **thread_temps = (perm_idx_t **)malloc(num_threads * sizeof(perm_idx_t *));
+    perm_idx_t **thread_temps = (perm_idx_t **)calloc(num_threads, sizeof(perm_idx_t *));
     size_t *thread_bucket_offsets = NULL;
 
     if (!all_samples || !splitters || !temp_order ||
@@ -636,21 +631,19 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
     }
 
     /* Phase 1: Parallel sampling */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
 
         size_t local_chunk = end - start;
-        size_t step = local_chunk / samples_per_thread;
-        if (step == 0) step = 1;
 
         char **my_samples = all_samples + tid * samples_per_thread;
 
-        for (size_t i = 0; i < samples_per_thread && start + i * step < end; i++) {
-            size_t idx = order[start + i * step];
+        for (size_t i = 0; i < samples_per_thread; i++) {
+            /* Include every sample, including short final partitions. */
+            size_t idx = order[start + i * local_chunk / samples_per_thread];
             my_samples[i] = (char *)strings[idx];
         }
     }
@@ -673,9 +666,8 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
     }
 
     /* Phase 3: Parallel classification */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -716,9 +708,8 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
     }
 
     /* Phase 5: Parallel scatter */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t start = (size_t)tid * chunk_size;
         size_t end = (size_t)(tid + 1) * chunk_size;
         if (end > nobs) end = nobs;
@@ -735,8 +726,6 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
         }
     }
 
-    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
-
     /* Phase 6: Allocate per-thread temps */
     size_t max_bucket_size = 0;
     for (int b = 0; b < num_threads; b++) {
@@ -745,18 +734,20 @@ static stata_retcode sample_sort_string_impl(perm_idx_t * SAMPLE_RESTRICT order,
         }
     }
 
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         thread_temps[tid] = (perm_idx_t *)malloc(max_bucket_size * sizeof(perm_idx_t));
     }
 
     for (int t = 0; t < num_threads; t++) {
-        if (thread_temps[t] == NULL && bucket_sizes[t] > 0) {
+        if (thread_temps[t] == NULL) {
             rc = STATA_ERR_MEMORY;
             goto cleanup;
         }
     }
+
+    /* Scratch is complete; this phase cannot fail. */
+    memcpy(order, temp_order, nobs * sizeof(perm_idx_t));
 
     /* Phase 6: Parallel local bucket sort */
     #pragma omp parallel for schedule(dynamic, 1) num_threads(num_threads)
@@ -810,7 +801,7 @@ static stata_retcode sample_sort_by_numeric_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (num_threads > SAMPLE_MAX_THREADS) num_threads = SAMPLE_MAX_THREADS;
 
     if (data->nobs < (size_t)SAMPLE_SORT_THRESHOLD) {
@@ -852,7 +843,7 @@ static stata_retcode sample_sort_by_string_var(stata_data *data, int var_idx)
     }
 
     /* Determine thread count */
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (num_threads > SAMPLE_MAX_THREADS) num_threads = SAMPLE_MAX_THREADS;
 
     if (data->nobs < (size_t)SAMPLE_SORT_THRESHOLD) {

@@ -8,7 +8,7 @@
 {title:Title}
 
 {phang}
-{bf:cdecode} {hline 2} C-accelerated numeric to string decoding for Stata
+{bf:cdecode} {hline 2} Literal value-label decoding with multiple-variable and replace support
 
 
 {marker syntax}{...}
@@ -29,8 +29,8 @@
 
 {syntab:Options}
 {synopt:{opth maxl:ength(#)}}maximum string length for new variables{p_end}
-{synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
-{synopt:{opt v:erbose}}display timing breakdown{p_end}
+{synopt:{opt thr:eads(#)}}accepted for compatibility; native decoding controls execution{p_end}
+{synopt:{opt v:erbose}}report use of the native decoding engine{p_end}
 {synoptline}
 
 
@@ -38,8 +38,9 @@
 {title:Description}
 
 {pstd}
-{cmd:cdecode} is a high-performance drop-in replacement for Stata's {help decode:decode}
-command. It converts numeric variables with value labels to string variables
+{cmd:cdecode} extends Stata's {help decode:decode} command to multiple variables
+and transactional replacement. It uses Stata's native value-label engine to
+preserve literal text, labeled extended missing values, and long strL labels. It converts numeric variables with value labels to string variables
 containing the label text.
 
 {pstd}
@@ -85,16 +86,17 @@ You must specify either {opt generate()} or {opt replace}, but not both.
 
 {phang}
 {opth maxlength(#)} specifies the maximum string length for the new variables.
-By default, {cmd:cdecode} automatically determines the length based on the
-longest label in the value label definition. Use this option to truncate
+By default, native {cmd:decode} determines the output type, including strL for
+long labels. {cmd:maxlength()} uses native decode's length and truncation rules. Use this option to truncate
 labels to a specific length.
 
 {phang}
-{opt threads(#)} specifies the maximum number of threads to use for parallel
-operations. By default, {cmd:cdecode} uses all available CPU cores.
+{opt threads(#)} is retained for syntax compatibility and does not control
+Stata's native decoding engine. The legacy C label-save parser is no longer used.
 
 {phang}
-{opt verbose} displays detailed progress information and timing breakdown.
+{opt verbose} reports use of the native decoding engine and the number of
+variables decoded.
 
 
 {marker examples}{...}

@@ -123,11 +123,17 @@ program define civreghdfe, eclass
         exit 198
     }
 
+    if "`center'" != "" {
+        di as error "civreghdfe: center is not supported"
+        exit 198
+    }
+
     * Handle residuals2 - auto-named residuals
     if "`residuals2'" != "" {
-        capture drop _civreghdfe_resid
         local residuals "_civreghdfe_resid"
     }
+
+    if "`residuals'" != "" & "`residuals2'" == "" confirm new variable `residuals'
 
     * Parse the varlist with parentheses for endogenous vars and instruments
     * Format: depvar [exog_before] (endog1 endog2 = inst1 inst2 inst3) [exog_after]
@@ -161,7 +167,17 @@ program define civreghdfe, eclass
             local rest = substr("`rest'", 2, .)
         }
 
-        local paren_end = strpos("`rest'", ")")
+        local paren_end = 0
+        local paren_depth = 1
+        forvalues pos = 1/`=strlen("`rest'")' {
+            local char = substr("`rest'", `pos', 1)
+            if "`char'" == "(" local ++paren_depth
+            if "`char'" == ")" local --paren_depth
+            if `paren_depth' == 0 {
+                local paren_end = `pos'
+                continue, break
+            }
+        }
         if `paren_end' == 0 {
             di as error "Unmatched parenthesis in variable specification"
             exit 198
@@ -325,60 +341,11 @@ program define civreghdfe, eclass
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "civreghdfe: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * When no absorb specified and noconstant not requested, add explicit constant
     * (With absorb, the constant is implicitly absorbed by the FE)
@@ -470,8 +437,11 @@ program define civreghdfe, eclass
             di as error "Weight type `weight' not supported"
             exit 198
         }
-        local weight_var `"`exp'"'
-        confirm numeric variable `weight_var'
+        tempvar evaluated_weight
+        local weight_expr = trim(`"`exp'"')
+        if substr(`"`weight_expr'"', 1, 1) == "=" local weight_expr = substr(`"`weight_expr'"', 2, .)
+        quietly generate double `evaluated_weight' = `weight_expr' if `touse'
+        local weight_var "`evaluated_weight'"
     }
 
     * Mark out additional variables from sample (touse already created earlier for fvrevar)
@@ -624,6 +594,11 @@ program define civreghdfe, eclass
         if "`verbose'" != "" {
             di as text "Estimation method:     2SLS"
         }
+    }
+
+    if `maxiter' < 1 | missing(`tolerance') | `tolerance' <= 0 {
+        di as error "civreghdfe: maxiter() and tolerance() must be positive"
+        exit 198
     }
 
     * Set up scalars for plugin
@@ -987,6 +962,12 @@ program define civreghdfe, eclass
         local plugin_vars `plugin_vars' `weight_var'
     }
 
+    tempvar stored_resid
+    quietly gen double `stored_resid' = .
+    local plugin_vars `plugin_vars' `stored_resid'
+    local resid_idx : word count `plugin_vars'
+    scalar __civreghdfe_resid_idx = `resid_idx'
+
     * Build threads option string
     local threads_code ""
     if `threads' > 0 {
@@ -1002,6 +983,11 @@ program define civreghdfe, eclass
     timer clear 99
     timer on 99
     plugin call ctools_plugin `plugin_vars' if `touse', "civreghdfe `threads_code' iv_regression"
+    quietly replace `touse' = 0 if missing(`stored_resid')
+    if "`residuals'" != "" {
+        if "`residuals2'" != "" capture drop `residuals'
+        rename `stored_resid' `residuals'
+    }
     timer off 99
     qui timer list 99
     local t_plugin = r(t99)
@@ -1268,6 +1254,7 @@ program define civreghdfe, eclass
 
     * Store macros
     ereturn local predict "civreghdfe_p"
+    ereturn local resid "`residuals'"
     ereturn local cmd "civreghdfe"
     ereturn local cmdline `"civreghdfe `0'"'
     ereturn local depvar "`depname_use'"
@@ -2050,6 +2037,8 @@ program define civreghdfe, eclass
     forval i = 1/10 {
         capture scalar drop __civreghdfe_partial_`i'
     }
+
+    capture scalar drop __civreghdfe_resid_idx
 
     * Clean up collinearity scalars
     capture scalar drop __civreghdfe_num_collinear

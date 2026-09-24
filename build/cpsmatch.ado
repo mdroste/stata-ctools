@@ -52,6 +52,11 @@ program define cpsmatch, rclass sortpreserve
         local method = 2
     }
 
+    if "`noreplacement'" != "" & (`method' != 0 | `neighbor' != 1) {
+        di as error "cpsmatch: noreplacement requires nearest-neighbor matching with neighbor(1)"
+        exit 198
+    }
+
     * Kernel type
     local kernelcode = 0  /* 0=epan, 1=normal, 2=biweight, 3=uniform, 4=tricube */
     if "`kerneltype'" != "" {
@@ -113,62 +118,11 @@ program define cpsmatch, rclass sortpreserve
     * LOAD PLUGIN
     * =========================================================================
 
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cpsmatch: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * =========================================================================
     * ESTIMATE PROPENSITY SCORE (if not provided)
@@ -210,40 +164,16 @@ program define cpsmatch, rclass sortpreserve
     quietly gen double _id = .
     quietly gen double _support = .
     quietly gen byte _treated = `depvar' `if' `in'
-    quietly gen int _nn = .
+    quietly gen long _nn = .
 
-    * Get variable indices - include ALL variables (like cencode)
-    unab allvars : *
-
-    local treat_idx = 0
-    local pscore_idx = 0
-    local outcome_idx = 0
-    local weight_idx = 0
-    local match_idx = 0
-    local support_idx = 0
-
-    local idx = 1
-    foreach v of local allvars {
-        if "`v'" == "`depvar'" {
-            local treat_idx = `idx'
-        }
-        if "`v'" == "_pscore" {
-            local pscore_idx = `idx'
-        }
-        if "`outcome'" != "" & "`v'" == "`outcome'" {
-            local outcome_idx = `idx'
-        }
-        if "`v'" == "_weight" {
-            local weight_idx = `idx'
-        }
-        if "`v'" == "_id" {
-            local match_idx = `idx'
-        }
-        if "`v'" == "_support" {
-            local support_idx = `idx'
-        }
-        local ++idx
-    }
+    * Pass only the matching inputs and outputs in a fixed, one-based order.
+    local allvars "`depvar' _pscore _weight _id _support `outcome' _nn"
+    local treat_idx = 1
+    local pscore_idx = 2
+    local weight_idx = 3
+    local match_idx = 4
+    local support_idx = 5
+    local outcome_idx = cond("`outcome'" == "", 0, 6)
 
     * Count observations
     quietly count `if' `in'
@@ -288,8 +218,8 @@ program define cpsmatch, rclass sortpreserve
     * POST-PROCESSING
     * =========================================================================
 
-    * Update _nn with neighbor count from matching
-    quietly replace _nn = `neighbor' if _treated == 1 & _support == 1
+    * _nn is written by C: actual matches, zero for unmatched treated rows,
+    * missing for controls and observations outside the matching sample.
 
     * =========================================================================
     * CALCULATE ATT (if outcome specified)

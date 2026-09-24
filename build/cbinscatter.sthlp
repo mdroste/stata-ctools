@@ -37,7 +37,7 @@
 
 {syntab:Data Options}
 {synopt:{opt discrete}}treat x as discrete (one bin per unique value){p_end}
-{synopt:{opt genxq(varname)}}generate bin assignment variable{p_end}
+
 {synopt:{opt save:data(filename)}}save bin data to file{p_end}
 
 {syntab:Graph Options}
@@ -154,8 +154,8 @@ Fit lines are computed from the underlying microdata, not the bin means.
 unique value of x instead of quantile-based bins.
 
 {phang}
-{opt genxq(varname)} generates a new variable containing the bin assignment
-for each observation. (Not yet implemented.)
+{opt genxq(varname)} is not implemented and returns error 198 before changing data.
+Use {opt savedata()} for the aggregate bin data.
 
 {phang}
 {opt savedata(filename)} saves the bin data (bin means, counts, etc.) to
@@ -273,7 +273,7 @@ operations. By default, {cmd:cbinscatter} uses all available CPU cores.
 
 {phang2}1. {bf:Parallel data loading:} Data is loaded from Stata in parallel with 8-way loop unrolling.{p_end}
 
-{phang2}2. {bf:Histogram-based binning:} Instead of sorting (O(N log N)), uses a histogram approach with O(N) complexity and sequential memory access, providing 40x+ speedups for bin computation.{p_end}
+{phang2}2. {bf:Histogram-based binning:} Instead of sorting (O(N log N)), uses a histogram approach with O(N) complexity and sequential memory access.{p_end}
 
 {phang2}3. {bf:Single-pass statistics:} Bin means and fit coefficients are computed in single passes through the data using closed-form solutions.{p_end}
 
@@ -317,4 +317,14 @@ for his pioneering work on binned scatter plot visualization in Stata.
 {psee}
 Online: {browse "https://github.com/michaelstepner/binscatter":binscatter} (if installed),
 {help ctools}, {help creghdfe}, {help twoway}
+{p_end}
+
+{title:Control and weight handling}
+
+{pstd}
+Weight expressions are evaluated once. Missing weights are excluded, selected
+weights must be positive, and fweights must be integers. Factor-variable controls
+and interactions are materialized before adjustment. Redundant control columns
+are omitted; a failed adjustment returns an error. Fixed effects use iterative
+projection sweeps in cbinscatter_resid.c.
 {p_end}

@@ -1161,7 +1161,7 @@ foreach ds of local sysuse_datasets {
         benchmark_import using "temp/sysuse_`ds'.csv", testname("sysuse `ds'")
     }
     else {
-        * (silent) "  [SKIP] sysuse `ds' not available"
+        test_skip "sysuse `ds'" "dataset unavailable (r(`=_rc'))"
     }
 }
 
@@ -1173,19 +1173,19 @@ print_section "Stata Web Datasets (webuse)"
 
 * Common webuse datasets for testing
 local webuse_datasets airline auto2 bdesop cancer countxmpl grunfeld ///
-    lutkepohl2 klein mlogitex mlpsdist nhanes2 nhanes2f nlsw88 nlswork ///
-    pig pig2 shock sysauto1 union uslifeexp2 wpi1 xpose1
+    lutkepohl2 klein sysdsn1 lbw nhanes2 nhanes2f nlsw88 nlswork ///
+    pig bplong ships lifeexp union uslifeexp2 wpi1 census
 
 foreach ds of local webuse_datasets {
     capture {
-        webuse `ds', clear
+        ctools_fixture `ds', clear
         export delimited using "temp/webuse_`ds'.csv", replace
     }
     if _rc == 0 {
         benchmark_import using "temp/webuse_`ds'.csv", testname("webuse `ds'")
     }
     else {
-        * (silent) "  [SKIP] webuse `ds' not available or no internet"
+        test_skip "webuse `ds'" "dataset unavailable (r(`=_rc'))"
     }
 }
 
@@ -2597,7 +2597,7 @@ export excel using "temp/xi_census.xlsx", firstrow(variables) replace
 benchmark_excel using "temp/xi_census.xlsx", testname("xlsx import: census full") importopts(firstrow clear)
 capture erase "temp/xi_census.xlsx"
 
-capture webuse nlswork, clear
+capture ctools_fixture nlswork, clear
 if _rc == 0 {
     keep in 1/2000
     export excel using "temp/xi_nlswork.xlsx", firstrow(variables) replace
@@ -2605,14 +2605,14 @@ if _rc == 0 {
     capture erase "temp/xi_nlswork.xlsx"
 }
 
-capture webuse lifeexp, clear
+capture ctools_fixture lifeexp, clear
 if _rc == 0 {
     export excel using "temp/xi_lifeexp.xlsx", firstrow(variables) replace
     benchmark_excel using "temp/xi_lifeexp.xlsx", testname("xlsx import: lifeexp") importopts(firstrow clear)
     capture erase "temp/xi_lifeexp.xlsx"
 }
 
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     export excel using "temp/xi_bplong.xlsx", firstrow(variables) replace
     benchmark_excel using "temp/xi_bplong.xlsx", testname("xlsx import: bplong") importopts(firstrow clear)
@@ -3134,3 +3134,6 @@ foreach f of local files {
 * End of cimport validation
 noi print_summary "cimport"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cimport"

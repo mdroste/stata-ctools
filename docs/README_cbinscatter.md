@@ -31,7 +31,7 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 | Option | Description |
 |--------|-------------|
 | `discrete` | Treat x as discrete (one bin per unique value) |
-| `genxq(varname)` | Generate bin assignment variable (not yet implemented) |
+| `genxq(varname)` | Unsupported; rejected with r(198) before data processing |
 | `savedata(filename)` | Save bin data to Stata file |
 
 ### Graph Options
@@ -50,7 +50,6 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 |--------|-------------|
 | `reportreg` | Report underlying regression |
 | `verbose` | Display progress information |
-| `timeit` | Display timing breakdown |
 
 ### Weights
 Supports `aweight`, `fweight`, `pweight`, and `iweight`.
@@ -87,7 +86,7 @@ cbinscatter price mpg [aw=weight], nquantiles(15)
 cbinscatter price mpg, nograph savedata(mybins)
 
 * Cubic fit with verbose timing
-cbinscatter price mpg, linetype(cubic) verbose timeit
+cbinscatter price mpg, linetype(cubic) verbose
 ```
 
 ## Performance
@@ -107,7 +106,7 @@ cbinscatter price mpg, linetype(cubic) verbose timeit
 - **Fast path for unweighted no-SE case**: A specialized loop skips weight and SE computation when neither is needed, reducing per-observation work
 
 **Residualization:**
-- **Native HDFE via CG solver**: Fixed effects are absorbed using the same symmetric Kaczmarz CG algorithm as `creghdfe`, with pre-computed inverse counts and thread-local buffers
+- **Iterative projections**: `cbinscatter_resid.c` absorbs fixed effects by repeated projection sweeps; it does not use the shared conjugate-gradient solver in `creghdfe`.
 - **Fused project-subtract**: Combines projection and subtraction in a single memory pass
 
 **Data I/O:**
@@ -115,11 +114,11 @@ cbinscatter price mpg, linetype(cubic) verbose timeit
 - **Overflow-safe allocation**: `ctools_safe_mul_size` checks prevent silent overflow on datasets with many bins or groups
 
 ### Performance Benchmark
-On a dataset with 25 million observations, `cbinscatter` completes in under 1 second including graph generation.
+Use the validation benchmarks to measure a particular dataset and configuration. Record the source revision, dimensions, options, hardware, and reference package versions; no universal runtime is promised.
 
 ## Timing Breakdown
 
-With `timeit`, you'll see time spent in:
+With `verbose`, you'll see time spent in:
 - **Load**: Loading data from Stata
 - **Residualize**: Partialling out controls/fixed effects
 - **Bin computation**: Computing bin means
@@ -189,7 +188,6 @@ With `timeit`, you'll see time spent in:
 | Implementation | Stata + Mata | C with OpenMP |
 | Binning Algorithm | Sort-based | Histogram-based |
 | Binning Complexity | O(N log N) | O(N) |
-| Typical Speedup | 1x (baseline) | 10-100x |
 | HDFE Support | Via reghdfe | Native |
 
 ## See Also
@@ -197,3 +195,16 @@ With `timeit`, you'll see time spent in:
 - [ctools Overview](../README.md)
 - [creghdfe](README_creghdfe.md) - Regression with HDFE (used internally)
 - binscatter - Original Stata implementation (if installed)
+
+## Controls and weights
+
+Weight expressions such as `[aw=1+abs(z)]` are evaluated once on the candidate
+sample. Missing weights are excluded; selected weights must be positive, and
+frequency weights must be integers. `controls()` accepts factor terms and
+interactions, which the wrapper materializes before calling the plugin. For
+example, `controls(i.category c.z#i.category)` is supported. The two plotted
+variables must be numeric variables.
+
+`method(binsreg)` omits redundant control columns when solving the adjustment,
+including with absorbed effects. Adding a duplicate control leaves fitted bin
+means unchanged. Failure to solve the adjustment returns an error.

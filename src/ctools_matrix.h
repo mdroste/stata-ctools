@@ -78,9 +78,11 @@ typedef struct {
 
 #endif /* CTOOLS_VCE_DATA_DEFINED */
 
-void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V);
+/* Return 0 on success, 920 on allocation failure, 498 on invalid inputs.
+ * Callers must not publish a covariance when the return is nonzero. */
+ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V);
 
-void ctools_vce_cluster(const ctools_vce_data *d,
+ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
                         const ST_int *cluster_ids, ST_int num_clusters,
                         ST_double dof_adj, ST_double *V);
 

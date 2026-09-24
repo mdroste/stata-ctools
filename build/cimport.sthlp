@@ -27,7 +27,7 @@
 {synoptline}
 {syntab:Main}
 {synopt:{opt clear}}clear data in memory before loading{p_end}
-{synopt:{opt d:elimiters(chars)}}specify field delimiter; default is comma{p_end}
+{synopt:{opt d:elimiters(chars)}}specify field delimiter; default is automatic detection{p_end}
 
 {syntab:Variable names}
 {synopt:{opt varn:ames(rule)}}rule for reading variable names; {opt 1} or {opt nonames}{p_end}
@@ -42,7 +42,7 @@
 {syntab:Parsing}
 {synopt:{opt bindq:uotes(option)}}quote binding rule; {opt strict} or {opt loose}{p_end}
 {synopt:{opt stripq:uotes}}remove surrounding quotes from string values{p_end}
-{synopt:{opt enc:oding(encoding)}}file encoding; currently only UTF-8 supported{p_end}
+{synopt:{opt enc:oding(encoding)}}file encoding; default is automatic detection; UTF-32 rejected{p_end}
 {synopt:{opt rowr:ange([start][:end])}}range of rows to import{p_end}
 {synopt:{opt colr:ange([start][:end])}}range of columns to import{p_end}
 {synopt:{opt empty:lines(option)}}empty line handling; {opt skip} or {opt fill}{p_end}
@@ -97,6 +97,11 @@ It is a high-performance replacement for {help import delimited:import delimited
 replacement for {help import excel:import excel}.
 
 
+{pstd}
+String fields longer than 2,045 bytes are not supported. Such files are rejected
+before {opt clear} discards the current dataset. Use native {cmd:import} when
+strL storage is required. Strings within this limit are imported without truncation.
+
 {marker options}{...}
 {title:Options}
 
@@ -107,8 +112,7 @@ replacement for {help import excel:import excel}.
 though the current data have not been saved to disk.
 
 {phang}
-{opt delimiters(chars)} specifies the delimiter used in the file. The default
-is comma ({cmd:,}). Use {cmd:delimiters(tab)} or {cmd:delimiters(\t)} for
+{opt delimiters(chars)} specifies the delimiter used in the file. The default is automatic detection; use {cmd:delimiters(",")} to force comma. Use {cmd:delimiters(tab)} or {cmd:delimiters(\t)} for
 tab-delimited files.
 
 {dlgtab:Variable names}
@@ -160,8 +164,9 @@ after parsing. {bf:Note:} This option is currently accepted but not yet
 implemented in the C plugin.
 
 {phang}
-{opt encoding(encoding)} specifies the file encoding. Currently only UTF-8
-is supported.
+{opt encoding(encoding)} overrides automatic encoding detection. Supported encodings include UTF-8,
+UTF-16LE/BE, ASCII, Latin-1/9, Windows-1252, and Mac Roman. UTF-32 is rejected;
+convert it to UTF-8 before importing.
 
 {phang}
 {opt rowrange([start][:end])} specifies a range of rows to import.
@@ -315,4 +320,10 @@ Manual: {bf:[D] import delimited}, {bf:[D] import excel}
 
 {psee}
 Online: {help import delimited}, {help import excel}, {help insheet}, {help cexport}, {help ctools}
+{p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+Excel import honors workbookPr date1904. Daily date cells become Stata daily dates, and datetime cells become Stata milliseconds. In the 1900 system, serial 60 (the nonexistent 29 February 1900) is missing; serials below and above it use their correct offsets. Inline-string headers and values are retained in both the serial and parallel parser paths. Imported display formats are not inferred from arbitrary Excel formatting.
 {p_end}

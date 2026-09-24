@@ -465,9 +465,9 @@ static ST_retcode store_results(
     ST_int g, b, row;
 
     /* Store scalars */
-    SF_scal_save("__cbinscatter_N", (ST_double)results->total_obs);
-    SF_scal_save("__cbinscatter_N_dropped", (ST_double)results->obs_dropped);
-    SF_scal_save("__cbinscatter_num_groups", (ST_double)results->num_by_groups);
+    { ST_retcode rc = SF_scal_save("__cbinscatter_N", (ST_double)results->total_obs); if (rc) return rc; }
+    { ST_retcode rc = SF_scal_save("__cbinscatter_N_dropped", (ST_double)results->obs_dropped); if (rc) return rc; }
+    { ST_retcode rc = SF_scal_save("__cbinscatter_num_groups", (ST_double)results->num_by_groups); if (rc) return rc; }
 
     /* Store bin data to matrix __cbinscatter_bins */
     row = 1;
@@ -475,11 +475,11 @@ static ST_retcode store_results(
         ByGroupResult *group = &results->groups[g];
         for (b = 0; b < group->num_bins; b++) {
             BinStats *bin = &group->bins[b];
-            SF_mat_store("__cbinscatter_bins", row, 1, (ST_double)group->by_group_id);
-            SF_mat_store("__cbinscatter_bins", row, 2, (ST_double)bin->bin_id);
-            SF_mat_store("__cbinscatter_bins", row, 3, bin->x_mean);
-            SF_mat_store("__cbinscatter_bins", row, 4, bin->y_mean);
-            SF_mat_store("__cbinscatter_bins", row, 5, (ST_double)bin->n_obs);
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 1, (ST_double)group->by_group_id); if (rc) return rc; }
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 2, (ST_double)bin->bin_id); if (rc) return rc; }
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 3, bin->x_mean); if (rc) return rc; }
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 4, bin->y_mean); if (rc) return rc; }
+            { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_bins", row, 5, (ST_double)bin->n_obs); if (rc) return rc; }
             row++;
         }
     }
@@ -490,10 +490,10 @@ static ST_retcode store_results(
             ByGroupResult *group = &results->groups[g];
             if (group->fit_coefs && group->fit_order > 0) {
                 for (ST_int j = 0; j <= group->fit_order && j < 4; j++) {
-                    SF_mat_store("__cbinscatter_coefs", g + 1, j + 1, group->fit_coefs[j]);
+                    { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_coefs", g + 1, j + 1, group->fit_coefs[j]); if (rc) return rc; }
                 }
-                SF_mat_store("__cbinscatter_fit_stats", g + 1, 1, group->fit_r2);
-                SF_mat_store("__cbinscatter_fit_stats", g + 1, 2, (ST_double)group->fit_n);
+                { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_fit_stats", g + 1, 1, group->fit_r2); if (rc) return rc; }
+                { ST_retcode rc = (_stata_)->safematstore("__cbinscatter_fit_stats", g + 1, 2, (ST_double)group->fit_n); if (rc) return rc; }
             }
         }
     }

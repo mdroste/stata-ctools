@@ -10,6 +10,13 @@
 
 #include "cpplmhdfe_types.h"
 
+/* Select on original rows until singleton and all-zero FE removals stabilize.
+ * levels are 1-based, mask is initialized by the caller; -1 means allocation
+ * or invalid-level failure. No compact/original index spaces are mixed. */
+ST_int ppml_select_fe_sample(const ST_double *y, ST_int *const *levels,
+    const ST_int *num_levels, ST_int G, ST_int N, ST_int *mask,
+    ST_int *num_singletons, ST_int *num_separated);
+
 /*
  * Detect separation via FE-level screening.
  * For each FE level, if all y_i = 0 for observations in that level,

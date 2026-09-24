@@ -9,42 +9,42 @@
   ```
 
 [![Build](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml/badge.svg)](https://github.com/mdroste/stata-ctools/actions/workflows/build.yml)
-![Version](https://img.shields.io/badge/version-0.9.1_(February_2026)-blue)
+![Version](https://img.shields.io/badge/version-1.0.2-blue)
 
 **This is an initial release. Please report problems/suggestions on [Issues](https://github.com/mdroste/stata-ctools/issues).**
 
 ## Overview
 
-**ctools** programs inherit the syntax and functionality of the programs they replace, but are usually much faster for large datasets.
+**ctools** provides C implementations of common Stata data operations and estimators. Supported syntax and statistical behavior vary by command; see the [compatibility table](docs/COMPATIBILITY.md).
 
-| Stata command | Replaced with | Description | Typical speedup |
-| --- | --- | --- | ---: |
-| `import` | `cimport` | Import text-delimited and Excel data | **10-30x** |
-| `export` | `cexport` | Export text-delimited and Excel data | **10-30x** |
-| `sort` | `csort` | Sort dataset | **1-5x** |
-| `merge` | `cmerge` | Merge (join) datasets | **1-5x** |
-| `sample` | `csample` | Resampling without replacement | **3-4x** |
-| `bsample` | `cbsample` | Resampling with replacement | **3-4x** |
-| `encode` | `cencode` | Recast string as labeled numeric | **2-10x** |
-| `decode` | `cdecode` | Recast labeled numeric as string | **2-10x** |
-| `destring` | `cdestring` | Recast string as numeric type | **5-20x** |
-| `qreg` | `cqreg` | Quantile regression | **2-4x** |
-| `gstats winsor` | `cwinsor` | Winsorize variables | **2-10x** |
-| `rangestat` | `crangestat` | Range statistics of variables | **20-100x** |
-| `psmatch2` | `cpsmatch` | Propensity score matching | **10-30x** |
-| `binscatter` | `cbinscatter` | Binned scatter plots | **10-30x** |
-| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects | **10-30x** |
-| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects | **10-30x** |
-| `ppmlhdfe` | `cppmlhdfe` | PPML with multi-way fixed effects | **20-30x** |
+| Stata command | Replaced with | Description |
+| --- | --- | --- |
+| `import` | `cimport` | Import text-delimited and Excel data |
+| `export` | `cexport` | Export text-delimited and Excel data |
+| `sort` | `csort` | Sort dataset |
+| `merge` | `cmerge` | Merge (join) datasets |
+| `sample` | `csample` | Resampling without replacement |
+| `bsample` | `cbsample` | Resampling with replacement |
+| `encode` | `cencode` | Recast string as labeled numeric |
+| `decode` | `cdecode` | Recast labeled numeric as string |
+| `destring` | `cdestring` | Recast string as numeric type |
+| `qreg` | `cqreg` | Quantile regression |
+| `gstats winsor` | `cwinsor` | Winsorize variables |
+| `rangestat` | `crangestat` | Range statistics of variables |
+| `psmatch2` | `cpsmatch` | Propensity score matching |
+| `binscatter` | `cbinscatter` | Binned scatter plots |
+| `reghdfe` | `creghdfe` | OLS with multi-way fixed effects |
+| `ivreghdfe` | `civreghdfe` | 2SLS/GMM with multi-way fixed effects |
+| `ppmlhdfe` | `cpplmhdfe` | PPML with multi-way fixed effects |
 
-Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.MD](FEATURES.MD) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
+Some ctools programs have extended functionality. For instance, `cbinscatter` supports multi-way fixed effects and the procedure to control for covariates characterized by [Cattaneo et al. (2024)](https://www.aeaweb.org/articles?id=10.1257/aer.20221576). See [FEATURES.md](FEATURES.md) for a brief description of the new features implemented for each command above. Each command also has an associated internal help file (e.g. `help cbinscatter`).
 
-Most ctools commands (e.g. `creghdfe`, `cbinscatter`) will be much faster on pretty much any dataset. On the other hand, `csort` and `cmerge` involve a lot of overhead (needing to read entire datasets from Stata to the C plugin and back), and themselves replace internal compiled Stata routines that are not terribly inefficient. As a result, it is possible for `csort` or `cmerge` to be *slower* than  `sort`/`merge` if your dataset is sufficiently wide (many variables). If your dataset has at most a few dozen variables and many millions of observations, `csort` and `cmerge` will probably be significantly faster.
+Performance depends on dataset shape, options, and hardware. Data transfer overhead can make sorting or merging wide datasets slower than native Stata. See the [benchmark reporting requirements](docs/COMPATIBILITY.md#performance-evidence) before interpreting speed comparisons.
 
 
 ## Compatibility and Requirements
 
-ctools is compatible with Stata 14.1+ (plugin interface version 3.0). It does not require any dependencies.
+ctools is compatible with Stata 14.1+ (plugin interface version 3.0). The [platform contract](docs/PLATFORMS.md) specifies CPU/OS baselines and runtime dependencies, including Linux libgomp.
 
 **Note:** ctools does not support datasets exceeding 2^31 (~2.147 billion) observations. This is a [known limitation](https://github.com/mcaceresb/stata-gtools/issues/43) of Stata's plugin API for C and can only be addressed with an internal Stata update. ctools will gracefully exit with an error if your dataset exceeds this limit.
 
@@ -59,20 +59,29 @@ net install ctools, from("https://raw.githubusercontent.com/mdroste/stata-ctools
 
 ### Manual Installation
 
-1. Download or clone this repository
-2. Copy the contents of the `build/` directory to a location on Stata's adopath (e.g., your personal ado directory)
+1. Download a complete release archive and validate its extracted directory with `python3 validation/check_package.py /path/to/release/build`.
+2. In Stata, run `net install ctools, from("/absolute/path/to/release/build") replace`.
 
-These installations will download all of the Stata program and documentation files (.ado and .sthlp) and compiled plugins for Linux, Windows, and Mac. The appropriate (operating system and architecture-dependent) compiled plugin is automatically invoked by ctools.
+A source checkout's `build/` is not necessarily an installable distribution: it
+may contain only the locally compiled binary. After building from source, use
+`make package BUILD_REVISION=<revision> PACKAGE_DIR=dist/ctools-<revision>` to
+produce a complete package for the host platform. Install from that staged
+directory. Its manifest explicitly identifies the platform and `BUILD_INFO.json`
+records the revision and file checksums. Full release packages contain all four
+platform plugins; publication requires the licensed correctness gate.
 
 
 ## Building from Source Files
 
+Release identity is defined in `release.json`. Run `python3 scripts/sync_release.py` after changing it; CI checks the generated copies. `ctools, version` reports the installed ado and plugin identities.
 
-You probably do not need to compile the ctools plugin yourself; GitHub automatically builds plugins for Windows, Mac, and Linux. If you want or need to build plugins from source, make sure OpenMP is available on your system. 
+
+You probably do not need to compile the ctools plugin yourself; GitHub automatically builds plugins for Windows, Mac, and Linux. If you want or need to build plugins from source, follow the [platform build instructions](docs/PLATFORMS.md), including the deployment-compatible macOS OpenMP runtime.
 
 ```bash
 make              # Build for current platform
-make all          # Build all platform plugins
+make all          # Build all platform plugins (requires every toolchain)
+make package      # Build and stage an installable host-platform package
 make check        # Check build dependencies
 make clean        # Remove compiled files
 ```
@@ -85,7 +94,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 ## Usage Notes
 
 - All ctools programs follow a basic structure: (1) copy data from Stata to C; (2) operate on that data (3) return data from C to Stata. *This means that ctools programs require more memory than the programs they replace.* In addition, some commands will run faster when they involve fewer variables, or when you have fewer variables in memory. For instance,  `csort`'s runtime is heavily dependent on the number of variables in memory, and can be slower Stata's built-in `sort` if the dataset is relatively wide (e.g. 100+ variables) due to this data transfer overhead.
-- The default options for `csort` and `cmerge` require a lot of memory. For `csort`, you probably require 2-3 times as much memory as your dataset. For `csort`, you can reduce this memory overhead with the optional argument `streaming`, which reads variables a handful at a time rather than all at once (at a modest cost to runtime).
+- The default options for `csort` and `cmerge` require a lot of memory. For `csort`, you probably require 2-3 times as much memory as your dataset. For `csort`, you can reduce this memory overhead with the optional argument `stream(#)`, which reads variables a handful at a time rather than all at once (at a modest cost to runtime).
 
 ## Issues
 - [ ] Precision of accumulated scalar statistics (e.g. total/model/residual sum of squares) associated with regression output (cqreg, creghdfe, civredhfe): only matches replacement to ~7 significant digits.
@@ -107,7 +116,7 @@ See [DEVELOPERS.md](DEVELOPERS.md) for additional information on ctools' archite
 
 ## License
 
-This program is MIT-licensed. 
+Project code is [MIT-licensed](LICENSE). The distribution includes [third-party notices](THIRD_PARTY_NOTICES).
 
 
 ## Contributing

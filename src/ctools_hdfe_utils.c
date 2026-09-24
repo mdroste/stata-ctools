@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 #include "ctools_hdfe_utils.h"
 
@@ -730,4 +731,40 @@ void ctools_hdfe_state_cleanup(HDFE_State *state)
         free(state->thread_fe_means);
         state->thread_fe_means = NULL;
     }
+}
+
+/* Retain the original double partition before producing integer IDs. */
+typedef struct { ST_double value; ST_int index; } ctools_numeric_cluster_pair;
+static int ctools_compare_numeric_cluster(const void *a, const void *b)
+{
+    ST_double x = ((const ctools_numeric_cluster_pair *)a)->value;
+    ST_double y = ((const ctools_numeric_cluster_pair *)b)->value;
+    return (x > y) - (x < y);
+}
+
+ST_int ctools_numeric_to_cluster_ids(const ST_double *values, ST_int N,
+                                    ST_int *ids, ST_int *num_groups)
+{
+    if (N < 0 || !values || !ids || !num_groups) return -1;
+    *num_groups = 0;
+    if (N == 0) return 0;
+    ctools_numeric_cluster_pair *pairs = malloc((size_t)N * sizeof(*pairs));
+    if (!pairs) return -1;
+    ST_int count = 0;
+    for (ST_int i = 0; i < N; i++) {
+        ids[i] = -1;
+        if (!SF_is_missing(values[i]) && isfinite(values[i])) {
+            pairs[count].value = values[i];
+            pairs[count++].index = i;
+        }
+    }
+    qsort(pairs, (size_t)count, sizeof(*pairs), ctools_compare_numeric_cluster);
+    ST_int group = -1;
+    for (ST_int i = 0; i < count; i++) {
+        if (i == 0 || pairs[i].value != pairs[i - 1].value) group++;
+        ids[pairs[i].index] = group;
+    }
+    *num_groups = group + 1;
+    free(pairs);
+    return 0;
 }

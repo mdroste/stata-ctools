@@ -7,6 +7,7 @@
 */
 
 #include "cexport_xlsx.h"
+#include "cexport_parse.h"
 #include "../cimport/miniz/miniz.h"
 #include "../ctools_threads.h"
 #include "../ctools_runtime.h"
@@ -54,7 +55,7 @@ typedef struct {
     ST_int nvars;
     char **varnames;
     int *vartypes;  /* 0=string, 1-5=numeric types */
-    bool *date_cols; /* true if column is a date (needs s="1" style) */
+    unsigned char *date_cols; /* 0 = numeric, 1 = daily date, 2 = datetime */
     bool has_dates;  /* true if any column is a date */
 
     /* Shared strings for deduplication */
@@ -103,13 +104,15 @@ static const char *RELS_XML =
 static const char *STYLES_XML =
     "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"
     "<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n"
+    "  <numFmts count=\"1\"><numFmt numFmtId=\"164\" formatCode=\"yyyy-mm-dd hh:mm:ss.000\"/></numFmts>\n"
     "  <fonts count=\"1\"><font><sz val=\"11\"/><name val=\"Calibri\"/></font></fonts>\n"
     "  <fills count=\"2\"><fill><patternFill patternType=\"none\"/></fill><fill><patternFill patternType=\"gray125\"/></fill></fills>\n"
     "  <borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>\n"
     "  <cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\n"
-    "  <cellXfs count=\"2\">"
+    "  <cellXfs count=\"3\">"
     "<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\"/>"
     "<xf numFmtId=\"14\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
+    "<xf numFmtId=\"164\" fontId=\"0\" fillId=\"0\" borderId=\"0\" xfId=\"0\" applyNumberFormat=\"true\"/>"
     "</cellXfs>\n"
     "</styleSheet>";
 
@@ -466,19 +469,24 @@ static ST_retcode xlsx_parse_args(XLSXExportContext *ctx, const char *args) {
     strncpy(args_copy, args, sizeof(args_copy) - 1);
     args_copy[sizeof(args_copy) - 1] = '\0';
 
-    /* Parse filename (first token) */
-    char *filename = strtok(args_copy, " \t");
-    if (!filename) {
-        snprintf(ctx->error_message, sizeof(ctx->error_message),
-                 "cexport xlsx: missing filename\n");
-        return 198;
+    char *filename = NULL, *sheet = NULL, *missing = NULL;
+    ST_retcode rc = cexport_read_local("filename", &filename);
+    if (!rc) rc = cexport_read_local("sheet", &sheet);
+    if (!rc) rc = cexport_read_local("missing", &missing);
+    if (!rc && (!filename[0] || strlen(filename) >= sizeof(ctx->filename) ||
+                strlen(sheet) > MAX_SHEET_NAME)) rc = 198;
+    if (!rc) {
+        strcpy(ctx->filename, filename);
+        if (sheet[0]) strcpy(ctx->sheet_name, sheet);
+        if (missing[0]) { ctx->missing_value = missing; missing = NULL; }
     }
-    strncpy(ctx->filename, filename, sizeof(ctx->filename) - 1);
-    ctx->filename[sizeof(ctx->filename) - 1] = '\0';
+    free(filename); free(sheet); free(missing);
+    if (rc) return rc;
 
     /* Parse options */
-    char *opt;
-    while ((opt = strtok(NULL, " \t")) != NULL) {
+    char *saveptr = NULL;
+    for (char *opt = strtok_r(args_copy, " \t", &saveptr); opt;
+         opt = strtok_r(NULL, " \t", &saveptr)) {
         if (strncmp(opt, "sheet=", 6) == 0) {
             strncpy(ctx->sheet_name, opt + 6, MAX_SHEET_NAME);
             ctx->sheet_name[MAX_SHEET_NAME] = '\0';
@@ -538,58 +546,17 @@ static ST_retcode xlsx_load_var_metadata(XLSXExportContext *ctx) {
         return 920;
     }
 
-    /* Load variable names from global macro */
-    char varnames_buf[32000];
-    ST_retcode rc = SF_macro_use("CEXPORT_VARNAMES", varnames_buf, sizeof(varnames_buf));
-    if (rc) {
-        snprintf(ctx->error_message, sizeof(ctx->error_message),
-                 "cexport xlsx: failed to get variable names\n");
-        return rc;
-    }
-
-    /* Parse variable names */
-    char *name = strtok(varnames_buf, " ");
-    for (ST_int i = 0; i < ctx->nvars && name; i++) {
-        ctx->varnames[i] = strdup(name);
-        if (ctx->varnames[i] == NULL) {
-            snprintf(ctx->error_message, sizeof(ctx->error_message),
-                     "cexport xlsx: memory allocation failed for variable name\n");
-            return 920;
+    ctx->date_cols = calloc(ctx->nvars, sizeof(*ctx->date_cols));
+    if (!ctx->date_cols) return 920;
+    for (ST_int i = 0; i < ctx->nvars; i++) {
+        int date;
+        ST_retcode rc = cexport_column_metadata(i, &ctx->varnames[i], &ctx->vartypes[i], &date);
+        if (rc) {
+            snprintf(ctx->error_message, sizeof(ctx->error_message), "cexport: incomplete column metadata\n");
+            return rc;
         }
-        name = strtok(NULL, " ");
-    }
-
-    /* Load variable types from global macro */
-    char vartypes_buf[8000];
-    rc = SF_macro_use("CEXPORT_VARTYPES", vartypes_buf, sizeof(vartypes_buf));
-    if (rc) {
-        snprintf(ctx->error_message, sizeof(ctx->error_message),
-                 "cexport xlsx: failed to get variable types\n");
-        return rc;
-    }
-
-    /* Parse variable types */
-    char *type_str = strtok(vartypes_buf, " ");
-    for (ST_int i = 0; i < ctx->nvars && type_str; i++) {
-        ctx->vartypes[i] = atoi(type_str);
-        type_str = strtok(NULL, " ");
-    }
-
-    /* Load date column flags from global macro (optional) */
-    char datecols_buf[8000];
-    rc = SF_macro_use("CEXPORT_DATE_COLS", datecols_buf, sizeof(datecols_buf));
-    if (rc == 0 && datecols_buf[0] != '\0') {
-        ctx->date_cols = calloc(ctx->nvars, sizeof(bool));
-        if (ctx->date_cols) {
-            char *dc_str = strtok(datecols_buf, " ");
-            for (ST_int i = 0; i < ctx->nvars && dc_str; i++) {
-                if (dc_str[0] == '1') {
-                    ctx->date_cols[i] = true;
-                    ctx->has_dates = true;
-                }
-                dc_str = strtok(NULL, " ");
-            }
-        }
+        ctx->date_cols[i] = (unsigned char)date;
+        if (date) ctx->has_dates = true;
     }
 
     return 0;
@@ -1113,7 +1080,7 @@ typedef struct {
     size_t *col_letters_len;    /* shared pre-computed column letter lengths */
     char (*col_prefix)[24];     /* pre-computed "      <c r=\"" + col letters */
     size_t *col_prefix_len;     /* length of each prefix */
-    const bool *date_cols;      /* which columns are dates (need s="1") */
+    const unsigned char *date_cols;      /* 0 = numeric, 1 = daily date, 2 = datetime */
     const char *escaped_missing;
     size_t escaped_missing_len;
     StringBuffer sb;            /* output buffer */
@@ -1208,7 +1175,7 @@ static void *xlsx_format_chunk(void *arg) {
                     memcpy(cell_buf, prefix, prefix_len); pos = (int)prefix_len;
                     pos += ctools_int64_to_str((int64_t)row_num, cell_buf + pos);
                     if (a->date_cols && a->date_cols[j]) {
-                        memcpy(cell_buf + pos, "\" s=\"1\"><v>", 11); pos += 11;
+                        memcpy(cell_buf + pos, a->date_cols[j] == 2 ? "\" s=\"2\"><v>" : "\" s=\"1\"><v>", 11); pos += 11;
                     } else {
                         memcpy(cell_buf + pos, "\"><v>", 5); pos += 5;
                     }
@@ -1694,8 +1661,20 @@ ST_retcode cexport_xlsx_main(const char *args) {
 
     double t_load = ctools_timer_seconds();
 
-    /* Write XLSX file using in-memory data */
+    cexport_output output;
+    rc = cexport_output_prepare(&output, ctx.filename, ctx.replace);
+    if (rc) {
+        ctools_filtered_data_free(&filtered); xlsx_context_free(&ctx); return rc;
+    }
+    if (strlen(output.temporary) >= sizeof(ctx.filename)) {
+        cexport_output_cleanup(&output); ctools_filtered_data_free(&filtered);
+        xlsx_context_free(&ctx); return 198;
+    }
+    strcpy(ctx.filename, output.temporary);
+    /* Write XLSX file using in-memory data, then publish the complete archive. */
     rc = xlsx_write_file(&ctx, &filtered);
+    if (!rc) rc = cexport_output_commit(&output);
+    cexport_output_cleanup(&output);
     ctools_filtered_data_free(&filtered);
     if (rc) {
         SF_error(ctx.error_message);

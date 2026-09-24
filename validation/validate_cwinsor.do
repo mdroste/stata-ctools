@@ -494,3 +494,6 @@ benchmark_winsor x, testname("mixed magnitude values")
 } /* end quietly */
 
 print_summary "cwinsor"
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cwinsor"

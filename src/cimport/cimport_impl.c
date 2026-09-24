@@ -262,9 +262,6 @@ static void cimport_infer_column_types(CImportContext *ctx) {
                 }
             }
             colinfo->max_strlen = max_len > 0 ? max_len : 1;
-            if (colinfo->max_strlen > CTOOLS_MAX_STRING_LEN) {
-                colinfo->max_strlen = CTOOLS_MAX_STRING_LEN;
-            }
             continue;
         }
 
@@ -294,9 +291,6 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         if (is_string) {
             colinfo->type = CIMPORT_COL_STRING;
             colinfo->max_strlen = max_len > 0 ? max_len : 1;
-            if (colinfo->max_strlen > CTOOLS_MAX_STRING_LEN) {
-                colinfo->max_strlen = CTOOLS_MAX_STRING_LEN;
-            }
         } else {
             colinfo->type = CIMPORT_COL_NUMERIC;
         }
@@ -379,9 +373,6 @@ static void cimport_infer_column_types(CImportContext *ctx) {
         }
         if (ctx->columns[i].type == CIMPORT_COL_STRING && ctx->columns[i].max_strlen == 0) {
             ctx->columns[i].max_strlen = 1;
-        }
-        if (ctx->columns[i].max_strlen > CTOOLS_MAX_STRING_LEN) {
-            ctx->columns[i].max_strlen = CTOOLS_MAX_STRING_LEN;
         }
 
         if (ctx->columns[i].type == CIMPORT_COL_NUMERIC) {
@@ -804,6 +795,12 @@ static CImportContext *cimport_parse_csv(const char *filename, char delimiter, b
     t_start = ctools_timer_ms();
     {
         CImportEncodingDetection detection;
+        detection = cimport_detect_encoding(ctx->file_data, ctx->file_size);
+        if (detection.encoding == CIMPORT_ENC_UTF32LE || detection.encoding == CIMPORT_ENC_UTF32BE) {
+            cimport_display_msg("cimport: UTF-32 is unsupported; convert the file to UTF-8\n");
+            cimport_free_context(ctx);
+            return NULL;
+        }
         int bom_skip = 0;
         bool ascii_fast_path = false;
 
@@ -1272,7 +1269,7 @@ static void *cimport_build_cache_worker(void *arg) {
                             while (src_len > 0 && (src[src_len-1] == '\r' || src[src_len-1] == '\n')) {
                                 src_len--;
                             }
-                            int copy_len = (src_len < CTOOLS_MAX_STRING_LEN) ? src_len : CTOOLS_MAX_STRING_LEN - 1;
+                            int copy_len = (src_len <= CTOOLS_MAX_STRING_LEN) ? src_len : CTOOLS_MAX_STRING_LEN;
                             str = ctools_arena_alloc(&cache->string_arena, copy_len + 1);
                             if (str) {
                                 memcpy(str, src, copy_len);
@@ -1282,7 +1279,7 @@ static void *cimport_build_cache_worker(void *arg) {
                             }
                         } else {
                             /* Field has quotes — extract with quote handling */
-                            int len = cimport_extract_field_fast(ctx->file_data, field, field_buf, CTOOLS_MAX_STRING_LEN, ctx->quote_char);
+                            int len = cimport_extract_field_fast(ctx->file_data, field, field_buf, sizeof(field_buf), ctx->quote_char);
                             field_buf[len] = '\0';
                             str = ctools_arena_alloc(&cache->string_arena, len + 1);
                             if (str) {
@@ -1576,7 +1573,8 @@ typedef struct {
     /* For direct numeric store (cache-less path) */
     CImportContext *ctx;
     int col_idx;
-    size_t rows_stored;     /* output: number of rows stored */
+    size_t rows_stored;     /* output: successfully stored rows */
+    ST_retcode error;
 } CImportSPIStoreTask;
 
 /* String SPI store worker (uses pre-built string cache) */
@@ -1585,34 +1583,18 @@ static void *cimport_spi_store_worker(void *arg) {
     CImportColumnCache *cache = task->cache;
     ST_int var = task->var;
     size_t nrows = cache->count;
-    task->rows_stored = nrows;
-
+    task->rows_stored = 0;
+    task->error = 0;
+    if (var < 1 || var > SF_nvars() || nrows > (size_t)SF_nobs() ||
+        !SF_var_is_string(var) || SF_var_is_strl(var)) {
+        task->error = 198;
+        return (void *)1;
+    }
     char **strings = cache->string_data;
-
-    for (size_t p = 0; p < 16 && p < nrows; p++) {
-        __builtin_prefetch(strings[p], 0, 0);
-    }
-
-    size_t i = 0;
-    size_t nrows_aligned = nrows & ~(size_t)3;
-
-    for (; i < nrows_aligned; i += 4) {
-        if (i + 16 < nrows) {
-            __builtin_prefetch(&strings[i + 16], 0, 0);
-            __builtin_prefetch(strings[i + 12], 0, 0);
-            __builtin_prefetch(strings[i + 13], 0, 0);
-            __builtin_prefetch(strings[i + 14], 0, 0);
-            __builtin_prefetch(strings[i + 15], 0, 0);
-        }
-
-        SF_sstore(var, (ST_int)(i + 1), strings[i]);
-        SF_sstore(var, (ST_int)(i + 2), strings[i + 1]);
-        SF_sstore(var, (ST_int)(i + 3), strings[i + 2]);
-        SF_sstore(var, (ST_int)(i + 4), strings[i + 3]);
-    }
-
-    for (; i < nrows; i++) {
-        SF_sstore(var, (ST_int)(i + 1), strings[i]);
+    for (size_t i = 0; i < nrows; i++) {
+        task->error = SF_sstore(var, (ST_int)(i + 1), strings[i] ? strings[i] : "");
+        if (task->error) return (void *)1;
+        task->rows_stored++;
     }
 
     return NULL;
@@ -1626,6 +1608,13 @@ static void *cimport_spi_store_numeric_direct(void *arg) {
     int col_idx = task->col_idx;
     double missing = SV_missval;
 
+    task->rows_stored = 0;
+    task->error = 0;
+    if (var < 1 || var > SF_nvars() || SF_var_is_string(var) ||
+        ctx->total_rows > (size_t)SF_nobs()) {
+        task->error = 198;
+        return (void *)1;
+    }
     size_t row_idx = 0;
 
     for (int c = 0; c < ctx->num_chunks; c++) {
@@ -1648,8 +1637,9 @@ static void *cimport_spi_store_numeric_direct(void *arg) {
                 val = missing;
             }
 
-            SF_vstore(var, (ST_int)(row_idx + 1), val);
-            row_idx++;
+            task->error = (_stata_)->safestore(var, (ST_int)(row_idx + 1), val);
+            if (task->error) return (void *)1;
+            task->rows_stored = ++row_idx;
         }
     }
 
@@ -1744,6 +1734,7 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
             store_tasks[col_idx].ctx = ctx;
             store_tasks[col_idx].col_idx = col_idx;
             store_tasks[col_idx].rows_stored = 0;
+            store_tasks[col_idx].error = 0;
         }
 
         /* Use persistent pool or sequential dispatch.
@@ -1758,9 +1749,9 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
              * the pool handles parallelism internally. */
             for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
                 if (ctx->columns[col_idx].type == CIMPORT_COL_STRING) {
-                    ctools_persistent_pool_submit(pool, cimport_spi_store_worker, &store_tasks[col_idx]);
+                    if (ctools_persistent_pool_submit(pool, cimport_spi_store_worker, &store_tasks[col_idx])) store_tasks[col_idx].error = 920;
                 } else {
-                    ctools_persistent_pool_submit(pool, cimport_spi_store_numeric_direct, &store_tasks[col_idx]);
+                    if (ctools_persistent_pool_submit(pool, cimport_spi_store_numeric_direct, &store_tasks[col_idx])) store_tasks[col_idx].error = 920;
                 }
             }
             ctools_persistent_pool_wait(pool);
@@ -1774,7 +1765,17 @@ static ST_retcode cimport_do_load(const char *filename, char delimiter, bool has
             }
         }
 
+        ST_retcode store_error = 0;
+        for (int col_idx = 0; col_idx < ctx->num_columns; col_idx++) {
+            if (store_tasks[col_idx].error) { store_error = store_tasks[col_idx].error; break; }
+            if (store_tasks[col_idx].rows_stored != ctx->total_rows) { store_error = 459; break; }
+        }
         free(store_tasks);
+        if (store_error) {
+            cimport_display_error("cimport: write failed; imported data are incomplete\n");
+            cimport_clear_cached_context();
+            return store_error;
+        }
     }
 
     double t_load_end = ctools_timer_ms();
@@ -1909,6 +1910,17 @@ ST_retcode cimport_main(const char *args) {
     if (opts.mode == NULL || opts.filename == NULL) {
         cimport_display_error("cimport: mode and filename required\n");
         return 198;
+    }
+
+    /* The ado transports the filename separately so spaces/quotes never become
+     * command tokens. Keep literal tokens for direct plugin callers. */
+    char filename_buf[4096];
+    if (strcmp(opts.filename, "@filename") == 0) {
+        if (SF_macro_use("___cimport_filename", filename_buf, sizeof(filename_buf) - 1) || !filename_buf[0]) {
+            cimport_display_error("cimport: cannot read filename\n");
+            return 198;
+        }
+        opts.filename = filename_buf;
     }
 
     /* Check for XLSX file extension and dispatch to xlsx handler */

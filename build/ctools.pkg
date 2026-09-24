@@ -8,18 +8,25 @@ d
 d Included commands:
 d   csort       - Parallel sorting (IPS4o, radix, timsort, etc.)
 d   cmerge      - C-accelerated dataset merging
-d   cimport     - Multi-threaded CSV import
-d   cexport     - Parallel CSV export
+d   cimport     - Multi-threaded delimited text and XLSX import
+d   cexport     - Delimited text and XLSX export
 d   creghdfe    - HDFE regression with CG solver
 d   civreghdfe  - IV/2SLS regression with HDFE
 d   cqreg       - Quantile regression with IPM solver
 d   cbinscatter - Binned scatter plots
+d   cencode/cdecode - Convert value labels
+d   cdestring   - Convert strings to numeric data
+d   csample/cbsample - Sampling and bootstrap draws
+d   cwinsor     - Winsorize or trim variables
+d   crangestat  - Range statistics
+d   cpsmatch    - Propensity score matching (ATT)
+d   cpplmhdfe   - PPML with high-dimensional fixed effects
 d
-d Version: 1.0.1
+d Version: 1.0.2
 d
-d Requires: Stata 14.0 or later
+d Requires: Stata 14.1 or later
 d
-d Distribution-Date: 20260207
+d Distribution-Date: 20260920
 
 f ctools.ado
 f ctools.sthlp
@@ -38,10 +45,35 @@ f civreghdfe.ado
 f civreghdfe.sthlp
 f cqreg.ado
 f cqreg.sthlp
-f cqreg_p.ado
 f cbinscatter.ado
 f cbinscatter.sthlp
+f _ctools_load.ado
+f _ctools_newvars.ado
+f _ctools_weight.ado
+f _ctools_strw.ado
+f cbsample.ado
+f cbsample.sthlp
+f cdecode.ado
+f cdecode.sthlp
+f cdestring.ado
+f cdestring.sthlp
+f cencode.ado
+f cencode.sthlp
+f civreghdfe_p.ado
+f cpplmhdfe.ado
+f cpplmhdfe_p.ado
+f cpplmhdfe.sthlp
+f cpsmatch.ado
+f cpsmatch.sthlp
+f crangestat.ado
+f crangestat.sthlp
+f csample.ado
+f csample.sthlp
+f cwinsor.ado
+f cwinsor.sthlp
 f ctools_mac_arm.plugin
 f ctools_mac_x86.plugin
 f ctools_windows.plugin
 f ctools_linux.plugin
+f LICENSE
+f THIRD_PARTY_NOTICES

@@ -28,6 +28,9 @@
 #include <omp.h>
 #endif
 
+/* Checked SPI writes resolve positions in the plugin varlist, even after
+ * estimation has introduced internal Stata variables. */
+#define SD_SAFEMODE
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_runtime.h"
@@ -65,6 +68,7 @@ typedef struct {
     int pscore_idx;         /* 1-based index of propensity score variable */
     int outcome_idx;        /* 1-based index of outcome variable (0 if none) */
     int out_weight_idx;     /* 1-based index for output weight variable */
+    int out_nn_idx;         /* actual eligible controls used for each treated row */
     int out_match_idx;      /* 1-based index for output match ID variable */
     int out_support_idx;    /* 1-based index for common support indicator */
     size_t nobs;            /* Number of observations */
@@ -1021,6 +1025,13 @@ ST_retcode cpsmatch_main(const char *args)
         return 198;
     }
 
+    opts.out_nn_idx = opts.outcome_idx > 0 ? 7 : 6;
+
+    if (!opts.with_replace && (opts.method != MATCH_NEAREST || opts.n_neighbors != 1)) {
+        SF_error("cpsmatch: noreplacement requires nearest-neighbor matching with neighbor(1)\n");
+        return 198;
+    }
+
     if (opts.nobs == 0) {
         SF_error("cpsmatch: no observations\n");
         return 2000;
@@ -1169,8 +1180,9 @@ ST_retcode cpsmatch_main(const char *args)
     double *out_weight = calloc(n_filtered, sizeof(double));
     double *out_match = malloc(n_filtered * sizeof(double));
     double *out_support = malloc(n_filtered * sizeof(double));
+    double *out_nn = malloc(n_filtered * sizeof(double));
 
-    if (!out_weight || !out_match || !out_support) {
+    if (!out_weight || !out_match || !out_support || !out_nn) {
         ctools_filtered_data_free(&filtered);
         free(treated_idx);
         free(control_idx);
@@ -1179,7 +1191,7 @@ ST_retcode cpsmatch_main(const char *args)
         free(control_available);
         free(out_weight);
         free(out_match);
-        free(out_support);
+        free(out_support); free(out_nn);
         SF_error("cpsmatch: memory allocation failed\n");
         return 920;
     }
@@ -1188,7 +1200,10 @@ ST_retcode cpsmatch_main(const char *args)
     for (size_t i = 0; i < n_filtered; i++) {
         out_match[i] = SV_missval;
         out_support[i] = SV_missval;
+        out_nn[i] = SV_missval;
     }
+
+    for (size_t t = 0; t < n_treated; t++) out_nn[treated_idx[t]] = 0.0;
 
     /* Caliper is always in absolute units (propensity score scale) for psmatch2 compatibility */
     double caliper = opts.caliper;
@@ -1217,7 +1232,7 @@ ST_retcode cpsmatch_main(const char *args)
         free(control_available);
         free(out_weight);
         free(out_match);
-        free(out_support);
+        free(out_support); free(out_nn);
         SF_error("cpsmatch: memory allocation failed\n");
         return 920;
     }
@@ -1236,7 +1251,7 @@ ST_retcode cpsmatch_main(const char *args)
             free(control_available);
             free(out_weight);
             free(out_match);
-            free(out_support);
+            free(out_support); free(out_nn);
             free(treated_order);
             SF_error("cpsmatch: memory allocation failed\n");
             return 920;
@@ -1245,6 +1260,7 @@ ST_retcode cpsmatch_main(const char *args)
         /* Populate and sort */
         for (size_t i = 0; i < n_treated; i++) {
             sorted_treated[i].orig_idx = i;
+            sorted_treated[i].obs_idx = treated_idx[i];
             sorted_treated[i].pscore = treated_pscore[i];
         }
 
@@ -1291,7 +1307,7 @@ ST_retcode cpsmatch_main(const char *args)
             free(control_available);
             free(out_weight);
             free(out_match);
-            free(out_support);
+            free(out_support); free(out_nn);
             free(treated_order);
             SF_error("cpsmatch: memory allocation failed\n");
             return 920;
@@ -1338,84 +1354,32 @@ ST_retcode cpsmatch_main(const char *args)
             /* Binary search to find insertion point */
             size_t insert_pos = binary_search_left(sorted_controls, n_controls, ps);
 
-            /* Expand left and right to find nearest available control */
+            /* Compare the nearest available control on each side of insertion.
+             * Equal distances choose the left candidate deterministically. */
             ssize_t left = (ssize_t)insert_pos - 1;
             size_t right = insert_pos;
             size_t best_idx = SIZE_MAX;
             double best_dist = DBL_MAX;
-
-            /* Find the single nearest available control */
-            while (left >= 0 || right < n_controls) {
-                /* Check left candidate */
-                if (left >= 0 && sorted_available[left]) {
-                    double dist_left = fabs(ps - sorted_controls[left].pscore);
-                    if (caliper <= 0.0 || dist_left <= caliper) {
-                        if (dist_left < best_dist) {
-                            best_dist = dist_left;
-                            best_idx = (size_t)left;
-                        }
-                        break;  /* Found best on left, check right before deciding */
-                    }
-                    left--;
-                } else if (left >= 0) {
-                    left--;
-                    continue;
+            while (left >= 0 && !sorted_available[left]) left--;
+            while (right < n_controls && !sorted_available[right]) right++;
+            if (left >= 0) {
+                double dist = fabs(ps - sorted_controls[left].pscore);
+                if (caliper <= 0.0 || dist <= caliper) {
+                    best_idx = (size_t)left;
+                    best_dist = dist;
                 }
-
-                /* Check right candidate */
-                if (right < n_controls && sorted_available[right]) {
-                    double dist_right = fabs(ps - sorted_controls[right].pscore);
-                    if (caliper <= 0.0 || dist_right <= caliper) {
-                        if (dist_right < best_dist) {
-                            best_dist = dist_right;
-                            best_idx = right;
-                        }
-                        break;  /* Found best on right */
-                    }
-                    right++;
-                } else if (right < n_controls) {
-                    right++;
-                    continue;
-                }
-
-                /* Both sides exhausted without caliper match */
-                if (left < 0 && right >= n_controls) break;
             }
-
-            /* If we found a candidate on one side, check the other side for closer */
-            if (best_idx != SIZE_MAX && left >= 0 && right < n_controls) {
-                /* We broke out after finding one - check if other side is closer */
-                if (best_idx == (size_t)left + 1) {
-                    /* Found on left side, check right */
-                    while (right < n_controls) {
-                        if (sorted_available[right]) {
-                            double dist_right = fabs(ps - sorted_controls[right].pscore);
-                            if (dist_right < best_dist && (caliper <= 0.0 || dist_right <= caliper)) {
-                                best_dist = dist_right;
-                                best_idx = right;
-                            }
-                            break;
-                        }
-                        right++;
-                    }
-                } else {
-                    /* Found on right side, check left */
-                    while (left >= 0) {
-                        if (sorted_available[left]) {
-                            double dist_left = fabs(ps - sorted_controls[left].pscore);
-                            if (dist_left < best_dist && (caliper <= 0.0 || dist_left <= caliper)) {
-                                best_dist = dist_left;
-                                best_idx = (size_t)left;
-                            }
-                            break;
-                        }
-                        left--;
-                    }
+            if (right < n_controls) {
+                double dist = fabs(ps - sorted_controls[right].pscore);
+                if (dist < best_dist && (caliper <= 0.0 || dist <= caliper)) {
+                    best_idx = right;
+                    best_dist = dist;
                 }
             }
 
             if (best_idx != SIZE_MAX) {
                 n_matched_treated++;
+                out_nn[obs_idx] = 1.0;
                 n_controls_available--;
 
                 /* Mark control as used */
@@ -1456,7 +1420,7 @@ ST_retcode cpsmatch_main(const char *args)
             free(control_available);
             free(out_weight);
             free(out_match);
-            free(out_support);
+            free(out_support); free(out_nn);
             free(treated_order);
             SF_error("cpsmatch: memory allocation failed\n");
             return 920;
@@ -1510,7 +1474,7 @@ ST_retcode cpsmatch_main(const char *args)
                 free(control_available);
                 free(out_weight);
                 free(out_match);
-                free(out_support);
+                free(out_support); free(out_nn);
                 free(treated_order);
                 SF_error("cpsmatch: memory allocation failed\n");
                 return 920;
@@ -1554,6 +1518,7 @@ ST_retcode cpsmatch_main(const char *args)
 
                     if (info.n_matches > 0) {
                         n_matched_treated++;
+                        out_nn[obs_idx] = (double)info.n_matches;
 
                         /* Store first match ID - use obs_map for Stata observation number */
                         size_t first_match_filtered = control_idx[sorted_controls[info.start].orig_idx];
@@ -1639,6 +1604,7 @@ ST_retcode cpsmatch_main(const char *args)
 
                     if (match_rc == 0 && result.n_matches > 0) {
                         n_matched_treated++;
+                        out_nn[obs_idx] = (double)result.n_matches;
 
                         /* Store first match ID - use obs_map for Stata observation number */
                         out_match[obs_idx] = (double)obs_map[result.match_ids[0]];
@@ -1718,20 +1684,26 @@ ST_retcode cpsmatch_main(const char *args)
 
     /* Store results - use obs_map to write to correct Stata observations.
      * Output arrays are indexed by filtered position (0 to n_filtered-1).
-     * Variable indices need +1 offset for SF_vstore. */
+     * Variable positions from the ado are already one-based. */
     for (size_t i = 0; i < n_filtered; i++) {
         ST_int obs = (ST_int)obs_map[i];
 
+        rc = SF_vstore(opts.out_nn_idx, obs, out_nn[i]);
+        if (rc) goto cleanup;
+
         if (opts.out_weight_idx > 0) {
-            SF_vstore(opts.out_weight_idx + 1, obs, out_weight[i]);
+            rc = SF_vstore(opts.out_weight_idx, obs, out_weight[i]);
+            if (rc) goto cleanup;
         }
 
         if (opts.out_match_idx > 0) {
-            SF_vstore(opts.out_match_idx + 1, obs, out_match[i]);
+            rc = SF_vstore(opts.out_match_idx, obs, out_match[i]);
+            if (rc) goto cleanup;
         }
 
         if (opts.out_support_idx > 0) {
-            SF_vstore(opts.out_support_idx + 1, obs, out_support[i]);
+            rc = SF_vstore(opts.out_support_idx, obs, out_support[i]);
+            if (rc) goto cleanup;
         }
     }
 
@@ -1760,6 +1732,7 @@ ST_retcode cpsmatch_main(const char *args)
     /* Thread diagnostics */
     CTOOLS_SAVE_THREAD_INFO("_cpsmatch");
 
+cleanup:
     /* Cleanup - use stata_data_free for input data (frees treatment, pscore, outcome) */
     ctools_filtered_data_free(&filtered);
     free(treated_idx);
@@ -1769,7 +1742,7 @@ ST_retcode cpsmatch_main(const char *args)
     free(control_available);
     free(out_weight);
     free(out_match);
-    free(out_support);
+    free(out_support); free(out_nn);
 
     return rc;
 }

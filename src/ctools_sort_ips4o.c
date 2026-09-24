@@ -525,7 +525,7 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     stata_retcode rc = STATA_OK;
     int t;
 
-    int num_threads = ctools_get_max_threads();
+    int num_threads = ctools_get_openmp_threads();
     if (num_threads > 16) num_threads = 16;  /* Cap threads */
 
     /* Initialize arena - estimate total memory needed:
@@ -595,9 +595,8 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     }
 
     /* Parallel counting */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t chunk = (nobs + num_threads - 1) / num_threads;
         size_t start = tid * chunk;
         size_t end = start + chunk;
@@ -655,9 +654,8 @@ static stata_retcode ips4o_parallel_numeric(perm_idx_t * IPS4O_RESTRICT order,
     }
 
     /* Parallel scatter */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t chunk = (nobs + num_threads - 1) / num_threads;
         size_t start = tid * chunk;
         size_t end = start + chunk;
@@ -718,7 +716,7 @@ static stata_retcode ips4o_parallel_string(perm_idx_t * IPS4O_RESTRICT order,
     stata_retcode rc = STATA_OK;
     int t;
 
-    int num_threads = ctools_get_max_threads();
+    int num_threads = ctools_get_openmp_threads();
     if (num_threads > 16) num_threads = 16;
 
     /* Initialize arena with 2MB blocks */

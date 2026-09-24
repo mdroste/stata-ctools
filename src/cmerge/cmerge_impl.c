@@ -923,6 +923,16 @@ static ST_retcode cmerge_execute(const char *args)
             ctools_filtered_data_free(&master_data);
             free(all_var_indices);
             cache_cleanup_on_error();
+            if (output_nobs_signed == -4) {
+                SF_error("cmerge: key variable types must match\n");
+                return 106;
+            }
+            if (output_nobs_signed == -2 || output_nobs_signed == -3) {
+                SF_error(output_nobs_signed == -2 ?
+                    "cmerge: keys do not uniquely identify master observations\n" :
+                    "cmerge: keys do not uniquely identify using observations\n");
+                return 459;
+            }
             SF_error("cmerge: Merge join failed\n");
             return 920;
         }

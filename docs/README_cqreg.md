@@ -4,7 +4,9 @@ High-performance C-accelerated quantile regression.
 
 ## Overview
 
-`cqreg` is a drop-in replacement for Stata's `qreg` command that uses an Interior Point Method (IPM) solver implemented in C. It provides significant performance improvements, especially for large datasets (N > 100,000). Unlike native `qreg`, `cqreg` supports high-dimensional fixed effects via the `absorb()` option.
+`cqreg` implements selected syntax of Stata's `qreg` command that uses an Interior Point Method (IPM) solver implemented in C. It provides significant performance improvements, especially for large datasets (N > 100,000). `absorb()` is currently unsupported; use explicit factor-variable indicators to estimate fixed effects jointly with the slopes.
+
+Weight expressions are not supported. Solver and VCE differences are described in the [compatibility table](COMPATIBILITY.md).
 
 ## Syntax
 
@@ -18,7 +20,7 @@ cqreg depvar indepvars [if] [in] [, options]
 | Option | Description |
 |--------|-------------|
 | `quantile(#)` | Quantile to estimate (0-1, default: 0.5 for median) |
-| `absorb(varlist)` | Categorical variables to absorb as fixed effects (HDFE) |
+| `absorb(varlist)` | Currently unsupported; use explicit indicators |
 
 ### Variance/Standard Error Options
 | Option | Description |
@@ -29,15 +31,16 @@ cqreg depvar indepvars [if] [in] [, options]
 ### Optimization Options
 | Option | Description |
 |--------|-------------|
-| `tolerance(#)` | Convergence tolerance (default: 1e-8) |
-| `maxiter(#)` | Maximum IPM iterations (default: 50) |
+| `tolerance(#)` | Convergence tolerance (default: 1e-12) |
+| `maxiter(#)` | Maximum IPM iterations (default: 200) |
 | `nopreprocess(#)` | Preprocessing control: 0 = disabled (default), -1 = enabled (experimental) |
+
+Exhausting the iteration limit, numerical breakdown, or nonfinite results returns error 430 without posting new estimates.
 
 ### Reporting Options
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information |
-| `timeit` | Display execution time |
 
 ## Examples
 
@@ -57,16 +60,16 @@ cqreg price mpg weight, quantile(0.90) vce(cluster foreign)
 
 * Quantile regression with fixed effects
 webuse nlswork, clear
-cqreg ln_wage age ttl_exp tenure, absorb(idcode)
+cqreg ln_wage age ttl_exp tenure i.idcode
 
 * Two-way fixed effects with clustering
-cqreg ln_wage age ttl_exp tenure, absorb(idcode year) vce(cluster idcode)
+cqreg ln_wage age ttl_exp tenure i.idcode i.year, vce(cluster idcode)
 
 * Using Bofinger bandwidth
 cqreg price mpg weight, quantile(0.5) bwmethod(bofinger)
 
 * With verbose timing
-cqreg price mpg weight, verbose timeit
+cqreg price mpg weight, verbose
 ```
 
 ## Performance
@@ -83,12 +86,7 @@ cqreg price mpg weight, verbose timeit
 - **BLAS/LAPACK dispatch**: Automatically uses Apple Accelerate (macOS) or OpenBLAS when available for matrix-matrix and matrix-vector operations, falling back to hand-tuned C kernels
 - **K-way unrolled dot product**: `ctools_dot_unrolled` (8/16-way) used in the fallback path when BLAS is unavailable
 - **4-way unrolled scaling**: Custom `dscal`-equivalent loop processes 4 elements per iteration when BLAS is not linked
-- **OpenMP parallelization**: Parallel matrix operations in both the IPM core and the HDFE pre-processing step
-
-**HDFE Support:**
-- **CG solver with symmetric Kaczmarz**: Same algorithm as `creghdfe`—fixed effects are partialled out before the IPM solve, so the IPM operates on a smaller effective problem
-- **Pre-computed inverse group counts**: Avoids division in the inner demeaning loop
-- **Thread-local accumulators**: Eliminates contention during parallel FE projection
+- **OpenMP parallelization**: Parallel matrix operations in the IPM core
 
 ## Algorithm
 
@@ -139,10 +137,9 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(sparsity)` | Estimated sparsity (1/f(0)) |
 | `e(bwidth)` | Bandwidth used for sparsity estimation |
 | `e(iterations)` | Number of IPM iterations |
-| `e(converged)` | 1 if converged, 0 otherwise |
+| `e(convcode)` | 0 for a successfully converged fit |
 | `e(df_r)` | Residual degrees of freedom |
 | `e(df_m)` | Model degrees of freedom |
-| `e(df_a)` | Degrees of freedom absorbed by FEs |
 | `e(N_clust)` | Number of clusters (if clustered) |
 
 ### Macros
@@ -152,7 +149,6 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(depvar)` | Dependent variable name |
 | `e(vce)` | Variance estimation method |
 | `e(bwmethod)` | Bandwidth selection method |
-| `e(absorb)` | Absorbed FE variables |
 | `e(clustvar)` | Cluster variable (if clustered) |
 | `e(predict)` | Program used for `predict` |
 
@@ -164,11 +160,9 @@ Cluster-robust standard errors clustered on the specified variable.
 
 ## Technical Notes
 
-### Fixed Effects (HDFE)
-When `absorb()` is specified:
-- Fixed effects are partialled out using CG solver before IPM
-- Absorbed factors consume degrees of freedom
-- More efficient than creating dummy variables
+### Fixed Effects
+`absorb()` returns an error because least-squares partialling does not preserve
+quantile loss. Use explicit indicators when the number of groups permits it.
 
 ### Preprocessing (Experimental)
 The `nopreprocess(-1)` option enables an experimental preprocessing algorithm based on Chernozhukov, Fernández-Val, and Melly (2020). This attempts to speed up estimation by:
@@ -183,9 +177,8 @@ The `nopreprocess(-1)` option enables an experimental preprocessing algorithm ba
 |---------|--------------|---------|
 | Algorithm | Simplex | Interior Point Method |
 | Complexity | O(N²) worst case | O(sqrt(N)) |
-| HDFE Support | No | Yes |
+| HDFE Support | No | No; explicit indicators required |
 | Parallelization | No | Yes (OpenMP) |
-| Typical Speedup | 1x (baseline) | 2-10x |
 
 ## References
 

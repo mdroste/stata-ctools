@@ -41,6 +41,22 @@ end
 
 program define cmerge, rclass
     version 14.1
+    local caller_frame ""
+    if c(stata_version) >= 16 local caller_frame "`c(frame)'"
+    preserve
+    capture noisily _cmerge_impl `0'
+    local rc = _rc
+    if "`caller_frame'" != "" frame change `caller_frame'
+    if `rc' {
+        restore
+        exit `rc'
+    }
+    return add
+    restore, not
+end
+
+program define _cmerge_impl, rclass
+    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -141,6 +157,15 @@ program define cmerge, rclass
         }
     }
 
+    * Enforce uniqueness even for keys that will not match the other side.
+    if !`merge_by_n' & inlist(`merge_code', 0, 2) & _N > 0 {
+        capture isid `keyvars', missok
+        if _rc {
+            di as error "cmerge: key variables do not uniquely identify observations in master"
+            exit 459
+        }
+    }
+
     * Default generate variable name
     if "`generate'" == "" & "`nogenerate'" == "" {
         local generate "_merge"
@@ -217,6 +242,11 @@ program define cmerge, rclass
     local master_nobs = _N
     local master_nvars = c(k)
     unab master_varlist : _all
+    local master_storage_types ""
+    foreach var of local master_varlist {
+        local storage : type `var'
+        local master_storage_types `master_storage_types' `storage'
+    }
 
     * Allow empty master - will just add using-only observations
 
@@ -299,63 +329,11 @@ program define cmerge, rclass
     }
 
     * Load the platform-appropriate ctools plugin (cached after first load)
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if "`__os'" == "MacOSX" | strpos(lower("`__machine'"), "mac") > 0 {
-            * Check cached architecture first (avoids subprocess on repeat calls)
-            local __is_arm = 0
-            if "$CTOOLS_ARCH_CACHE" == "arm64" {
-                local __is_arm = 1
-            }
-            else if "$CTOOLS_ARCH_CACHE" == "x86_64" {
-                local __is_arm = 0
-            }
-            else {
-                * First call - detect and cache
-                if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                    local __is_arm = 1
-                    global CTOOLS_ARCH_CACHE "arm64"
-                }
-                else {
-                    tempfile __archfile
-                    quietly shell uname -m > "`__archfile'" 2>&1
-                    tempname __fh
-                    file open `__fh' using "`__archfile'", read text
-                    file read `__fh' __archline
-                    file close `__fh'
-                    capture erase "`__archfile'"
-                    if strpos("`__archline'", "arm64") > 0 {
-                        local __is_arm = 1
-                        global CTOOLS_ARCH_CACHE "arm64"
-                    }
-                    else {
-                        global CTOOLS_ARCH_CACHE "x86_64"
-                    }
-                }
-            }
-            local __plugin = cond(`__is_arm', "ctools_mac_arm.plugin", "ctools_mac_x86.plugin")
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cmerge: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * =========================================================================
     * Phase 1: Load using dataset - ONLY key + keepusing vars
@@ -368,23 +346,26 @@ program define cmerge, rclass
     * Use frames (Stata 16+) for faster context switching vs preserve/restore
     * Frames avoid copying the entire master dataset twice
     local __use_frames = 0
+    tempname __using_frame
+    local __master_frame ""
     if c(stata_version) >= 16 {
-        capture frame create _cmerge_using
+        local __master_frame "`c(frame)'"
+        capture frame create `__using_frame'
         if _rc == 0 {
             local __use_frames = 1
         }
     }
 
     if `__use_frames' {
-        * Load using data into separate frame (master stays in default)
+        * Load using data into separate frame (master stays in its caller frame)
         * If keepusing specified, load only key + keepusing vars (much faster for wide datasets)
         if "`keepusing'" != "" & !`merge_by_n' {
-            frame _cmerge_using: qui use `keyvars' `keepusing' using `"`using'"', clear
+            frame `__using_frame': qui use `keyvars' `keepusing' using `"`using'"', clear
         }
         else {
-            frame _cmerge_using: qui use `"`using'"', clear
+            frame `__using_frame': qui use `"`using'"', clear
         }
-        frame change _cmerge_using
+        frame change `__using_frame'
     }
     else {
         * Fallback: preserve/restore for Stata < 16
@@ -404,13 +385,26 @@ program define cmerge, rclass
             if _rc {
                 di as error "cmerge: key variable `var' not found in using dataset"
                 if `__use_frames' {
-                    frame change default
-                    frame drop _cmerge_using
+                    frame change `__master_frame'
+                    frame drop `__using_frame'
                 }
                 else {
                     restore
                 }
                 exit 111
+            }
+        }
+
+        if inlist(`merge_code', 0, 1) & _N > 0 {
+            capture isid `keyvars', missok
+            if _rc {
+                di as error "cmerge: key variables do not uniquely identify observations in using"
+                if `__use_frames' {
+                    frame change `__master_frame'
+                    frame drop `__using_frame'
+                }
+                else restore
+                exit 459
             }
         }
 
@@ -427,18 +421,14 @@ program define cmerge, rclass
             }
 
             if "`master_type'" != "`using_type'" {
-                if "`force'" == "" {
-                    di as error "cmerge: key variable `var' is `master_type' in master but `using_type' in using"
-                    di as error "use force option to override"
-                    if `__use_frames' {
-                        frame change default
-                        frame drop _cmerge_using
-                    }
-                    else {
-                        restore
-                    }
-                    exit 106
+                di as error "cmerge: key variable `var' is `master_type' in master but `using_type' in using"
+                di as error "key types must match even with force"
+                if `__use_frames' {
+                    frame change `__master_frame'
+                    frame drop `__using_frame'
                 }
+                else restore
+                exit 106
             }
             local ++i
         }
@@ -485,6 +475,67 @@ program define cmerge, rclass
             }
         }
         local using_keep_vars "`keyvars' `keepusing_names'"
+    }
+
+    * Resolve all shared destinations, including keys for using-only rows,
+    * while both input schemas are available. Recast master only after restore.
+    local promote_names ""
+    local promote_types ""
+    local numeric_types "byte int long float double"
+    local schema_vars `keyvars' `keepusing_names'
+    local schema_vars : list uniq schema_vars
+    foreach var of local schema_vars {
+        local master_pos : list posof "`var'" in master_varlist
+        if `master_pos' {
+            local mt : word `master_pos' of `master_storage_types'
+            local ut : type `var'
+            local mstr = substr("`mt'",1,3) == "str"
+            local ustr = substr("`ut'",1,3) == "str"
+            if `mstr' != `ustr' {
+                * force applies only to non-key using values: discard values
+                * whose representation cannot be stored in the master type.
+                local is_key : list var in keyvars
+                if "`force'" == "" | `is_key' {
+                    di as error "cmerge: incompatible types for shared variable `var'"
+                    if `__use_frames' {
+                        frame change `__master_frame'
+                        frame drop `__using_frame'
+                    }
+                    else restore
+                    exit 106
+                }
+                drop `var'
+                if `mstr' quietly generate `mt' `var' = ""
+                else quietly generate `mt' `var' = .
+                local ut "`mt'"
+            }
+            local target "`mt'"
+            if `mstr' {
+                if "`mt'" == "strL" | "`ut'" == "strL" local target "strL"
+                else {
+                    local width = max(real(substr("`mt'",4,.)), real(substr("`ut'",4,.)))
+                    local target "str`width'"
+                }
+            }
+            else {
+                local mr : list posof "`mt'" in numeric_types
+                local ur : list posof "`ut'" in numeric_types
+                local rank = max(`mr', `ur')
+                * float cannot exactly represent every long integer.
+                if (`mr' == 3 & `ur' == 4) | (`mr' == 4 & `ur' == 3) local rank = 5
+                local target : word `rank' of `numeric_types'
+            }
+            if "`target'" != "`mt'" {
+                local promote_names `promote_names' `var'
+                local promote_types `promote_types' `target'
+            }
+        }
+    }
+    * A force conversion may have changed the using-side storage metadata.
+    local keepusing_types ""
+    foreach var of local keepusing_names {
+        local storage : type `var'
+        local keepusing_types `keepusing_types' `storage'
     }
 
     * Capture variable notes from using dataset (unless nonotes specified)
@@ -569,11 +620,18 @@ program define cmerge, rclass
         }
 
         if `__use_frames' {
-            frame change default
-            frame drop _cmerge_using
+            frame change `__master_frame'
+            frame drop `__using_frame'
         }
         else {
             restore
+        }
+
+        local p = 0
+        foreach var of local promote_names {
+            local ++p
+            local storage : word `p' of `promote_types'
+            quietly recast `storage' `var'
         }
 
         * Handle empty master: append using with _merge=2
@@ -589,9 +647,10 @@ program define cmerge, rclass
         * Handle empty using: keep master with _merge=1
         else if `master_nobs' > 0 & `using_nobs' == 0 {
             * Add placeholder keepusing variables
+            local type_index = 0
             foreach vname of local keepusing_names {
-                local vtype : word 1 of `keepusing_types'
-                local keepusing_types : list keepusing_types - vtype
+                local ++type_index
+                local vtype : word `type_index' of `keepusing_types'
                 capture confirm variable `vname'
                 if _rc {
                     if substr("`vtype'", 1, 3) == "str" {
@@ -633,18 +692,12 @@ program define cmerge, rclass
                     local keep_codes "`keep_codes' 2"
                 }
             }
-            if "`nogenerate'" == "" {
-                local keep_expr ""
-                foreach code of local keep_codes {
-                    if "`keep_expr'" == "" {
-                        local keep_expr "`generate' == `code'"
-                    }
-                    else {
-                        local keep_expr "`keep_expr' | `generate' == `code'"
-                    }
-                }
-                qui keep if `keep_expr'
+            local empty_result = cond(`master_nobs' > 0, 1, 2)
+            local retain = 0
+            foreach code of local keep_codes {
+                if `code' == `empty_result' local retain = 1
             }
+            if !`retain' quietly keep if 0
         }
 
         * Handle assert() option for empty datasets
@@ -768,8 +821,8 @@ program define cmerge, rclass
     if `plugin_rc' {
         di as error "cmerge: failed to load using data (error `plugin_rc')"
         if `__use_frames' {
-            frame change default
-            frame drop _cmerge_using
+            frame change `__master_frame'
+            frame drop `__using_frame'
         }
         else {
             restore
@@ -860,8 +913,8 @@ program define cmerge, rclass
     }
 
     if `__use_frames' {
-        frame change default
-        frame drop _cmerge_using
+        frame change `__master_frame'
+        frame drop `__using_frame'
     }
     else {
         restore
@@ -871,6 +924,13 @@ program define cmerge, rclass
         timer off 96
         timer on 97   /* append vars */
     }
+
+        local p = 0
+        foreach var of local promote_names {
+            local ++p
+            local storage : word `p' of `promote_types'
+            quietly recast `storage' `var'
+        }
 
     * Append empty template to add variable definitions (faster than st_addvar)
     if `n_new_vars' > 0 {
@@ -947,8 +1007,8 @@ program define cmerge, rclass
     unab __all_phase2_vars : _all
     _ctools_strw `__all_phase2_vars'
 
-    * Call plugin Phase 2 (current_varlist already computed)
-    capture noisily plugin call ctools_plugin `current_varlist', "cmerge `threads_code' `plugin_args'"
+    * Pass every current variable: SPI indices are relative to this varlist.
+    capture noisily plugin call ctools_plugin `__all_phase2_vars', "cmerge `threads_code' `plugin_args'"
     local plugin_rc = _rc
 
     * End plugin2 timer, start post-plugin timer

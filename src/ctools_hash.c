@@ -179,8 +179,8 @@ int ctools_str_hash_insert_value(ctools_str_hash_table *ht, const char *key,
     while (ht->entries[idx].key && probes < ht->capacity) {
         if (ht->entries[idx].hash == hash &&
             strcmp(ht->entries[idx].key, key) == 0) {
-            /* Key already exists - return existing value */
-            return ht->entries[idx].value;
+            /* Existing mapping is retained; status is independent of its code. */
+            return 0;
         }
         idx = (idx + 1) % ht->capacity;
         probes++;
@@ -199,12 +199,12 @@ int ctools_str_hash_insert_value(ctools_str_hash_table *ht, const char *key,
     ht->entries[idx].value = value;
     ht->count++;
 
-    return value;
+    return 0;
 }
 
-int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key)
+int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *value)
 {
-    if (!ht || !key || ht->count == 0) return 0;
+    if (!ht || !key || !value || ht->count == 0) return 0;
 
     uint32_t hash = ctools_str_hash_compute(key);
     size_t idx = hash % ht->capacity;
@@ -213,7 +213,8 @@ int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key)
     while (ht->entries[idx].key && probes < ht->capacity) {
         if (ht->entries[idx].hash == hash &&
             strcmp(ht->entries[idx].key, key) == 0) {
-            return ht->entries[idx].value;
+            *value = ht->entries[idx].value;
+            return 1;
         }
         idx = (idx + 1) % ht->capacity;
         probes++;
@@ -756,73 +757,31 @@ int ctools_label_scan_stata_file(const char *filepath, int *max_label_len)
     return 0;
 }
 
-/* Check if a string contains control characters that Stata's .do parser
- * can't handle (tab expands to spaces, newline breaks the line) */
-static int label_string_needs_escape(const char *s)
-{
-    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
-        if (*p < 32) return 1;
-    }
-    return 0;
-}
-
-/* Write a string expression using char() for control characters.
- * Output: `"seg1"' + char(9) + `"seg2"' + char(10) + `"seg3"'
- * For use in: local __lbl_tmp = <this expression> */
-static void write_escaped_string_expr(FILE *fp, const char *s)
-{
-    const unsigned char *p = (const unsigned char *)s;
-    const unsigned char *seg_start = p;
-    int first = 1;
-
-    for (;; p++) {
-        if (*p == '\0' || *p < 32) {
-            /* Write accumulated safe segment */
-            if (p > seg_start) {
-                if (!first) fprintf(fp, " + ");
-                fprintf(fp, "`\"");
-                fwrite(seg_start, 1, (size_t)(p - seg_start), fp);
-                fprintf(fp, "\"'");
-                first = 0;
-            }
-            if (*p == '\0') break;
-            /* Write char(N) for the control character */
-            if (!first) fprintf(fp, " + ");
-            fprintf(fp, "char(%d)", (int)*p);
-            first = 0;
-            seg_start = p + 1;
-        }
-    }
-    if (first) {
-        /* Empty string */
-        fprintf(fp, "`\"\"'");
-    }
-}
-
+/* Emit only ASCII numeric byte literals as Mata source. User text never becomes
+ * Stata macro syntax, quoting delimiters, or executable Mata code. */
 int ctools_label_write_stata_file(const char **strings, const int *codes,
                                    size_t n_labels, const char *label_name,
                                    const char *filepath)
 {
     FILE *fp = fopen(filepath, "w");
     if (!fp) return -1;
-
+    fprintf(fp, "tempname __ctools_label_text\n");
     for (size_t i = 0; i < n_labels; i++) {
-        const char *add = (i == 0) ? "" : ", add";
-
-        if (!label_string_needs_escape(strings[i])) {
-            /* Simple case: no control characters */
-            fprintf(fp, "label define %s %d `\"%s\"'%s\n",
-                    label_name, codes[i], strings[i], add);
-        } else {
-            /* Escaped case: use local + char() to preserve control chars */
-            fprintf(fp, "local __lbl_tmp = ");
-            write_escaped_string_expr(fp, strings[i]);
-            fprintf(fp, "\n");
-            fprintf(fp, "label define %s %d `\"`__lbl_tmp'\"'%s\n",
-                    label_name, codes[i], add);
+        const unsigned char *p = (const unsigned char *)(strings[i] ? strings[i] : "");
+        size_t length = strlen((const char *)p);
+        /* Bound each expression below Mata's token limit, including str2045. */
+        fprintf(fp, "mata: `__ctools_label_text' = \"\"\n");
+        for (size_t offset = 0; offset < length; offset += 128) {
+            size_t end = offset + 128 < length ? offset + 128 : length;
+            fprintf(fp, "mata: `__ctools_label_text' = `__ctools_label_text' + invtokens(char((");
+            for (size_t j = offset; j < end; j++)
+                fprintf(fp, "%s%u", j == offset ? "" : ",", (unsigned)p[j]);
+            fprintf(fp, ")), \"\")\n");
         }
+        fprintf(fp, "mata: st_vlmodify(\"%s\", %d, `__ctools_label_text')\n", label_name, codes[i]);
     }
-
-    fclose(fp);
-    return 0;
+    if (n_labels) fprintf(fp, "mata: mata drop `__ctools_label_text'\n");
+    int failed = ferror(fp);
+    if (fclose(fp) != 0) failed = 1;
+    return failed ? -1 : 0;
 }

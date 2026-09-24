@@ -30,6 +30,8 @@ typedef enum {
     CIMPORT_ENC_WINDOWS_1252,   /* CP1252 */
     CIMPORT_ENC_ASCII,
     CIMPORT_ENC_MACROMAN,       /* Mac OS Roman */
+    CIMPORT_ENC_UTF32LE,       /* Recognized but unsupported */
+    CIMPORT_ENC_UTF32BE,
     CIMPORT_ENC_COUNT
 } CImportEncoding;
 

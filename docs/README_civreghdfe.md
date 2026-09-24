@@ -35,7 +35,6 @@ civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight], absor
 |--------|-------------|
 | `first` | Report first-stage regression statistics |
 | `verbose` | Display progress information |
-| `timeit` | Display timing breakdown |
 | `small` | Use small-sample adjustments |
 
 ### Weights
@@ -67,7 +66,7 @@ civreghdfe ln_wage (tenure = union) age [aw=hours], absorb(idcode)
 civreghdfe y (x1 = z1 z2) x2 x3, absorb(firm year industry)
 
 * Verbose timing output
-civreghdfe ln_wage (tenure = union) age, absorb(idcode) verbose timeit
+civreghdfe ln_wage (tenure = union) age, absorb(idcode) verbose
 ```
 
 ## Syntax Details
@@ -179,7 +178,7 @@ For valid 2SLS estimation:
 
 ### Overidentification
 - When instruments > endogenous variables, the model is overidentified
-- Overidentification tests not yet implemented
+- Sargan/Hansen statistics are returned in `e(sargan)`, `e(sargan_df)`, and `e(sargan_p)` for supported overidentified specifications; see the installed help for inference details.
 
 ## Performance
 
@@ -202,7 +201,7 @@ For valid 2SLS estimation:
 - **Cache-line aligned allocations**: 64-byte boundaries prevent false sharing
 - **Persistent thread pool**: Threads reused across first stage, second stage, and HDFE iterations
 
-Typical speedup: 5-10x over `ivreghdfe`.
+Runtime depends on data and hardware; retain benchmark provenance with any comparison.
 
 ## Comparison with ivreghdfe
 
@@ -211,7 +210,6 @@ Typical speedup: 5-10x over `ivreghdfe`.
 | Implementation | Stata + Mata | C with OpenMP |
 | HDFE Algorithm | Alternating projections | CG with Kaczmarz |
 | Parallelization | Limited | Yes |
-| Typical Speedup | 1x (baseline) | 5-10x |
 
 ## See Also
 
@@ -219,3 +217,7 @@ Typical speedup: 5-10x over `ivreghdfe`.
 - [creghdfe](README_creghdfe.md) - OLS regression with HDFE
 - ivreghdfe - Original implementation (if installed)
 - [ivreg2](https://ideas.repec.org/c/boc/bocode/s425401.html) - Alternative IV estimation
+
+## Validation and failure behavior
+
+maxiter() and tolerance() must be positive. A fixed-effect projection that exhausts its iteration limit returns error 430; covariance allocation failures propagate as errors rather than successful zero standard errors.

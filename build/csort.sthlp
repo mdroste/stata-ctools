@@ -19,7 +19,6 @@
 {p 8 17 2}
 {cmdab:csort}
 {varlist}
-{ifin}
 [{cmd:,} {it:options}]
 
 {synoptset 24 tabbed}{...}
@@ -52,6 +51,10 @@ speed improvements over the native command, especially for large datasets.
 variables in {varlist}. The sort is {it:stable}, meaning observations with equal
 key values maintain their relative order.
 
+
+{pstd}
+Like native {cmd:sort}, {cmd:csort} rejects {cmd:if} and {cmd:in}. Fixed-width
+strings are supported; {cmd:strL} variables are rejected.
 
 {marker options}{...}
 {title:Options}
@@ -121,8 +124,7 @@ the value range is small (common for dates, years, categories). Automatically
 falls back to LSD radix sort for larger ranges.{p_end}
 
 {pstd}
-This provides massive speedups for typical Stata workloads. For example, sorting
-panel data by date or ID can be 100x faster than comparison-based sorts.
+The benefit depends on key ranges, dataset shape, and hardware.
 
 {dlgtab:Manual Algorithm Selection}
 
@@ -152,9 +154,8 @@ implementation uses:
 {p 8 12 2}3. Parallel data storing back to Stata{p_end}
 
 {pstd}
-For large datasets (millions of observations), {cmd:csort} can be 2-10x faster
-than the native {cmd:sort} command, depending on data characteristics and the
-number of available CPU cores.
+Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
+should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
 
 {pstd}
 {cmd:csort} supports sorting on multiple variables. When sorting on multiple

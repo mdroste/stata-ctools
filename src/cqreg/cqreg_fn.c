@@ -29,7 +29,6 @@
 /* Algorithm parameters */
 #define IPM_BETA        0.99995   /* Step size damping factor */
 #define IPM_SMALL       1e-14     /* Small number for numerical stability */
-#define IPM_MAX_ITER    500       /* Maximum iterations */
 #define IPM_TOL_DEFAULT 1e-12     /* Default convergence tolerance for gap */
 
 /* SIMD support for ARM NEON and x86 SSE/AVX */
@@ -786,6 +785,61 @@ static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
     *fd_out = (IPM_BETA * fd_min > 1.0) ? 1.0 : IPM_BETA * fd_min;
 }
 
+/* Weighted Householder QR avoids squaring the condition number when the
+ * barrier weights concentrate on a nearly singular set of active observations.
+ * weighted_rhs is q*r (or its predictor-corrector counterpart). */
+static int cqreg_weighted_qr(const ST_double *X, const ST_double *q,
+    const ST_double *weighted_rhs, ST_int N, ST_int K, ST_double *solution)
+{
+    ST_double *A = malloc((size_t)N * K * sizeof(*A));
+    ST_double *b = malloc((size_t)N * sizeof(*b));
+    ST_double *scale = calloc((size_t)K, sizeof(*scale));
+    int rc = -1;
+    if (!A || !b || !scale) goto cleanup;
+    for (ST_int i = 0; i < N; i++) {
+        if (!(q[i] > 0) || !isfinite(q[i])) goto cleanup;
+        ST_double root = sqrt(q[i]);
+        b[i] = weighted_rhs[i] / root;
+        for (ST_int j = 0; j < K; j++) {
+            A[j*N+i] = root * X[j*N+i];
+            if (fabs(A[j*N+i]) > scale[j]) scale[j] = fabs(A[j*N+i]);
+        }
+    }
+    for (ST_int j = 0; j < K; j++) {
+        if (!(scale[j] > 0)) goto cleanup;
+        for (ST_int i = 0; i < N; i++) A[j*N+i] /= scale[j];
+    }
+    for (ST_int j = 0; j < K; j++) {
+        ST_double norm = 0.0;
+        for (ST_int i = j; i < N; i++) norm = hypot(norm, A[j*N+i]);
+        if (!(norm > 0) || !isfinite(norm)) goto cleanup;
+        ST_double diag = -copysign(norm, A[j*N+j]);
+        ST_double first = A[j*N+j] - diag;
+        ST_double tau = (diag - A[j*N+j]) / diag;
+        A[j*N+j] = diag;
+        for (ST_int i = j+1; i < N; i++) A[j*N+i] /= first;
+        for (ST_int k = j+1; k <= K; k++) {
+            ST_double *column = k == K ? b : A + k*N;
+            ST_double dot = column[j];
+            for (ST_int i = j+1; i < N; i++) dot += A[j*N+i] * column[i];
+            dot *= tau;
+            column[j] -= dot;
+            for (ST_int i = j+1; i < N; i++) column[i] -= A[j*N+i] * dot;
+        }
+    }
+    for (ST_int j = K-1; j >= 0; j--) {
+        ST_double value = b[j];
+        for (ST_int k = j+1; k < K; k++) value -= A[k*N+j] * solution[k];
+        solution[j] = value / A[j*N+j];
+        if (!isfinite(solution[j])) goto cleanup;
+    }
+    for (ST_int j = 0; j < K; j++) solution[j] /= scale[j];
+    rc = 0;
+cleanup:
+    free(A); free(b); free(scale);
+    return rc;
+}
+
 /* ============================================================================
  * Main Frisch-Newton Interior Point Solver
  *
@@ -804,15 +858,17 @@ static void compute_step_lengths_fused(ST_double *fp_out, ST_double *fd_out,
  * Returns:
  *   Number of iterations on success, negative on error
  * ============================================================================ */
-ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
+static ST_int cqreg_fn_solve_core(cqreg_ipm_state *ipm,
                        const ST_double *Y,
                        const ST_double *X,
                        ST_double tau,
-                       ST_double *beta)
+                       ST_double *beta, int use_qr)
 {
     ST_int N = ipm->N;
     ST_int K = ipm->K;
     ST_int i, j, iter;
+    ipm->iterations = 0;
+    ipm->converged = 0;
 
     ipm_debug_open();
     IPM_LOG("=== IPM Solver Start ===\n");
@@ -956,7 +1012,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         ipm_tol = IPM_TOL_DEFAULT;
     }
 
-    for (iter = 0; iter < IPM_MAX_ITER; iter++) {
+    for (iter = 0; iter < ipm->config.maxiter; iter++) {
 
         /* Check convergence using configurable tolerance */
         if (gap < ipm_tol || !isfinite(gap)) {
@@ -1016,11 +1072,13 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
         blas_dgemv(1, N, K, 1.0, X, N, Xq, 0.0, Xqr);
 
         /* Solve (X'QX) * dy = Xqr via Cholesky */
-        if (cqreg_cholesky(XqX, K) != 0) {
-            break;  /* Numerical issues */
+        if (use_qr) {
+            if (cqreg_weighted_qr(X, q, Xq, N, K, dy)) break;
+        } else {
+            if (cqreg_cholesky(XqX, K) != 0) break;
+            memcpy(dy, Xqr, K * sizeof(ST_double));
+            cqreg_solve_cholesky(XqX, dy, K);
         }
-        memcpy(dy, Xqr, K * sizeof(ST_double));
-        cqreg_solve_cholesky(XqX, dy, K);
 #if FN_TIMING
         fn_time_cholesky += ctools_timer_seconds() - t_phase;
         t_phase = ctools_timer_seconds();
@@ -1100,11 +1158,13 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
             /* Restore XqX from saved copy (avoids recomputing X'DX) */
             memcpy(XqX, XqX_copy, K * K * sizeof(ST_double));
 
-            if (cqreg_cholesky(XqX, K) != 0) {
-                break;
+            if (use_qr) {
+                if (cqreg_weighted_qr(X, q, Xq, N, K, dy)) break;
+            } else {
+                if (cqreg_cholesky(XqX, K) != 0) break;
+                memcpy(dy, Xqr, K * sizeof(ST_double));
+                cqreg_solve_cholesky(XqX, dy, K);
             }
-            memcpy(dy, Xqr, K * sizeof(ST_double));
-            cqreg_solve_cholesky(XqX, dy, K);
 #if FN_TIMING
             fn_corr_gemv1 += ctools_timer_seconds() - t_corr;
             t_corr = ctools_timer_seconds();
@@ -1211,7 +1271,15 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 
     /* Store results in ipm state */
     ipm->iterations = iter;
-    ipm->converged = (gap < ipm_tol) ? 1 : 0;
+    ipm->converged = isfinite(gap) && gap >= 0.0 && gap < ipm_tol;
+    for (j = 0; j < K; j++) {
+        if (!isfinite(beta[j])) ipm->converged = 0;
+    }
+    if (!ipm->converged) {
+        if (ipm->config.verbose) ctools_error("cqreg", "solver gap %.17g (required < %.17g), iteration %d", gap, ipm_tol, iter);
+        ipm_debug_close();
+        return -(iter > 0 ? iter : 1);
+    }
 
     /*
      * For auxiliary solves (sparsity estimation), we only need beta.
@@ -1225,7 +1293,7 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 #if FN_TIMING
         fn_timing_report(N, K, ipm->config.verbose);
 #endif
-        return iter;
+        return iter > 0 ? iter : 1;
     }
 
     /* Compute residuals from IPM solution */
@@ -1389,5 +1457,18 @@ ST_int cqreg_fn_solve(cqreg_ipm_state *ipm,
 #endif
 
     /* No cleanup needed - all arrays are pre-allocated in IPM state */
-    return iter;
+    return iter > 0 ? iter : 1;
+}
+
+ST_int cqreg_fn_solve(cqreg_ipm_state *ipm, const ST_double *Y,
+    const ST_double *X, ST_double tau, ST_double *beta)
+{
+    ST_int result = cqreg_fn_solve_core(ipm, Y, X, tau, beta, 0);
+    /* Retry numerical breakdown with QR. Exhausting maxiter remains an error;
+     * the requested gap tolerance is unchanged for both factorizations. */
+    if (!ipm->converged && ipm->iterations < ipm->config.maxiter) {
+        if (ipm->config.verbose) ctools_msg("cqreg", "retrying numerical breakdown with weighted QR");
+        result = cqreg_fn_solve_core(ipm, Y, X, tau, beta, 1);
+    }
+    return result;
 }

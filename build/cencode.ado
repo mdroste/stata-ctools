@@ -2,6 +2,19 @@
 
 program define cencode, rclass
     version 14.1
+    preserve
+    capture noisily _cencode_impl `0'
+    local rc = _rc
+    if `rc' {
+        restore
+        exit `rc'
+    }
+    return add
+    restore, not
+end
+
+program define _cencode_impl, rclass
+    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -29,32 +42,6 @@ program define cencode, rclass
     * Count input variables
     local n_vars : word count `varlist'
 
-    * Handle empty dataset early - match encode behavior (succeed with empty output)
-    * Must come before generate-exists check since test framework may leave
-    * variables from a prior encode call
-    if _N == 0 {
-        if "`replace'" != "" {
-            * For replace with 0 obs, convert string vars to numeric
-            foreach v of local varlist {
-                capture drop `v'
-                quietly generate long `v' = .
-            }
-        }
-        else if "`generate'" != "" {
-            local n_gen : word count `generate'
-            if `n_gen' == `n_vars' {
-                forvalues i = 1/`n_gen' {
-                    local gvar : word `i' of `generate'
-                    capture drop `gvar'
-                    quietly generate long `gvar' = .
-                }
-            }
-        }
-        return scalar N_unique = 0
-        return scalar N_vars = `n_vars'
-        exit 0
-    }
-
     * Handle replace vs generate
     local __do_replace = 0
     if "`replace'" != "" {
@@ -67,15 +54,7 @@ program define cencode, rclass
             di as error "cencode: generate() must specify `n_vars' variable(s) to match varlist"
             exit 198
         }
-        * Check that none of the generate variables already exist
-        forvalues i = 1/`n_gen' {
-            local gvar : word `i' of `generate'
-            capture confirm variable `gvar'
-            if _rc == 0 {
-                di as error "cencode: variable `gvar' already exists"
-                exit 110
-            }
-        }
+        _ctools_newvars `generate'
     }
 
     * Check that all source variables are string (match encode rc=107)
@@ -85,6 +64,20 @@ program define cencode, rclass
             di as error "`v' is not a string variable"
             exit 107
         }
+    }
+
+    if _N == 0 {
+        forvalues i=1/`n_vars' {
+            if `__do_replace' {
+                local target : word `i' of `varlist'
+                drop `target'
+            }
+            else local target : word `i' of `generate'
+            quietly generate long `target' = .
+        }
+        return scalar N_unique = 0
+        return scalar N_vars = `n_vars'
+        exit
     }
 
     * =========================================================================
@@ -106,62 +99,11 @@ program define cencode, rclass
     marksample touse, strok
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cencode: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
     * Reset _rc (plugin load may leave _rc=110 for already-loaded plugin)
     capture confirm number 0
 
@@ -195,6 +137,24 @@ program define cencode, rclass
         }
         else {
             local this_label "`__final_name'"
+        }
+
+        capture label list `this_label'
+        if !_rc {
+            quietly encode `srcvar' `if' `in', generate(`destvar') label(`this_label') `noextend'
+            tempvar label_tag
+            quietly egen byte `label_tag' = tag(`destvar')
+            quietly count if `label_tag'
+            return scalar N_unique = r(N)
+            if `__do_replace' {
+                drop `srcvar'
+                rename `destvar' `srcvar'
+            }
+            * No C phases ran for this variable.
+            foreach phase in parse load collect sort encode labels total {
+                scalar _cencode_time_`phase' = 0
+            }
+            continue
         }
 
         * Create the destination variable (numeric, long type for sufficient range)

@@ -81,7 +81,7 @@ benchmark_reghdfe pop medage, absorb(region) vce(robust) testname("robust")
  ******************************************************************************/
 print_section "Panel Data (nlswork)"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode) testname("individual FE")
 benchmark_reghdfe ln_wage age tenure, absorb(idcode year) testname("two-way FE")
@@ -130,6 +130,8 @@ reghdfe price mpg weight, absorb(foreign) resid(reghdfe_resid)
 tempvar reghdfe_r
 gen double `reghdfe_r' = reghdfe_resid
 
+* Discard a residual left by the reference fit before creating this output.
+capture drop _reghdfe_resid
 creghdfe price mpg weight, absorb(foreign) resid
 assert_var_equal _reghdfe_resid `reghdfe_r' $DEFAULT_SIGFIGS "resid: default name"
 
@@ -217,7 +219,7 @@ else {
 }
 
 * Partial singletons in two-way FE
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 gen year_singleton = year
 replace year_singleton = 1900 + _n if _n <= 100  // Create some singletons
@@ -456,7 +458,7 @@ else {
 print_section "VCE Options - Comprehensive"
 
 * Large clusters
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/15000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("large clusters (many)")
 
@@ -465,19 +467,12 @@ sysuse auto, clear
 gen cluster_var = ceil(_n / 10)  // ~7-8 clusters
 benchmark_reghdfe price mpg weight, absorb(foreign) vce(cluster cluster_var) testname("small clusters (few)")
 
-* Single cluster (extreme case)
+* A one-cluster covariance is undefined: reject it explicitly.
 sysuse auto, clear
 gen single_cluster = 1
-capture reghdfe price mpg weight, absorb(foreign) vce(cluster single_cluster)
-local stata_rc = _rc
 capture creghdfe price mpg weight, absorb(foreign) vce(cluster single_cluster)
-local ctools_rc = _rc
-if `stata_rc' == `ctools_rc' {
-    test_pass "single cluster (both rc=`stata_rc')"
-}
-else {
-    test_fail "single cluster" "rc differ: reghdfe=`stata_rc' creghdfe=`ctools_rc'"
-}
+if _rc == 498 test_pass "single cluster rejected (undefined covariance)"
+else test_fail "single cluster rejection" "expected 498, got `=_rc'"
 
 * Two clusters
 sysuse auto, clear
@@ -501,7 +496,7 @@ benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign) vce(cluster fore
 print_section "Weight Tests - Comprehensive"
 
 * aweight with panel data
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 gen aw_var = hours if !missing(hours)
 replace aw_var = 40 if missing(aw_var)
@@ -567,7 +562,7 @@ benchmark_reghdfe y x_small x_medium x_large, absorb(id) testname("covariates di
 print_section "Additional Built-in Datasets"
 
 * Grunfeld panel data
-capture webuse grunfeld, clear
+capture ctools_fixture grunfeld, clear
 if _rc == 0 {
     benchmark_reghdfe invest mvalue kstock, absorb(company) testname("grunfeld: company FE")
     benchmark_reghdfe invest mvalue kstock, absorb(company year) testname("grunfeld: two-way FE")
@@ -579,7 +574,7 @@ else {
 }
 
 * Pig dataset
-capture webuse pig, clear
+capture ctools_fixture pig, clear
 if _rc == 0 {
     benchmark_reghdfe weight week, absorb(id) testname("pig: individual FE")
     benchmark_reghdfe weight week, absorb(id) vce(robust) testname("pig: robust")
@@ -589,7 +584,7 @@ else {
 }
 
 * bplong - blood pressure data
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_reghdfe bp when, absorb(patient) testname("bplong: patient FE")
     benchmark_reghdfe bp when sex, absorb(patient) testname("bplong: with sex covariate")
@@ -599,7 +594,7 @@ else {
 }
 
 * cancer - survival data
-capture webuse cancer, clear
+capture ctools_fixture cancer, clear
 if _rc == 0 {
     gen age_group = ceil(age / 10)
     benchmark_reghdfe studytime age, absorb(drug) testname("cancer: drug FE")
@@ -609,7 +604,7 @@ else {
 }
 
 * lifeexp - life expectancy
-capture webuse lifeexp, clear
+capture ctools_fixture lifeexp, clear
 if _rc == 0 {
     benchmark_reghdfe lexp gnppc, absorb(region) testname("lifeexp: region FE")
     benchmark_reghdfe lexp gnppc safewater, absorb(region) testname("lifeexp: two covariates")
@@ -776,14 +771,14 @@ benchmark_reghdfe y x, absorb(id1 id2 id3) vce(cluster id1) testname("three-way 
 print_section "Panel Data Variations (nlswork)"
 
 * Full nlswork dataset
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) testname("nlswork full: individual FE")
 benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode year) testname("nlswork full: two-way FE")
 benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(robust) testname("nlswork full: robust")
 benchmark_reghdfe ln_wage age tenure ttl_exp, absorb(idcode) vce(cluster idcode) testname("nlswork full: cluster idcode")
 
 * nlswork with industry FE
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep if !missing(ind_code)
 benchmark_reghdfe ln_wage age tenure, absorb(ind_code) testname("nlswork: industry FE")
 benchmark_reghdfe ln_wage age tenure, absorb(idcode ind_code) testname("nlswork: individual + industry FE")
@@ -798,7 +793,7 @@ sysuse auto, clear
 benchmark_reghdfe price mpg weight [aw=weight], absorb(foreign rep78) vce(robust) testname("two-way + robust + aweight")
 
 * Two-way FE + cluster + weights
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 gen aw_var = hours if !missing(hours)
 replace aw_var = 40 if missing(aw_var)
@@ -866,7 +861,7 @@ benchmark_reghdfe price mpg weight i.rep78, absorb(foreign) vce(cluster foreign)
 benchmark_reghdfe price c.mpg#i.foreign weight, absorb(rep78) testname("c.mpg#i.foreign interaction")
 
 * Factor variable with panel data
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_reghdfe ln_wage age tenure i.race, absorb(idcode) testname("i.race panel")
 benchmark_reghdfe ln_wage age tenure i.race, absorb(idcode year) testname("i.race two-way FE")
@@ -881,7 +876,7 @@ benchmark_reghdfe price mpg ib3.rep78, absorb(foreign) testname("ib3.rep78 (cust
 benchmark_reghdfe price i.foreign##c.mpg weight, absorb(rep78) testname("i.foreign##c.mpg full factorial")
 
 * Multiple separate factor variables
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_reghdfe ln_wage age i.race i.union, absorb(idcode) testname("i.race i.union (multiple factors)")
 
@@ -898,65 +893,65 @@ benchmark_reghdfe ln_wage age i.race i.union, absorb(idcode) testname("i.race i.
 print_section "Time Series Operators"
 
 * Test with manually created lag variable (workaround for L.)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 gen L2_mvalue = L2.mvalue
 benchmark_reghdfe invest L_mvalue kstock, absorb(company) testname("manual lag (L.mvalue equivalent)")
 
 * Test with multiple manually created lags
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 gen L2_mvalue = L2.mvalue
 benchmark_reghdfe invest L_mvalue L2_mvalue kstock, absorb(company) testname("manual multiple lags (L. L2. equivalent)")
 
 * Test with manually created difference variable (workaround for D.)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen D_mvalue = D.mvalue
 benchmark_reghdfe invest D_mvalue kstock, absorb(company) testname("manual difference (D.mvalue equivalent)")
 
 * Test with manually created lead variable (workaround for F.)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen F_mvalue = F.mvalue
 benchmark_reghdfe invest F_mvalue kstock, absorb(company) testname("manual lead (F.mvalue equivalent)")
 
 * Test with manually created lag + two-way FE
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 benchmark_reghdfe invest L_mvalue kstock, absorb(company year) testname("manual lag + two-way FE")
 
 * Test with manually created lag + robust SE
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 benchmark_reghdfe invest L_mvalue kstock, absorb(company) vce(robust) testname("manual lag + robust")
 
 * Test with manually created lag + clustering
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 benchmark_reghdfe invest L_mvalue kstock, absorb(company) vce(cluster company) testname("manual lag + cluster")
 
 * nlswork panel with manually created lag
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 xtset idcode year
 gen L_tenure = L.tenure
 benchmark_reghdfe ln_wage L_tenure age, absorb(idcode) testname("nlswork manual lag")
 
 * nlswork panel with manually created difference
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 xtset idcode year
 gen D_tenure = D.tenure
 benchmark_reghdfe ln_wage D_tenure age, absorb(idcode) testname("nlswork manual difference")
 
 * Direct L. operator error handling - verify behavior matches reghdfe
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 capture reghdfe invest L.mvalue kstock, absorb(company)
 local stata_rc = _rc
@@ -970,7 +965,7 @@ else {
 }
 
 * Direct D. operator error handling - verify behavior matches reghdfe
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 capture reghdfe invest D.mvalue kstock, absorb(company)
 local stata_rc = _rc
@@ -984,7 +979,7 @@ else {
 }
 
 * Direct F. operator error handling - verify behavior matches reghdfe
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 capture reghdfe invest F.mvalue kstock, absorb(company)
 local stata_rc = _rc
@@ -998,14 +993,14 @@ else {
 }
 
 * Lead and lag together
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 gen F_mvalue = F.mvalue
 benchmark_reghdfe invest L_mvalue F_mvalue kstock, absorb(company) testname("lead and lag together")
 
 * Time series with factor variables
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 xtset company year
 gen L_mvalue = L.mvalue
 benchmark_reghdfe invest L_mvalue kstock i.company, absorb(year) testname("manual lag + i.company factor")
@@ -1024,9 +1019,11 @@ gen double `reghdfe_g' = reghdfe_gvar
 creghdfe price mpg weight, absorb(foreign rep78) groupvar(creghdfe_gvar)
 assert_var_equal creghdfe_gvar `reghdfe_g' $DEFAULT_SIGFIGS "groupvar: auto two-way FE"
 
-* Test 2: savefe - compare FE values against reghdfe
+* Test 2: savefe - compare FE values against a precise reference.
+* Default reghdfe FE recovery is not accurate to seven significant figures
+* on this panel; tighten the reference solver, keeping the comparison threshold.
 sysuse auto, clear
-reghdfe price mpg weight, absorb(foreign rep78, savefe) resid
+reghdfe price mpg weight, absorb(foreign rep78, savefe) resid tolerance(1e-12)
 rename __hdfe1__ reghdfe_fe1
 rename __hdfe2__ reghdfe_fe2
 
@@ -1148,9 +1145,9 @@ else {
 }
 
 * Test 6: savefe with panel data - compare values
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
-reghdfe ln_wage age tenure, absorb(idcode year, savefe) resid
+reghdfe ln_wage age tenure, absorb(idcode year, savefe) resid tolerance(1e-12)
 rename __hdfe1__ reghdfe_fe1
 rename __hdfe2__ reghdfe_fe2
 
@@ -1159,7 +1156,7 @@ assert_var_equal __hdfe1__ reghdfe_fe1 $DEFAULT_SIGFIGS "savefe: nlswork FE1"
 assert_var_equal __hdfe2__ reghdfe_fe2 $DEFAULT_SIGFIGS "savefe: nlswork FE2"
 
 * Test 7: groupvar with panel data
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 reghdfe ln_wage age tenure, absorb(idcode year) groupvar(reghdfe_gvar)
 tempvar reghdfe_g
@@ -1221,7 +1218,7 @@ creghdfe price mpg weight [aw=weight], absorb(foreign) resid2(creghdfe_resid)
 assert_var_equal creghdfe_resid `reghdfe_r' $DEFAULT_SIGFIGS "resid values: aweight"
 
 * Residual values with panel data
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 reghdfe ln_wage age tenure, absorb(idcode) resid(reghdfe_resid)
 tempvar reghdfe_r
@@ -1710,6 +1707,8 @@ predict double reghdfe_resid_hat, residuals
 tempvar reghdfe_rh
 gen double `reghdfe_rh' = reghdfe_resid_hat
 
+* Discard a residual left by the reference fit before creating this output.
+capture drop _reghdfe_resid
 creghdfe price mpg weight, absorb(foreign) resid
 predict double creghdfe_resid_hat, residuals
 assert_var_equal creghdfe_resid_hat `reghdfe_rh' $DEFAULT_SIGFIGS "predict residuals"
@@ -1721,6 +1720,8 @@ predict double reghdfe_xbd_hat, xbd
 tempvar reghdfe_xbd
 gen double `reghdfe_xbd' = reghdfe_xbd_hat
 
+* Discard a residual left by the reference fit before creating this output.
+capture drop _reghdfe_resid
 creghdfe price mpg weight, absorb(foreign) resid
 predict double creghdfe_xbd_hat, xbd
 assert_var_equal creghdfe_xbd_hat `reghdfe_xbd' $DEFAULT_SIGFIGS "predict xbd"
@@ -1943,7 +1944,7 @@ print_section "DOF Adjustments vs reghdfe"
 * Two-way FE with dofadjustments(none)
 * NOTE: dof(none) may have a 1-unit difference due to intercept handling
 * between reghdfe and creghdfe. We allow abs diff <= 1 on df_r.
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(none)
 local reghdfe_df_r_none = e(df_r)
 local reghdfe_df_a_none = e(df_a)
@@ -1982,7 +1983,7 @@ else {
 }
 
 * Two-way FE with dofadjustments(pairwise)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(pairwise)
 local reghdfe_df_r_pair = e(df_r)
 matrix reghdfe_b = e(b)
@@ -2019,7 +2020,7 @@ else {
 }
 
 * Two-way FE with dofadjustments(firstpair)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 reghdfe invest mvalue kstock, absorb(company year) dofadjustments(firstpair)
 local reghdfe_df_r_first = e(df_r)
 matrix reghdfe_b = e(b)
@@ -2106,7 +2107,7 @@ else {
 }
 
 * DOF with nlswork panel
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 reghdfe ln_wage age tenure, absorb(idcode year) dofadjustments(pairwise)
 local reghdfe_df_r = e(df_r)
@@ -2544,25 +2545,25 @@ else {
 print_section "Cluster Same as FE"
 
 * Cluster on same variable as absorb
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode) vce(cluster idcode) testname("cluster=FE: idcode")
 
 * Two-way FE, cluster on one of the FE vars
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode year) vce(cluster idcode) testname("two-way FE, cluster on idcode")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode year) vce(cluster year) testname("two-way FE, cluster on year")
 
 * Grunfeld: cluster on company (same as FE)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 benchmark_reghdfe invest mvalue kstock, absorb(company) vce(cluster company) testname("grunfeld: cluster=company FE")
 
 * Grunfeld: two-way FE, cluster on year
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 benchmark_reghdfe invest mvalue kstock, absorb(company year) vce(cluster year) testname("grunfeld: two-way cluster=year")
 
 /*******************************************************************************
@@ -2583,12 +2584,12 @@ gen int fw = ceil(mpg / 5)
 benchmark_reghdfe price mpg weight [fw=fw], absorb(foreign) vce(cluster foreign) testname("fweight + cluster")
 
 * aweight + robust + two-way FE
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 gen aw_var = abs(mvalue) / 100
 benchmark_reghdfe invest mvalue kstock [aw=aw_var], absorb(company year) vce(robust) testname("aweight + robust + two-way")
 
 * pweight + two-way FE (pweight implies robust)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 gen pw_var = abs(mvalue) / 100 + 1
 benchmark_reghdfe invest mvalue kstock [pw=pw_var], absorb(company year) testname("pweight + two-way FE")
 
@@ -2605,7 +2606,7 @@ gen int fw = runiformint(1, 5)
 benchmark_reghdfe y x1 x2 [fw=fw], absorb(id) vce(robust) testname("fweight + robust + panel")
 
 * aweight + cluster + panel
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 gen aw_var = hours if !missing(hours)
 replace aw_var = 40 if missing(aw_var)
@@ -2669,7 +2670,7 @@ sysuse auto, clear
 benchmark_reghdfe price c.mpg#i.foreign c.weight#i.foreign, absorb(rep78) testname("multiple c.var#i.var interactions")
 
 * Factor with panel data and two-way FE
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 keep if !missing(union)
 benchmark_reghdfe ln_wage age i.union c.tenure#i.union, absorb(idcode year) testname("factor + interaction + two-way FE panel")
@@ -3232,7 +3233,7 @@ benchmark_reghdfe price mpg weight, absorb(foreign) testname("DOF: single FE")
 sysuse auto, clear
 benchmark_reghdfe price mpg weight, absorb(foreign rep78) testname("DOF: two-way FE")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 benchmark_reghdfe ln_wage age tenure, absorb(idcode year) testname("DOF: nlswork panel")
 
@@ -3844,3 +3845,6 @@ else {
 * End of creghdfe validation
 noi print_summary "creghdfe"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "creghdfe"

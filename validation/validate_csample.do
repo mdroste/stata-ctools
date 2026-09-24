@@ -175,7 +175,7 @@ gen id = _n
 set seed 12345
 csample 50, by(group)
 
-* Note: Stata's sample doesn't support by(), so exact comparison isn't possible.
+* Native sample supports by(); count parity is checked in validate_audit_p2.do.
 * Use tighter range check with 20% tolerance around expected 50 per group.
 local all_ok = 1
 forvalues g = 0/9 {
@@ -314,6 +314,12 @@ gen id = _n
 gen x = runiform()
 gen keep_flag = id <= 100
 
+preserve
+sample 50 if keep_flag == 1
+local expected_N = _N
+count if id > 100
+local expected_outside = r(N)
+restore
 set seed 12345
 csample 50 if keep_flag == 1
 
@@ -321,7 +327,7 @@ local n_kept = _N
 count if id > 100
 local n_wrong = r(N)
 
-if `n_wrong' == 0 & `n_kept' > 35 & `n_kept' < 65 {
+if `n_wrong' == `expected_outside' & `n_kept' == `expected_N' {
     test_pass "if condition respected"
 }
 else {
@@ -332,6 +338,12 @@ else {
 clear
 set obs 200
 gen id = _n
+preserve
+sample 50 in 1/100
+local expected_N = _N
+count if id > 100
+local expected_outside = r(N)
+restore
 set seed 12345
 csample 50 in 1/100
 
@@ -339,7 +351,7 @@ local n_kept = _N
 count if id > 100
 local n_wrong = r(N)
 
-if `n_wrong' == 0 & `n_kept' > 35 & `n_kept' < 65 {
+if `n_wrong' == `expected_outside' & `n_kept' == `expected_N' {
     test_pass "in condition respected"
 }
 else {
@@ -352,6 +364,14 @@ set obs 300
 gen id = _n
 gen group = mod(_n, 3)
 
+preserve
+sample 50 if group == 1 in 1/200
+local expected_N = _N
+count if id > 200
+local expected_outside_in = r(N)
+count if group != 1
+local expected_outside_if = r(N)
+restore
 set seed 12345
 csample 50 if group == 1 in 1/200
 
@@ -361,7 +381,7 @@ local n_wrong_in = r(N)
 count if group != 1
 local n_wrong_if = r(N)
 
-if `n_wrong_in' == 0 & `n_wrong_if' == 0 & `n_kept' > 20 & `n_kept' < 50 {
+if `n_wrong_in' == `expected_outside_in' & `n_wrong_if' == `expected_outside_if' & `n_kept' == `expected_N' {
     test_pass "combined if/in conditions"
 }
 else {
@@ -526,7 +546,7 @@ else {
 }
 
 * By variable doesn't exist
-* Note: Stata's sample doesn't support by(), so we test csample independently
+* Native sample also supports by(); these cases test csample group sizes.
 clear
 set obs 100
 gen id = _n
@@ -541,3 +561,6 @@ else {
 * End of csample validation
 noi print_summary "csample"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "csample"

@@ -908,6 +908,13 @@ stata_retcode csort_stream_sort(
     const int *str_widths,
     csort_stream_timings *timings)
 {
+    for (ST_int v = 1; v <= SF_nvars(); v++) {
+        if (SF_var_is_string(v) && SF_var_is_strl(v)) {
+            SF_error("csort: strL I/O is unsupported; recast to str2045 when lossless\n");
+            return STATA_ERR_UNSUPPORTED_TYPE;
+        }
+    }
+
     ctools_filtered_data key_filtered;
     perm_idx_t *obs_map = NULL;
     stata_retcode rc;

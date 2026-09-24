@@ -20,6 +20,9 @@
  * Part of the ctools Stata plugin suite
  */
 
+/* Resolve output indices in the plugin varlist, including hidden Stata variables. */
+#define SD_SAFEMODE
+#include <float.h>
 #include "cpplmhdfe_irls.h"
 #include "cpplmhdfe_separation.h"
 #include "../creghdfe/creghdfe_utils.h"
@@ -63,6 +66,8 @@ static void cleanup_ppml_state(void)
 ST_retcode do_ppml_regression(int argc, char *argv[])
 {
     ST_int K, G, N_orig, N, in1, in2;
+    ST_retcode output_rc = 0;
+    ST_int sample_var_idx = 0;
     ST_int k, g, i, j, idx;
     ST_double val;
     ST_int verbose;
@@ -71,7 +76,6 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     PPMLFactorData *factors = NULL;
     char scalar_name[64];
     double t_start, t_load, t_remap, t_singleton, t_dof, t_irls, t_vce;
-    ST_int max_iter_singleton = 100;
     ST_int mobility_groups = 1;
     ST_int df_a = 0;
     ST_int num_threads;
@@ -292,13 +296,13 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             double *cluster_data = filtered.data.vars[K + G].data.dbl;
             for (g = 0; g < G; g++) {
                 double *fe_data = filtered.data.vars[K + g].data.dbl;
-                if ((ST_int)cluster_data[0] != (ST_int)fe_data[0] ||
-                    (ST_int)cluster_data[N_orig/2] != (ST_int)fe_data[N_orig/2] ||
-                    (ST_int)cluster_data[N_orig-1] != (ST_int)fe_data[N_orig-1])
+                if (cluster_data[0] != fe_data[0] ||
+                    cluster_data[N_orig/2] != fe_data[N_orig/2] ||
+                    cluster_data[N_orig-1] != fe_data[N_orig-1])
                     continue;
                 ST_int all_match = 1;
                 for (idx = 0; idx < N_orig && all_match; idx++) {
-                    if ((ST_int)cluster_data[idx] != (ST_int)fe_data[idx])
+                    if (cluster_data[idx] != fe_data[idx])
                         all_match = 0;
                 }
                 if (all_match) { cluster_matches_fe = g; break; }
@@ -330,36 +334,36 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     /* ================================================================
      * STEP 2: Singleton removal
      * ================================================================ */
-    num_singletons = 0;
-    N = N_orig;
-
-    {
-        ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
-        if (fe_levels) {
-            for (g = 0; g < G; g++)
-                fe_levels[g] = factors[g].levels;
-            num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask, max_iter_singleton, (verbose >= 1));
-            free(fe_levels);
-            N = 0;
-            for (i = 0; i < N_orig; i++)
-                if (mask[i]) N++;
-        }
+    ST_int num_separated = 0;
+    ST_int *selection_levels[10];
+    ST_int selection_nlevels[10];
+    for (g = 0; g < G; g++) {
+        selection_levels[g] = factors[g].levels;
+        selection_nlevels[g] = factors[g].num_levels;
     }
-
-    if (N == 0) {
-        ctools_scal_save("__cpplmhdfe_N", 0.0);
-        ctools_scal_save("__cpplmhdfe_num_singletons", (ST_double)num_singletons);
-        SF_error("cpplmhdfe: all observations are singletons\n");
+    ST_int selection_rc = ppml_select_fe_sample(data, selection_levels,
+        selection_nlevels, G, N_orig, mask, &num_singletons, &num_separated);
+    N = 0;
+    for (i = 0; i < N_orig; i++) if (mask[i]) N++;
+    if (selection_rc || N == 0 || (vcetype == 2 && !cluster_raw_values)) {
         for (g = 0; g < G; g++) {
-            free(factors[g].levels);
-            if (factors[g].counts) free(factors[g].counts);
+            free(factors[g].levels); free(factors[g].counts);
+            free(weighted_counts_orig[g]);
         }
-        free(factors); free(mask); free(data);
-        if (weights) free(weights);
-        if (offset_arr) free(offset_arr);
-        if (cluster_raw_values) free(cluster_raw_values);
-        if (obs_map) free(obs_map);
+        free(factors); free(mask); free(data); free(weights); free(offset_arr);
+        free(cluster_raw_values); free(obs_map);
+        if (selection_rc || N > 0) {
+            SF_error("cpplmhdfe: sample selection allocation failed\n");
+            return 920;
+        }
+        SF_error("cpplmhdfe: no observations remain after singleton/separation removal\n");
         return 2001;
+    }
+    if (verbose && (num_singletons || num_separated)) {
+        char msg[160];
+        snprintf(msg, sizeof(msg), "cpplmhdfe: dropped %d singletons and %d separated observations\n",
+                 num_singletons, num_separated);
+        SF_display(msg);
     }
 
     t_singleton = get_time_sec();
@@ -612,126 +616,18 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     if (offset_arr) free(offset_arr);
     offset_arr = NULL;
 
-    /* ================================================================
-     * STEP 6: Separation detection (FE-level)
-     * ================================================================ */
-    ST_int num_separated = 0;
-    {
-        ST_int *sep_mask = (ST_int *)calloc(N, sizeof(ST_int));
-        if (sep_mask) {
-            num_separated = ppml_detect_separation_fe(
-                data, g_ppml_state->factors, G, N, sep_mask);
-
-            if (num_separated > 0 && verbose) {
-                char msg[128];
-                snprintf(msg, sizeof(msg), "(cpplmhdfe: %d separated observations detected and dropped)\n", num_separated);
-                SF_display(msg);
-            }
-
-            /* Remove separated observations if any */
-            if (num_separated > 0) {
-                /* Build new mask: invert sep_mask */
-                ST_int *keep = (ST_int *)malloc(N * sizeof(ST_int));
-                if (keep) {
-                    for (i = 0; i < N; i++) keep[i] = !sep_mask[i];
-                    ST_int N_new = N - num_separated;
-
-                    /* Compact data */
-                    ST_double *data_new = (ST_double *)malloc((size_t)N_new * K * sizeof(ST_double));
-                    if (data_new) {
-                        for (k = 0; k < K; k++) {
-                            idx = 0;
-                            for (i = 0; i < N; i++) {
-                                if (keep[i])
-                                    data_new[k * N_new + idx++] = data[k * N + i];
-                            }
-                        }
-                        free(data);
-                        data = data_new;
-                    }
-
-                    /* Compact w_user */
-                    if (w_user_compact) {
-                        ST_double *w_new = (ST_double *)malloc(N_new * sizeof(ST_double));
-                        if (w_new) {
-                            idx = 0;
-                            for (i = 0; i < N; i++)
-                                if (keep[i]) w_new[idx++] = w_user_compact[i];
-                            free(w_user_compact);
-                            w_user_compact = w_new;
-                        }
-                    }
-
-                    /* Compact offset */
-                    if (offset_compact) {
-                        ST_double *o_new = (ST_double *)malloc(N_new * sizeof(ST_double));
-                        if (o_new) {
-                            idx = 0;
-                            for (i = 0; i < N; i++)
-                                if (keep[i]) o_new[idx++] = offset_compact[i];
-                            free(offset_compact);
-                            offset_compact = o_new;
-                        }
-                    }
-
-                    /* Compact FE levels */
-                    for (g = 0; g < G; g++) {
-                        ST_int *lev_new = (ST_int *)malloc(N_new * sizeof(ST_int));
-                        if (lev_new) {
-                            idx = 0;
-                            for (i = 0; i < N; i++)
-                                if (keep[i]) lev_new[idx++] = g_ppml_state->factors[g].levels[i];
-                            free(g_ppml_state->factors[g].levels);
-                            g_ppml_state->factors[g].levels = lev_new;
-                            /* Rebuild sorted permutation */
-                            ctools_build_sorted_permutation(&g_ppml_state->factors[g], N_new);
-                        }
-                    }
-
-                    /* Compact obs_map */
-                    if (obs_map) {
-                        /* obs_map maps compacted index → original Stata obs.
-                         * But after singleton removal, obs_map is still N_orig size.
-                         * We need to build a new mapping for the post-separation N_new obs.
-                         * The current obs_map was already compacted by singleton mask.
-                         * We need to re-compact using the keep array. */
-                        /* First, build the obs_map for post-singleton N observations */
-                        perm_idx_t *obs_map_n = (perm_idx_t *)malloc(N * sizeof(perm_idx_t));
-                        if (obs_map_n) {
-                            idx = 0;
-                            for (i = 0; i < N_orig; i++) {
-                                if (mask[i]) {
-                                    obs_map_n[idx++] = obs_map[i];
-                                }
-                            }
-                            /* Now compact obs_map_n by keep */
-                            perm_idx_t *obs_map_new = (perm_idx_t *)malloc(N_new * sizeof(perm_idx_t));
-                            if (obs_map_new) {
-                                idx = 0;
-                                for (i = 0; i < N; i++) {
-                                    if (keep[i]) obs_map_new[idx++] = obs_map_n[i];
-                                }
-                                free(obs_map);
-                                obs_map = obs_map_new;
-                                /* Update mask to reflect the new mapping */
-                                free(mask);
-                                mask = (ST_int *)malloc(N_new * sizeof(ST_int));
-                                if (mask) {
-                                    for (i = 0; i < N_new; i++) mask[i] = 1;
-                                }
-                            }
-                            free(obs_map_n);
-                        }
-                    }
-
-                    N = N_new;
-                    g_ppml_state->N = N;
-                    free(keep);
-                }
-            }
-            free(sep_mask);
+    /* Compact all row identities with exactly the same original-row mask.
+     * After this point every array, including clusters and obs_map, has N rows. */
+    idx = 0;
+    for (i = 0; i < N_orig; i++) {
+        if (mask[i]) {
+            obs_map[idx] = obs_map[i];
+            if (cluster_raw_values) cluster_raw_values[idx] = cluster_raw_values[i];
+            idx++;
         }
     }
+    free(mask);
+    mask = NULL;
 
     /* ================================================================
      * STEP 7: Allocate IRLS arrays and HDFE buffers
@@ -800,6 +696,25 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         return 920;
     }
 
+    ST_double *stdev_x = NULL;
+    ST_int *irls_keep_idx = NULL;
+    ST_double *xtx_k = NULL;
+    ST_double *xty_k = NULL;
+    ST_double *beta_k = NULL;
+    ST_double *inv_xx_k = NULL;
+    ST_int *is_collinear = NULL;
+    ST_int *keep_idx = NULL;
+    ST_double *beta_final = NULL;
+    ST_double *inv_xx_final = NULL;
+    ST_double *V_keep = NULL;
+    ST_double *xtx_keep = NULL;
+    ST_double *xty_keep = NULL;
+    ST_double *w_reg = NULL;
+    ST_double *means_x = NULL;
+    ST_double *inv_xx_ext = NULL;
+    ST_double *X_eff = NULL;
+    ST_double *vce_resid = NULL;
+    ST_double *V_ext = NULL;
     /* ================================================================
      * STEP 8: Initialize IRLS
      * Initialize eta from OLS of log(max(y,1)) on X with unit weights
@@ -813,7 +728,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * the convergence trajectory gives the same terminal state, eliminating
      * systematic VCE precision differences. */
     ST_double stdev_y = 1.0;
-    ST_double *stdev_x = (ST_double *)malloc(K_x * sizeof(ST_double));
+    stdev_x = (ST_double *)malloc(K_x * sizeof(ST_double));
+    if (!stdev_x) { output_rc = 920; goto ppml_cleanup; }
     {
         ST_double sum_y = 0.0, sum_y2 = 0.0;
         for (i = 0; i < N; i++) {
@@ -879,7 +795,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * Partial out FE from X with initial weights, then detect collinearity
      * in X'X to identify variables collinear with the absorbed FEs.
      * ================================================================ */
-    ST_int *irls_keep_idx = NULL;
+
     ST_int K_irls = K_x;  /* number of non-collinear X vars for IRLS */
     {
         /* Set up [z_dummy, X] for partialling - z doesn't matter, just X */
@@ -888,10 +804,16 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         for (k = 0; k < K_x; k++)
             memcpy(&aug_copy[(k + 1) * N], &X[k * N], N * sizeof(ST_double));
 
-        partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
+        HDFE_SolveResult projection = partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
+        if (projection.status) {
+            SF_error("cpplmhdfe: fixed-effect projection did not converge\n");
+            output_rc = projection.status;
+            goto ppml_cleanup;
+        }
 
         /* Build X'X from partialled X columns */
         ST_double *xtx_pre = (ST_double *)calloc(K_x * K_x, sizeof(ST_double));
+        if (!xtx_pre) { output_rc = 920; goto ppml_cleanup; }
         if (xtx_pre) {
             for (i = 0; i < K_x; i++) {
                 for (j = 0; j <= i; j++) {
@@ -901,6 +823,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 }
             }
             ST_int *pre_collinear = (ST_int *)calloc(K_x, sizeof(ST_int));
+            if (!pre_collinear) { free(xtx_pre); output_rc = 920; goto ppml_cleanup; }
             if (pre_collinear) {
                 detect_collinearity(xtx_pre, K_x, pre_collinear, verbose);
                 ST_int n_coll = 0;
@@ -909,6 +832,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                 K_irls = K_x - n_coll;
                 if (n_coll > 0 && K_irls > 0) {
                     irls_keep_idx = (ST_int *)malloc(K_irls * sizeof(ST_int));
+                    if (!irls_keep_idx) { free(pre_collinear); free(xtx_pre); output_rc = 920; goto ppml_cleanup; }
                     if (irls_keep_idx) {
                         idx = 0;
                         for (k = 0; k < K_x; k++)
@@ -929,12 +853,16 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     /* Allocate compact IRLS arrays if collinearity detected */
-    ST_double *xtx_k = NULL, *xty_k = NULL, *beta_k = NULL, *inv_xx_k = NULL;
+
+
+
+
     if (irls_keep_idx && K_irls < K_x) {
         xtx_k = (ST_double *)malloc(K_irls * K_irls * sizeof(ST_double));
         xty_k = (ST_double *)malloc(K_irls * sizeof(ST_double));
         beta_k = (ST_double *)malloc(K_irls * sizeof(ST_double));
         inv_xx_k = (ST_double *)malloc(K_irls * K_irls * sizeof(ST_double));
+        if (!xtx_k || !xty_k || !beta_k || !inv_xx_k) { output_rc = 920; goto ppml_cleanup; }
     }
 
     /* ================================================================
@@ -943,6 +871,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_double deviance = 1e30, deviance_old;
     ST_int irls_iter;
     ST_int irls_converged = 0;
+    ST_double log_eps_history[3] = {0.0, 0.0, 0.0};
+    ST_int eps_history_count = 0;
 
     /* Adaptive CG tolerance matching ppmlhdfe:
      * Start at 1e-4 (fast early iterations), tighten toward 1e-9
@@ -968,8 +898,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         }
 
         /* (d) Partial out via CG solver using current IRLS weights */
-        ST_int cg_iters = partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
-        if (cg_iters < 0) cg_iters = -cg_iters;
+        HDFE_SolveResult projection = partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
+        if (projection.status) {
+            SF_error("cpplmhdfe: fixed-effect projection did not converge\n");
+            output_rc = projection.status;
+            goto ppml_cleanup;
+        }
 
         /* (e) Solve WLS: beta = (X~'W X~)^{-1} X~'W z~ using partialled data */
         memset(irls_beta, 0, K_x * sizeof(ST_double));
@@ -1112,10 +1046,32 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     irls_iter + 1, deviance, rel_change);
                 SF_display(msg);
             }
-            if (rel_change < irls_tol) {
+            /* Match the reference's decision to finish with an exact solve:
+             * extrapolate log(eps) with a cubic through iterations 0..3,
+             * where the intercept is zero. One-way demeaning is exact; for
+             * multiple FE dimensions also require the target inner tolerance. */
+            ST_double predicted_eps = DBL_MAX;
+            if (eps_history_count == 3) {
+                predicted_eps = exp(4.0 * log_eps_history[0] -
+                                    6.0 * log_eps_history[1] +
+                                    4.0 * log_eps_history[2]);
+            }
+            int final_solve = g_ppml_state->tolerance <= 11.0 * irls_tol ||
+                              predicted_eps <= irls_tol;
+            if (rel_change < irls_tol && final_solve &&
+                (G == 1 || g_ppml_state->tolerance <= target_inner_tol)) {
                 irls_converged = 1;
                 irls_iter++;
                 break;
+            }
+
+            if (rel_change > 0.0 && isfinite(rel_change)) {
+                if (eps_history_count < 3) log_eps_history[eps_history_count++] = log(rel_change);
+                else {
+                    log_eps_history[0] = log_eps_history[1];
+                    log_eps_history[1] = log_eps_history[2];
+                    log_eps_history[2] = log(rel_change);
+                }
             }
 
             /* Adaptive CG tolerance: tighten as IRLS converges.
@@ -1147,25 +1103,33 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             memset(sep_m, 0, N * sizeof(ST_int));
             ST_int new_sep = ppml_detect_separation_mu(y, mu, sep_tol, N, sep_m);
             if (new_sep > 0) {
-                num_separated += new_sep;
-                if (verbose) {
-                    char msg[128];
-                    snprintf(msg, sizeof(msg),
-                        "(cpplmhdfe: %d additional separated obs detected at iter %d)\n",
-                        new_sep, irls_iter + 1);
-                    SF_display(msg);
-                }
-                /* For simplicity in v1: set mu to a small value rather than
-                 * removing obs mid-loop (would require full re-compaction) */
-                for (i = 0; i < N; i++) {
-                    if (sep_m[i]) {
-                        mu[i] = 1e-18;
-                        irls_w[i] = 1e-18;
-                    }
-                }
-                ppml_update_fe_weights(g_ppml_state, irls_w, N);
+                /* These observations have not been removed from the sample.
+                 * Do not count them repeatedly as dropped or silently replace
+                 * their IRLS weights. General separation needs a refit with a
+                 * new sample; only FE-level separation is supported here. */
+                SF_error("cpplmhdfe: possible separation remains after FE removal; use ppmlhdfe for general separation\n");
+                output_rc = 430;
+                break;
             }
         }
+    }
+
+    if (!irls_converged && !output_rc) {
+        SF_error("cpplmhdfe: IRLS did not converge\n");
+        output_rc = 430;
+    }
+    if (output_rc) {
+        free(mu); free(eta); free(z_orig); free(aug_copy);
+        free(xtx); free(xty); free(irls_beta); free(inv_xx); free(sep_m);
+        free(irls_keep_idx); free(xtx_k); free(xty_k); free(beta_k); free(inv_xx_k);
+        free(stdev_x); free(w_user_compact); free(offset_compact);
+        free(cluster_raw_values); free(obs_map); free(data);
+        for (g = 0; g < G; g++) {
+            free(factors[g].levels); free(factors[g].counts);
+        }
+        free(factors);
+        cleanup_ppml_state(); /* also owns irls_w */
+        return output_rc;
     }
 
     if (verbose) {
@@ -1194,16 +1158,23 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         memcpy(aug_copy, z_orig, N * sizeof(ST_double));
         for (k = 0; k < K_x; k++)
             memcpy(&aug_copy[(k + 1) * N], &X[k * N], N * sizeof(ST_double));
-        partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
+        HDFE_SolveResult projection = partial_out_columns(g_ppml_state, aug_copy, N, K_aug, num_threads);
+        if (projection.status) {
+            SF_error("cpplmhdfe: fixed-effect projection did not converge\n");
+            output_rc = projection.status;
+            goto ppml_cleanup;
+        }
     }
 
     /* Collinearity detection */
-    ST_int *is_collinear = (ST_int *)calloc(K_x, sizeof(ST_int));
+    is_collinear = (ST_int *)calloc(K_x, sizeof(ST_int));
+    if (!is_collinear) { output_rc = 920; goto ppml_cleanup; }
     ST_int num_collinear = 0;
     ST_int K_keep;
 
     if (is_collinear) {
         ST_double *xtx_final = (ST_double *)malloc(K_x * K_x * sizeof(ST_double));
+        if (!xtx_final) { output_rc = 920; goto ppml_cleanup; }
         if (xtx_final) {
             for (i = 0; i < K_x; i++) {
                 for (j = 0; j < K_x; j++) {
@@ -1226,7 +1197,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     /* Build non-collinear index */
-    ST_int *keep_idx = (ST_int *)malloc(K_keep * sizeof(ST_int));
+    keep_idx = (ST_int *)malloc(K_keep * sizeof(ST_int));
+    if (!keep_idx && K_keep > 0) { output_rc = 920; goto ppml_cleanup; }
     if (keep_idx && is_collinear) {
         idx = 0;
         for (k = 0; k < K_x; k++) {
@@ -1238,11 +1210,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     /* Final solve: beta and inv(X'WX)
      * Use converged IRLS weights for the final normal equations so stored
      * coefficients match the terminal PPML optimum. */
-    ST_double *beta_final = (ST_double *)calloc(K_keep, sizeof(ST_double));
-    ST_double *inv_xx_final = NULL;
-    ST_double *V_keep = NULL;
-    ST_double *xtx_keep = NULL;
-    ST_double *xty_keep = NULL;
+    beta_final = (ST_double *)calloc(K_keep, sizeof(ST_double));
+    if (!beta_final && K_keep > 0) { output_rc = 920; goto ppml_cleanup; }
+
+
+
+
     ST_int final_use_weights = 1;
     ST_double N_ref = (ST_double)N;
     if (has_weights && weight_type == 2 && w_user_compact) {
@@ -1252,7 +1225,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     ST_double sum_irls_w = 0.0;
     for (i = 0; i < N; i++) sum_irls_w += irls_w[i];
     ST_double w_scale = (sum_irls_w > 0.0) ? (N_ref / sum_irls_w) : 1.0;
-    ST_double *w_reg = (ST_double *)malloc(N * sizeof(ST_double));
+    w_reg = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!w_reg) { output_rc = 920; goto ppml_cleanup; }
     if (w_reg) {
         for (i = 0; i < N; i++) w_reg[i] = irls_w[i] * w_scale;
     }
@@ -1263,6 +1237,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         inv_xx_final = (ST_double *)malloc(K_keep * K_keep * sizeof(ST_double));
         V_keep = (ST_double *)calloc(K_keep * K_keep, sizeof(ST_double));
 
+        if (!xtx_keep || !xty_keep || !inv_xx_final || !V_keep) { output_rc = 920; goto ppml_cleanup; }
         if (xtx_keep && xty_keep && inv_xx_final && V_keep) {
 
             /* Build X'X (or X'WX for fweight) using dd_real precision. */
@@ -1298,7 +1273,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
             /* Solve with iterative refinement for maximum beta precision. */
             memcpy(inv_xx_final, xtx_keep, K_keep * K_keep * sizeof(ST_double));
-            if (cholesky(inv_xx_final, K_keep) == 0) {
+            if (cholesky(inv_xx_final, K_keep) != 0) { output_rc = 498; goto ppml_cleanup; }
+            {
                 invert_from_cholesky(inv_xx_final, K_keep, inv_xx_final);
                 for (i = 0; i < K_keep; i++) {
                     beta_final[i] = 0.0;
@@ -1349,7 +1325,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * These means are added back to the partialled X for VCE computation.
      * Uses IRLS weights = mean(x, HDFE.weight) matching ppmlhdfe. */
     ST_int K_with_cons = K_keep + 1;
-    ST_double *means_x = (ST_double *)calloc(K_keep, sizeof(ST_double));
+    means_x = (ST_double *)calloc(K_keep, sizeof(ST_double));
+    if (!means_x && K_keep > 0) { output_rc = 920; goto ppml_cleanup; }
     if (means_x && K_keep > 0) {
         ST_double sum_w_eff = 0.0;
         for (i = 0; i < N; i++) sum_w_eff += irls_w[i];
@@ -1367,9 +1344,11 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      * The (K+1)th element is the constant/intercept.
      * inv([A b; b' c]) with A=X'WX, b=X'W1, c=1'W1.
      * Using: side = -inv(A) * mean_x, corner = 1/c - mean_x' * side */
-    ST_double *inv_xx_ext = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+    inv_xx_ext = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+    if (!inv_xx_ext) { output_rc = 920; goto ppml_cleanup; }
     if (inv_xx_ext && inv_xx_final && means_x && K_keep > 0) {
         ST_double *side = (ST_double *)calloc(K_keep, sizeof(ST_double));
+        if (!side) { output_rc = 920; goto ppml_cleanup; }
         if (side) {
             for (j = 0; j < K_keep; j++) {
                 for (i = 0; i < K_keep; i++) {
@@ -1399,9 +1378,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     /* Build X_eff with means added back + constant column (K_with_cons columns) */
-    ST_double *X_eff = NULL;
+
     if (K_keep > 0) {
         X_eff = (ST_double *)malloc((size_t)N * K_with_cons * sizeof(ST_double));
+        if (!X_eff) { output_rc = 920; goto ppml_cleanup; }
         if (X_eff) {
             for (k = 0; k < K_keep; k++) {
                 const ST_double *xp = &aug_copy[(keep_idx[k] + 1) * N];
@@ -1418,7 +1398,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     }
 
     /* Compute final OLS residual from partialled data. */
-    ST_double *vce_resid = (ST_double *)malloc(N * sizeof(ST_double));
+    vce_resid = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!vce_resid) { output_rc = 920; goto ppml_cleanup; }
     if (vce_resid) {
         if (beta_final && K_keep > 0) {
             for (i = 0; i < N; i++) {
@@ -1440,6 +1421,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
     if (vcetype == 2) {
         cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
+        if (!cluster_ids) { output_rc = 920; goto ppml_cleanup; }
         if (cluster_ids) {
             if (cluster_matches_fe >= 0) {
                 num_clusters = g_ppml_state->factors[cluster_matches_fe].num_levels;
@@ -1461,25 +1443,12 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     ctools_scal_save(scalar_name, (ST_double)is_nested);
                 }
             } else if (cluster_raw_values) {
-                double *clust_compact = (double *)malloc(N * sizeof(double));
-                ST_int *clust_levels = (ST_int *)malloc(N * sizeof(ST_int));
-                if (clust_compact && clust_levels) {
-                    idx = 0;
-                    for (i = 0; i < N_orig; i++) {
-                        if (mask && mask[i]) {
-                            if (idx < N) clust_compact[idx] = cluster_raw_values[i];
-                            idx++;
-                        }
-                    }
-                    ST_int ncl = 0;
-                    if (remap_values_sorted(clust_compact, N, clust_levels, &ncl) == 0) {
-                        num_clusters = ncl;
-                        for (i = 0; i < N; i++)
-                            cluster_ids[i] = clust_levels[i] - 1;
-                    }
-                    free(clust_levels);
+                /* cluster_raw_values is already in final estimation order. */
+                ST_int ncl = 0;
+                if (ctools_numeric_to_cluster_ids(cluster_raw_values, N, cluster_ids, &ncl) != 0) {
+                    output_rc = 920; goto ppml_cleanup;
                 }
-                if (clust_compact) free(clust_compact);
+                num_clusters = ncl;
 
                 for (g = 0; g < G; g++) {
                     ST_int is_nested = ctools_fe_nested_in_cluster(
@@ -1491,6 +1460,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     ctools_scal_save(scalar_name, (ST_double)is_nested);
                 }
             }
+        }
+        if (num_clusters < 2) {
+            SF_error("cpplmhdfe: clustered VCE requires at least two retained clusters\n");
+            output_rc = 459; goto ppml_cleanup;
         }
     } else {
         for (g = 0; g < G; g++) {
@@ -1505,9 +1478,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
      *
      * For fweight: D = extended H^{-1} (raw), resid = (y-mu), weights = fw
      * For others: D extended & normalized, resid = OLS_resid, weights = irls_w as aweight */
-    ST_double *V_ext = NULL;  /* (K_with_cons)x(K_with_cons) full VCE */
+  /* (K_with_cons)x(K_with_cons) full VCE */
     if (K_keep > 0 && vce_resid && X_eff && inv_xx_ext) {
         V_ext = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+        if (!V_ext) { output_rc = 920; goto ppml_cleanup; }
 
         if (vcetype == 0) {
             /* Unadjusted VCE: V = H^{-1} (Poisson dispersion = 1) */
@@ -1523,9 +1497,8 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
             ST_double *vce_resid_work = vce_resid;
             if (has_weights && weight_type == 2 && w_user_compact) {
                 vce_resid_work = (ST_double *)malloc(N * sizeof(ST_double));
-                if (vce_resid_work) {
-                    memcpy(vce_resid_work, vce_resid, N * sizeof(ST_double));
-                }
+                if (!vce_resid_work) { output_rc = 920; goto ppml_cleanup; }
+                memcpy(vce_resid_work, vce_resid, N * sizeof(ST_double));
                 for (i = 0; i < N; i++) {
                     ST_double fw = w_user_compact[i];
                     ST_double wr = w_reg ? w_reg[i] : irls_w[i];
@@ -1548,12 +1521,17 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
 
             if (vcetype == 1) {
                 ST_double dof_adj = N_ref / (N_ref - 1.0);
-                ctools_vce_robust(&d, dof_adj, V_ext);
+                output_rc = ctools_vce_robust(&d, dof_adj, V_ext);
             } else {
                 ST_double dof_adj = (ST_double)num_clusters / (num_clusters - 1);
-                ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V_ext);
+                output_rc = ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V_ext);
             }
             if (vce_resid_work && vce_resid_work != vce_resid) free(vce_resid_work);
+
+            if (output_rc) {
+                SF_error("cpplmhdfe: covariance calculation failed\n");
+                goto ppml_cleanup;
+            }
 
             /* Extract K_keep×K_keep submatrix (dropping constant row/col) */
             for (i = 0; i < K_keep; i++)
@@ -1561,9 +1539,7 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
                     V_keep[i * K_keep + j] = V_ext[i * K_with_cons + j];
         }
     }
-    if (V_ext) free(V_ext);
-
-    if (cluster_raw_values) free(cluster_raw_values);
+    free(V_ext); V_ext = NULL;
 
     t_vce = get_time_sec();
 
@@ -1610,6 +1586,13 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
         } else {
             ll_0 += w_u * (-y_mean);
         }
+    }
+
+    if (SF_scal_use("__cpplmhdfe_sample_idx", &val) == 0)
+        sample_var_idx = (ST_int)val;
+    if (sample_var_idx > 0) {
+        for (i = 0; i < N && !output_rc; i++)
+            output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
     }
 
     /* N reporting: for fweights, report sum of weights; otherwise report obs count */
@@ -1672,6 +1655,9 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     /* ================================================================
      * Cleanup
      * ================================================================ */
+ppml_cleanup:
+    free(V_ext);
+    free(cluster_raw_values);
     free(mu); free(eta);
     free(z_orig); free(aug_copy);
     free(xtx); free(xty); free(irls_beta); free(inv_xx); free(sep_m);
@@ -1706,11 +1692,10 @@ ST_retcode do_ppml_regression(int argc, char *argv[])
     free(data);
     if (obs_map) free(obs_map);
 
-    /* Detach irls_w from state before cleanup (it's owned by us) */
-    g_ppml_state->weights = NULL;
+    /* State owns irls_w; cleanup releases it together with the FE buffers. */
     cleanup_ppml_state();
 
-    return 0;
+    return output_rc;
 }
 
 /* ========================================================================

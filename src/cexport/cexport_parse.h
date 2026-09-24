@@ -13,6 +13,19 @@
 
 #include "cexport_context.h"
 
+typedef struct {
+    char *destination;
+    char *temporary;
+    bool replace;
+    bool owns_temporary;
+} cexport_output;
+
+ST_retcode cexport_read_local(const char *field, char **value);
+ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *date);
+ST_retcode cexport_output_prepare(cexport_output *out, const char *filename, bool replace);
+ST_retcode cexport_output_commit(cexport_output *out);
+void cexport_output_cleanup(cexport_output *out);
+
 /* ========================================================================
    Context Management
    ======================================================================== */
@@ -40,7 +53,7 @@ void cexport_context_cleanup(cexport_context *ctx);
 /*
     Parse command arguments.
 
-    Format: filename delimiter [options...]
+    Format: delimiter [options...]; filename is a length-checked local
     Options: noheader, quote, noquoteif, verbose, crlf, mmap,
              noparallel, nofsync, direct, prefault
 
@@ -52,7 +65,7 @@ int cexport_parse_args(cexport_context *ctx, const char *args);
 
 /*
     Load variable names from Stata macro.
-    The .ado file sets CEXPORT_VARNAMES macro with space-separated variable names.
+    The .ado supplies independent local metadata for every column.
 
     @param ctx  Context to populate (nvars and varnames)
     @return     0 on success, -1 on error
@@ -61,7 +74,7 @@ int cexport_load_varnames(cexport_context *ctx);
 
 /*
     Load variable types from Stata macro.
-    The .ado file sets CEXPORT_VARTYPES macro with space-separated type codes:
+    The .ado supplies an independent local type code for each column:
     0=string, 1=byte, 2=int, 3=long, 4=float, 5=double
 
     @param ctx  Context to populate (vartypes array)

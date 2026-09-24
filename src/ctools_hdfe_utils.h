@@ -150,6 +150,10 @@ ST_int ctools_remap_cluster_ids(
 
     Returns: 0 on success, -1 on memory allocation failure
 */
+/* Dense zero-based IDs from full numeric values; missing values receive -1. */
+ST_int ctools_numeric_to_cluster_ids(const ST_double *values, ST_int N,
+                                    ST_int *ids, ST_int *num_groups);
+
 ST_int ctools_strings_to_cluster_ids(
     char **strings,
     ST_int N,

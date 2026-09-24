@@ -676,6 +676,12 @@ ST_retcode cqreg_full_regression(const char *args)
     ST_int maxiter = read_scalar_int("__cqreg_maxiter", 200);
     ST_int nopreprocess = read_scalar_int("__cqreg_nopreprocess", 0);
 
+    if (G > 0 || maxiter < 1) {
+        ctools_error("cqreg", "absorb() is unsupported and maxiter must be positive");
+        main_debug_close();
+        return 198;
+    }
+
     /* Validate quantile */
     if (quantile <= 0.0 || quantile >= 1.0) {
         ctools_error("cqreg", "Quantile must be between 0 and 1");
@@ -900,7 +906,14 @@ ST_retcode cqreg_full_regression(const char *args)
 
         for (ST_int i = 0; i < K_x; i++) {
             for (ST_int j = i; j < K_x; j++) {
-                ST_double val = fast_dot(&state->X[i * N], &state->X[j * N], N);
+                ST_double mean_i = 0.0, mean_j = 0.0;
+                for (ST_int row = 0; row < N; row++) {
+                    mean_i += state->X[i * N + row] / N;
+                    mean_j += state->X[j * N + row] / N;
+                }
+                ST_double val = 0.0;
+                for (ST_int row = 0; row < N; row++)
+                    val += (state->X[i * N + row] - mean_i) * (state->X[j * N + row] - mean_j);
                 xtx[i * K_x + j] = val;
                 xtx[j * K_x + i] = val;
             }
@@ -1041,8 +1054,8 @@ ST_retcode cqreg_full_regression(const char *args)
 
     main_debug_log("Solver returned %d\n", ipm_result);
 
-    state->iterations = abs(ipm_result);
-    state->converged = (ipm_result > 0) ? 1 : 0;
+    state->iterations = state->ipm->iterations;
+    state->converged = ipm_result > 0 && state->ipm->converged;
 
     main_debug_log("Getting objective value...\n");
     /* Get objective value */
@@ -1064,8 +1077,9 @@ ST_retcode cqreg_full_regression(const char *args)
 
 
     if (!state->converged) {
-        ctools_error("cqreg", "IPM solver did not converge in %d iterations", maxiter);
-        /* Continue anyway to return partial results */
+        ctools_error("cqreg", "IPM solver stopped without convergence after %d iterations", state->iterations);
+        rc = 430;
+        goto cleanup;
     }
 
     /* ========================================================================
@@ -1181,6 +1195,7 @@ ST_retcode cqreg_full_regression(const char *args)
      * Cleanup
      * ======================================================================== */
 
+cleanup:
     main_debug_log("Cleanup: freeing state...\n");
     cqreg_hdfe_cleanup(state);
     main_debug_log("HDFE cleaned up\n");

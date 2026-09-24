@@ -191,60 +191,11 @@ program define cexport, rclass
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cexport: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Build plugin arguments
     local opt_noheader = cond("`novarnames'" != "", "noheader", "")
@@ -266,8 +217,7 @@ program define cexport, rclass
         local threads_code "threads(`threads')"
     }
 
-    * Pass variable names to the plugin via global macro
-    global CEXPORT_VARNAMES `varlist'
+
 
     * Pass variable storage types to the plugin
     * Types: 1=byte, 2=int, 3=long, 4=float, 5=double, 0=string
@@ -294,7 +244,23 @@ program define cexport, rclass
             local vartypes `vartypes' 0
         }
     }
-    global CEXPORT_VARTYPES `vartypes'
+
+
+    * Each metadata field has an independent local; no aggregate buffer limit.
+    local metadata_count : word count `varlist'
+    forvalues metadata_i=1/`metadata_count' {
+        local __cexport_name_`metadata_i' : word `metadata_i' of `varlist'
+        local __cexport_type_`metadata_i' : word `metadata_i' of `vartypes'
+        local __cexport_date_`metadata_i' : word `metadata_i' of `date_cols'
+        if "`__cexport_date_`metadata_i''" == "" local __cexport_date_`metadata_i' 0
+    }
+    local __cexport_filename `"`using'"'
+    local __cexport_filename_len = strlen(`"`__cexport_filename'"')
+    local __cexport_sheet `"`sheet'"'
+    local __cexport_sheet_len = strlen(`"`__cexport_sheet'"')
+    local __cexport_missing `"`missing'"'
+    local __cexport_missing_len = strlen(`"`__cexport_missing'"')
+    local opt_replace = cond("`replace'" != "", "replace", "")
 
     * Record start time
     timer clear 99
@@ -304,16 +270,14 @@ program define cexport, rclass
     _ctools_strw `export_varlist'
 
     * Call the C plugin
-    * Plugin expects: filename delimiter [options]
+    * Plugin expects options only; paths/metadata are length-checked locals.
     * Use export_varlist (may contain decoded temp vars for value labels)
     capture noisily plugin call ctools_plugin `export_varlist' `if' `in', ///
-        "cexport `threads_code' `using' `plugin_delim' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
+        "cexport `threads_code' `plugin_delim' `opt_replace' `opt_noheader' `opt_quote' `opt_noquoteif' `opt_verbose' `opt_mmap' `opt_nofsync' `opt_direct' `opt_prefault' `opt_crlf' `opt_noparallel'"
 
     local export_rc = _rc
 
     * Clean up global macros
-    macro drop CEXPORT_VARNAMES
-    macro drop CEXPORT_VARTYPES
 
     if `export_rc' {
         di as error "Error exporting data (rc=`export_rc')"
@@ -417,7 +381,7 @@ program define cexport_excel, rclass
     * Support both "using filename" and just "filename" (like export excel does)
     syntax [anything] [using/] [if] [in], [SHEET(string) FIRSTrow(string) ///
         REPLACE DATAfmt DATEString(string) NOLabel Verbose ///
-        CELL(string) MISSING(string) KEEPCELLfmt]
+        CELL(string) MISSING(string) KEEPCELLfmt THReads(integer 0)]
 
     * Handle filename - can come from using/ or as last positional argument
     if `"`using'"' == "" & `"`anything'"' != "" {
@@ -605,16 +569,18 @@ program define cexport_excel, rclass
                 }
                 else if "`datetype'" == "c" | "`datetype'" == "C" {
                     if "`datetype'" == "C" {
-                        qui gen double `xldate_`export_idx'' = dofC(`origvar') + 21916 if !missing(`origvar')
+                        qui gen double `xldate_`export_idx'' = cofC(`origvar') / 86400000 + 21916 if !missing(`origvar')
                     }
                     else {
-                        qui gen double `xldate_`export_idx'' = dofc(`origvar') + 21916 if !missing(`origvar')
+                        qui gen double `xldate_`export_idx'' = `origvar' / 86400000 + 21916 if !missing(`origvar')
                     }
                 }
                 else {
                     qui gen double `xldate_`export_idx'' = `origvar' + 21916 if !missing(`origvar')
                 }
 
+                * Excel inserts a nonexistent 29feb1900 at serial 60.
+                qui replace `xldate_`export_idx'' = `xldate_`export_idx'' - 1 if `xldate_`export_idx'' < 61
                 local new_export_varlist `new_export_varlist' `xldate_`export_idx''
                 local date_converted_vars `date_converted_vars' `xldate_`export_idx''
             }
@@ -638,72 +604,21 @@ program define cexport_excel, rclass
     }
 
     * Load plugin
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cexport excel: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Build plugin arguments
-    local opt_sheet = cond("`sheet'" != "", "sheet=`sheet'", "")
     local opt_replace = cond("`replace'" != "", "replace", "")
     local opt_nolabel = cond("`nolabel'" != "", "nolabel", "")
     local opt_verbose = cond("`verbose'" != "", "verbose", "")
     local opt_cell = cond(`"`cell'"' != "", `"cell=`cell'"', "")
-    local opt_missing = cond(`"`missing'"' != "", `"missing=`missing'"', "")
     local opt_keepcellfmt = cond("`keepcellfmt'" != "", "keepcellfmt", "")
 
     * Pass variable names to plugin
-    global CEXPORT_VARNAMES `varlist'
+
 
     * Pass variable types
     local vartypes ""
@@ -729,7 +644,7 @@ program define cexport_excel, rclass
             local vartypes `vartypes' 0
         }
     }
-    global CEXPORT_VARTYPES `vartypes'
+
 
     * Build date column flags for plugin
     local date_cols ""
@@ -741,10 +656,29 @@ program define cexport_excel, rclass
         local is_date = 0
         if substr("`fmt'", 1, 2) == "%t" | substr("`fmt'", 1, 3) == "%-t" {
             local is_date = 1
+            if strpos("`fmt'", "tc") | strpos("`fmt'", "tC") local is_date = 2
+            capture confirm numeric variable `var'
+            if _rc local is_date = 0
         }
         local date_cols `date_cols' `is_date'
     }
-    global CEXPORT_DATE_COLS `date_cols'
+
+
+    * Each metadata field has an independent local; no aggregate buffer limit.
+    local metadata_count : word count `varlist'
+    forvalues metadata_i=1/`metadata_count' {
+        local __cexport_name_`metadata_i' : word `metadata_i' of `varlist'
+        local __cexport_type_`metadata_i' : word `metadata_i' of `vartypes'
+        local __cexport_date_`metadata_i' : word `metadata_i' of `date_cols'
+        if "`__cexport_date_`metadata_i''" == "" local __cexport_date_`metadata_i' 0
+    }
+    local __cexport_filename `"`using'"'
+    local __cexport_filename_len = strlen(`"`__cexport_filename'"')
+    local __cexport_sheet `"`sheet'"'
+    local __cexport_sheet_len = strlen(`"`__cexport_sheet'"')
+    local __cexport_missing `"`missing'"'
+    local __cexport_missing_len = strlen(`"`__cexport_missing'"')
+    local opt_replace = cond("`replace'" != "", "replace", "")
 
     * Record start time
     timer clear 99
@@ -753,16 +687,16 @@ program define cexport_excel, rclass
     * Set string width metadata for flat buffer optimization
     _ctools_strw `export_varlist'
 
+    local threads_code ""
+    if `threads' > 0 local threads_code "threads(`threads')"
+
     * Call plugin with if `touse' so SF_ifobs() filters correctly
     capture noisily plugin call ctools_plugin `export_varlist' if `touse', ///
-        "cexport_xlsx `using' `opt_sheet' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose' `opt_cell' `opt_missing' `opt_keepcellfmt'"
+        "cexport_xlsx `threads_code' `opt_firstrow' `opt_replace' `opt_nolabel' `opt_verbose' `opt_cell' `opt_keepcellfmt'"
 
     local export_rc = _rc
 
     * Clean up
-    macro drop CEXPORT_VARNAMES
-    macro drop CEXPORT_VARTYPES
-    macro drop CEXPORT_DATE_COLS
 
     if `export_rc' {
         di as error "Error exporting XLSX data (rc=`export_rc')"

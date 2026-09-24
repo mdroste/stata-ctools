@@ -91,7 +91,7 @@ void ctools_sort_order_pairs(ctools_order_pair_t *pairs, size_t n)
     }
 
     /* Determine thread count */
-    int num_threads = ctools_get_max_threads();
+    int num_threads = ctools_get_openmp_threads();
     if ((size_t)num_threads > n / 1000) num_threads = (int)(n / 1000);
     if (num_threads < 1) num_threads = 1;
 

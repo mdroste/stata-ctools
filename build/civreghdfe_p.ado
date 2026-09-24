@@ -45,10 +45,19 @@ program define civreghdfe_p, rclass
         label var `varlist' "S.E. of prediction"
     }
     else if "`residuals'" != "" {
-        * residuals: y - xb
-        tempvar xbvar
-        PredictXB `xbvar' `if' `in', xb
-        gen double `varlist' = `depvar' - `xbvar' if `touse'
+        if "`e(resid)'" != "" {
+            confirm numeric variable `e(resid)', exact
+            gen `typlist' `varlist' = `e(resid)' if `touse' & e(sample)
+        }
+        else if "`fixed_effects'" != "" {
+            di as error "residual predictions with fixed effects require residuals() during estimation"
+            exit 198
+        }
+        else {
+            tempvar xbvar
+            PredictXB `xbvar' `if' `in', xb
+            gen `typlist' `varlist' = `depvar' - `xbvar' if `touse' & e(sample)
+        }
         label var `varlist' "Residuals"
         if `was_score' {
             return local scorevars `varlist'
@@ -67,7 +76,7 @@ program define civreghdfe_p, rclass
             di as error "residual variable `e(resid)' not found"
             exit 111
         }
-        gen double `varlist' = `depvar' - `e(resid)' if `touse'
+        gen `typlist' `varlist' = `depvar' - `e(resid)' if `touse' & e(sample)
         label var `varlist' "Xb + d[`fixed_effects']"
     }
     else {

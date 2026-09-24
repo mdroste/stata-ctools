@@ -8,6 +8,7 @@
  */
 
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #include "ctools_matrix.h"
@@ -173,22 +174,23 @@ static int vce_sort_by_cluster(const ST_int *cluster_ids, ST_int N, ST_int num_c
 /*
  * Compute robust (HC1) sandwich VCE.
  */
-void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V)
+ST_retcode ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V)
 {
     ST_int idx, i, j, k;
     ST_int N = d->N;
     ST_int K = d->K;
 
-    /* Zero V on entry so any early return leaves a known state (zero SE) */
-    memset(V, 0, K * K * sizeof(ST_double));
+    if (N < 1 || K < 1 || !isfinite(dof_adj) || dof_adj <= 0)
+        return 498;
 
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;
     if (d->normalize_weights && d->weights != NULL && (d->weight_type == 1 || d->weight_type == 3)) {
         ST_double sum_w = 0.0;
         w_norm = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!w_norm) return;
+        if (!w_norm) return 920;
         for (idx = 0; idx < N; idx++) sum_w += d->weights[idx];
+        if (!isfinite(sum_w) || sum_w <= 0) { free(w_norm); return 498; }
         ST_double scale = (ST_double)N / sum_w;
         for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
     }
@@ -201,7 +203,7 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
         if (meat) free(meat);
         if (temp) free(temp);
         if (w_norm) free(w_norm);
-        return;
+        return 920;
     }
 
     /* Compute meat = X_eff' * diag(w_i) * X_eff
@@ -261,35 +263,45 @@ void ctools_vce_robust(const ctools_vce_data *d, ST_double dof_adj, ST_double *V
             for (k = 0; k < K; k++) {
                 acc += temp[k * K + i] * (long double)d->D[j * K + k];
             }
-            V[j * K + i] = (ST_double)(acc * (long double)dof_adj);
+            ST_double value = (ST_double)(acc * (long double)dof_adj);
+            if (!isfinite(value)) { free(meat); free(temp); return 498; }
+            meat[j * K + i] = value;
         }
     }
 
+    for (size_t entry = 0; entry < (size_t)K * K; entry++) V[entry] = (ST_double)meat[entry];
     free(meat);
     free(temp);
+    return 0;
 }
 
 /*
  * Compute clustered sandwich VCE.
  */
-void ctools_vce_cluster(const ctools_vce_data *d,
+ST_retcode ctools_vce_cluster(const ctools_vce_data *d,
                         const ST_int *cluster_ids, ST_int num_clusters,
                         ST_double dof_adj, ST_double *V)
 {
-    ST_int i, k, idx;
+    ST_int k, idx;
     ST_int N = d->N;
     ST_int K = d->K;
 
-    /* Zero V on entry so any early return leaves a known state (zero SE) */
-    memset(V, 0, K * K * sizeof(ST_double));
+    if (N < 1 || K < 1 || !isfinite(dof_adj) || dof_adj <= 0)
+        return 498;
+
+    if (!cluster_ids || num_clusters <= 1) return 498;
+    for (idx = 0; idx < N; idx++) {
+        if (cluster_ids[idx] < 0 || cluster_ids[idx] >= num_clusters) return 498;
+    }
 
     /* Normalize weights for aweight/pweight (OLS convention) */
     ST_double *w_norm = NULL;
     if (d->normalize_weights && d->weights != NULL && (d->weight_type == 1 || d->weight_type == 3)) {
         ST_double sum_w = 0.0;
         w_norm = (ST_double *)malloc(N * sizeof(ST_double));
-        if (!w_norm) return;
+        if (!w_norm) return 920;
         for (idx = 0; idx < N; idx++) sum_w += d->weights[idx];
+        if (!isfinite(sum_w) || sum_w <= 0) { free(w_norm); return 498; }
         ST_double scale = (ST_double)N / sum_w;
         for (idx = 0; idx < N; idx++) w_norm[idx] = d->weights[idx] * scale;
     }
@@ -308,7 +320,7 @@ void ctools_vce_cluster(const ctools_vce_data *d,
         if (sort_perm) free(sort_perm);
         if (boundaries) free(boundaries);
         if (w_norm) free(w_norm);
-        return;
+        return 920;
     }
 
     /* Sort observations by cluster using counting sort */
@@ -316,7 +328,7 @@ void ctools_vce_cluster(const ctools_vce_data *d,
         free(meat); free(temp); free(ecX);
         free(sort_perm); free(boundaries);
         if (w_norm) free(w_norm);
-        return;
+        return 920;
     }
 
     /* Stream through clusters, accumulating ecX then outer product into meat */
@@ -387,10 +399,14 @@ void ctools_vce_cluster(const ctools_vce_data *d,
             for (ST_int kk = 0; kk < K; kk++) {
                 acc += temp[kk * K + ii] * (long double)d->D[jj * K + kk];
             }
-            V[jj * K + ii] = (ST_double)(acc * (long double)dof_adj);
+            ST_double value = (ST_double)(acc * (long double)dof_adj);
+            if (!isfinite(value)) { free(meat); free(temp); return 498; }
+            meat[jj * K + ii] = value;
         }
     }
 
+    for (size_t entry = 0; entry < (size_t)K * K; entry++) V[entry] = (ST_double)meat[entry];
     free(meat);
     free(temp);
+    return 0;
 }

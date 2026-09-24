@@ -829,3 +829,6 @@ else {
  ******************************************************************************/
 noi print_summary "cpsmatch"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cpsmatch"

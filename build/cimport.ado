@@ -30,9 +30,17 @@ program define cimport, rclass
         LOCale(string) PARSElocale]
 
     * Handle filename - can come from using/ or as first positional argument
+    if `"`using'"' != "" & `"`anything'"' != "" {
+        di as error "cimport: specify one filename, with or without using"
+        exit 198
+    }
     if `"`using'"' == "" & `"`anything'"' != "" {
         * Filename provided without "using" keyword
-        local using `"`anything'"'
+        gettoken using extra : anything
+        if trim(`"`extra'"') != "" {
+            di as error "cimport: specify one filename"
+            exit 198
+        }
     }
     if `"`using'"' == "" {
         di as error "cimport delimited: filename required"
@@ -43,13 +51,8 @@ program define cimport, rclass
     * Validate file exists
     confirm file `"`using'"'
 
-    * Clear data if requested
-    if "`clear'" != "" {
-        clear
-    }
-
-    * Check that no data exists
-    if _N > 0 | c(k) > 0 {
+    * Scan and validate before discarding the current dataset.
+    if "`clear'" == "" & (_N > 0 | c(k) > 0) {
         di as error "data in memory would be lost"
         di as error "use the clear option to discard current data"
         exit 4
@@ -122,6 +125,10 @@ program define cimport, rclass
     local encoding_opt ""
     if "`encoding'" != "" {
         local enc_lower = lower("`encoding'")
+        if inlist("`enc_lower'", "utf-32", "utf32", "utf-32le", "utf-32be", "utf32le", "utf32be") {
+            di as error "cimport: UTF-32 is unsupported; convert the file to UTF-8"
+            exit 198
+        }
         * Normalize common encoding names
         if inlist("`enc_lower'", "utf-8", "utf8") {
             local encoding_opt "encoding=utf8"
@@ -336,60 +343,11 @@ program define cimport, rclass
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cimport: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Build plugin arguments
     local opt_noheader = cond(`noheader' == 1, "noheader", "")
@@ -437,8 +395,9 @@ program define cimport, rclass
 
     timer on 11
 
+    local __cimport_filename `"`using'"'
     capture noisily plugin call ctools_plugin, ///
-        "cimport `threads_code' scan `using' `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
+        "cimport `threads_code' scan @filename `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -458,6 +417,14 @@ program define cimport, rclass
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
     capture macro drop CIMPORT_NUMCOLS CIMPORT_STRCOLS
+
+    foreach vlen of local strlens {
+        if `vlen' > 2045 {
+            di as error "cimport: string exceeds 2045 bytes; use native import for strL data"
+            exit 198
+        }
+    }
+    if "`clear'" != "" clear
 
     * Handle empty file or file with header only - match Stata's behavior (rc=0, N=0, k=0)
     if `nvar' == 0 | `nobs' == 0 {
@@ -631,11 +598,11 @@ program define cimport, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport `threads_code' load `using' `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
+        "cimport `threads_code' load @filename `plugin_delim' `opt_noheader' `opt_headerrow' `opt_verbose' `opt_bindquotes' `opt_asfloat' `opt_asdouble' `opt_decimalsep' `opt_groupsep' `opt_emptylines' `opt_maxquotedrows' `encoding_opt'"
 
     local load_rc = _rc
     if `load_rc' {
-        di as error "Error loading CSV data (rc=`load_rc')"
+        di as error "Error loading CSV data (rc=`load_rc'); imported data are incomplete"
         exit `load_rc'
     }
 
@@ -783,8 +750,16 @@ program define cimport_excel, rclass
         ALLString CASE(string) CLEAR Verbose]
 
     * Handle filename - can come from using/ or as first positional argument
+    if `"`using'"' != "" & `"`anything'"' != "" {
+        di as error "cimport: specify one filename, with or without using"
+        exit 198
+    }
     if `"`using'"' == "" & `"`anything'"' != "" {
-        local using `"`anything'"'
+        gettoken using extra : anything
+        if trim(`"`extra'"') != "" {
+            di as error "cimport: specify one filename"
+            exit 198
+        }
     }
     if `"`using'"' == "" {
         di as error "cimport excel: filename required"
@@ -802,13 +777,8 @@ program define cimport_excel, rclass
         exit 198
     }
 
-    * Clear data if requested
-    if "`clear'" != "" {
-        clear
-    }
-
-    * Check that no data exists
-    if _N > 0 | c(k) > 0 {
+    * Scan and validate before discarding the current dataset.
+    if "`clear'" == "" & (_N > 0 | c(k) > 0) {
         di as error "data in memory would be lost"
         di as error "use the clear option to discard current data"
         exit 4
@@ -826,60 +796,11 @@ program define cimport_excel, rclass
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cimport excel: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Build plugin arguments
     local opt_sheet = cond("`sheet'" != "", "sheet=`sheet'", "")
@@ -899,8 +820,9 @@ program define cimport_excel, rclass
 
     timer on 11
 
+    local __cimport_filename `"`using'"'
     capture noisily plugin call ctools_plugin, ///
-        "cimport scan `using' `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
+        "cimport scan @filename `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
 
     local scan_rc = _rc
     if `scan_rc' {
@@ -919,6 +841,14 @@ program define cimport_excel, rclass
     * Clean up global macros
     macro drop _cimport_nobs _cimport_nvar _cimport_varnames ///
                _cimport_vartypes _cimport_numtypes _cimport_strlens
+
+    foreach vlen of local strlens {
+        if `vlen' > 2045 {
+            di as error "cimport: string exceeds 2045 bytes; use native import for strL data"
+            exit 198
+        }
+    }
+    if "`clear'" != "" clear
 
     * Handle empty file
     if `nvar' == 0 | `nobs' == 0 {
@@ -1022,11 +952,11 @@ program define cimport_excel, rclass
     unab allvars : *
 
     capture noisily plugin call ctools_plugin `allvars', ///
-        "cimport load `using' `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
+        "cimport load @filename `opt_sheet' `opt_cellrange' `opt_firstrow' `opt_allstring' `opt_case' `opt_verbose'"
 
     local load_rc = _rc
     if `load_rc' {
-        di as error "Error loading XLSX data (rc=`load_rc')"
+        di as error "Error loading XLSX data (rc=`load_rc'); imported data are incomplete"
         exit `load_rc'
     }
 

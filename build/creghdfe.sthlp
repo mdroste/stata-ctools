@@ -255,3 +255,9 @@ Manual: {bf:[R] areg}
 Online: {browse "https://github.com/sergiocorreia/reghdfe":reghdfe} (if installed),
 {help areg}, {help xtreg}, {help ctools}
 {p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+residuals(), groupvar(), and savefe output names must be distinct new variables. Existing variables, including inputs and fixed-effect identifiers, are never replaced by these options. Failed operations restore the dataset. iterate() and tolerance() must be positive. Exhausting the fixed-effect solver returns error 430 instead of posting estimates.
+{p_end}

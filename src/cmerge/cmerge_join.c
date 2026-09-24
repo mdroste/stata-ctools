@@ -30,6 +30,25 @@ int64_t cmerge_sorted_join(
     size_t m_nobs = master_keys->nobs;
     size_t u_nobs = using_keys->nobs;
 
+    *output_specs_out = NULL;
+    for (int k = 0; k < nkeys; k++) {
+        if (master_keys->vars[k].type != using_keys->vars[k].type) return -4;
+    }
+    /* Validate every group, including unmatched keys, before emitting rows.
+     * -2/-3 identify cardinality errors separately from allocation failure. */
+    if (merge_type == MERGE_1_1 || merge_type == MERGE_1_M) {
+        for (size_t i = 1; i < m_nobs; i++) {
+            if (cmerge_compare_keys(master_keys, i - 1, master_keys, i, nkeys) == 0)
+                return -2;
+        }
+    }
+    if (merge_type == MERGE_1_1 || merge_type == MERGE_M_1) {
+        for (size_t i = 1; i < u_nobs; i++) {
+            if (cmerge_compare_keys(using_keys, i - 1, using_keys, i, nkeys) == 0)
+                return -3;
+        }
+    }
+
     /* Determine if we can use the numeric fast path */
     int master_numeric = cmerge_all_keys_numeric(master_keys, nkeys);
     int using_numeric = cmerge_all_keys_numeric(using_keys, nkeys);

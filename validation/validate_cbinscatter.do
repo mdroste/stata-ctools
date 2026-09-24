@@ -776,7 +776,7 @@ if `binsreg_installed' {
     * =====================================================================
 
     * nlswork: with control (tenure)
-    webuse nlswork, clear
+    ctools_fixture nlswork, clear
     keep in 1/5000
     drop if missing(hours) | missing(ln_wage) | missing(tenure)
     compare_binsreg_bins, ///
@@ -785,7 +785,7 @@ if `binsreg_installed' {
         nbins(20) testname("nlswork: ctrl(tenure)")
 
     * nlswork: absorb(idcode) individual FE
-    webuse nlswork, clear
+    ctools_fixture nlswork, clear
     keep in 1/5000
     drop if missing(hours) | missing(ln_wage)
     compare_binsreg_bins, ///
@@ -794,7 +794,7 @@ if `binsreg_installed' {
         nbins(20) testname("nlswork: absorb(idcode)")
 
     * nlswork: controls + absorb
-    webuse nlswork, clear
+    ctools_fixture nlswork, clear
     keep in 1/5000
     drop if missing(hours) | missing(ln_wage) | missing(tenure)
     compare_binsreg_bins, ///
@@ -803,7 +803,7 @@ if `binsreg_installed' {
         nbins(20) testname("nlswork: ctrl + absorb(idcode)")
 
     * nlswork: two-way FE
-    webuse nlswork, clear
+    ctools_fixture nlswork, clear
     keep in 1/5000
     drop if missing(hours) | missing(ln_wage)
     compare_binsreg_bins, ///
@@ -812,7 +812,7 @@ if `binsreg_installed' {
         nbins(20) testname("nlswork: two-way FE")
 
     * nlswork: controls + two-way FE
-    webuse nlswork, clear
+    ctools_fixture nlswork, clear
     keep in 1/5000
     drop if missing(hours) | missing(ln_wage) | missing(tenure)
     compare_binsreg_bins, ///
@@ -1355,7 +1355,7 @@ else {
  ******************************************************************************/
 print_section "Panel Data (nlswork)"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, nograph
 if e(N) > 0 {
@@ -1365,7 +1365,7 @@ else {
     test_fail "nlswork basic" "N=`=e(N)'"
 }
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, controls(tenure) nograph
 if e(N) > 0 {
@@ -1375,7 +1375,7 @@ else {
     test_fail "nlswork with controls" "N=`=e(N)'"
 }
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, absorb(idcode) nograph
 if e(N) > 0 {
@@ -1385,7 +1385,7 @@ else {
     test_fail "nlswork with individual FE" "N=`=e(N)'"
 }
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/10000
 cbinscatter ln_wage age, absorb(idcode year) nograph
 if e(N) > 0 {
@@ -1820,3 +1820,6 @@ capture program drop compare_binsreg_bins
 * End of cbinscatter validation
 noi print_summary "cbinscatter"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cbinscatter"

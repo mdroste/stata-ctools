@@ -1,6 +1,6 @@
-*! version 1.0.2 9feb2026 github.com/mdroste/stata-ctools
+*! version 1.0.2 20260920 github.com/mdroste/stata-ctools
 
-program define ctools
+program define ctools, rclass
     version 14.1
 
     syntax [, Version ENVironment_check Verbose UPDATE]
@@ -29,67 +29,26 @@ program define ctools
         exit
     }
 
-    if "`environment_check'" != "" {
+    local __ado_version "1.0.2"
+    if "`environment_check'" != "" | "`version'" != "" {
         * Load the plugin if not already loaded
-        capture program list ctools_plugin
-        if _rc != 0 {
-            local __os = c(os)
-            local __machine = c(machine_type)
-            local __is_mac = 0
-            if "`__os'" == "MacOSX" {
-                local __is_mac = 1
-            }
-            else if strpos(lower("`__machine'"), "mac") > 0 {
-                local __is_mac = 1
-            }
+        _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
-            local __plugin = ""
-            if "`__os'" == "Windows" {
-                local __plugin "ctools_windows.plugin"
-            }
-            else if `__is_mac' {
-                local __is_arm = 0
-                if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                    local __is_arm = 1
-                }
-                if `__is_arm' == 0 {
-                    tempfile __archfile
-                    quietly shell uname -m > "`__archfile'" 2>&1
-                    tempname __fh
-                    file open `__fh' using "`__archfile'", read text
-                    file read `__fh' __archline
-                    file close `__fh'
-                    capture erase "`__archfile'"
-                    if strpos("`__archline'", "arm64") > 0 {
-                        local __is_arm = 1
-                    }
-                }
-                if `__is_arm' {
-                    local __plugin "ctools_mac_arm.plugin"
-                }
-                else {
-                    local __plugin "ctools_mac_x86.plugin"
-                }
-            }
-            else if "`__os'" == "Unix" {
-                local __plugin "ctools_linux.plugin"
-            }
-            else {
-                local __plugin "ctools.plugin"
-            }
-
-            capture program ctools_plugin, plugin using("`__plugin'")
-            if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-                capture program ctools_plugin, plugin using("ctools.plugin")
-            }
-        }
-
-        capture program list ctools_plugin
-        if _rc == 0 {
-            di as text "ctools plugin is loaded and ready."
+        capture noisily plugin call ctools_plugin, "version"
+        local plugin_rc = _rc
+        if `plugin_rc' == 0 {
+            di as text "ctools ado `__ado_version'; plugin `ctools_plugin_version' (`ctools_plugin_revision')"
+            return local version "`__ado_version'"
+            return local plugin_version "`ctools_plugin_version'"
+            return local plugin_revision "`ctools_plugin_revision'"
         }
         else {
-            di as error "ctools plugin could NOT be loaded."
+            di as error "ctools plugin identity could not be read."
+            exit `plugin_rc'
         }
         exit
     }
@@ -102,7 +61,7 @@ program define ctools
     di as result "╚██████╗   ██║   ╚██████╔╝╚██████╔╝███████╗███████║"
     di as result " ╚═════╝   ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝"
     di as text ""
-    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.0.1"
+    di as text "  {it:C-accelerated tools for Stata}{col 56}v1.0.2"
     di as text "{hline 60}"
     di as text ""
     di as text "{ul:Data Management}"
@@ -122,6 +81,7 @@ program define ctools
     di as text "  {help creghdfe:creghdfe}     OLS with multi-way FE"
     di as text "  {help civreghdfe:civreghdfe}   2SLS/GMM with multi-way FE"
     di as text "  {help cqreg:cqreg}        Quantile regression"
+    di as text "  {help cpplmhdfe:cpplmhdfe}    PPML with multi-way FE"
     di as text "  {help cpsmatch:cpsmatch}     Propensity score matching"
     di as text ""
     di as text "{ul:Visualization}"

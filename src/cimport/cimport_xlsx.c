@@ -43,7 +43,7 @@ static bool shared_strings_callback(const xlsx_xml_event *event, void *user_data
 static bool worksheet_callback(const xlsx_xml_event *event, void *user_data);
 static bool styles_callback(const xlsx_xml_event *event, void *user_data);
 static void generate_varname(char *buf, int col, const char *header_value, int case_mode);
-static double excel_date_to_stata(double excel_date);
+static double excel_date_to_stata(const XLSXContext *ctx, double excel_date, bool datetime);
 
 /* Global cached context (survives between scan and load calls) */
 static XLSXContext *g_xlsx_ctx = NULL;
@@ -55,6 +55,16 @@ void xlsx_clear_cached_context(void)
         free(g_xlsx_ctx);
         g_xlsx_ctx = NULL;
     }
+}
+
+/* Tagged column-major slots store either a number or an arena-owned pointer.
+ * memcpy avoids aliasing violations; supported plugin platforms use 64-bit pointers. */
+_Static_assert(sizeof(const char *) <= sizeof(double), "XLSX slot must hold a pointer");
+static const char *xlsx_cm_inline_string(const double *slot)
+{
+    const char *value;
+    memcpy(&value, slot, sizeof(value));
+    return value;
 }
 
 /* Parser state structures */
@@ -95,7 +105,7 @@ typedef struct {
     int current_numfmt_id;
     int current_xf_index;
     /* Track which numFmtIds are dates */
-    bool is_date_numfmt[256];
+    uint8_t is_date_numfmt[65536];
 } StylesParseState;
 
 /* ============================================================================
@@ -259,7 +269,11 @@ static bool workbook_callback(const xlsx_xml_event *event, void *user_data)
     XLSXContext *ctx = state->ctx;
 
     if (event->type == XLSX_XML_START_ELEMENT) {
-        if (strcmp(event->tag_name, "sheets") == 0) {
+        if (strcmp(event->tag_name, "workbookPr") == 0) {
+            const char *date1904 = xlsx_xml_get_attr(event, "date1904");
+            ctx->date1904 = date1904 && (!strcmp(date1904, "1") || !strcmp(date1904, "true"));
+        }
+        else if (strcmp(event->tag_name, "sheets") == 0) {
             state->in_sheets = true;
         }
         else if (state->in_sheets && strcmp(event->tag_name, "sheet") == 0) {
@@ -505,10 +519,11 @@ ST_retcode xlsx_parse_shared_strings(XLSXContext *ctx)
  * ============================================================================ */
 
 /* Built-in Excel number format IDs that are dates */
-static bool is_builtin_date_format(int numFmtId)
+static uint8_t is_builtin_date_format(int numFmtId)
 {
     /* Standard date/time formats: 14-22, 27-36, 45-47, 50-58 */
-    if (numFmtId >= 14 && numFmtId <= 22) return true;
+    if ((numFmtId >= 18 && numFmtId <= 22) || (numFmtId >= 45 && numFmtId <= 47)) return 2;
+    if (numFmtId >= 14 && numFmtId <= 17) return 1;
     if (numFmtId >= 27 && numFmtId <= 36) return true;
     if (numFmtId >= 45 && numFmtId <= 47) return true;
     if (numFmtId >= 50 && numFmtId <= 58) return true;
@@ -530,21 +545,22 @@ static bool styles_callback(const xlsx_xml_event *event, void *user_data)
 
             if (numFmtId && formatCode) {
                 int id = atoi(numFmtId);
-                /* Check if format code looks like a date */
-                bool is_date = false;
-                const char *p = formatCode;
-                while (*p) {
-                    /* Look for date-related format characters */
-                    if (*p == 'd' || *p == 'm' || *p == 'y' ||
-                        *p == 'D' || *p == 'M' || *p == 'Y') {
-                        is_date = true;
-                        break;
+                /* Ignore quoted literals and escaped display characters. */
+                uint8_t is_date = 0;
+                bool quoted = false;
+                for (const char *p = formatCode; *p; p++) {
+                    if (*p == '"') { quoted = !quoted; continue; }
+                    if (quoted) continue;
+                    if (*p == '\\' || *p == '_' || *p == '*') { if (p[1]) p++; continue; }
+                    if (*p == '[') {
+                        if (p[1] == 'h' || p[1] == 'H' || p[1] == 's' || p[1] == 'S') is_date = 2;
+                        while (p[1] && *p != ']') p++;
+                        continue;
                     }
-                    p++;
+                    if (*p == 'h' || *p == 'H' || *p == 's' || *p == 'S') is_date = 2;
+                    else if (!is_date && (*p == 'd' || *p == 'D' || *p == 'm' || *p == 'M' || *p == 'y' || *p == 'Y')) is_date = 1;
                 }
-                if (id >= 0 && id < 256) {
-                    state->is_date_numfmt[id] = is_date;
-                }
+                if (id >= 0 && id < 65536) state->is_date_numfmt[id] = is_date;
             }
         }
         else if (strcmp(event->tag_name, "cellXfs") == 0) {
@@ -553,12 +569,12 @@ static bool styles_callback(const xlsx_xml_event *event, void *user_data)
         }
         else if (state->in_cellxfs && strcmp(event->tag_name, "xf") == 0) {
             const char *numFmtId = xlsx_xml_get_attr(event, "numFmtId");
-            bool is_date = false;
+            uint8_t is_date = 0;
 
             if (numFmtId) {
                 int id = atoi(numFmtId);
                 is_date = is_builtin_date_format(id);
-                if (!is_date && id >= 0 && id < 256) {
+                if (!is_date && id >= 0 && id < 65536) {
                     is_date = state->is_date_numfmt[id];
                 }
             }
@@ -566,13 +582,13 @@ static bool styles_callback(const xlsx_xml_event *event, void *user_data)
             /* Expand date_styles array if needed */
             if (state->current_xf_index >= ctx->num_styles) {
                 int new_size = ctx->num_styles == 0 ? 64 : ctx->num_styles * 2;
-                bool *new_styles = (bool *)realloc(ctx->date_styles,
-                                                    new_size * sizeof(bool));
+                uint8_t *new_styles = (uint8_t *)realloc(ctx->date_styles,
+                                                    new_size * sizeof(uint8_t));
                 if (!new_styles) {
                     return false;  /* Memory allocation failed */
                 }
                 memset(new_styles + ctx->num_styles, 0,
-                       (new_size - ctx->num_styles) * sizeof(bool));
+                       (new_size - ctx->num_styles) * sizeof(uint8_t));
                 ctx->date_styles = new_styles;
                 ctx->num_styles = new_size;
             }
@@ -1048,7 +1064,7 @@ static void xlsx_scan_cell_core(const XLSXContext *ctx, xlsx_scan_local *loc,
         if (ctools_parse_double_fast(val_text, (int)val_len, &parsed, SV_missval))
             numeric_val = parsed;
         if (style >= 0 && style < ctx->num_styles && ctx->date_styles[style])
-            cell_type = XLSX_CELL_DATE;
+            cell_type = ctx->date_styles[style] == 2 ? XLSX_CELL_DATETIME : XLSX_CELL_DATE;
         break;
     }
     case XLSX_CELL_BOOLEAN:
@@ -1071,7 +1087,9 @@ static void xlsx_scan_cell_core(const XLSXContext *ctx, xlsx_scan_local *loc,
     if (ctx->cm_active && col >= 0 && col < ctx->cm_num_cols &&
         row > 0 && (size_t)row <= ctx->cm_num_rows) {
         size_t row_idx = (size_t)(row - 1);
-        ctx->cm_numeric[col][row_idx] = numeric_val;
+        if (cell_type == XLSX_CELL_STRING)
+            memcpy(&ctx->cm_numeric[col][row_idx], &inline_str, sizeof(inline_str));
+        else ctx->cm_numeric[col][row_idx] = numeric_val;
         ctx->cm_types[col][row_idx] = (uint8_t)cell_type;
     }
 
@@ -1103,11 +1121,12 @@ static void xlsx_scan_cell_core(const XLSXContext *ctx, xlsx_scan_local *loc,
                 break;
             }
             case XLSX_CELL_NUMBER:
+            case XLSX_CELL_DATETIME:
             case XLSX_CELL_DATE:
                 if (cs->type == CIMPORT_COL_UNKNOWN) cs->type = CIMPORT_COL_NUMERIC;
                 if (cs->type == CIMPORT_COL_NUMERIC) {
                     double val = numeric_val;
-                    if (cell_type == XLSX_CELL_DATE) val = excel_date_to_stata(numeric_val);
+                    if ((cell_type == XLSX_CELL_DATE || cell_type == XLSX_CELL_DATETIME)) val = excel_date_to_stata(ctx, numeric_val, cell_type == XLSX_CELL_DATETIME);
                     if (val < cs->min_value) cs->min_value = val;
                     if (val > cs->max_value) cs->max_value = val;
                     if (cs->is_integer && val != floor(val)) cs->is_integer = false;
@@ -1403,7 +1422,14 @@ static bool xlsx_scan_buffer_parallel(XLSXContext *ctx, const char *sheet_start,
     for (int i = 0; i < nchunks; i++) {
         xlsx_merge_col_stats(ctx, &chunks[i].local);
         free(chunks[i].local.col_stats);
-        ctools_arena_free(chunks[i].local.arena);
+        /* Retain inline strings until column caches have copied them. */
+        ctools_arena *arena = chunks[i].local.arena;
+        if (arena->first) {
+            if (ctx->parse_arena.current) ctx->parse_arena.current->next = arena->first;
+            else ctx->parse_arena.first = arena->first;
+            ctx->parse_arena.current = arena->current;
+            ctx->parse_arena.total_allocated += arena->total_allocated;
+        }
     }
 
     free(chunks);
@@ -1739,7 +1765,7 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                     if (state->current_style >= 0 &&
                         state->current_style < ctx->num_styles &&
                         ctx->date_styles[state->current_style]) {
-                        cell_type = XLSX_CELL_DATE;
+                        cell_type = ctx->date_styles[state->current_style] == 2 ? XLSX_CELL_DATETIME : XLSX_CELL_DATE;
                     }
                     break;
                 }
@@ -1762,7 +1788,9 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                 if (ctx->cm_active && col >= 0 && col < ctx->cm_num_cols &&
                     row > 0 && (size_t)row <= ctx->cm_num_rows) {
                     size_t row_idx = (size_t)(row - 1);
-                    ctx->cm_numeric[col][row_idx] = numeric_val;
+                    if (cell_type == XLSX_CELL_STRING)
+            memcpy(&ctx->cm_numeric[col][row_idx], &inline_str, sizeof(inline_str));
+        else ctx->cm_numeric[col][row_idx] = numeric_val;
                     ctx->cm_types[col][row_idx] = (uint8_t)cell_type;
                 }
 
@@ -1779,7 +1807,8 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                             cell->value.shared_string_idx = ss_idx;
                             break;
                         case XLSX_CELL_NUMBER:
-                        case XLSX_CELL_DATE:
+                        case XLSX_CELL_DATETIME:
+            case XLSX_CELL_DATE:
                             cell->value.number = numeric_val;
                             break;
                         case XLSX_CELL_BOOLEAN:
@@ -1825,14 +1854,15 @@ static bool worksheet_callback(const xlsx_xml_event *event, void *user_data)
                             }
                             break;
                         case XLSX_CELL_NUMBER:
-                        case XLSX_CELL_DATE:
+                        case XLSX_CELL_DATETIME:
+            case XLSX_CELL_DATE:
                             if (cs->type == CIMPORT_COL_UNKNOWN) {
                                 cs->type = CIMPORT_COL_NUMERIC;
                             }
                             if (cs->type == CIMPORT_COL_NUMERIC) {
                                 double val = numeric_val;
-                                if (cell_type == XLSX_CELL_DATE) {
-                                    val = excel_date_to_stata(numeric_val);
+                                if ((cell_type == XLSX_CELL_DATE || cell_type == XLSX_CELL_DATETIME)) {
+                                    val = excel_date_to_stata(ctx, numeric_val, cell_type == XLSX_CELL_DATETIME);
                                 }
                                 if (val < cs->min_value) cs->min_value = val;
                                 if (val > cs->max_value) cs->max_value = val;
@@ -2011,8 +2041,9 @@ ST_retcode xlsx_infer_types(XLSXContext *ctx)
                         header_value = ctx->shared_strings[ss_idx];
                     }
                 }
-                /* Inline strings stored in parse_arena are not in cm_numeric;
-                 * they're rare in headers so we skip them (fallback to default name) */
+                else if (ctype == XLSX_CELL_STRING) {
+                    header_value = xlsx_cm_inline_string(&ctx->cm_numeric[cm_col][hdr_idx]);
+                }
                 generate_varname(ctx->columns[c].name, c, header_value, ctx->case_mode);
             }
         } else {
@@ -2058,7 +2089,6 @@ ST_retcode xlsx_infer_types(XLSXContext *ctx)
 
         if (col->type == CIMPORT_COL_STRING) {
             if (col->max_strlen < 1) col->max_strlen = 1;
-            if (col->max_strlen > 2045) col->max_strlen = 2045;
         } else if (col->type == CIMPORT_COL_NUMERIC) {
             if (col->is_integer) {
                 if (col->min_value >= -127 && col->max_value <= 100) {
@@ -2151,6 +2181,7 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                 size_t cm_r = cm_start + r;
                 uint8_t ct = src_types[cm_r];
                 const char *str = NULL;
+                char num_buf[64];
                 size_t slen = 0;
 
                 if (ct == XLSX_CELL_SHARED_STRING) {
@@ -2163,9 +2194,11 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                             slen = strlen(str);
                         }
                     }
-                } else if (ct == XLSX_CELL_NUMBER || ct == XLSX_CELL_DATE) {
+                } else if (ct == XLSX_CELL_STRING) {
+                    str = xlsx_cm_inline_string(&src_num[cm_r]);
+                    slen = str ? strlen(str) : 0;
+                } else if (ct == XLSX_CELL_NUMBER || (ct == XLSX_CELL_DATE || ct == XLSX_CELL_DATETIME)) {
                     /* Number in string column — convert */
-                    char num_buf[64];
                     snprintf(num_buf, sizeof(num_buf), "%g", src_num[cm_r]);
                     str = num_buf;
                     slen = strlen(str);
@@ -2173,9 +2206,6 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                     str = (src_num[cm_r] == 1.0) ? "1" : "0";
                     slen = 1;
                 }
-                /* Note: inline strings (XLSX_CELL_STRING) are stored in parse_arena
-                 * but we can't easily recover them from cm_numeric. They're rare in
-                 * practice. For now they show as empty in the string column. */
 
                 if (str && slen > 0) {
                     char *copy = (char *)ctools_arena_alloc(&cache->string_arena, slen + 1);
@@ -2195,8 +2225,8 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                 /* Fix up non-numeric cell types in-place */
                 for (size_t r = 0; r < total_data_rows; r++) {
                     uint8_t ct = src_types[r];
-                    if (ct == XLSX_CELL_DATE) {
-                        cache->numeric_data[r] = excel_date_to_stata(cache->numeric_data[r]);
+                    if ((ct == XLSX_CELL_DATE || ct == XLSX_CELL_DATETIME)) {
+                        cache->numeric_data[r] = excel_date_to_stata(ctx, cache->numeric_data[r], ct == XLSX_CELL_DATETIME);
                     } else if (ct == XLSX_CELL_SHARED_STRING ||
                                ct == XLSX_CELL_STRING) {
                         /* Empty-string cells in numeric column → missing */
@@ -2212,8 +2242,8 @@ static ST_retcode xlsx_build_cache_columnar(XLSXContext *ctx)
                     uint8_t ct = src_types[cm_r];
                     if (ct == XLSX_CELL_NUMBER) {
                         cache->numeric_data[r] = src_num[cm_r];
-                    } else if (ct == XLSX_CELL_DATE) {
-                        cache->numeric_data[r] = excel_date_to_stata(src_num[cm_r]);
+                    } else if ((ct == XLSX_CELL_DATE || ct == XLSX_CELL_DATETIME)) {
+                        cache->numeric_data[r] = excel_date_to_stata(ctx, src_num[cm_r], ct == XLSX_CELL_DATETIME);
                     } else if (ct == XLSX_CELL_BOOLEAN) {
                         cache->numeric_data[r] = src_num[cm_r];
                     } else {
@@ -2298,14 +2328,14 @@ static ST_retcode xlsx_build_cache_rowmajor(XLSXContext *ctx)
 
             if (col->type == CIMPORT_COL_STRING) {
                 const char *str = "";
+                char num_buf[64];
                 if (cell->type == XLSX_CELL_SHARED_STRING &&
                     (uint32_t)cell->value.shared_string_idx < ctx->num_shared_strings) {
                     str = ctx->shared_strings[cell->value.shared_string_idx];
                 } else if (cell->type == XLSX_CELL_STRING) {
                     str = cell->value.inline_string ? cell->value.inline_string : "";
                 } else if (cell->type == XLSX_CELL_NUMBER ||
-                           cell->type == XLSX_CELL_DATE) {
-                    char num_buf[64];
+                           (cell->type == XLSX_CELL_DATE || cell->type == XLSX_CELL_DATETIME)) {
                     snprintf(num_buf, sizeof(num_buf), "%g", cell->value.number);
                     str = num_buf;
                 }
@@ -2321,8 +2351,9 @@ static ST_retcode xlsx_build_cache_rowmajor(XLSXContext *ctx)
                 case XLSX_CELL_NUMBER:
                     val = cell->value.number;
                     break;
-                case XLSX_CELL_DATE:
-                    val = excel_date_to_stata(cell->value.number);
+                case XLSX_CELL_DATETIME:
+            case XLSX_CELL_DATE:
+                    val = excel_date_to_stata(ctx, cell->value.number, cell->type == XLSX_CELL_DATETIME);
                     break;
                 case XLSX_CELL_BOOLEAN:
                     val = cell->value.boolean ? 1.0 : 0.0;
@@ -2387,22 +2418,13 @@ static void generate_varname(char *buf, int col, const char *header_value, int c
     }
 }
 
-static double excel_date_to_stata(double excel_date)
+static double excel_date_to_stata(const XLSXContext *ctx, double excel_date, bool datetime)
 {
-    /* Excel dates are days since 1899-12-30 (with 1900 bug)
-     * Stata dates are days since 1960-01-01
-     * Difference: 21916 days (1960-01-01 - 1899-12-30)
-     * But Excel has the 1900 bug (treats 1900 as leap year), so subtract 1 more
-     * for dates after Feb 28, 1900 */
-
-    /* Check for Excel's 1900 date system bug */
-    if (excel_date >= 60.0) {
-        /* After Feb 28, 1900 - adjust for bug */
-        excel_date -= 1.0;
-    }
-
-    /* Convert to Stata date */
-    return excel_date - 21916.0;
+    /* Serial 60 denotes the nonexistent 29feb1900. Never map it to a real day. */
+    if (!isfinite(excel_date) || (!ctx->date1904 && excel_date >= 60 && excel_date < 61))
+        return SV_missval;
+    double days = excel_date - (ctx->date1904 ? 20454.0 : (excel_date < 60 ? 21915.0 : 21916.0));
+    return datetime ? days * 86400000.0 : days;
 }
 
 int xlsx_select_sheet_by_name(XLSXContext *ctx, const char *name)
@@ -2473,19 +2495,31 @@ typedef struct {
     CImportColumnCache *cache;
     ST_int var;
     ST_int stata_nobs;
+    ST_retcode error;
 } xlsx_store_task;
 
 static void *xlsx_store_worker(void *arg)
 {
     xlsx_store_task *task = (xlsx_store_task *)arg;
+    task->error = 0;
+    int is_string = task->col->type == CIMPORT_COL_STRING;
+    if (task->var < 1 || task->var > SF_nvars() ||
+        task->cache->count > (size_t)task->stata_nobs ||
+        SF_var_is_string(task->var) != is_string ||
+        (is_string && SF_var_is_strl(task->var))) {
+        task->error = 198;
+        return (void *)1;
+    }
     if (task->col->type == CIMPORT_COL_STRING) {
         for (size_t r = 0; r < task->cache->count && (ST_int)(r + 1) <= task->stata_nobs; r++) {
             char *str = task->cache->string_data[r] ? task->cache->string_data[r] : (char *)"";
-            SF_sstore(task->var, (ST_int)(r + 1), str);
+            task->error = SF_sstore(task->var, (ST_int)(r + 1), str);
+            if (task->error) return (void *)1;
         }
     } else {
         for (size_t r = 0; r < task->cache->count && (ST_int)(r + 1) <= task->stata_nobs; r++) {
-            SF_vstore(task->var, (ST_int)(r + 1), task->cache->numeric_data[r]);
+            task->error = (_stata_)->safestore(task->var, (ST_int)(r + 1), task->cache->numeric_data[r]);
+            if (task->error) return (void *)1;
         }
     }
     return NULL;
@@ -2771,9 +2805,16 @@ ST_retcode xlsx_import_main(const char *args)
         return 198;
     }
 
-    char filename_buf[1024];
-    strncpy(filename_buf, filename_tok, sizeof(filename_buf) - 1);
-    filename_buf[sizeof(filename_buf) - 1] = '\0';
+    char filename_buf[4096];
+    if (strcmp(filename_tok, "@filename") == 0) {
+        if (SF_macro_use("___cimport_filename", filename_buf, sizeof(filename_buf) - 1) || !filename_buf[0]) {
+            SF_error("cimport excel: cannot read filename\n");
+            return 198;
+        }
+    } else {
+        if (strlen(filename_tok) >= sizeof(filename_buf)) return 198;
+        strcpy(filename_buf, filename_tok);
+    }
     char *filename = filename_buf;
 
     /* Extract sheet name */
@@ -2857,49 +2898,38 @@ ST_retcode xlsx_import_main(const char *args)
         }
 
         /* Store data to Stata (parallel by column) */
-        ST_int nvar = SF_nvar();
         ST_int stata_nobs = SF_nobs();
-        int store_cols = ctx->num_columns < nvar ? ctx->num_columns : nvar;
-
+        int store_cols = ctx->num_columns;
+        if (store_cols > SF_nvars()) {
+            xlsx_clear_cached_context();
+            return 198;
+        }
+        xlsx_store_task *tasks = (xlsx_store_task *)calloc(store_cols, sizeof(xlsx_store_task));
+        if (!tasks) { xlsx_clear_cached_context(); return 920; }
+        for (int c = 0; c < store_cols; c++) {
+            tasks[c].col = &ctx->columns[c];
+            tasks[c].cache = &ctx->col_cache[c];
+            tasks[c].var = c + 1;
+            tasks[c].stata_nobs = stata_nobs;
+        }
         ctools_persistent_pool *pool = ctools_get_global_pool();
         if (pool && store_cols > 1) {
-            xlsx_store_task *tasks = (xlsx_store_task *)malloc(store_cols * sizeof(xlsx_store_task));
-            if (tasks) {
-                for (int c = 0; c < store_cols; c++) {
-                    tasks[c].col = &ctx->columns[c];
-                    tasks[c].cache = &ctx->col_cache[c];
-                    tasks[c].var = c + 1;
-                    tasks[c].stata_nobs = stata_nobs;
-                }
-                if (ctools_persistent_pool_submit_batch(pool, xlsx_store_worker,
-                                                         tasks, store_cols, sizeof(xlsx_store_task)) == 0) {
-                    ctools_persistent_pool_wait(pool);
-                    free(tasks);
-                } else {
-                    free(tasks);
-                    goto xlsx_store_sequential;
-                }
-            } else {
-                goto xlsx_store_sequential;
-            }
+            if (ctools_persistent_pool_submit_batch(pool, xlsx_store_worker,
+                                                   tasks, store_cols, sizeof(xlsx_store_task))) rc = 920;
+            else if (ctools_persistent_pool_wait(pool)) rc = 459;
         } else {
-xlsx_store_sequential:;
             for (int c = 0; c < store_cols; c++) {
-                CImportColumnInfo *col = &ctx->columns[c];
-                CImportColumnCache *cache = &ctx->col_cache[c];
-                ST_int var = c + 1;
-
-                if (col->type == CIMPORT_COL_STRING) {
-                    for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
-                        char *str = cache->string_data[r] ? cache->string_data[r] : (char *)"";
-                        SF_sstore(var, (ST_int)(r + 1), str);
-                    }
-                } else {
-                    for (size_t r = 0; r < cache->count && (ST_int)(r + 1) <= stata_nobs; r++) {
-                        SF_vstore(var, (ST_int)(r + 1), cache->numeric_data[r]);
-                    }
-                }
+                if (xlsx_store_worker(&tasks[c])) break;
             }
+        }
+        for (int c = 0; c < store_cols; c++) {
+            if (tasks[c].error) { rc = tasks[c].error; break; }
+        }
+        free(tasks);
+        if (rc) {
+            SF_error("cimport: write failed; imported data are incomplete\n");
+            xlsx_clear_cached_context();
+            return rc;
         }
 
         if (ctx->verbose) {

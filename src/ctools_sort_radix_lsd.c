@@ -92,10 +92,10 @@ static radix_sort_context_t *radix_context_alloc(int num_threads)
     if (ctx == NULL) return NULL;
 
     ctx->num_threads = num_threads;
-    ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->all_local_counts = (size_t **)calloc(num_threads, sizeof(size_t *));
     ctx->global_counts = (size_t *)calloc(RADIX_SIZE, sizeof(size_t));
     ctx->global_offsets = (size_t *)malloc(RADIX_SIZE * sizeof(size_t));
-    ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->thread_offsets = (size_t **)calloc(num_threads, sizeof(size_t *));
 
     if (!ctx->all_local_counts || !ctx->global_counts ||
         !ctx->global_offsets || !ctx->thread_offsets) {
@@ -179,9 +179,8 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
     /* Phase 1: Parallel histogram computation (OpenMP) */
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t my_start = (size_t)tid * chunk_size;
         size_t my_end = (size_t)(tid + 1) * chunk_size;
         if (my_end > nobs) my_end = nobs;
@@ -251,9 +250,8 @@ static int radix_sort_pass_numeric_parallel(perm_idx_t *order,
     }
 
     /* Phase 2: Parallel scatter (OpenMP) */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t my_start = (size_t)tid * chunk_size;
         size_t my_end = (size_t)(tid + 1) * chunk_size;
         if (my_end > nobs) my_end = nobs;
@@ -344,10 +342,10 @@ static string_sort_context_t *string_context_alloc(int num_threads)
     if (ctx == NULL) return NULL;
 
     ctx->num_threads = num_threads;
-    ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->all_local_counts = (size_t **)calloc(num_threads, sizeof(size_t *));
     ctx->global_counts = (size_t *)calloc(RADIX_SIZE + 1, sizeof(size_t));
     ctx->global_offsets = (size_t *)malloc((RADIX_SIZE + 1) * sizeof(size_t));
-    ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->thread_offsets = (size_t **)calloc(num_threads, sizeof(size_t *));
 
     if (!ctx->all_local_counts || !ctx->global_counts ||
         !ctx->global_offsets || !ctx->thread_offsets) {
@@ -425,9 +423,8 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
     chunk_size = (nobs + num_threads - 1) / num_threads;
 
     /* Phase 1: Parallel histogram (OpenMP) */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t my_start = (size_t)tid * chunk_size;
         size_t my_end = (size_t)(tid + 1) * chunk_size;
         if (my_end > nobs) my_end = nobs;
@@ -488,9 +485,8 @@ static int radix_sort_pass_string_parallel(perm_idx_t *order,
     }
 
     /* Phase 2: Parallel scatter (OpenMP) */
-    #pragma omp parallel num_threads(num_threads)
-    {
-        int tid = omp_get_thread_num();
+    #pragma omp parallel for num_threads(num_threads) schedule(static)
+    for (int tid = 0; tid < num_threads; tid++) {
         size_t my_start = (size_t)tid * chunk_size;
         size_t my_end = (size_t)(tid + 1) * chunk_size;
         if (my_end > nobs) my_end = nobs;
@@ -621,7 +617,7 @@ static stata_retcode sort_by_numeric_var(stata_data *data, int var_idx)
 
     /* Decide whether to use parallel sort */
     use_parallel = (data->nobs >= MIN_OBS_PER_THREAD * 2);
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (data->nobs < (size_t)MIN_OBS_PER_THREAD * (size_t)num_threads) {
         num_threads = (int)(data->nobs / MIN_OBS_PER_THREAD);
         if (num_threads < 2) {
@@ -737,7 +733,7 @@ static stata_retcode sort_by_string_var(stata_data *data, int var_idx)
 
     /* Decide on parallelization */
     use_parallel = (data->nobs >= MIN_OBS_PER_THREAD * 2);
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (data->nobs < (size_t)MIN_OBS_PER_THREAD * (size_t)num_threads) {
         num_threads = (int)(data->nobs / MIN_OBS_PER_THREAD);
         if (num_threads < 2) {

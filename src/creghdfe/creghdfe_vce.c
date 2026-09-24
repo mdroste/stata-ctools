@@ -37,7 +37,7 @@ void compute_vce_unadjusted(
  * This matches reghdfe.mata lines 3929-3930
  * ======================================================================== */
 
-void compute_vce_robust(
+ST_retcode compute_vce_robust(
     const ST_double *data,    /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,   /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,  /* K_with_cons x K_with_cons inverse (X vars + constant) */
@@ -66,7 +66,7 @@ void compute_vce_robust(
     d.K = K_with_cons;
     d.normalize_weights = 1;
 
-    ctools_vce_robust(&d, dof_adj, V);
+    return ctools_vce_robust(&d, dof_adj, V);
 }
 
 /* ========================================================================
@@ -78,7 +78,7 @@ void compute_vce_robust(
  * This matches reghdfe.mata lines 4021, 4026, 4031
  * ======================================================================== */
 
-void compute_vce_cluster(
+ST_retcode compute_vce_cluster(
     const ST_double *data,      /* N x (K_keep+2) matrix: y, X1...X_K_keep, constant */
     const ST_double *resid,     /* N x 1 pre-computed residuals from partialled X */
     const ST_double *inv_xx,    /* K_with_cons x K_with_cons inverse (X vars + constant) */
@@ -97,8 +97,7 @@ void compute_vce_cluster(
 {
     /* Handle degenerate case: single cluster (VCE undefined, like reghdfe) */
     if (num_clusters <= 1) {
-        memset(V, 0, K_with_cons * K_with_cons * sizeof(ST_double));
-        return;
+        return 498;
     }
 
     /* reghdfe's DOF adjustment: (N-1)/(N - nested_adj - df_m - S.df_a) * M/(M-1)
@@ -118,5 +117,5 @@ void compute_vce_cluster(
     d.K = K_with_cons;
     d.normalize_weights = 1;
 
-    ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V);
+    return ctools_vce_cluster(&d, cluster_ids, num_clusters, dof_adj, V);
 }

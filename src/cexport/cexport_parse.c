@@ -7,6 +7,15 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdbool.h>
+#include <errno.h>
+#include <fcntl.h>
+#if defined(_WIN32)
+#include <io.h>
+#include <sys/stat.h>
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "stplugin.h"
 #include "ctools_types.h"
@@ -90,18 +99,15 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
     char *saveptr;
     char *token;
     int arg_idx = 0;
+    if (cexport_read_local("filename", &ctx->filename) || !ctx->filename[0]) {
+        free(args_copy);
+        return 198;
+    }
 
     token = strtok_r(args_copy, " \t", &saveptr);
     while (token != NULL) {
         if (arg_idx == 0) {
-            /* First arg: filename */
-            ctx->filename = strdup(token);
-            if (ctx->filename == NULL) {
-                free(args_copy);
-                return -1;
-            }
-        } else if (arg_idx == 1) {
-            /* Second arg: delimiter */
+            /* Delimiter is the first option token. */
             if (strlen(token) == 1) {
                 ctx->delimiter = token[0];
             } else if (strcmp(token, "tab") == 0) {
@@ -109,7 +115,9 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
             }
         } else {
             /* Options */
-            if (strcmp(token, "noheader") == 0) {
+            if (strcmp(token, "replace") == 0) {
+                ctx->replace = true;
+            } else if (strcmp(token, "noheader") == 0) {
                 ctx->write_header = false;
             } else if (strcmp(token, "quote") == 0) {
                 ctx->quote_strings = true;
@@ -156,87 +164,113 @@ int cexport_parse_args(cexport_context *ctx, const char *args)
     return 0;
 }
 
+/* User text is never tokenized. The ado supplies a byte length, allowing
+ * truncation by SF_macro_use to be detected before any output is opened. */
+ST_retcode cexport_read_local(const char *field, char **value)
+{
+    char name[96], length_text[32];
+    int length;
+    *value = NULL;
+    snprintf(name, sizeof(name), "___cexport_%s_len", field);
+    if (SF_macro_use(name, length_text, sizeof(length_text)) ||
+        !ctools_safe_atoi(length_text, &length) || length < 0 || length > 1048576)
+        return 198;
+    char *buf = malloc((size_t)length + 1);
+    if (!buf) return 920;
+    memset(buf, 0, (size_t)length + 1);
+    snprintf(name, sizeof(name), "___cexport_%s", field);
+    if (SF_macro_use(name, buf, length + 1) || strlen(buf) != (size_t)length) {
+        free(buf);
+        return 198;
+    }
+    *value = buf;
+    return 0;
+}
+
+ST_retcode cexport_column_metadata(size_t column, char **name, int *type, int *date)
+{
+    char macro[96], value[64];
+    *name = NULL;
+    snprintf(macro, sizeof(macro), "___cexport_name_%zu", column + 1);
+    if (SF_macro_use(macro, value, sizeof(value)) || !value[0] || strlen(value) > 32)
+        return 198;
+    *name = strdup(value);
+    if (!*name) return 920;
+    snprintf(macro, sizeof(macro), "___cexport_type_%zu", column + 1);
+    if (SF_macro_use(macro, value, sizeof(value)) || !ctools_safe_atoi(value, type) ||
+        *type < 0 || *type > 5) return 198;
+    snprintf(macro, sizeof(macro), "___cexport_date_%zu", column + 1);
+    if (SF_macro_use(macro, value, sizeof(value)) || !ctools_safe_atoi(value, date) ||
+        *date < 0 || *date > 2) return 198;
+    return 0;
+}
+
 int cexport_load_varnames(cexport_context *ctx)
 {
-    size_t nvars = SF_nvars();
-    ctx->varnames = (char **)ctools_safe_calloc2(nvars, sizeof(char *));
-    if (ctx->varnames == NULL) return -1;
-
-    ctx->nvars = nvars;
-
-    /* Try to get variable names from macro */
-    char varnames_buf[32768];
-    size_t names_parsed = 0;
-    if (SF_macro_use("CEXPORT_VARNAMES", varnames_buf, sizeof(varnames_buf)) == 0 &&
-        strlen(varnames_buf) > 0) {
-        /* Parse space-separated names */
-        char *p = varnames_buf;
-        for (size_t j = 0; j < nvars; j++) {
-            /* Skip whitespace */
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '\0') break;
-
-            /* Find end of name */
-            char *start = p;
-            while (*p != ' ' && *p != '\t' && *p != '\0') p++;
-
-            size_t len = p - start;
-            ctx->varnames[j] = (char *)malloc(len + 1);
-            if (ctx->varnames[j] == NULL) return -1;
-            memcpy(ctx->varnames[j], start, len);
-            ctx->varnames[j][len] = '\0';
-            names_parsed++;
-        }
-
-        /* Fill remaining entries with fallback names if macro was short */
-        for (size_t j = names_parsed; j < nvars; j++) {
-            char namebuf[32];
-            snprintf(namebuf, sizeof(namebuf), "v%zu", j + 1);
-            ctx->varnames[j] = strdup(namebuf);
-            if (ctx->varnames[j] == NULL) return -1;
-        }
-    } else {
-        /* Fallback: use generic names */
-        for (size_t j = 0; j < nvars; j++) {
-            char namebuf[32];
-            snprintf(namebuf, sizeof(namebuf), "v%zu", j + 1);
-            ctx->varnames[j] = strdup(namebuf);
-            if (ctx->varnames[j] == NULL) return -1;
-        }
+    ctx->nvars = SF_nvars();
+    ctx->varnames = ctools_safe_calloc2(ctx->nvars, sizeof(char *));
+    ctx->vartypes = ctools_safe_malloc2(ctx->nvars, sizeof(vartype_t));
+    if (!ctx->varnames || !ctx->vartypes) return 920;
+    for (size_t j = 0; j < ctx->nvars; j++) {
+        int type, date;
+        ST_retcode rc = cexport_column_metadata(j, &ctx->varnames[j], &type, &date);
+        if (rc) return rc;
+        ctx->vartypes[j] = (vartype_t)type;
     }
-
     return 0;
 }
 
 int cexport_load_vartypes(cexport_context *ctx)
 {
-    size_t nvars = ctx->nvars;
-    ctx->vartypes = (vartype_t *)ctools_safe_malloc2(nvars, sizeof(vartype_t));
-    if (ctx->vartypes == NULL) return -1;
+    /* Names and types are loaded and validated together. */
+    return ctx->vartypes ? 0 : 198;
+}
 
-    /* Initialize to double (safest default - most precision) */
-    for (size_t j = 0; j < nvars; j++) {
-        ctx->vartypes[j] = VARTYPE_DOUBLE;
-    }
-
-    /* Try to get variable types from macro */
-    char vartypes_buf[32768];
-    if (SF_macro_use("CEXPORT_VARTYPES", vartypes_buf, sizeof(vartypes_buf)) == 0 &&
-        strlen(vartypes_buf) > 0) {
-        /* Parse space-separated type codes */
-        char *p = vartypes_buf;
-        for (size_t j = 0; j < nvars; j++) {
-            /* Skip whitespace */
-            while (*p == ' ' || *p == '\t') p++;
-            if (*p == '\0') break;
-
-            /* Parse type code */
-            int type_code = (int)strtol(p, &p, 10);
-            if (type_code >= 0 && type_code <= 5) {
-                ctx->vartypes[j] = (vartype_t)type_code;
-            }
-        }
-    }
-
+/* Reserve a sibling file; publishing is a separate, atomic operation. */
+ST_retcode cexport_output_prepare(cexport_output *out, const char *filename, bool replace)
+{
+    memset(out, 0, sizeof(*out));
+    out->replace = replace;
+    out->destination = strdup(filename);
+    out->temporary = malloc(strlen(filename) + 20);
+    if (!out->destination || !out->temporary) { cexport_output_cleanup(out); return 920; }
+    sprintf(out->temporary, "%s.ctools.XXXXXX", filename);
+#ifdef _WIN32
+    int fd = -1;
+    if (_mktemp_s(out->temporary, strlen(out->temporary) + 1) == 0)
+        fd = _open(out->temporary, _O_CREAT | _O_EXCL | _O_BINARY | _O_WRONLY,
+                   _S_IREAD | _S_IWRITE);
+    if (fd >= 0) _close(fd);
+#else
+    int fd = mkstemp(out->temporary);
+    if (fd >= 0) close(fd);
+#endif
+    if (fd < 0) { cexport_output_cleanup(out); return 603; }
+    out->owns_temporary = true;
     return 0;
+}
+
+ST_retcode cexport_output_commit(cexport_output *out)
+{
+#ifdef _WIN32
+    if (!MoveFileExA(out->temporary, out->destination,
+            MOVEFILE_WRITE_THROUGH | (out->replace ? MOVEFILE_REPLACE_EXISTING : 0)))
+        return GetLastError() == ERROR_ALREADY_EXISTS || GetLastError() == ERROR_FILE_EXISTS ? 602 : 603;
+#else
+    if (out->replace) {
+        if (rename(out->temporary, out->destination)) return 603;
+    } else {
+        /* link() refuses an existing destination, including a racing writer. */
+        if (link(out->temporary, out->destination)) return errno == EEXIST ? 602 : 603;
+        unlink(out->temporary);
+    }
+#endif
+    return 0;
+}
+
+void cexport_output_cleanup(cexport_output *out)
+{
+    if (out->owns_temporary) remove(out->temporary);
+    free(out->temporary); free(out->destination);
+    memset(out, 0, sizeof(*out));
 }

@@ -118,11 +118,14 @@ CImportEncodingDetection cimport_detect_encoding(const char *data, size_t size)
         return result;
     }
 
+    if (size >= 4 && ((bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0 && bytes[3] == 0) ||
+                      (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0xFE && bytes[3] == 0xFF))) {
+        result.encoding = bytes[0] == 0xFF ? CIMPORT_ENC_UTF32LE : CIMPORT_ENC_UTF32BE;
+        result.bom_length = 4;
+        result.confidence = 1.0f;
+        return result;
+    }
     if (size >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE) {
-        /* Could be UTF-16LE or UTF-32LE */
-        if (size >= 4 && bytes[2] == 0x00 && bytes[3] == 0x00) {
-            /* UTF-32LE - not commonly used, treat as UTF-16LE for now */
-        }
         result.encoding = CIMPORT_ENC_UTF16LE;
         result.bom_length = 2;
         result.confidence = 1.0f;

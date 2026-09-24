@@ -23,6 +23,8 @@
 #include <omp.h>
 #endif
 
+/* Resolve output indices in the plugin varlist, including hidden Stata variables. */
+#define SD_SAFEMODE
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_config.h"
@@ -95,15 +97,14 @@ typedef struct {
 
 /* Check if two adjacent observations are in the same group */
 static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
+    (void)miss;
     for (size_t b = 0; b < nvars; b++) {
-        double prev = data->vars[b].data.dbl[i - 1];
-        double curr = data->vars[b].data.dbl[i];
-
-        int prev_miss = (prev >= miss);
-        int curr_miss = (curr >= miss);
-
-        if (prev_miss && curr_miss) continue;
-        if (prev_miss || curr_miss || prev != curr) {
+        const stata_variable *var = &data->vars[b];
+        if (var->type == STATA_TYPE_STRING) {
+            const char *prev = var->data.str[i - 1];
+            const char *curr = var->data.str[i];
+            if (strcmp(prev ? prev : "", curr ? curr : "") != 0) return 0;
+        } else if (var->data.dbl[i - 1] != var->data.dbl[i]) {
             return 0;
         }
     }
@@ -434,10 +435,7 @@ ST_retcode cbsample_main(const char *args) {
         return 2000;
     }
 
-    /* Default n to nobs if not specified */
-    if (config.n == 0) {
-        config.n = nobs;
-    }
+    /* n=0 means draw each stratum's original number of sampling units. */
 
     freq_weights = (double *)calloc(nobs, sizeof(double));
     if (!freq_weights) {
@@ -561,10 +559,10 @@ ST_retcode cbsample_main(const char *args) {
         /* Create a temporary view with just cluster vars */
         stata_data cluster_view;
         cluster_view.nobs = by_filtered.data.nobs;
-        cluster_view.nvars = ncluster;
-        cluster_view.vars = &by_filtered.data.vars[nstrata];  /* Cluster vars start after strata */
+        cluster_view.nvars = total_by;
+        cluster_view.vars = by_filtered.data.vars;  /* Include stratum boundaries. */
         cluster_view.sort_order = NULL;
-        detect_groups_from_data(&cluster_view, ncluster, clusters, &nclusters);
+        detect_groups_from_data(&cluster_view, total_by, clusters, &nclusters);
     } else {
         /* No clustering: each observation is its own "cluster" */
         for (size_t i = 0; i < nobs; i++) {
@@ -629,17 +627,15 @@ ST_retcode cbsample_main(const char *args) {
             size_t n_clusters_in_stratum = last_cluster - first_cluster;
             if (n_clusters_in_stratum == 0) continue;
 
-            /* Calculate target sample size for this stratum (proportional) */
-            size_t target_n = (size_t)round((double)config.n * (double)st_count / (double)nobs);
-            if (target_n == 0) target_n = 1;
+            size_t target_n = config.n ? config.n : n_clusters_in_stratum;
+            if (target_n > n_clusters_in_stratum) { rc = 498; goto cleanup; }
 
             /* Seed RNG based on stratum index for reproducibility */
             xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
             xoshiro256_state *rng = &thread_rngs[0];
 
-            /* We need to sample enough clusters to get target_n observations */
-            /* Simple approach: sample n_clusters_in_stratum clusters */
-            for (size_t draw = 0; draw < n_clusters_in_stratum; draw++) {
+            /* Explicit n counts clusters within each stratum. */
+            for (size_t draw = 0; draw < target_n; draw++) {
                 size_t cluster_idx = first_cluster + xoshiro256_uniform(rng, n_clusters_in_stratum);
                 size_t cl_start = clusters[cluster_idx].start;
                 size_t cl_count = clusters[cluster_idx].count;
@@ -658,8 +654,8 @@ ST_retcode cbsample_main(const char *args) {
             size_t st_start = strata[st].start;
             size_t st_count = strata[st].count;
 
-            size_t target_n = (size_t)round((double)config.n * (double)st_count / (double)nobs);
-            if (target_n == 0) target_n = 1;
+            size_t target_n = config.n ? config.n : st_count;
+            if (target_n > st_count) { rc = 498; goto cleanup; }
 
             /* Seed RNG based on stratum index for reproducibility */
             xoshiro256_seed(&thread_rngs[0], config.seed + (uint64_t)st * 0x9e3779b97f4a7c15ULL);
@@ -681,7 +677,8 @@ ST_retcode cbsample_main(const char *args) {
     /* Write frequency weights to Stata using obs_map (or arithmetic if NULL) */
     for (size_t i = 0; i < nobs; i++) {
         ST_int obs = obs_map ? (ST_int)obs_map[i] : (obs_start + (ST_int)i);
-        SF_vstore(freq_idx, obs, freq_weights[i]);
+        rc = SF_vstore(freq_idx, obs, freq_weights[i]);
+        if (rc) goto cleanup;
     }
 
     t_store = ctools_timer_seconds() - store_start;
@@ -694,7 +691,8 @@ ST_retcode cbsample_main(const char *args) {
         total_weight += freq_weights[i];
     }
 
-    /* === Cleanup === */
+cleanup:
+    /* No Stata output is written until all strata have valid draw counts. */
     free(thread_rngs);
     if (sort_perm) free(sort_perm);
     free(clusters);
@@ -708,6 +706,11 @@ ST_retcode cbsample_main(const char *args) {
     free(freq_weights);
     if (cluster_indices) free(cluster_indices);
     if (strata_indices) free(strata_indices);
+
+    if (rc) {
+        if (rc == 498) SF_error("cbsample: resample size exceeds sampling units in a stratum\n");
+        return rc;
+    }
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;

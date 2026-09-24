@@ -45,6 +45,7 @@
 #include "ctools_config.h"
 #include "ctools_threads.h"
 #include "ctools_runtime.h"
+#include "ctools_version.h"
 
 /*
     Initialize OpenMP safely to avoid conflicts with other OpenMP runtimes
@@ -93,11 +94,10 @@ static int parse_threads_arg(char *cmd_args)
         return 0;  /* No args */
     }
 
-    /* Find "threads(" in the argument string */
-    threads_start = strstr(cmd_args, "threads(");
-    if (threads_start == NULL) {
-        return 0;  /* Not found */
-    }
+    /* Only the leading option token belongs to the dispatcher. */
+    threads_start = cmd_args;
+    while (*threads_start == ' ' || *threads_start == '\t') threads_start++;
+    if (strncmp(threads_start, "threads(", 8) != 0) return 0;
 
     paren_open = threads_start + 7;  /* Point to '(' */
     if (*paren_open != '(') {
@@ -105,7 +105,8 @@ static int parse_threads_arg(char *cmd_args)
     }
 
     paren_close = strchr(paren_open, ')');
-    if (paren_close == NULL) {
+    if (paren_close == NULL || (paren_close[1] != '\0' &&
+                               paren_close[1] != ' ' && paren_close[1] != '\t')) {
         return -1;  /* Missing closing paren */
     }
 
@@ -201,6 +202,13 @@ STDLL stata_call(int argc, char *argv[])
     char *space_pos;
     ST_retcode rc;
     int thread_count;
+
+    /* Identity queries do not start threads or alter command state. */
+    if (argc > 0 && argv[0] && strcmp(argv[0], "version") == 0) {
+        ST_retcode version_rc = SF_macro_save("_ctools_plugin_version", CTOOLS_VERSION);
+        if (version_rc) return version_rc;
+        return SF_macro_save("_ctools_plugin_revision", CTOOLS_BUILD_REVISION);
+    }
 
     /* Initialize OpenMP safely before any parallel code runs */
     ctools_init_openmp();

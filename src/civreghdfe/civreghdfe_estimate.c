@@ -1982,7 +1982,7 @@ ST_retcode ivest_compute_2sls(
             }
         }
 
-        ivvce_compute_full(
+        ST_retcode vce_rc = ivvce_compute_full(
             Z, resid, temp1, vce_bread,
             weights, weight_type,
             N, N_eff, K_total, K_iv,
@@ -1993,6 +1993,14 @@ ST_retcode ivest_compute_2sls(
         );
 
         if (XtPzX_inv_cue) free(XtPzX_inv_cue);
+        if (vce_rc) {
+            free(ZtZ); free(ZtZ_inv); free(ZtX); free(Zty);
+            free(XtPzX); free(XtPzy); free(temp1); free(X_all);
+            free(resid); free(ZtZ_inv_Zty); free(XkX_copy); free(beta_temp);
+            free(XkX_inv); free(gmm_hessian_inv); free(XtX); free(Xty);
+            free(XkX); free(Xky);
+            return vce_rc;
+        }
     }
 
     /* Step 10: Compute first-stage F statistics */

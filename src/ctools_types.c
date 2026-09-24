@@ -481,8 +481,8 @@ stata_retcode ctools_apply_permutation(stata_data *data)
     if (nthreads < 1) nthreads = 1;
 
     /* Allocate buffer pool - one buffer per thread */
-    double **dbl_buffers = (double **)malloc(nthreads * sizeof(double *));
-    char ***ptr_buffers = (char ***)malloc(nthreads * sizeof(char **));
+    double **dbl_buffers = (double **)calloc(nthreads, sizeof(double *));
+    char ***ptr_buffers = (char ***)calloc(nthreads, sizeof(char **));
     if (!dbl_buffers || !ptr_buffers) {
         free(dbl_buffers);
         free(ptr_buffers);

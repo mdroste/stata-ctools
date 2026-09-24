@@ -4,29 +4,35 @@ High-performance C-accelerated sorting for Stata datasets.
 
 ## Overview
 
-`csort` is a drop-in replacement for Stata's `sort` command that provides 2-4x speedup over native Stata sorting. It supports multiple sorting algorithms optimized for different use cases:
+`csort` implements stable ascending sorting through a C plugin. It supports multiple sorting algorithms optimized for different use cases:
 
-- **LSD Radix Sort** (default): Best for fixed-width keys and general-purpose sorting
+- **LSD Radix Sort**: Best for fixed-width keys and general-purpose sorting
 - **MSD Radix Sort**: Best for variable-length strings with common prefixes
 - **Timsort**: Best for partially sorted data (panel data, time series)
+
+The default `auto` mode chooses an algorithm from the key types and ranges. `sample`, `counting`, `merge`, and `ips4o` are also available. Like native `sort`, `csort` rejects `if` and `in`.
 
 ## Syntax
 
 ```stata
-csort varlist [if] [in] [, options]
+csort varlist [, options]
 ```
 
 ## Options
 
 | Option | Description |
 |--------|-------------|
-| `algorithm(string)` | Sort algorithm: `lsd` (default), `msd`, or `timsort` |
+| `algorithm(string)` | Sort algorithm: `auto` (default), `lsd`, `msd`, `timsort`, `sample`, `counting`, `merge`, or `ips4o` |
+| `stream(#)` | Stream 1–16 variables at a time |
+| `nostream` | Disable automatic streaming |
+| `nosortedby` | Skip the final native sort used to set sorted metadata |
+| `threads(#)` | Maximum threads |
 | `verbose` | Display timing breakdown (load, sort, store, total) |
 
 ## Examples
 
 ```stata
-* Basic usage - sort by single variable (uses LSD radix sort by default)
+* Basic usage - sort by single variable (uses automatic algorithm selection)
 csort id
 
 * Sort by multiple variables
@@ -34,12 +40,6 @@ csort state year firm_id
 
 * Sort with timing output
 csort myvar, verbose
-
-* Sort with if/in conditions
-csort price if foreign == 1
-
-* Sort a subset of observations
-csort value in 1/10000
 
 * Use MSD radix sort (better for variable-length strings)
 csort company_name, algorithm(msd)
@@ -53,7 +53,7 @@ csort panelid year, algorithm(timsort) verbose
 
 ## Algorithm Selection Guide
 
-### LSD Radix Sort (Default)
+### LSD Radix Sort
 **Best for:**
 - Integer or fixed-width numeric keys
 - Data with uniform key distribution
@@ -110,17 +110,15 @@ csort date_var, algorithm(timsort)
 
 ## Performance
 
-All three algorithms are optimized for performance:
+The sorting algorithms are optimized for performance:
 
 ### LSD Radix Sort Performance
 - **Complexity**: O(N*k) where k is key width (8 for doubles)
 - **Parallelization**: OpenMP parallel histogram and scatter
-- **Best case**: 2-4x faster than Stata's sort
 
 ### MSD Radix Sort Performance
 - **Complexity**: O(N*k) where k is average distinguishing prefix length
 - **Parallelization**: OpenMP task parallelism for independent buckets
-- **Best case**: 2-5x faster for variable-length strings
 
 ### Timsort Performance
 - **Complexity**: O(N) best case, O(N log N) worst case
@@ -167,7 +165,7 @@ When using the `verbose` option, you'll see:
 ## Supported Variable Types
 
 - Numeric variables (all Stata numeric types)
-- String variables
+- Fixed-width string variables (strL is rejected)
 - Multiple sort keys (sorts by first variable, then second, etc.)
 
 ## Stored Results
@@ -184,7 +182,7 @@ When using the `verbose` option, you'll see:
 ## Technical Notes
 
 - The sort is stable, meaning observations with equal sort keys maintain their original relative order
-- After sorting, Stata's internal `sortedby` characteristic is updated appropriately
+- By default, the wrapper runs native `sort, stable` to establish Stata's `sortedby` metadata; `nosortedby` skips that step and exposes the C permutation directly
 - Missing values are sorted to the end (consistent with Stata's convention)
 
 ## Comparison with Native `sort`
@@ -196,7 +194,6 @@ When using the `verbose` option, you'll see:
 | Parallelization | No | Yes (OpenMP) | Yes (OpenMP) | Partial |
 | Best For | General | Fixed-width keys | Variable strings | Partially sorted |
 | Stable Sort | Yes (with `stable`) | Yes | Yes | Yes |
-| Typical Speedup | 1x | 2-4x | 2-5x (strings) | 2-10x (sorted) |
 
 ## See Also
 

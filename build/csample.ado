@@ -61,62 +61,11 @@ program define csample
     }
 
     * Load plugin
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "csample: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Generate seed from Stata's RNG (respects -set seed-)
     * Use runiform to generate a large integer seed
@@ -129,16 +78,15 @@ program define csample
     }
 
     * Create variable for keep flags (will be dropped at end)
-    capture drop __csample_keep__
-    quietly gen double __csample_keep__ = 0
-    local __keep "__csample_keep__"
+    tempvar __keep
+    quietly gen double `__keep' = 0
 
     * Get ALL variables and find indices (cencode pattern)
     unab allvars : *
     local keep_idx = 0
     local idx = 1
     foreach v of local allvars {
-        if ("`v'" == "__csample_keep__") {
+        if ("`v'" == "`__keep'") {
             local keep_idx = `idx'
         }
         local ++idx
@@ -188,10 +136,10 @@ program define csample
         "csample `threads_opt' `keep_idx' `nby' `by_indices' `opts'"
 
     * Drop observations where __keep == 0
-    quietly drop if `__keep' == 0
+    quietly drop if `touse' & `__keep' == 0
 
     * Clean up the keep variable
-    capture drop __csample_keep__
+    drop `__keep'
 
     * Finish timing
     timer off 90

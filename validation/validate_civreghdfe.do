@@ -106,19 +106,19 @@ benchmark_ivreghdfe pop (medage = death) divorce, absorb(region) testname("censu
  ******************************************************************************/
 print_section "Panel Data (nlswork)"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_ivreghdfe ln_wage (tenure = age), absorb(idcode) testname("nlswork basic")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_ivreghdfe ln_wage (tenure = age ttl_exp), absorb(idcode) testname("nlswork two instr")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_ivreghdfe ln_wage (tenure = age), absorb(idcode) vce(robust) testname("nlswork robust")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_ivreghdfe ln_wage (tenure = age), absorb(idcode) vce(cluster idcode) testname("nlswork cluster")
 
@@ -628,7 +628,7 @@ benchmark_ivreghdfe price (mpg = weight length) c.turn#i.foreign, absorb(rep78) 
 * Note: i.race#i.union with absorb(idcode) causes different collinearity
 * selections after HDFE partialling (Cholesky vs _rmcoll). Both produce valid
 * parameterizations. Compare model-level statistics instead of coefficients.
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 local __testpfx "i.race#i.union interaction"
 
@@ -702,7 +702,7 @@ if _rc == 0 {
     test_pass "L(1/2).varname (lag range) as instrument"
 }
 else {
-    test_pass "L(1/2).varname: skipped (lag range syntax not supported, use L.var L2.var)"
+    test_fail "L(1/2).varname" "lag-range parsing failed"
 }
 
 * Benchmark combined L. and D. operators
@@ -1422,7 +1422,7 @@ benchmark_ivreghdfe y (x_endog = z) x_exog, absorb(id1 id2 id3) vce(cluster id1)
 print_section "Additional Datasets"
 
 * Grunfeld: classic panel IV
-capture webuse grunfeld, clear
+capture ctools_fixture grunfeld, clear
 if _rc == 0 {
     benchmark_ivreghdfe invest (kstock = L.kstock) mvalue, absorb(company) testname("grunfeld: company FE")
     benchmark_ivreghdfe invest (kstock = L.kstock) mvalue, absorb(company year) testname("grunfeld: two-way FE")
@@ -1434,7 +1434,7 @@ else {
 }
 
 * bplong: blood pressure panel
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_ivreghdfe bp (agegrp = when) sex, absorb(patient) testname("bplong: patient FE")
 }
@@ -1485,7 +1485,7 @@ benchmark_ivreghdfe y (x_endog = z) x_exog, absorb(id year) testname("100K obs, 
 print_section "VCE Comprehensive"
 
 * Large clusters (many)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_ivreghdfe ln_wage (tenure = age) ttl_exp, absorb(idcode) vce(cluster idcode) testname("large clusters (many)")
 
@@ -1994,3 +1994,6 @@ capture clear
 * End of civreghdfe validation
 noi print_summary "civreghdfe"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "civreghdfe"

@@ -43,6 +43,7 @@ typedef struct {
 
     /* Formatting options */
     char delimiter;
+    bool replace;             /* Atomic destination replacement allowed */
     bool write_header;
     bool quote_strings;
     bool quote_if_needed;

@@ -29,6 +29,12 @@ program define cpplmhdfe, eclass
         local irlstolerance `tolerance'
     }
 
+    if `iterate' < 1 | `irlsmaxiter' < 1 | missing(`tolerance', `irlstolerance', `septolerance') | ///
+        `tolerance' <= 0 | `irlstolerance' <= 0 | `septolerance' <= 0 {
+        di as error "cpplmhdfe: iteration limits and tolerances must be positive"
+        exit 198
+    }
+
     * Parse absorb option
     if `"`absorb'"' == "" {
         di as error "cpplmhdfe: absorb() is required"
@@ -69,9 +75,9 @@ program define cpplmhdfe, eclass
     local weight_var ""
     local weight_type = 0
     if "`weight'" != "" {
-        local weight_var "`exp'"
-        local weight_var = subinstr("`weight_var'", "=", "", .)
-        local weight_var = trim("`weight_var'")
+        tempvar evaluated_weight
+        quietly generate double `evaluated_weight' `exp' if `touse'
+        local weight_var "`evaluated_weight'"
 
         if "`weight'" == "aweight" {
             local weight_type = 1
@@ -220,60 +226,11 @@ program define cpplmhdfe, eclass
     }
 
     * Load plugin
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cpplmhdfe: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Set up scalars for C plugin
     scalar __cpplmhdfe_K = `nvars'
@@ -315,6 +272,13 @@ program define cpplmhdfe, eclass
         local plugin_varlist `plugin_varlist' `offset_var'
     }
 
+    * The plugin returns the final sample after internal row removals.
+    tempvar final_sample
+    quietly generate byte `final_sample' = 0
+    local plugin_varlist `plugin_varlist' `final_sample'
+    local sample_idx : word count `plugin_varlist'
+    scalar __cpplmhdfe_sample_idx = `sample_idx'
+
     * Create V matrix
     local K_x = `nvars' - 1
     if `K_x' < 1 {
@@ -328,7 +292,7 @@ program define cpplmhdfe, eclass
 
     local reg_rc = _rc
     if `reg_rc' {
-        capture scalar drop __cpplmhdfe_K __cpplmhdfe_G __cpplmhdfe_verbose
+        capture scalar drop __cpplmhdfe_sample_idx __cpplmhdfe_K __cpplmhdfe_G __cpplmhdfe_verbose
         capture scalar drop __cpplmhdfe_maxiter __cpplmhdfe_tolerance
         capture scalar drop __cpplmhdfe_vce_type __cpplmhdfe_has_weights
         capture scalar drop __cpplmhdfe_weight_type __cpplmhdfe_has_offset
@@ -376,7 +340,7 @@ program define cpplmhdfe, eclass
         local df_a_adjusted = 0
     }
 
-    * df_m = number of non-collinear X variables
+    * Initialize model degrees of freedom; refine to joint-test rank below.
     local df_m = `K_keep'
 
     * df_r calculation
@@ -454,11 +418,27 @@ program define cpplmhdfe, eclass
     local F = .
     if `K_keep' > 0 {
         tempname b_test V_test Vinv Wald
-        matrix `b_test' = `b'[1, 1..`K_keep']
-        matrix `V_test' = `V'[1..`K_keep', 1..`K_keep']
+        matrix `b_test' = J(1, `K_keep', 0)
+        matrix `V_test' = J(`K_keep', `K_keep', 0)
+        local row = 0
+        forvalues i=1/`K_x' {
+            if __cpplmhdfe_collinear_`i' == 0 {
+                local ++row
+                matrix `b_test'[1, `row'] = `b'[1, `i']
+                local col = 0
+                forvalues j=1/`K_x' {
+                    if __cpplmhdfe_collinear_`j' == 0 {
+                        local ++col
+                        matrix `V_test'[`row', `col'] = `V'[`i', `j']
+                    }
+                }
+            }
+        }
         matrix `Vinv' = syminv(`V_test')
         matrix `Wald' = `b_test' * `Vinv' * `b_test''
-        local F = `Wald'[1,1] / `df_m'
+        * Match the rank of the estimable joint restrictions.
+        local df_m = colsof(`Vinv') - diag0cnt(`Vinv')
+        if `df_m' > 0 local F = `Wald'[1,1] / `df_m'
     }
 
     * Expand b and V to include base levels for factor variables
@@ -537,7 +517,7 @@ program define cpplmhdfe, eclass
     timer on 98
 
     * Post results
-    ereturn post `b' `V', esample(`touse') depname(`depvar_orig') obs(`N_final')
+    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
 
     * Store e() results
     ereturn scalar N = `N_final'
@@ -548,7 +528,7 @@ program define cpplmhdfe, eclass
     ereturn scalar deviance = `deviance'
     ereturn scalar r2_p = `r2_p'
     ereturn scalar F = `F'
-    ereturn scalar rank = `df_m'
+    ereturn scalar rank = `K_keep'
     ereturn scalar N_hdfe = `nfe'
     ereturn scalar num_singletons = `num_singletons'
     ereturn scalar num_separated = `num_separated'
@@ -567,6 +547,7 @@ program define cpplmhdfe, eclass
     ereturn local depvar "`depvar_orig'"
     ereturn local indepvars "`indepvars'"
     ereturn local vce = cond(`vcetype'==0, "unadjusted", cond(`vcetype'==1, "robust", "cluster"))
+    ereturn local predict "cpplmhdfe_p"
     ereturn local cmd "cpplmhdfe"
     ereturn local cmdline "cpplmhdfe `0'"
 
@@ -647,7 +628,7 @@ program define cpplmhdfe, eclass
     }
 
     * Clean up scalars
-    capture scalar drop __cpplmhdfe_K __cpplmhdfe_G __cpplmhdfe_verbose
+    capture scalar drop __cpplmhdfe_sample_idx __cpplmhdfe_K __cpplmhdfe_G __cpplmhdfe_verbose
     capture scalar drop __cpplmhdfe_maxiter __cpplmhdfe_tolerance
     capture scalar drop __cpplmhdfe_vce_type __cpplmhdfe_has_weights
     capture scalar drop __cpplmhdfe_weight_type __cpplmhdfe_has_offset

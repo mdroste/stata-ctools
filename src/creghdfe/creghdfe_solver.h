@@ -29,8 +29,15 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id);
  *   K: Number of columns to partial out
  *   num_threads: Number of threads to use
  *
- * Returns: Maximum iterations used across all columns (negative if any failed)
+ * Returns: status (0, 198 for invalid configuration, or 430 for nonconvergence),
+ * convergence flag, and maximum iterations used across columns.
  * ======================================================================== */
-ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads);
+typedef struct {
+    ST_retcode status;
+    ST_int converged;
+    ST_int iterations;
+} HDFE_SolveResult;
+
+HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads);
 
 #endif /* CREGHDFE_SOLVER_H */

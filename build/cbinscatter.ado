@@ -119,40 +119,17 @@ program define cbinscatter, eclass sortpreserve
         }
     }
 
-    * Validate genxq variable name if specified
     if "`genxq'" != "" {
-        capture confirm new variable `genxq'
-        if _rc {
-            di as error "cbinscatter: genxq() variable already exists: `genxq'"
-            exit 110
-        }
+        di as error "cbinscatter: genxq() is not implemented"
+        exit 198
     }
 
     * =========================================================================
     * END UPFRONT VALIDATION - now proceed with data processing
     * =========================================================================
 
-    * Parse weight (before marksample to include weight var)
     local weight_var ""
-    local weight_type = 0   // 0=none, 1=aweight, 2=fweight, 3=pweight, 4=iweight
-    if "`weight'" != "" {
-        local weight_var "`exp'"
-        local weight_var = subinstr("`weight_var'", "=", "", .)
-        local weight_var = trim("`weight_var'")
-
-        if "`weight'" == "aweight" {
-            local weight_type = 1
-        }
-        else if "`weight'" == "fweight" {
-            local weight_type = 2
-        }
-        else if "`weight'" == "pweight" {
-            local weight_type = 3
-        }
-        else if "`weight'" == "iweight" {
-            local weight_type = 4
-        }
-    }
+    local weight_type = 0
 
     * Parse variable list
     gettoken depvar xvar : varlist
@@ -171,18 +148,9 @@ program define cbinscatter, eclass sortpreserve
         exit 109
     }
 
-    * Count control and absorb variables
-    local num_controls = 0
-    if "`controls'" != "" {
-        local num_controls : word count `controls'
-    }
-    local num_absorb = 0
-    if "`absorb'" != "" {
-        local num_absorb : word count `absorb'
-    }
+    local num_absorb : word count `absorb'
 
-    * Minimal sample marking - just handle if/in, let plugin handle missing values
-    * This avoids expensive markout operations on large datasets
+    * Count the requested sample before excluding incomplete observations
     marksample touse, novarlist
 
     * Get observation count from Stata (fast, uses existing if/in)
@@ -193,76 +161,42 @@ program define cbinscatter, eclass sortpreserve
         exit 3301
     }
 
-    * Count by-groups if specified (use levelsof instead of tab - faster)
+    if "`weight'" != "" {
+        tempvar evaluated_weight
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
+        local weight_var "`evaluated_weight'"
+        if "`weight'" == "aweight" local weight_type = 1
+        else if "`weight'" == "fweight" local weight_type = 2
+        else if "`weight'" == "pweight" local weight_type = 3
+        else if "`weight'" == "iweight" local weight_type = 4
+    }
+    local controls_original `controls'
+    if "`controls'" != "" {
+        fvrevar `controls' if `touse'
+        local controls `r(varlist)'
+    }
+    local num_controls : word count `controls'
+
+    * Group IDs must be dense after excluding incomplete observations.
+    markout `touse' `depvar' `xvar' `controls' `absorb' `weight_var'
+    if "`by'" != "" markout `touse' `by', strok
     local num_by_groups = 1
     if "`by'" != "" {
-        * Convert by variable to numeric if string
-        capture confirm numeric variable `by'
-        if _rc != 0 {
-            tempvar by_numeric
-            qui egen `by_numeric' = group(`by') if `touse'
-            local by_orig "`by'"
-            local by "`by_numeric'"
-        }
-        qui levelsof `by' if `touse', local(bylevels)
-        local num_by_groups : word count `bylevels'
+        local by_orig "`by'"
+        tempvar by_numeric
+        quietly egen long `by_numeric' = group(`by') if `touse', label
+        local by "`by_numeric'"
+        quietly summarize `by' if `touse', meanonly
+        local num_by_groups = r(max)
+        if missing(`num_by_groups') error 2000
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cbinscatter: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Set up parameters via Stata scalars
     scalar __cbinscatter_nquantiles = `nquantiles'
@@ -370,7 +304,7 @@ program define cbinscatter, eclass sortpreserve
 
     * Retrieve results from scalars
     local N_used = __cbinscatter_N
-    local N_dropped = __cbinscatter_N_dropped
+    local N_dropped = `nobs' - `N_used'
     local actual_num_groups = __cbinscatter_num_groups
 
     * Display timing if requested
@@ -432,11 +366,7 @@ program define cbinscatter, eclass sortpreserve
     }
 
     * Generate bin assignment variable if requested
-    if "`genxq'" != "" {
-        * This would require additional plugin work to return per-obs bin IDs
-        * For now, just display a message
-        di as text "(genxq option not yet implemented)"
-    }
+
 
     * Create graph if not suppressed
     if "`nograph'" == "" {
@@ -564,7 +494,8 @@ program define cbinscatter, eclass sortpreserve
                 }
 
                 local scatters "`scatters' (scatteri `coords', mcolor(`thismcolor') lcolor(`thislcolor'))"
-                local legend_labels `"`legend_labels' label(`legend_idx' "`by'==`g'")"'
+                local group_label : label (`by') `g'
+                local legend_labels `"`legend_labels' label(`legend_idx' "`by_orig'==`group_label'")"'
                 local legend_order "`legend_order' `legend_idx'"
                 local legend_idx = `legend_idx' + 1
 

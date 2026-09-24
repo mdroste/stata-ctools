@@ -23,114 +23,69 @@
  * Returns 0 on success, non-zero on failure.
  * ======================================================================== */
 
-static ST_int solve_with_collinearity(
+ST_int cbinscatter_solve_with_collinearity(
     const ST_double *XtX,
     const ST_double *rhs,
     ST_int K,
     ST_double *beta
 ) {
-    ST_int i, j, k, a, b;
-    ST_int *is_collinear = NULL;
-    ST_int *keep = NULL;
-    ST_double *L = NULL;
-    ST_double *XtX_r = NULL, *rhs_r = NULL, *beta_r = NULL;
-    ST_int rc = 0;
-    ST_int num_collinear = 0;
-    const ST_double tol = 1e-10;  /* Tolerance for collinearity detection */
-
-    is_collinear = (ST_int *)calloc(K, sizeof(ST_int));
-    L = (ST_double *)malloc(K * K * sizeof(ST_double));
-    if (!is_collinear || !L) {
-        free(is_collinear);
-        free(L);
-        return -1;
-    }
-
-    /* Inline modified Cholesky to detect collinear columns */
-    memcpy(L, XtX, K * K * sizeof(ST_double));
-
-    for (k = 0; k < K; k++) {
-        ST_double sum = L[k * K + k];
-        for (j = 0; j < k; j++) {
-            sum -= L[k * K + j] * L[k * K + j];
+    /* Normalize the Gram matrix so rank decisions do not depend on units.
+     * Modified Cholesky omits dependent columns and solves the retained span. */
+    if (K < 1) return CBINSCATTER_ERR_SINGULAR;
+    ST_double *L = ctools_safe_malloc3((size_t)K, (size_t)K, sizeof(*L));
+    ST_double *scale = ctools_safe_malloc2((size_t)K, sizeof(*scale));
+    ST_double *solution = ctools_safe_calloc2((size_t)K, sizeof(*solution));
+    ST_int rc = CBINSCATTER_OK;
+    if (!L || !scale || !solution) { rc = CBINSCATTER_ERR_MEMORY; goto done; }
+    for (ST_int i = 0; i < K; i++) {
+        ST_double diagonal = XtX[(size_t)i * K + i];
+        if (!isfinite(diagonal) || diagonal < 0 || !isfinite(rhs[i])) {
+            rc = CBINSCATTER_ERR_SINGULAR; goto done;
         }
-
-        if (sum < tol) {
-            /* Column k is collinear */
-            is_collinear[k] = 1;
-            num_collinear++;
-            L[k * K + k] = 0.0;
-            for (i = k + 1; i < K; i++) {
-                L[i * K + k] = 0.0;
-            }
+        scale[i] = sqrt(diagonal);
+    }
+    for (ST_int i = 0; i < K; i++) {
+        for (ST_int j = 0; j < K; j++) {
+            L[(size_t)i * K + j] = scale[i] && scale[j] ?
+                XtX[(size_t)i * K + j] / scale[i] / scale[j] : 0;
+            if (!isfinite(L[(size_t)i * K + j])) { rc = CBINSCATTER_ERR_SINGULAR; goto done; }
+        }
+    }
+    const ST_double tolerance = 1e-10;
+    for (ST_int k = 0; k < K; k++) {
+        ST_double sum = L[(size_t)k * K + k];
+        for (ST_int j = 0; j < k; j++) sum -= L[(size_t)k * K + j] * L[(size_t)k * K + j];
+        if (sum <= tolerance) {
+            if (sum < -tolerance) { rc = CBINSCATTER_ERR_SINGULAR; goto done; }
+            L[(size_t)k * K + k] = 0;
+            for (ST_int i = k + 1; i < K; i++) L[(size_t)i * K + k] = 0;
             continue;
         }
-
-        ST_double diag = sqrt(sum);
-        L[k * K + k] = diag;
-
-        for (i = k + 1; i < K; i++) {
-            sum = L[i * K + k];
-            for (j = 0; j < k; j++) {
-                sum -= L[i * K + j] * L[k * K + j];
-            }
-            L[i * K + k] = sum / diag;
+        L[(size_t)k * K + k] = sqrt(sum);
+        for (ST_int i = k + 1; i < K; i++) {
+            sum = L[(size_t)i * K + k];
+            for (ST_int j = 0; j < k; j++) sum -= L[(size_t)i * K + j] * L[(size_t)k * K + j];
+            L[(size_t)i * K + k] = sum / L[(size_t)k * K + k];
         }
     }
-
-    free(L);
-
-    ST_int K_r = K - num_collinear;
-    if (K_r == 0) {
-        memset(beta, 0, K * sizeof(ST_double));
-        free(is_collinear);
-        return 0;
+    for (ST_int i = 0; i < K; i++) {
+        if (!L[(size_t)i * K + i]) continue;
+        ST_double sum = rhs[i] / scale[i];
+        for (ST_int j = 0; j < i; j++) sum -= L[(size_t)i * K + j] * solution[j];
+        solution[i] = sum / L[(size_t)i * K + i];
     }
-
-    /* If no collinearity detected, solve directly */
-    if (num_collinear == 0) {
-        free(is_collinear);
-        return ctools_solve_cholesky(XtX, rhs, K, beta);
-    }
-
-    /* Build reduced system excluding collinear columns */
-    keep = (ST_int *)malloc(K_r * sizeof(ST_int));
-    XtX_r = (ST_double *)malloc((size_t)K_r * K_r * sizeof(ST_double));
-    rhs_r = (ST_double *)malloc(K_r * sizeof(ST_double));
-    beta_r = (ST_double *)malloc(K_r * sizeof(ST_double));
-
-    if (!keep || !XtX_r || !rhs_r || !beta_r) {
-        rc = -1;
-        goto done;
-    }
-
-    ST_int idx = 0;
-    for (j = 0; j < K; j++) {
-        if (!is_collinear[j]) keep[idx++] = j;
-    }
-
-    for (a = 0; a < K_r; a++) {
-        rhs_r[a] = rhs[keep[a]];
-        for (b = 0; b < K_r; b++) {
-            XtX_r[a * K_r + b] = XtX[keep[a] * K + keep[b]];
+    for (ST_int i = K - 1; i >= 0; i--) {
+        if (!L[(size_t)i * K + i]) continue;
+        ST_double sum = solution[i];
+        for (ST_int j = i + 1; j < K; j++) sum -= L[(size_t)j * K + i] * solution[j];
+        solution[i] = sum / L[(size_t)i * K + i];
+        if (!isfinite(solution[i]) || !isfinite(solution[i] / scale[i])) {
+            rc = CBINSCATTER_ERR_SINGULAR; goto done;
         }
     }
-
-    rc = ctools_solve_cholesky(XtX_r, rhs_r, K_r, beta_r);
-
-    if (rc == 0) {
-        memset(beta, 0, K * sizeof(ST_double));
-        for (a = 0; a < K_r; a++) {
-            beta[keep[a]] = beta_r[a];
-        }
-    }
-
+    for (ST_int i = 0; i < K; i++) beta[i] = scale[i] ? solution[i] / scale[i] : 0;
 done:
-    free(is_collinear);
-    free(keep);
-    free(XtX_r);
-    free(rhs_r);
-    free(beta_r);
+    free(L); free(scale); free(solution);
     return rc;
 }
 
@@ -244,8 +199,8 @@ ST_retcode ols_residualize(
     /* Solve for beta_y and beta_x, handling collinear controls */
     if (ctools_solve_cholesky(XtX, Xty, K_full, beta_y) != 0) {
         /* Singular matrix - detect and drop collinear columns */
-        if (solve_with_collinearity(XtX, Xty, K_full, beta_y) != 0 ||
-            solve_with_collinearity(XtX, Xtx, K_full, beta_x) != 0) {
+        if (cbinscatter_solve_with_collinearity(XtX, Xty, K_full, beta_y) != 0 ||
+            cbinscatter_solve_with_collinearity(XtX, Xtx, K_full, beta_x) != 0) {
             rc = CBINSCATTER_ERR_SINGULAR;
             goto cleanup;
         }
@@ -562,7 +517,7 @@ static ST_retcode ols_residualize_y_only(
     /* Solve for beta_y: (X'X) * beta_y = X'y, handling collinear controls */
     if (ctools_solve_cholesky(XtX, Xty, K, beta_y) != 0) {
         /* Singular matrix - detect and drop collinear columns */
-        if (solve_with_collinearity(XtX, Xty, K, beta_y) != 0) {
+        if (cbinscatter_solve_with_collinearity(XtX, Xty, K, beta_y) != 0) {
             rc = CBINSCATTER_ERR_SINGULAR;
             goto cleanup;
         }

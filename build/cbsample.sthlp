@@ -17,6 +17,7 @@
 
 {p 8 17 2}
 {cmdab:cbsample}
+[{it:#}]
 {ifin}
 [{cmd:,} {it:options}]
 
@@ -24,10 +25,10 @@
 {synopthdr}
 {synoptline}
 {syntab:Main}
-{synopt:{opt n(#)}}size of bootstrap sample; default is {cmd:n(_N)}{p_end}
+{synopt:{it:#}}positional number of draws within each stratum; default is the original number of sampling units{p_end}
 {synopt:{opt cl:uster(varlist)}}variables identifying resampling clusters{p_end}
 {synopt:{opt str:ata(varlist)}}variables identifying strata{p_end}
-{synopt:{opt weight(newvar)}}store bootstrap weights instead of resampling{p_end}
+{synopt:{opt weight(varname)}}store bootstrap weights instead of resampling{p_end}
 {synoptline}
 {syntab:Advanced}
 {synopt:{opt thr:eads(#)}}maximum number of threads to use{p_end}
@@ -44,9 +45,10 @@ command. It draws a bootstrap sample (with replacement) from the dataset in memo
 
 {pstd}
 By default, {cmd:cbsample} replaces the data in memory with a bootstrap sample
-of the same size as the original. Observations not selected are dropped, while
-selected observations may appear multiple times (implemented by keeping one copy
-and dropping unselected observations by default).
+using the original number of sampling units in each stratum. A sampling unit is
+an observation, or a cluster when {opt cluster()} is specified. Selected rows
+are physically replicated with {cmd:expand}; unselected rows are dropped.
+With unequal cluster sizes, the expanded row count can differ from the original.
 
 {pstd}
 With {opt weight()}, {cmd:cbsample} keeps all observations and stores
@@ -64,8 +66,12 @@ physical replication of observations.
 {dlgtab:Main}
 
 {phang}
-{opt n(#)} specifies the size of the bootstrap sample. The default is {cmd:n(_N)},
-meaning a sample of the same size as the original dataset.
+The positional {it:#} specifies draws within each stratum. For example,
+{cmd:cbsample 2, strata(s)} draws two observations from every stratum;
+adding {cmd:cluster(c)} draws two clusters from every stratum. Omitting the
+count uses each stratum's original number of sampling units. An explicit count
+must be a positive integer no greater than the available units in any stratum.
+The {cmd:n()} option is not accepted.
 
 {phang}
 {opt cluster(varlist)} specifies the variables that identify resampling clusters.
@@ -74,12 +80,12 @@ All observations within a selected cluster receive the same weight.
 
 {phang}
 {opt strata(varlist)} specifies variables identifying strata. Resampling is
-performed independently within each stratum, maintaining the relative size of
-each stratum in the bootstrap sample.
+performed independently within each stratum. Missing strata are excluded.
+Cluster labels reused across strata identify separate sampling units.
 
 {phang}
-{opt weight(newvar)} creates a new variable {it:newvar} containing bootstrap
-frequency weights. When this option is specified, all observations are kept and
+{opt weight(varname)} overwrites an existing numeric variable with bootstrap
+frequency weights. Create it first with {cmd:generate double bsweight = 0}. When this option is specified, all observations are kept and
 the weight variable indicates how many times each observation was selected
 (0 if not selected). This is more memory-efficient than physical replication
 for bootstrap estimation.
@@ -124,19 +130,22 @@ structure of the original data.
 
 {pstd}Bootstrap sample of specific size:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
-{phang2}{cmd:. cbsample, n(50)}{p_end}
+{phang2}{cmd:. cbsample 50}{p_end}
 
 {pstd}Store bootstrap weights instead of resampling:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. generate double bsweight = 0}{p_end}
 {phang2}{cmd:. cbsample, weight(bsweight)}{p_end}
 {phang2}{cmd:. regress price mpg [fw=bsweight]}{p_end}
 
 {pstd}Stratified bootstrap:{p_end}
 {phang2}{cmd:. sysuse auto, clear}{p_end}
+{phang2}{cmd:. generate double bsweight = 0}{p_end}
 {phang2}{cmd:. cbsample, strata(foreign) weight(bsweight)}{p_end}
 
 {pstd}Cluster bootstrap:{p_end}
 {phang2}{cmd:. webuse nlswork, clear}{p_end}
+{phang2}{cmd:. generate double bsweight = 0}{p_end}
 {phang2}{cmd:. cbsample, cluster(idcode) weight(bsweight)}{p_end}
 
 {pstd}Reproducible bootstrap:{p_end}

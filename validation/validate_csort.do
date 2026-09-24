@@ -396,65 +396,65 @@ if _rc == 0 {
 print_section "Webuse Datasets"
 
 * lifeexp dataset (webuse version)
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 benchmark_sort country, testname("webuse lifeexp: country")
 
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 benchmark_sort lexp, testname("webuse lifeexp: life expectancy")
 
 * nlswork dataset (panel data)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort idcode, testname("nlswork: idcode")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort year, testname("nlswork: year")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort idcode year, testname("nlswork: idcode year")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort ln_wage, testname("nlswork: ln_wage")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort age, testname("nlswork: age")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 benchmark_sort union, testname("nlswork: union")
 
 * grunfeld dataset (panel data)
-capture webuse grunfeld, clear
+capture ctools_fixture grunfeld, clear
 if _rc == 0 {
     benchmark_sort company, testname("grunfeld: company")
 
-    webuse grunfeld, clear
+    ctools_fixture grunfeld, clear
     benchmark_sort year, testname("grunfeld: year")
 
-    webuse grunfeld, clear
+    ctools_fixture grunfeld, clear
     benchmark_sort company year, testname("grunfeld: company year")
 
-    webuse grunfeld, clear
+    ctools_fixture grunfeld, clear
     benchmark_sort invest, testname("grunfeld: invest")
 }
 
 * educ99gdp dataset
-webuse educ99gdp, clear
+ctools_fixture educ99gdp, clear
 benchmark_sort country, testname("educ99gdp: country")
 
-webuse educ99gdp, clear
+ctools_fixture educ99gdp, clear
 benchmark_sort public, testname("educ99gdp: public spending")
 
 * bplong webuse
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_sort patient when, testname("webuse bplong: patient when")
 }
 
 * cancer webuse
-capture webuse cancer, clear
+capture ctools_fixture cancer, clear
 if _rc == 0 {
     benchmark_sort studytime, testname("webuse cancer: studytime")
 
-    webuse cancer, clear
+    ctools_fixture cancer, clear
     benchmark_sort age drug, testname("webuse cancer: age drug")
 }
 
@@ -1529,3 +1529,6 @@ else {
 * End of csort validation
 noi print_summary "csort"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "csort"

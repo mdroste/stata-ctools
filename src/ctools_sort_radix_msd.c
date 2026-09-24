@@ -123,10 +123,10 @@ static msd_sort_context_t *msd_context_alloc(int num_threads)
     ctx->threads = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
     ctx->hist_args = (msd_histogram_args_t *)malloc(num_threads * sizeof(msd_histogram_args_t));
     ctx->scatter_args = (msd_scatter_args_t *)malloc(num_threads * sizeof(msd_scatter_args_t));
-    ctx->all_local_counts = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->all_local_counts = (size_t **)calloc(num_threads, sizeof(size_t *));
     ctx->global_counts = (size_t *)calloc(RADIX_SIZE, sizeof(size_t));
     ctx->global_offsets = (size_t *)malloc(RADIX_SIZE * sizeof(size_t));
-    ctx->thread_offsets = (size_t **)malloc(num_threads * sizeof(size_t *));
+    ctx->thread_offsets = (size_t **)calloc(num_threads, sizeof(size_t *));
 
     if (!ctx->threads || !ctx->hist_args || !ctx->scatter_args ||
         !ctx->all_local_counts || !ctx->global_counts ||
@@ -645,7 +645,7 @@ static stata_retcode msd_sort_by_numeric_var(stata_data *data, int var_idx)
 
     /* Decide on parallel sort */
     use_parallel = (data->nobs >= MSD_PARALLEL_HIST_THRESHOLD);
-    num_threads = ctools_get_max_threads();
+    num_threads = ctools_get_openmp_threads();
     if (data->nobs < (size_t)MIN_OBS_PER_THREAD * (size_t)num_threads) {
         num_threads = (int)(data->nobs / MIN_OBS_PER_THREAD);
         if (num_threads < 2) {

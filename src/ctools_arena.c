@@ -78,16 +78,21 @@ void *ctools_arena_alloc(ctools_arena *arena, size_t size)
         return NULL;
     }
 
-    /* Align to 8 bytes */
+    /* Align only after checking for wraparound. */
+    if (size > SIZE_MAX - 7) return NULL;
     size = (size + 7) & ~(size_t)7;
+    if (size > SIZE_MAX - arena->total_allocated) return NULL;
 
-    /* Try current block first */
-    if (arena->current != NULL &&
-        arena->current->used + size <= arena->current->capacity) {
-        void *ptr = arena->current->data + arena->current->used;
-        arena->current->used += size;
-        arena->total_allocated += size;
-        return ptr;
+    /* Reset retains the chain: consume existing blocks before appending. */
+    while (arena->current != NULL) {
+        if (size <= arena->current->capacity - arena->current->used) {
+            void *ptr = arena->current->data + arena->current->used;
+            arena->current->used += size;
+            arena->total_allocated += size;
+            return ptr;
+        }
+        if (arena->current->next == NULL) break;
+        arena->current = arena->current->next;
     }
 
     /* Need a new block - use larger of block_size and requested size */
@@ -128,23 +133,28 @@ void *ctools_arena_alloc_aligned(ctools_arena *arena, size_t size, size_t alignm
         return NULL;  /* Not a power of 2 */
     }
 
-    /* Round size up to alignment */
+    /* Both rounding and worst-case padding must fit. */
+    if (size > SIZE_MAX - (alignment - 1)) return NULL;
     size = (size + alignment - 1) & ~(alignment - 1);
+    if (size > SIZE_MAX - (alignment - 1) ||
+        size + alignment - 1 > SIZE_MAX - arena->total_allocated) return NULL;
 
-    /* Try current block first */
-    if (arena->current != NULL) {
+    /* Reuse retained successors before growing the chain. */
+    while (arena->current != NULL) {
         /* Calculate aligned position within current block */
         char *base = arena->current->data + arena->current->used;
         size_t offset = ((size_t)base) & (alignment - 1);
         size_t padding = (offset == 0) ? 0 : (alignment - offset);
         size_t total_needed = padding + size;
 
-        if (arena->current->used + total_needed <= arena->current->capacity) {
+        if (total_needed <= arena->current->capacity - arena->current->used) {
             void *ptr = base + padding;
             arena->current->used += total_needed;
             arena->total_allocated += total_needed;
             return ptr;
         }
+        if (arena->current->next == NULL) break;
+        arena->current = arena->current->next;
     }
 
     /* Need a new block - ensure block is large enough and data[] starts aligned

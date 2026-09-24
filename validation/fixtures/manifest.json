@@ -1,0 +1,98 @@
+{
+  "airline": {
+    "sha256": "070c9cbd02c74cf24e3598cdc565813d961085b88e7eec79d0750b6d37f2eb00",
+    "url": "https://www.stata-press.com/data/r18/airline.dta"
+  },
+  "auto2": {
+    "sha256": "aef95bc1362d5da25dcbab54f6532d99412c414b32a4be70f2cf630df743997e",
+    "url": "https://www.stata-press.com/data/r18/auto2.dta"
+  },
+  "bdesop": {
+    "sha256": "7a9b277f750881d55461127a6a79b548cb4e1d31fbc17f6067a5edd481b19a1e",
+    "url": "https://www.stata-press.com/data/r18/bdesop.dta"
+  },
+  "bplong": {
+    "sha256": "acc3cf7316e00037f55ad7cf041c7e1d31f156082f52ab51d4a5f529ca5e4115",
+    "url": "https://www.stata-press.com/data/r18/bplong.dta"
+  },
+  "cancer": {
+    "sha256": "24d54bf857c161046058ba1997e579bfb1c8d4dde4afaf7a0cbdb224f3a3464e",
+    "url": "https://www.stata-press.com/data/r18/cancer.dta"
+  },
+  "census": {
+    "sha256": "7369f818b6097437415736570f6107e0d8c5a083a5858462a66e6a19aee026d1",
+    "url": "https://www.stata-press.com/data/r18/census.dta"
+  },
+  "countxmpl": {
+    "sha256": "71f43ddcd0c60f892c089ee0b30eaec91917a1d17e93672ec41d6e7097a2c278",
+    "url": "https://www.stata-press.com/data/r18/countxmpl.dta"
+  },
+  "educ99gdp": {
+    "sha256": "25944ff6ccb4eeeecdd800697060214399124b30126e4c0f42e18dcb779d78ea",
+    "url": "https://www.stata-press.com/data/r18/educ99gdp.dta"
+  },
+  "grunfeld": {
+    "sha256": "be844fe819788af680c8c7bb44f0a86f6726fb440081bd2de4a102679ebbc939",
+    "url": "https://www.stata-press.com/data/r18/grunfeld.dta"
+  },
+  "klein": {
+    "sha256": "226a27ef1a74afe7830ece1b99d6fb648fc6cca77bb0e6b9ce45eabb7abba076",
+    "url": "https://www.stata-press.com/data/r18/klein.dta"
+  },
+  "lbw": {
+    "sha256": "446c185314fd277cada479339502841b05abc2749e54723dfdafc1ffe32d3c1f",
+    "url": "https://www.stata-press.com/data/r18/lbw.dta"
+  },
+  "lifeexp": {
+    "sha256": "6bd9ace09717831de07177fa5841c65bfd5f116d87f0cd47751addea15cd9f15",
+    "url": "https://www.stata-press.com/data/r18/lifeexp.dta"
+  },
+  "lutkepohl2": {
+    "sha256": "d8f4c75593e0c05ef398f29ec25a6ae57835a37198390aa3625e925bd1c9250d",
+    "url": "https://www.stata-press.com/data/r18/lutkepohl2.dta"
+  },
+  "nhanes2": {
+    "sha256": "ff639159e61f07fac91544bb0ca7e6281896242d2235344a3fd92866cbc04224",
+    "url": "https://www.stata-press.com/data/r18/nhanes2.dta"
+  },
+  "nhanes2f": {
+    "sha256": "29fc1c8092ce674707de3650ff6a0553068278bc7244d8427b0b6b01cb9592c8",
+    "url": "https://www.stata-press.com/data/r18/nhanes2f.dta"
+  },
+  "nlsw88": {
+    "sha256": "6c2249c12ec829af1b9c74fa2efb4dda0ce0fc093787939440a38fe3c75aa3c9",
+    "url": "https://www.stata-press.com/data/r18/nlsw88.dta"
+  },
+  "nlswork": {
+    "sha256": "fa0c8a88dcc3283688b3cbb1197752bf3dc280087b89da36c755bcf98690b98b",
+    "url": "https://www.stata-press.com/data/r18/nlswork.dta"
+  },
+  "pig": {
+    "sha256": "386428521504899cb97dd920c5ccfc57a12d134425c3cd39bb9bd3c00b720161",
+    "url": "https://www.stata-press.com/data/r18/pig.dta"
+  },
+  "ships": {
+    "sha256": "d015e0b262ebff647b5a2eb2c64260c5fd84ef7e05049595f888a7967612ba6b",
+    "url": "https://www.stata-press.com/data/r18/ships.dta"
+  },
+  "sysdsn1": {
+    "sha256": "f6354fa4deda582c79be8d28a3f5864123dca28407abfccb67c6a7b99dd53d05",
+    "url": "https://www.stata-press.com/data/r18/sysdsn1.dta"
+  },
+  "union": {
+    "sha256": "1706b833316bc4123c343ef1dc27fcb3ba80e9ac51095f43174dd4d88709b552",
+    "url": "https://www.stata-press.com/data/r18/union.dta"
+  },
+  "uslifeexp2": {
+    "sha256": "51a317e96419a71718f5757dd0cf75024cd250a5ed6c643b523393d289fffc32",
+    "url": "https://www.stata-press.com/data/r18/uslifeexp2.dta"
+  },
+  "voter": {
+    "sha256": "0b1dfbad5ba605e6e7bf46348516415965859a8f5fa1dfa84edc8d57256f156a",
+    "url": "https://www.stata-press.com/data/r18/voter.dta"
+  },
+  "wpi1": {
+    "sha256": "031488b5db4dd114a8166eedc543fcaa628031af8cf9204478737cdb74ff63e6",
+    "url": "https://www.stata-press.com/data/r18/wpi1.dta"
+  }
+}

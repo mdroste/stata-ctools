@@ -142,9 +142,8 @@ cost of full sorting.{p_end}
 SIMD-optimized loops for maximum throughput.{p_end}
 
 {pstd}
-For large datasets (millions of observations), {cmd:cwinsor} can be 5-20x
-faster than {cmd:winsor2}, depending on the number of variables, groups,
-and available CPU cores.
+Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
+should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
 
 {pstd}
 {bf:Missing values} are handled correctly: they are excluded from percentile
@@ -221,7 +220,6 @@ significantly better performance:
 {p2col :By-group support}Yes{space 10}Yes{p_end}
 {p2col :Trim option}Yes{space 10}Yes{p_end}
 {p2col :Generate new vars}Yes{space 10}Yes{p_end}
-{p2col :Speed (large data)}5-20x faster{space 4}Baseline{p_end}
 
 
 {title:Technical details}
@@ -260,3 +258,8 @@ for his useful contribution to the Stata community.
 Online: {browse "https://ideas.repec.org/c/boc/bocode/s457765.html":winsor2} (if installed),
 {help summarize}, {help centile}, {help pctile}, {help ctools}
 {p_end}
+
+{pstd}
+Generated outputs are missing outside the {cmd:if}/{cmd:in} sample. With
+{opt replace}, observations outside that sample retain their original values.
+A failed operation restores the dataset, including any partially generated outputs.

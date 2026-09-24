@@ -117,6 +117,11 @@ static ST_retcode do_iv_regression(void)
     SF_scal_use("__civreghdfe_nopartialsmall", &dval); nopartialsmall = (ST_int)dval;
     SF_scal_use("__civreghdfe_center", &dval); center = (ST_int)dval;
 
+    if (center) {
+        SF_error("civreghdfe: center is not supported\n");
+        return 198;
+    }
+
     /* Calculate variable positions */
     /* Layout: [y, X_endog (Ke), X_exog (Kx), Z (Kz), FE (G), cluster?, cluster2?, weight?] */
     ST_int var_y_idx = 0;  /* Index in loaded_data.vars[] */
@@ -207,8 +212,11 @@ static ST_retcode do_iv_regression(void)
             }
         } else {
             double *src = filtered.data.vars[var_cluster_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+            ST_int n_groups = 0;
+            if (ctools_numeric_to_cluster_ids(src, N_total, cluster_ids, &n_groups) != 0) {
+                free(cluster_ids); free(cluster2_ids);
+                ctools_filtered_data_free(&filtered);
+                return 920;
             }
         }
     }
@@ -224,8 +232,11 @@ static ST_retcode do_iv_regression(void)
             }
         } else {
             double *src = filtered.data.vars[var_cluster2_idx].data.dbl;
-            for (i = 0; i < N_total; i++) {
-                cluster2_ids[i] = SF_is_missing(src[i]) ? -1 : (ST_int)src[i];
+            ST_int n_groups = 0;
+            if (ctools_numeric_to_cluster_ids(src, N_total, cluster2_ids, &n_groups) != 0) {
+                free(cluster_ids); free(cluster2_ids);
+                ctools_filtered_data_free(&filtered);
+                return 920;
             }
         }
     }
@@ -414,6 +425,7 @@ static ST_retcode do_iv_regression(void)
                 valid_idx++;
                 continue;
             }
+            filtered.obs_map[out_idx] = filtered.obs_map[ii];
             y_c[out_idx] = filtered.data.vars[var_y_idx].data.dbl[ii];
             for (ST_int k = 0; k < K_endog; k++)
                 X_endog_c[k * N + out_idx] = filtered.data.vars[var_endog_start_idx + k].data.dbl[ii];
@@ -464,6 +476,10 @@ static ST_retcode do_iv_regression(void)
         }
     }
 
+    /* Retain the compacted observation mapping for residual output. */
+    perm_idx_t *est_obs = filtered.obs_map;
+    filtered.obs_map = NULL;
+
     /* Free original arrays and filtered data (kept alive for direct reads during compaction) */
     free(cluster_ids); free(cluster2_ids); free(valid_mask);
     ctools_filtered_data_free(&filtered);
@@ -475,6 +491,7 @@ static ST_retcode do_iv_regression(void)
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
+        free(est_obs);
         return 2001;
     }
 
@@ -491,6 +508,7 @@ static ST_retcode do_iv_regression(void)
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
+        free(est_obs);
         return 920;
     }
     state->G = G;
@@ -514,6 +532,7 @@ static ST_retcode do_iv_regression(void)
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         for (ST_int g = 0; g < G; g++) free(fe_levels_c[g]);
         free(fe_levels_c);
+        free(est_obs);
         return 920;
     }
     for (ST_int g = 0; g < G; g++) {
@@ -537,6 +556,7 @@ static ST_retcode do_iv_regression(void)
             free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
             for (ST_int fg = g; fg < G; fg++) free(fe_levels_c[fg]);
             free(fe_levels_c);
+            free(est_obs);
             return 920;
         }
 
@@ -593,6 +613,7 @@ static ST_retcode do_iv_regression(void)
         free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
         free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
         free(fe_levels_c);
+        free(est_obs);
         return 920;
     }
 
@@ -629,6 +650,7 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
         ST_double dval_idx;
@@ -662,6 +684,7 @@ static ST_retcode do_iv_regression(void)
         ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
+        free(est_obs);
         return 920;
     }
 
@@ -685,6 +708,7 @@ static ST_retcode do_iv_regression(void)
        residualization until convergence. This matches reghdfe's approach.
        Key insight: use the CURRENT partial variable columns from all_data for
        each projection, not a fixed precomputed P. */
+    HDFE_SolveResult projection = {0, 1, 0};
     if (n_partial > 0 && K_exog > 0 && partial_indices && is_partial) {
         /* Allocate workspace */
         ST_double *P_cur = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)n_partial, sizeof(ST_double));
@@ -708,6 +732,7 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
         for (ST_int pi = 0; pi < n_partial; pi++) {
@@ -723,7 +748,8 @@ static ST_retcode do_iv_regression(void)
             memcpy(old_data, all_data, (size_t)N * total_cols * sizeof(ST_double));
 
             /* Step 1: Demean by FE */
-            partial_out_columns(state, all_data, N, total_cols, num_threads);
+            projection = partial_out_columns(state, all_data, N, total_cols, num_threads);
+            if (projection.status) break;
 
             /* Step 2: Extract current P from all_data and compute (P'P)^{-1} */
             for (ST_int pi = 0; pi < n_partial; pi++) {
@@ -807,7 +833,17 @@ static ST_retcode do_iv_regression(void)
         free(partial_col_offsets);
     } else {
         /* No partial variables - just demean by FE once */
-        partial_out_columns(state, all_data, N, total_cols, num_threads);
+        projection = partial_out_columns(state, all_data, N, total_cols, num_threads);
+    }
+
+    if (projection.status) {
+        SF_error("civreghdfe: fixed-effect projection did not converge\n");
+        free(all_data); free(partial_indices); free(is_partial);
+        free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        free(fe_levels_c); free(est_obs);
+        ctools_hdfe_state_cleanup(state); free(state); g_state = NULL;
+        return projection.status;
     }
 
     /* End partial out timing, start post-processing timing */
@@ -906,6 +942,7 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
     }
@@ -921,8 +958,21 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
+    }
+
+    if (!kiefer && (vce_type == 2 || vce_type == 3) &&
+        (num_clusters < 2 || (has_cluster2 && num_clusters2 < 2))) {
+        SF_error("civreghdfe: clustered VCE requires at least two retained clusters in each dimension\n");
+        free(all_data); free(y_c); free(X_endog_c); free(X_exog_c); free(Z_c);
+        free(weights_c); free(cluster_ids_c); free(cluster2_ids_c);
+        free(fe_levels_c);
+        ctools_hdfe_state_cleanup(state);
+        free(state); g_state = NULL;
+        free(est_obs);
+        return 459;
     }
 
     /* Detect FEs nested within cluster variable using data-based check.
@@ -980,6 +1030,7 @@ static ST_retcode do_iv_regression(void)
         ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
+        free(est_obs);
         return 920;
     }
 
@@ -1014,6 +1065,7 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
 
@@ -1093,6 +1145,7 @@ static ST_retcode do_iv_regression(void)
             ctools_hdfe_state_cleanup(state);
             free(state);
             g_state = NULL;
+            free(est_obs);
             return 920;
         }
 
@@ -1227,6 +1280,7 @@ static ST_retcode do_iv_regression(void)
         ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
+        free(est_obs);
         return 481;
     }
 
@@ -1248,6 +1302,7 @@ static ST_retcode do_iv_regression(void)
         ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
+        free(est_obs);
         return 920;  /* Memory allocation error */
     }
 
@@ -1290,6 +1345,7 @@ static ST_retcode do_iv_regression(void)
         ctools_hdfe_state_cleanup(state);
         free(state);
         g_state = NULL;
+        free(est_obs);
         return rc;
     }
 
@@ -1319,6 +1375,10 @@ static ST_retcode do_iv_regression(void)
         tss += w * dev * dev;
     }
 
+    ST_double resid_idx_value = 0;
+    SF_scal_use("__civreghdfe_resid_idx", &resid_idx_value);
+    ST_int resid_idx = (ST_int)resid_idx_value;
+    ST_retcode residual_rc = 0;
     /* Compute RSS = sum(w * resid^2) */
     /* Compute fitted values: yhat = X_exog * beta[0:K_exog-1] + X_endog * beta[K_exog:K_total-1] */
     for (ST_int i = 0; i < N; i++) {
@@ -1330,6 +1390,8 @@ static ST_retcode do_iv_regression(void)
             fitted += X_endog_dem[j * N + i] * beta[K_exog + j];
         }
         ST_double resid = y_dem[i] - fitted;
+        if (resid_idx > 0 && !residual_rc)
+            residual_rc = (_stata_)->safestore(resid_idx, (ST_int)est_obs[i], resid);
         ST_double w = (weights_c && weight_type != 0) ? weights_c[i] : 1.0;
         rss += w * resid * resid;
     }
@@ -1504,7 +1566,9 @@ static ST_retcode do_iv_regression(void)
     free(state);
     g_state = NULL;
 
-    return STATA_OK;
+    free(est_obs);
+
+    return residual_rc;
 }
 
 /*

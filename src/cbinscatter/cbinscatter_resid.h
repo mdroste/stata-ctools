@@ -11,6 +11,11 @@
 
 #include "cbinscatter_types.h"
 
+/* Rank-aware normal-equation solve; redundant coefficients are set to zero.
+ * Nonzero return means failure, never a request to skip adjustment. */
+ST_int cbinscatter_solve_with_collinearity(const ST_double *XtX,
+    const ST_double *rhs, ST_int K, ST_double *beta);
+
 /* ========================================================================
  * OLS Residualization (Controls Only)
  * ======================================================================== */

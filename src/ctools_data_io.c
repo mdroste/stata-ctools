@@ -21,7 +21,7 @@
 
     Performance Optimizations:
     - Parallel variable I/O overlaps operations across columns
-    - SD_FASTMODE (compile flag) disables SPI bounds checking
+    - Checked SPI access remains enabled even in SD_FASTMODE builds
     - Cache-line aligned allocations for optimal memory access
     - String arena allocator for reduced malloc overhead
 */
@@ -29,6 +29,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <limits.h>
+#include <stdatomic.h>
 #include "stplugin.h"
 #include "ctools_types.h"
 #include "ctools_threads.h"
@@ -37,6 +39,93 @@
 
 /* Maximum string buffer size for Stata string variables */
 #define STATA_STR_MAXLEN 2045
+
+/* Validate plugin-visible indices before type queries or unchecked string SPI.
+ * Writes require fixed strings; bounded textual strL reads use the strL API. */
+static stata_retcode validate_variable(int var_idx, int expected_string)
+{
+    if (var_idx < 1 || var_idx > SF_nvars()) return STATA_ERR_INVALID_INPUT;
+    int is_string = SF_var_is_string(var_idx);
+    if (expected_string >= 0 && is_string != expected_string)
+        return STATA_ERR_UNSUPPORTED_TYPE;
+    if (expected_string >= 0 && is_string && SF_var_is_strl(var_idx)) {
+        SF_error("ctools: writing strL is unsupported; recast to str2045 when lossless\n");
+        return STATA_ERR_UNSUPPORTED_TYPE;
+    }
+    return STATA_OK;
+}
+
+static stata_retcode validate_range(size_t obs1, size_t nobs)
+{
+    size_t available = (size_t)SF_nobs();
+    if (obs1 < 1 || obs1 > available + 1 || nobs > available - (obs1 - 1))
+        return STATA_ERR_INVALID_INPUT;
+    return STATA_OK;
+}
+
+static stata_retcode validate_obs_map(const perm_idx_t *obs_map, size_t nobs)
+{
+    if (nobs && !obs_map) return STATA_ERR_INVALID_INPUT;
+    size_t available = (size_t)SF_nobs();
+    for (size_t i = 0; i < nobs; i++)
+        if (obs_map[i] < 1 || obs_map[i] > available) return STATA_ERR_INVALID_INPUT;
+    return STATA_OK;
+}
+
+/* Read bounded text strL through SPI's length-aware interface. Binary and
+ * oversized values are rejected before touching the fixed-width buffer.
+ * See https://www.stata.com/plugins/ (Routines for handling data). */
+static int read_stata_string(ST_int var_idx, ST_int obs, char *value)
+{
+    if (!SF_var_is_strl(var_idx))
+        return SF_sdata(var_idx, obs, value) ? STATA_ERR_STATA_READ : STATA_OK;
+    if (SF_var_is_binary(var_idx, obs)) return STATA_ERR_UNSUPPORTED_TYPE;
+    ST_int length = SF_sdatalen(var_idx, obs);
+    if (length < 0) return STATA_ERR_STATA_READ;
+    if (length > STATA_STR_MAXLEN) return STATA_ERR_UNSUPPORTED_TYPE;
+    /* SF_strldata returns bytes copied (not a zero-on-success status). */
+    if (SF_strldata(var_idx, obs, value, length + 1) != length) return STATA_ERR_STATA_READ;
+    value[length] = '\0';
+    return STATA_OK;
+}
+
+/* Width hints are not trusted as buffer bounds: a stale hint must never allow
+ * SPI to overwrite the next slot. */
+static int read_string_slot(int var_idx, ST_int obs, char *slot, size_t width)
+{
+    char value[STATA_STR_MAXLEN + 1];
+    int rc = read_stata_string(var_idx, obs, value);
+    if (rc) return rc;
+    size_t len = strlen(value);
+    if (len > width) return STATA_ERR_STATA_READ;
+    memcpy(slot, value, len + 1);
+    return STATA_OK;
+}
+
+static stata_retcode load_status(int rc)
+{
+    if (rc == STATA_ERR_UNSUPPORTED_TYPE)
+        SF_error("ctools: binary strL or text exceeding 2045 bytes is unsupported\n");
+    else if (rc == STATA_ERR_STATA_READ)
+        SF_error("ctools: failed to read Stata data\n");
+    return (stata_retcode)rc;
+}
+
+/* Only workers write the error slot; compare-exchange preserves the first
+ * failure without volatile data races. The caller reads it after joining. */
+static void record_io_error(atomic_int *error, int rc)
+{
+    if (rc) {
+        int expected = 0;
+        atomic_compare_exchange_strong(error, &expected, rc);
+    }
+}
+
+static stata_retcode store_status(int rc)
+{
+    if (rc) SF_error("ctools: write failed; data may be partially modified\n");
+    return (stata_retcode)rc;
+}
 
 /* ===========================================================================
    String Width Auto-Detection via Stata Local Macro
@@ -59,7 +148,7 @@ static int *ctools_read_strw_from_stata(size_t nvars)
     /* SF_macro_use convention: prefix local name with underscore.
        Local "__ctools_strw" -> SPI name "___ctools_strw" */
     char buf[16384];  /* ~3200 variables at max width "2045," */
-    ST_int rc = SF_macro_use("___ctools_strw", buf, sizeof(buf));
+    ST_int rc = SF_macro_use("___ctools_strw", buf, sizeof(buf) - 1);
     if (rc != 0 || buf[0] == '\0') {
         return NULL;  /* Macro not set — .ado didn't call _ctools_strw */
     }
@@ -108,13 +197,13 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
             var->_arena = NULL;
             /* Allocate minimal buffer to avoid NULL - calloc ensures it's zeroed */
             var->data.str = (char **)calloc(1, sizeof(char *));
-            if (!var->data.str) return -1;
+            if (!var->data.str) return STATA_ERR_MEMORY;
         } else {
             var->type = STATA_TYPE_DOUBLE;
             var->_arena = NULL;
             /* Allocate minimal buffer to avoid NULL */
             var->data.dbl = (double *)ctools_cacheline_alloc(sizeof(double));
-            if (!var->data.dbl) return -1;
+            if (!var->data.dbl) return STATA_ERR_MEMORY;
             var->data.dbl[0] = SV_missval;  /* Initialize to missing */
         }
         return 0;  /* Success with empty data */
@@ -144,19 +233,23 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
                     size_t str_array_size;
                     if (ctools_safe_mul_size(nobs, sizeof(char *), &str_array_size) != 0) {
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
                     char **str_ptrs = (char **)ctools_cacheline_alloc(str_array_size);
                     if (!str_ptrs) {
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
 
                     /* Read directly from Stata into flat buffer — single copy */
-                    ST_IIIS sdata_fn = (_stata_)->sdata;
                     for (i = 0; i < nobs; i++) {
                         str_ptrs[i] = flat_buf + i * stride;
-                        sdata_fn((ST_int)var_idx, (ST_int)(i + obs1), str_ptrs[i]);
+                        int read_rc = read_string_slot(var_idx, (ST_int)(i + obs1), str_ptrs[i], (size_t)str_width);
+                        if (read_rc) {
+                            ctools_aligned_free(str_ptrs);
+                            free(flat_buf);
+                            return read_rc;
+                        }
                     }
 
                     /* Wrap flat buffer as a ctools_string_arena for compatible cleanup.
@@ -166,7 +259,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
                     if (!arena) {
                         ctools_aligned_free(str_ptrs);
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
                     arena->base = flat_buf;
                     arena->capacity = flat_size;
@@ -190,11 +283,11 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         /* Allocate pointer array (cache-line aligned, zero-initialized for safe cleanup) */
         size_t str_array_size;
         if (ctools_safe_mul_size(nobs, sizeof(char *), &str_array_size) != 0) {
-            return -1;  /* Overflow */
+            return STATA_ERR_MEMORY;  /* Overflow */
         }
         var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
         if (var->data.str == NULL) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         memset(var->data.str, 0, str_array_size);
 
@@ -213,9 +306,10 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         }
 
         /* Load strings */
-        ST_IIIS sdata_fn2 = (_stata_)->sdata;
+        ST_IIIS sdata_fn2 = read_stata_string;
         for (i = 0; i < nobs; i++) {
-            sdata_fn2((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
+            int read_rc = sdata_fn2((ST_int)var_idx, (ST_int)(i + obs1), strbuf);
+            if (read_rc) return read_rc;
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
                 /* Cleanup on allocation failure:
@@ -238,7 +332,7 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
                 }
                 ctools_aligned_free(var->data.str);
                 var->data.str = NULL;
-                return -1;
+                return STATA_ERR_MEMORY;
             }
         }
     } else {
@@ -247,20 +341,20 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
         var->_arena = NULL;
         size_t dbl_array_size;
         if (ctools_safe_mul_size(nobs, sizeof(double), &dbl_array_size) != 0) {
-            return -1;  /* Overflow */
+            return STATA_ERR_MEMORY;  /* Overflow */
         }
         var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
 
         if (var->data.dbl == NULL) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
 
         double * restrict dbl_ptr = var->data.dbl;
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-        ST_IIIDp vdata_fn = (_stata_)->vdata;
+        ST_IIIDp vdata_fn = (_stata_)->safevdata;
         for (i = 0; i < nobs; i++) {
-            vdata_fn((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i]);
+            if (vdata_fn((ST_int)var_idx, (ST_int)(i + obs1), &dbl_ptr[i])) return STATA_ERR_STATA_READ;
         }
     }
 
@@ -279,16 +373,9 @@ static int load_single_variable(stata_variable *var, int var_idx, size_t obs1,
 static void *load_variable_thread(void *arg)
 {
     ctools_var_io_args *args = (ctools_var_io_args *)arg;
-    args->success = 0;
-
-    if (load_single_variable(args->var, args->var_idx, args->obs1,
-                              args->nobs, args->is_string,
-                              args->str_width) != 0) {
-        return (void *)1;
-    }
-
-    args->success = 1;
-    return NULL;
+    args->error = load_single_variable(args->var, args->var_idx, args->obs1,
+                                       args->nobs, args->is_string, args->str_width);
+    return args->error ? (void *)1 : NULL;
 }
 
 /* ===========================================================================
@@ -364,7 +451,7 @@ static void init_io_thread_args(ctools_var_io_args *args, stata_data *data,
             : 0;  /* Store uses var->str_maxlen instead */
         args[j].str_width = (str_widths && mode == IO_MODE_LOAD)
             ? str_widths[args[j].var_idx - 1] : 0;
-        args[j].success = 0;
+        args[j].error = STATA_OK;
     }
 }
 
@@ -380,49 +467,28 @@ typedef void *(*io_thread_func)(void *);
     @param args         [in]  Array of thread arguments
     @param nvars        [in]  Number of variables (and args)
     @param func         [in]  Thread function to execute
-    @param check_error  [in]  Non-zero to check for errors in load mode
 
     @return 0 on success, non-zero on failure
 */
 static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
-                               io_thread_func func, int check_error)
+                               io_thread_func func)
 {
-    int use_parallel = (nvars >= 2);
-
-    if (use_parallel) {
-        ctools_persistent_pool *pool = ctools_get_global_pool();
-
-        if (pool != NULL) {
-            /* Submit batch to thread pool */
-            if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
-                                                     sizeof(ctools_var_io_args)) != 0) {
-                return -1;
-            }
-
-            int pool_result = ctools_persistent_pool_wait(pool);
-            if (check_error && pool_result != 0) {
-                return -1;
-            }
-        } else {
-            /* Fallback to sequential */
-            for (size_t j = 0; j < nvars; j++) {
-                void *result = func(&args[j]);
-                if (check_error && result != NULL) {
-                    return -1;
-                }
-            }
-        }
+    ctools_persistent_pool *pool = nvars >= 2 ? ctools_get_global_pool() : NULL;
+    if (pool) {
+        if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
+                                               sizeof(ctools_var_io_args)) != 0)
+            return STATA_ERR_MEMORY;
+        int pool_result = ctools_persistent_pool_wait(pool);
+        for (size_t j = 0; j < nvars; j++)
+            if (args[j].error) return args[j].error;
+        if (pool_result) return STATA_ERR_MEMORY;
     } else {
-        /* Sequential execution */
         for (size_t j = 0; j < nvars; j++) {
-            void *result = func(&args[j]);
-            if (check_error && result != NULL) {
-                return -1;
-            }
+            func(&args[j]);
+            if (args[j].error) return args[j].error;
         }
     }
-
-    return 0;
+    return STATA_OK;
 }
 
 /* ===========================================================================
@@ -438,7 +504,7 @@ static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
     When available, we pack scattered arena pointers into a contiguous flat
     buffer so SF_sstore reads are sequential and cache-friendly.
 */
-static void store_single_variable(stata_variable *var, int var_idx,
+static int store_single_variable(stata_variable *var, int var_idx,
                                   size_t obs1, size_t nobs)
 {
     size_t i;
@@ -448,9 +514,9 @@ static void store_single_variable(stata_variable *var, int var_idx,
         const double * restrict dbl_data = var->data.dbl;
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-        ST_IIID store_fn = (_stata_)->store;
+        ST_IIID store_fn = (_stata_)->safestore;
         for (i = 0; i < nobs; i++) {
-            store_fn(stata_var_idx, (ST_int)(i + obs1), dbl_data[i]);
+            if (store_fn(stata_var_idx, (ST_int)(i + obs1), dbl_data[i])) return STATA_ERR_STATA_WRITE;
         }
 
     } else {
@@ -465,7 +531,6 @@ static void store_single_variable(stata_variable *var, int var_idx,
            and the buffer fits in 256 MB */
         if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
             size_t stride = str_width + 1;
-            ctools_string_arena *arena = (ctools_string_arena *)var->_arena;
 
             /* Repack path: strings may be scattered after permutation,
                copy into new flat buffer for sequential SF_sstore */
@@ -477,40 +542,37 @@ static void store_single_variable(stata_variable *var, int var_idx,
             }
 
             if (flat_buf) {
-                /* Use stride memcpy when source is flat buffer (no strlen needed) */
-                if (arena != NULL && !arena->has_fallback) {
-                    for (i = 0; i < nobs; i++) {
-                        const char *s = str_data[i];
-                        if (s) memcpy(flat_buf + i * stride, s, stride);
-                    }
-                } else {
-                    /* Non-flat source: strlen + bounded memcpy */
-                    for (i = 0; i < nobs; i++) {
-                        const char *s = str_data[i];
-                        if (s) {
-                            size_t len = strlen(s);
-                            if (len >= stride) len = stride - 1;
-                            memcpy(flat_buf + i * stride, s, len);
+                for (i = 0; i < nobs; i++) {
+                    const char *value = str_data[i];
+                    if (value) {
+                        size_t len = strlen(value);
+                        if (len > str_width) {
+                            free(flat_buf);
+                            return STATA_ERR_STATA_WRITE;
                         }
+                        memcpy(flat_buf + i * stride, value, len + 1);
                     }
                 }
 
                 /* Store: sequential scan through flat buffer */
                 for (i = 0; i < nobs; i++) {
-                    sstore_fn(stata_var_idx, (ST_int)(i + obs1),
-                              flat_buf + i * stride);
+                    if (sstore_fn(stata_var_idx, (ST_int)(i + obs1), flat_buf + i * stride)) {
+                        free(flat_buf);
+                        return STATA_ERR_STATA_WRITE;
+                    }
                 }
 
                 free(flat_buf);
-                return;
+                return STATA_OK;
             }
         }
 
-        /* Fallback: strL, width unknown, buffer too large, or alloc failed */
+        /* Fallback: width unknown, buffer too large, or alloc failed */
         for (i = 0; i < nobs; i++) {
-            sstore_fn(stata_var_idx, (ST_int)(i + obs1), str_data[i]);
+            if (sstore_fn(stata_var_idx, (ST_int)(i + obs1), str_data[i] ? str_data[i] : "")) return STATA_ERR_STATA_WRITE;
         }
     }
+    return STATA_OK;
 }
 
 /*
@@ -525,9 +587,8 @@ static void store_single_variable(stata_variable *var, int var_idx,
 static void *store_variable_thread(void *arg)
 {
     ctools_var_io_args *args = (ctools_var_io_args *)arg;
-    store_single_variable(args->var, args->var_idx, args->obs1, args->nobs);
-    args->success = 1;
-    return NULL;
+    args->error = store_single_variable(args->var, args->var_idx, args->obs1, args->nobs);
+    return args->error ? (void *)1 : NULL;
 }
 
 /*
@@ -561,6 +622,18 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
         return STATA_ERR_INVALID_INPUT;
     }
 
+    if (!data->vars || nvars > data->nvars) return STATA_ERR_INVALID_INPUT;
+    stata_retcode rc = validate_range(obs1, nobs);
+    if (rc) return rc;
+    for (size_t j = 0; j < nvars; j++) {
+        stata_variable *var = &data->vars[j];
+        if (var->type != STATA_TYPE_DOUBLE && var->type != STATA_TYPE_STRING) return STATA_ERR_UNSUPPORTED_TYPE;
+        if (var->nobs < nobs || (nobs && !var->data.dbl)) return STATA_ERR_INVALID_INPUT;
+        rc = validate_variable(var_indices ? var_indices[j] : (int)j + 1,
+                               var->type == STATA_TYPE_STRING);
+        if (rc) return rc;
+    }
+
     /*
         nvars == 1: row-parallel store (OpenMP over observations).
         For numeric variables, this is a simple parallel SF_vstore loop.
@@ -572,13 +645,14 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
         int var_idx = var_indices ? var_indices[0] : 1;
         ST_int stata_var = (ST_int)var_idx;
 
+        atomic_int error = 0;
         if (var->type == STATA_TYPE_DOUBLE) {
             const double * restrict dbl_data = var->data.dbl;
             /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-            ST_IIID store_fn = (_stata_)->store;
+            ST_IIID store_fn = (_stata_)->safestore;
             #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
             for (size_t i = 0; i < nobs; i++) {
-                store_fn(stata_var, (ST_int)(i + obs1), dbl_data[i]);
+                if (store_fn(stata_var, (ST_int)(i + obs1), dbl_data[i])) record_io_error(&error, STATA_ERR_STATA_WRITE);
             }
         } else {
             /* String store: row-parallel from pointer array */
@@ -586,12 +660,12 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
             ST_IIIS sstore_fn = (_stata_)->sstore;
             #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
             for (size_t i = 0; i < nobs; i++) {
-                sstore_fn(stata_var, (ST_int)(i + obs1), str_data[i]);
+                if (sstore_fn(stata_var, (ST_int)(i + obs1), str_data[i] ? str_data[i] : "")) record_io_error(&error, STATA_ERR_STATA_WRITE);
             }
         }
 
         ctools_memory_barrier();
-        return STATA_OK;
+        return store_status(atomic_load(&error));
     }
 
     /* nvars >= 2: column-parallel store via thread pool */
@@ -603,11 +677,11 @@ stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
 
     init_io_thread_args(thread_args, data, var_indices, nvars, obs1, nobs,
                         IO_MODE_STORE, NULL);
-    execute_io_parallel(thread_args, nvars, store_variable_thread, 0);
+    rc = execute_io_parallel(thread_args, nvars, store_variable_thread);
     free(thread_args);
 
     ctools_memory_barrier();
-    return STATA_OK;
+    return store_status(rc);
 }
 
 /*
@@ -658,150 +732,70 @@ stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
 stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
                                           size_t output_nobs, size_t obs1)
 {
-    size_t i;
-    ST_int stata_var = (ST_int)var_idx;
-    int is_string = SF_var_is_string(stata_var);
-    ST_int nobs_max = SF_nobs();
-
-    if (is_string) {
-        /* String variable: allocate buffer, gather, scatter (overflow-safe) */
-        char **buf = (char **)ctools_safe_cacheline_alloc2(output_nobs, sizeof(char *));
-        if (!buf) return STATA_ERR_MEMORY;
-        memset(buf, 0, output_nobs * sizeof(char *));  /* Zero-init for safe cleanup */
-
-        char strbuf[2048];
-
-        /* Create arena for string storage (estimate 64 bytes avg per string) */
-        /* Overflow check: output_nobs * 64 - skip arena if overflow, rely on strdup fallback */
-        ctools_string_arena *arena = NULL;
-        if (output_nobs <= SIZE_MAX / 64) {
-            size_t arena_capacity = output_nobs * 64;
-            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
-        }
-        /* Arena failure is ok - we fall back to strdup */
-
-        /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-        ST_IIIS sdata_fn = (_stata_)->sdata;
-
-        /* GATHER: Read from source positions */
-        for (i = 0; i < output_nobs; i++) {
-            if (source_rows[i] >= 0) {
-                /* Overflow check: ensure addition doesn't overflow int64_t */
-                if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
-                    char errbuf[128];
-                    snprintf(errbuf, sizeof(errbuf),
-                             "ctools: source_rows[%zu]=%lld + obs1=%zu would overflow\n",
-                             i, (long long)source_rows[i], obs1);
-                    SF_error(errbuf);
-                    /* Cleanup */
-                    for (size_t j = 0; j < i; j++) {
-                        if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
-                            free(buf[j]);
-                        }
-                    }
-                    ctools_string_arena_free(arena);
-                    ctools_aligned_free(buf);
-                    return STATA_ERR_INVALID_INPUT;
-                }
-                /* Bounds check: source observation must be within valid Stata range */
-                int64_t src_obs = source_rows[i] + (int64_t)obs1;
-                if (src_obs < 1 || src_obs > nobs_max) {
-                    char errbuf[128];
-                    snprintf(errbuf, sizeof(errbuf),
-                             "ctools: source_rows[%zu]=%lld -> obs %lld out of bounds [1,%d]\n",
-                             i, (long long)source_rows[i], (long long)src_obs, (int)nobs_max);
-                    SF_error(errbuf);
-                    /* Cleanup */
-                    for (size_t j = 0; j < i; j++) {
-                        if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
-                            free(buf[j]);
-                        }
-                    }
-                    ctools_string_arena_free(arena);
-                    ctools_aligned_free(buf);
-                    return STATA_ERR_INVALID_INPUT;
-                }
-                sdata_fn(stata_var, (ST_int)src_obs, strbuf);
-                buf[i] = ctools_string_arena_strdup(arena, strbuf);
-            } else {
-                buf[i] = ctools_string_arena_strdup(arena, "");  /* Missing -> empty string */
-            }
-            if (!buf[i]) {
-                /* Cleanup on allocation failure - free any fallback strings first */
-                for (size_t j = 0; j < i; j++) {
-                    if (buf[j] != NULL && !ctools_string_arena_owns(arena, buf[j])) {
-                        free(buf[j]);
-                    }
-                }
-                ctools_string_arena_free(arena);
-                ctools_aligned_free(buf);
-                return STATA_ERR_MEMORY;
-            }
-        }
-
-        /* SCATTER: Write to sequential output positions */
-        ST_IIIS sstore_fn = (_stata_)->sstore;
-        for (i = 0; i < output_nobs; i++) {
-            sstore_fn(stata_var, (ST_int)(i + obs1), buf[i]);
-        }
-
-        /* Free fallback strings (those not owned by arena), then free arena */
-        for (i = 0; i < output_nobs; i++) {
-            if (buf[i] != NULL && !ctools_string_arena_owns(arena, buf[i])) {
-                free(buf[i]);
-            }
-        }
-        ctools_string_arena_free(arena);
-        ctools_aligned_free(buf);
-
-    } else {
-        /* Numeric variable: allocate aligned buffer, gather, scatter (overflow-safe) */
-        double *buf = (double *)ctools_safe_cacheline_alloc2(output_nobs, sizeof(double));
-        if (!buf) return STATA_ERR_MEMORY;
-
-        /* Cache SPI function pointers — avoid reloading _stata_ per iteration */
-        ST_IIIDp vdata_fn = (_stata_)->vdata;
-
-        /* GATHER: Read from source positions */
-        for (i = 0; i < output_nobs; i++) {
-            if (source_rows[i] >= 0) {
-                /* Overflow check: ensure addition doesn't overflow int64_t */
-                if (source_rows[i] > INT64_MAX - (int64_t)obs1) {
-                    char errbuf[128];
-                    snprintf(errbuf, sizeof(errbuf),
-                             "ctools: source_rows[%zu]=%lld + obs1=%zu would overflow\n",
-                             i, (long long)source_rows[i], obs1);
-                    SF_error(errbuf);
-                    ctools_aligned_free(buf);
-                    return STATA_ERR_INVALID_INPUT;
-                }
-                /* Bounds check: source observation must be within valid Stata range */
-                int64_t src_obs = source_rows[i] + (int64_t)obs1;
-                if (src_obs < 1 || src_obs > nobs_max) {
-                    char errbuf[128];
-                    snprintf(errbuf, sizeof(errbuf),
-                             "ctools: source_rows[%zu]=%lld -> obs %lld out of bounds [1,%d]\n",
-                             i, (long long)source_rows[i], (long long)src_obs, (int)nobs_max);
-                    SF_error(errbuf);
-                    ctools_aligned_free(buf);
-                    return STATA_ERR_INVALID_INPUT;
-                }
-                vdata_fn(stata_var, (ST_int)src_obs, &buf[i]);
-            } else {
-                buf[i] = SV_missval;  /* Missing value */
-            }
-        }
-
-        /* SCATTER: Write to sequential output positions */
-        ST_IIID store_fn = (_stata_)->store;
-        for (i = 0; i < output_nobs; i++) {
-            store_fn(stata_var, (ST_int)(i + obs1), buf[i]);
-        }
-
-        ctools_aligned_free(buf);
+    stata_retcode rc = validate_variable(var_idx, -1);
+    if (rc) return rc;
+    rc = validate_range(obs1, output_nobs);
+    if (rc || (output_nobs && !source_rows)) return STATA_ERR_INVALID_INPUT;
+    if (!output_nobs) return STATA_OK;
+    size_t available = (size_t)SF_nobs();
+    for (size_t i = 0; i < output_nobs; i++) {
+        if (source_rows[i] < -1 ||
+            (source_rows[i] >= 0 && (uint64_t)source_rows[i] > available - obs1))
+            return STATA_ERR_INVALID_INPUT;
     }
 
-    return STATA_OK;
+    if (SF_var_is_string(var_idx)) {
+        rc = validate_variable(var_idx, 1);
+        if (rc) return rc;
+        char **buf = (char **)ctools_safe_cacheline_alloc2(output_nobs, sizeof(char *));
+        if (!buf) return STATA_ERR_MEMORY;
+        memset(buf, 0, output_nobs * sizeof(char *));
+        ctools_string_arena *arena = output_nobs <= SIZE_MAX / 64
+            ? ctools_string_arena_create(output_nobs * 64, CTOOLS_STRING_ARENA_STRDUP_FALLBACK)
+            : NULL;
+        for (size_t i = 0; i < output_nobs; i++) {
+            char strbuf[STATA_STR_MAXLEN + 1] = "";
+            if (source_rows[i] >= 0 && SF_sdata(var_idx, (ST_int)(source_rows[i] + obs1), strbuf)) {
+                rc = STATA_ERR_STATA_READ;
+                break;
+            }
+            buf[i] = ctools_string_arena_strdup(arena, strbuf);
+            if (!buf[i]) { rc = STATA_ERR_MEMORY; break; }
+        }
+        /* Complete the gather before any writes, including in-place permutations. */
+        if (!rc) {
+            for (size_t i = 0; i < output_nobs; i++) {
+                if (SF_sstore(var_idx, (ST_int)(obs1 + i), buf[i])) {
+                    rc = STATA_ERR_STATA_WRITE;
+                    break;
+                }
+            }
+        }
+        for (size_t i = 0; i < output_nobs; i++)
+            if (buf[i] && !ctools_string_arena_owns(arena, buf[i])) free(buf[i]);
+        ctools_string_arena_free(arena);
+        ctools_aligned_free(buf);
+    } else {
+        double *buf = (double *)ctools_safe_cacheline_alloc2(output_nobs, sizeof(double));
+        if (!buf) return STATA_ERR_MEMORY;
+        for (size_t i = 0; i < output_nobs; i++) {
+            buf[i] = SV_missval;
+            if (source_rows[i] >= 0 && (_stata_)->safevdata(var_idx, (ST_int)(source_rows[i] + obs1), &buf[i])) {
+                rc = STATA_ERR_STATA_READ;
+                break;
+            }
+        }
+        if (!rc) {
+            for (size_t i = 0; i < output_nobs; i++) {
+                if ((_stata_)->safestore(var_idx, (ST_int)(obs1 + i), buf[i])) {
+                    rc = STATA_ERR_STATA_WRITE;
+                    break;
+                }
+            }
+        }
+        ctools_aligned_free(buf);
+    }
+    return rc == STATA_ERR_STATA_WRITE ? store_status(rc) : rc;
 }
 
 /* ===========================================================================
@@ -840,6 +834,9 @@ static stata_retcode build_obs_map(
     int is_identity = 0;
     int skip_if_check = (flags & CTOOLS_LOAD_SKIP_IF) != 0;
 
+    if (obs_start > INT_MAX || obs_end > INT_MAX ||
+        (obs_start && obs_end && obs_end < obs_start)) return STATA_ERR_INVALID_INPUT;
+
     /* Resolve observation range */
     if (obs_start == 0 || obs_end == 0) {
         obs1 = SF_in1();
@@ -856,6 +853,7 @@ static stata_retcode build_obs_map(
         obs2 = (ST_int)obs_end;
     }
 
+    if (validate_range((size_t)obs1, (size_t)(obs2 - obs1 + 1))) return STATA_ERR_INVALID_INPUT;
     n_range = (size_t)(obs2 - obs1 + 1);
 
     /* Fast path: skip SF_ifobs checks entirely */
@@ -944,7 +942,7 @@ static stata_retcode build_obs_map(
     @param n_filtered [in]  Number of observations
     @param str_width  [in]  Known string width (0 = numeric or unknown width)
 
-    @return 0 on success, -1 on failure
+    @return STATA_OK on success, a shared I/O error code on failure
 */
 static int load_row_parallel(stata_variable *var, int var_idx,
                               perm_idx_t *obs_map, size_t n_filtered,
@@ -966,7 +964,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
             var->type = STATA_TYPE_DOUBLE;
             var->_arena = NULL;
             var->data.dbl = (double *)ctools_cacheline_alloc(sizeof(double));
-            if (!var->data.dbl) return -1;
+            if (!var->data.dbl) return STATA_ERR_MEMORY;
             var->data.dbl[0] = SV_missval;
             return 0;
         }
@@ -979,10 +977,10 @@ static int load_row_parallel(stata_variable *var, int var_idx,
 
         size_t str_array_size;
         if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
-        if (var->data.str == NULL) return -1;
+        if (var->data.str == NULL) return STATA_ERR_MEMORY;
         memset(var->data.str, 0, str_array_size);
 
         /* Fast path: flat buffer when string width is known */
@@ -993,23 +991,21 @@ static int load_row_parallel(stata_variable *var, int var_idx,
             if (ctools_safe_mul_size(n_filtered, stride, &flat_size) == 0) {
                 char *flat_buf = (char *)calloc(n_filtered, stride);
                 if (flat_buf != NULL) {
-                    volatile int load_error = 0;
-                    ST_IIIS sdata_fn = (_stata_)->sdata;
+                    atomic_int load_error = 0;
                     #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
                     for (size_t i = 0; i < n_filtered; i++) {
-                        if (load_error) continue;
+                        if (atomic_load(&load_error)) continue;
                         char *slot = flat_buf + i * stride;
-                        if (sdata_fn((ST_int)var_idx, (ST_int)obs_map[i], slot) != 0) {
-                            load_error = 1;
-                        }
+                        int read_rc = read_string_slot(var_idx, (ST_int)obs_map[i], slot, (size_t)str_width);
+                        record_io_error(&load_error, read_rc);
                         var->data.str[i] = slot;
                     }
 
-                    if (load_error) {
+                    if (atomic_load(&load_error)) {
                         free(flat_buf);
                         ctools_aligned_free(var->data.str);
                         var->data.str = NULL;
-                        return -1;
+                        return atomic_load(&load_error);
                     }
 
                     /* Wrap flat buffer as arena for compatible cleanup */
@@ -1025,7 +1021,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                         free(flat_buf);
                         ctools_aligned_free(var->data.str);
                         var->data.str = NULL;
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
                 }
             }
@@ -1043,7 +1039,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                 var->_arena = arena;
             }
 
-            volatile int load_error = 0;
+            atomic_int load_error = 0;
 
             #pragma omp parallel if(n_filtered >= MIN_OBS_PER_THREAD * 2)
             {
@@ -1064,12 +1060,16 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                         : slab_ptr + slab_size;
                 }
 
-                ST_IIIS sdata_fn2 = (_stata_)->sdata;
+                ST_IIIS sdata_fn2 = read_stata_string;
                 #pragma omp for schedule(static)
                 for (size_t i = 0; i < n_filtered; i++) {
-                    if (load_error) continue;
+                    if (atomic_load(&load_error)) continue;
                     char strbuf[STATA_STR_MAXLEN + 1];
-                    sdata_fn2((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+                    int read_rc = sdata_fn2((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+                    if (read_rc) {
+                        record_io_error(&load_error, read_rc);
+                        continue;
+                    }
                     size_t len = strlen(strbuf) + 1;
 
                     char *s;
@@ -1081,7 +1081,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                         s = strdup(strbuf);
                         if (arena != NULL) ARENA_ATOMIC_STORE_INT(&arena->has_fallback, 1);
                         if (s == NULL) {
-                            load_error = 1;
+                            record_io_error(&load_error, STATA_ERR_MEMORY);
                             continue;
                         }
                     }
@@ -1094,7 +1094,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                 }
             }
 
-            if (load_error) {
+            if (atomic_load(&load_error)) {
                 /* Cleanup: free fallback strings, arena, pointer array */
                 if (arena != NULL) {
                     for (size_t j = 0; j < n_filtered; j++) {
@@ -1112,7 +1112,7 @@ static int load_row_parallel(stata_variable *var, int var_idx,
                 }
                 ctools_aligned_free(var->data.str);
                 var->data.str = NULL;
-                return -1;
+                return atomic_load(&load_error);
             }
         }
     } else {
@@ -1122,19 +1122,21 @@ static int load_row_parallel(stata_variable *var, int var_idx,
 
         size_t dbl_array_size;
         if (ctools_safe_mul_size(n_filtered, sizeof(double), &dbl_array_size) != 0) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
-        if (var->data.dbl == NULL) return -1;
+        if (var->data.dbl == NULL) return STATA_ERR_MEMORY;
 
         double * restrict dbl_ptr = var->data.dbl;
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-        ST_IIIDp vdata_fn = (_stata_)->vdata;
+        ST_IIIDp vdata_fn = (_stata_)->safevdata;
+        atomic_int load_error = 0;
         #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
         for (size_t i = 0; i < n_filtered; i++) {
-            vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+            if (vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i])) record_io_error(&load_error, STATA_ERR_STATA_READ);
         }
+        return atomic_load(&load_error);
     }
 
     return 0;
@@ -1222,12 +1224,12 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
             var->str_maxlen = 0;
             var->_arena = NULL;
             var->data.str = (char **)calloc(1, sizeof(char *));
-            if (!var->data.str) return -1;
+            if (!var->data.str) return STATA_ERR_MEMORY;
         } else {
             var->type = STATA_TYPE_DOUBLE;
             var->_arena = NULL;
             var->data.dbl = (double *)ctools_cacheline_alloc(sizeof(double));
-            if (!var->data.dbl) return -1;
+            if (!var->data.dbl) return STATA_ERR_MEMORY;
             var->data.dbl[0] = SV_missval;
         }
         return 0;
@@ -1247,25 +1249,29 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
                     size_t str_array_size;
                     if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
                     char **str_ptrs = (char **)ctools_cacheline_alloc(str_array_size);
                     if (!str_ptrs) {
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
 
-                    ST_IIIS sdata_fn = (_stata_)->sdata;
                     for (i = 0; i < n_filtered; i++) {
                         str_ptrs[i] = flat_buf + i * stride;
-                        sdata_fn((ST_int)var_idx, (ST_int)obs_map[i], str_ptrs[i]);
+                        int read_rc = read_string_slot(var_idx, (ST_int)obs_map[i], str_ptrs[i], (size_t)str_width);
+                        if (read_rc) {
+                            ctools_aligned_free(str_ptrs);
+                            free(flat_buf);
+                            return read_rc;
+                        }
                     }
 
                     ctools_string_arena *arena = (ctools_string_arena *)malloc(sizeof(ctools_string_arena));
                     if (!arena) {
                         ctools_aligned_free(str_ptrs);
                         free(flat_buf);
-                        return -1;
+                        return STATA_ERR_MEMORY;
                     }
                     arena->base = flat_buf;
                     arena->capacity = flat_size;
@@ -1288,11 +1294,11 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
         /* Allocate pointer array */
         size_t str_array_size;
         if (ctools_safe_mul_size(n_filtered, sizeof(char *), &str_array_size) != 0) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         var->data.str = (char **)ctools_cacheline_alloc(str_array_size);
         if (var->data.str == NULL) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         memset(var->data.str, 0, str_array_size);
 
@@ -1310,9 +1316,10 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
         }
 
         /* Load strings using obs_map */
-        ST_IIIS sdata_fn3 = (_stata_)->sdata;
+        ST_IIIS sdata_fn3 = read_stata_string;
         for (i = 0; i < n_filtered; i++) {
-            sdata_fn3((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+            int read_rc = sdata_fn3((ST_int)var_idx, (ST_int)obs_map[i], strbuf);
+            if (read_rc) return read_rc;
             str_ptr[i] = ctools_string_arena_strdup(arena, strbuf);
             if (str_ptr[i] == NULL) {
                 /* Cleanup on failure */
@@ -1331,7 +1338,7 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
                 }
                 ctools_aligned_free(var->data.str);
                 var->data.str = NULL;
-                return -1;
+                return STATA_ERR_MEMORY;
             }
         }
     } else {
@@ -1341,20 +1348,20 @@ static int load_filtered_variable(stata_variable *var, int var_idx,
 
         size_t dbl_array_size;
         if (ctools_safe_mul_size(n_filtered, sizeof(double), &dbl_array_size) != 0) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
         var->data.dbl = (double *)ctools_cacheline_alloc(dbl_array_size);
         if (var->data.dbl == NULL) {
-            return -1;
+            return STATA_ERR_MEMORY;
         }
 
         double * restrict dbl_ptr = var->data.dbl;
 
         /* Cache SPI function pointer — avoid reloading _stata_ per iteration */
-        ST_IIIDp vdata_fn = (_stata_)->vdata;
+        ST_IIIDp vdata_fn = (_stata_)->safevdata;
         /* Load using obs_map - obs_map contains 1-based Stata obs numbers */
         for (i = 0; i < n_filtered; i++) {
-            vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i]);
+            if (vdata_fn((ST_int)var_idx, (ST_int)obs_map[i], &dbl_ptr[i])) return STATA_ERR_STATA_READ;
         }
     }
 
@@ -1371,22 +1378,15 @@ typedef struct {
     size_t n_filtered;
     int is_string;
     int str_width;
-    int success;
+    int error;
 } filtered_var_io_args;
 
 static void *load_filtered_variable_thread(void *arg)
 {
     filtered_var_io_args *args = (filtered_var_io_args *)arg;
-    args->success = 0;
-
-    if (load_filtered_variable(args->var, args->var_idx, args->obs_map,
-                                args->n_filtered, args->is_string,
-                                args->str_width) != 0) {
-        return (void *)1;
-    }
-
-    args->success = 1;
-    return NULL;
+    args->error = load_filtered_variable(args->var, args->var_idx, args->obs_map,
+                                         args->n_filtered, args->is_string, args->str_width);
+    return args->error ? (void *)1 : NULL;
 }
 
 /*
@@ -1430,6 +1430,11 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
         return STATA_ERR_INVALID_INPUT;
     }
 
+    for (size_t j = 0; j < nvars; j++) {
+        stata_retcode valid = validate_variable(var_indices[j], -1);
+        if (valid) { free(auto_indices); return valid; }
+    }
+
     /* Auto-detect string widths from Stata local */
     int *auto_str_widths = NULL;
     if (str_widths == NULL) {
@@ -1444,7 +1449,7 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
     if (rc != STATA_OK) {
         free(auto_str_widths);
         free(auto_indices);
-        return rc;
+        return load_status(rc);
     }
 
     result->n_range = n_range;
@@ -1459,7 +1464,7 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
         }
         free(auto_str_widths);
         free(auto_indices);
-        return rc;
+        return load_status(rc);
     }
 
     /* Allocate data structure */
@@ -1468,7 +1473,7 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
         ctools_filtered_data_free(result);
         free(auto_str_widths);
         free(auto_indices);
-        return rc;
+        return load_status(rc);
     }
 
     /*
@@ -1479,12 +1484,12 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
     if (nvars == 1) {
         /* Row-parallel path */
         int str_width = str_widths ? str_widths[var_indices[0] - 1] : 0;
-        if (load_row_parallel(&result->data.vars[0], var_indices[0],
-                               obs_map, n_filtered, str_width) != 0) {
+        rc = load_row_parallel(&result->data.vars[0], var_indices[0], obs_map, n_filtered, str_width);
+        if (rc != 0) {
             ctools_filtered_data_free(result);
             free(auto_str_widths);
             free(auto_indices);
-            return STATA_ERR_MEMORY;
+            return load_status(rc);
         }
     } else if (!was_filtered) {
         /*
@@ -1504,12 +1509,13 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
         init_io_thread_args(thread_args, &result->data, var_indices, nvars,
                             obs1, n_filtered, IO_MODE_LOAD, str_widths);
 
-        if (execute_io_parallel(thread_args, nvars, load_variable_thread, 1) != 0) {
+        rc = execute_io_parallel(thread_args, nvars, load_variable_thread);
+        if (rc != 0) {
             free(thread_args);
             ctools_filtered_data_free(result);
             free(auto_str_widths);
             free(auto_indices);
-            return STATA_ERR_MEMORY;
+            return load_status(rc);
         }
         free(thread_args);
     } else {
@@ -1532,7 +1538,7 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
             thread_args[j].n_filtered = n_filtered;
             thread_args[j].is_string = SF_var_is_string((ST_int)var_indices[j]);
             thread_args[j].str_width = str_widths ? str_widths[var_indices[j] - 1] : 0;
-            thread_args[j].success = 0;
+            thread_args[j].error = STATA_OK;
         }
 
         ctools_persistent_pool *pool = ctools_get_global_pool();
@@ -1546,25 +1552,19 @@ stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
                 free(auto_indices);
                 return STATA_ERR_MEMORY;
             }
-            int pool_result = ctools_persistent_pool_wait(pool);
-            if (pool_result != 0) {
-                free(thread_args);
-                ctools_filtered_data_free(result);
-                free(auto_str_widths);
-                free(auto_indices);
-                return STATA_ERR_MEMORY;
-            }
+            if (ctools_persistent_pool_wait(pool)) rc = STATA_ERR_MEMORY;
         } else {
-            for (size_t j = 0; j < nvars; j++) {
-                void *res = load_filtered_variable_thread(&thread_args[j]);
-                if (res != NULL) {
-                    free(thread_args);
-                    ctools_filtered_data_free(result);
-                    free(auto_str_widths);
-                    free(auto_indices);
-                    return STATA_ERR_MEMORY;
-                }
-            }
+            for (size_t j = 0; j < nvars; j++) load_filtered_variable_thread(&thread_args[j]);
+        }
+        for (size_t j = 0; j < nvars; j++) {
+            if (thread_args[j].error) { rc = thread_args[j].error; break; }
+        }
+        if (rc) {
+            free(thread_args);
+            ctools_filtered_data_free(result);
+            free(auto_str_widths);
+            free(auto_indices);
+            return load_status(rc);
         }
 
         free(thread_args);
@@ -1599,53 +1599,38 @@ stata_retcode ctools_data_load(ctools_filtered_data *result,
 stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
                                      int var_idx, perm_idx_t *obs_map)
 {
-    if (values == NULL || obs_map == NULL || n_filtered == 0) {
-        return (values == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
-    }
-
-    ST_int stata_var = (ST_int)var_idx;
-    ST_int nobs_max = SF_nobs();
-    ST_IIID store_fn = (_stata_)->store;
-
-    /* Write values using obs_map for indexing */
+    if (!n_filtered) return STATA_OK;
+    if (!values) return STATA_ERR_INVALID_INPUT;
+    stata_retcode rc = validate_variable(var_idx, 0);
+    if (rc) return rc;
+    rc = validate_obs_map(obs_map, n_filtered);
+    if (rc) return rc;
     for (size_t i = 0; i < n_filtered; i++) {
-        /* Bounds check: obs_map values must be valid 1-based Stata observation indices */
-        perm_idx_t obs = obs_map[i];
-        if (obs < 1 || obs > (perm_idx_t)nobs_max) {
-            char buf[128];
-            snprintf(buf, sizeof(buf),
-                     "ctools: obs_map[%zu]=%u out of bounds [1,%d]\n",
-                     i, (unsigned)obs, (int)nobs_max);
-            SF_error(buf);
-            return STATA_ERR_INVALID_INPUT;
-        }
-        store_fn(stata_var, (ST_int)obs, values[i]);
+        if ((_stata_)->safestore(var_idx, (ST_int)obs_map[i], values[i])) return store_status(STATA_ERR_STATA_WRITE);
     }
-
     return STATA_OK;
 }
 
 /*
     Row-parallel store for a single numeric variable.
     Counterpart to ctools_data_load_single_var_rowpar().
-    Skips per-element bounds checks (obs_map is trusted from our own loader).
+    Validates the entire observation map before starting worker writes.
 */
 stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
                                             int var_idx, perm_idx_t *obs_map)
 {
-    if (values == NULL || obs_map == NULL || n_filtered == 0) {
-        return (values == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
-    }
-
-    ST_int stata_var = (ST_int)var_idx;
-    ST_IIID store_fn = (_stata_)->store;
-
+    if (!n_filtered) return STATA_OK;
+    if (!values) return STATA_ERR_INVALID_INPUT;
+    stata_retcode rc = validate_variable(var_idx, 0);
+    if (rc) return rc;
+    rc = validate_obs_map(obs_map, n_filtered);
+    if (rc) return rc;
+    atomic_int error = 0;
     #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
     for (size_t i = 0; i < n_filtered; i++) {
-        store_fn(stata_var, (ST_int)obs_map[i], values[i]);
+        if ((_stata_)->safestore(var_idx, (ST_int)obs_map[i], values[i])) record_io_error(&error, STATA_ERR_STATA_WRITE);
     }
-
-    return STATA_OK;
+    return store_status(atomic_load(&error));
 }
 
 /*
@@ -1654,28 +1639,14 @@ stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
 stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
                                          int var_idx, perm_idx_t *obs_map)
 {
-    if (strings == NULL || obs_map == NULL || n_filtered == 0) {
-        return (strings == NULL && n_filtered == 0) ? STATA_OK : STATA_ERR_INVALID_INPUT;
-    }
-
-    ST_int stata_var = (ST_int)var_idx;
-    ST_int nobs_max = SF_nobs();
-    ST_IIIS sstore_fn = (_stata_)->sstore;
-
-    /* Write strings using obs_map for indexing */
+    if (!n_filtered) return STATA_OK;
+    if (!strings) return STATA_ERR_INVALID_INPUT;
+    stata_retcode rc = validate_variable(var_idx, 1);
+    if (rc) return rc;
+    rc = validate_obs_map(obs_map, n_filtered);
+    if (rc) return rc;
     for (size_t i = 0; i < n_filtered; i++) {
-        /* Bounds check: obs_map values must be valid 1-based Stata observation indices */
-        perm_idx_t obs = obs_map[i];
-        if (obs < 1 || obs > (perm_idx_t)nobs_max) {
-            char buf[128];
-            snprintf(buf, sizeof(buf),
-                     "ctools: obs_map[%zu]=%u out of bounds [1,%d]\n",
-                     i, (unsigned)obs, (int)nobs_max);
-            SF_error(buf);
-            return STATA_ERR_INVALID_INPUT;
-        }
-        sstore_fn(stata_var, (ST_int)obs, strings[i] ? strings[i] : "");
+        if (SF_sstore(var_idx, (ST_int)obs_map[i], strings[i] ? strings[i] : "")) return store_status(STATA_ERR_STATA_WRITE);
     }
-
     return STATA_OK;
 }

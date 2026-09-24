@@ -19,6 +19,7 @@
 {depvar}
 {indepvars}
 {ifin}
+[{it:weight}]
 {cmd:,}
 {opt a:bsorb(varlist)}
 [{it:options}]
@@ -36,9 +37,9 @@
 {synopt:{opt vce(vcetype)}}variance estimator; {opt robust} or {opt cluster} {it:clustvar}{p_end}
 
 {syntab:IRLS Convergence}
-{synopt:{opt irls_tol:erance(#)}}IRLS convergence tolerance; default is {cmd:1e-8}{p_end}
-{synopt:{opt irls_max:iter(#)}}maximum IRLS iterations; default is {cmd:1000}{p_end}
-{synopt:{opt sep:aration_tolerance(#)}}separation detection tolerance; default is {cmd:1e-8}{p_end}
+{synopt:{opt irlstol:erance(#)}}IRLS convergence tolerance; default is {cmd:1e-8}{p_end}
+{synopt:{opt irlsmax:iter(#)}}maximum IRLS iterations; default is {cmd:1000}{p_end}
+{synopt:{opt septol:erance(#)}}separation detection tolerance; default is {cmd:1e-8}{p_end}
 
 {syntab:CG Solver}
 {synopt:{opt tol:erance(#)}}CG solver convergence tolerance; default is {cmd:1e-8}{p_end}
@@ -88,8 +89,7 @@ the CG solver.
 are to be absorbed (partialled out). At least one absorb variable is required.
 
 {phang}
-{opt exposure(varname)} specifies an exposure variable. This is equivalent to
-{opt offset(log(varname))} and is commonly used in rate models.
+{opt exposure(varname)} specifies an exposure variable. This adds the logarithm of {it:varname} as the offset and is commonly used in rate models.
 
 {phang}
 {opt offset(varname)} specifies an offset variable that enters the linear
@@ -105,17 +105,20 @@ predictor additively: eta = X*beta + FE + offset.
 {dlgtab:IRLS Convergence}
 
 {phang}
-{opt irls_tolerance(#)} specifies the convergence criterion for the IRLS
+{opt irlstolerance(#)} specifies the convergence criterion for the IRLS
 loop. Convergence is declared when the relative change in deviance falls
 below this threshold: |dev - dev_old| / (0.1 + |dev|) < tol. Default is 1e-8.
 
 {phang}
-{opt irls_maxiter(#)} specifies the maximum number of IRLS iterations.
+{opt irlsmaxiter(#)} specifies the maximum number of IRLS iterations.
 Default is 1000.
 
 {phang}
-{opt separation_tolerance(#)} specifies the tolerance for detecting
-separation. Observations with y=0 and mu < tol are flagged as separated.
+{opt septolerance(#)} specifies the tolerance for detecting
+possible separation remaining during IRLS. The command removes all-zero FE
+groups and resulting singletons before estimation. If observations with y=0
+and mu below this tolerance remain during IRLS, it returns error 430 rather
+than reporting them as dropped. Use {cmd:ppmlhdfe} for general separation.
 Default is 1e-8.
 
 
@@ -196,4 +199,24 @@ Correia, S., Guimaraes, P., and Zylkin, T. (2020).
 
 {pstd}
 Part of the {browse "https://github.com/mdroste/stata-ctools":ctools} package.
+{p_end}
+
+{title:Prediction and estimation sample}
+
+{pstd}
+{cmd:predict newvar, xb} returns the slope index Xb, excluding absorbed effects
+and offset/exposure contributions. Default prediction and fitted means are
+rejected because FE reconstruction for prediction is not implemented. This
+restriction also applies after {cmd:estimates store}/{cmd:estimates restore}.
+
+{pstd}
+{cmd:e(sample)} marks the retained observations after missing values, singleton
+chains, and all-zero FE separation are removed. With fweights, {cmd:e(N)} is the
+sum of frequency weights rather than the number of marked physical rows.
+Weight expressions such as {cmd:[aw=2*w]} are evaluated into temporary doubles.
+
+{title:Validation and failure behavior}
+
+{pstd}
+Fixed-effect and IRLS iteration limits and tolerances must be positive. A nonconverged projection or exhausted IRLS fit returns error 430. Joint Wald statistics use the retained regressor indices, so moving omitted columns does not change the reported test.
 {p_end}

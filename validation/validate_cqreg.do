@@ -375,27 +375,27 @@ benchmark_qreg wage age tenure ttl_exp hours, testname("nlsw88: many covariates"
  ******************************************************************************/
 print_section "Webuse Datasets - nlswork"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure, testname("nlswork: median (5K obs)")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure, quantile(0.10) testname("nlswork: q=0.10")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure, quantile(0.25) testname("nlswork: q=0.25")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure, quantile(0.75) testname("nlswork: q=0.75")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure, quantile(0.90) testname("nlswork: q=0.90")
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 benchmark_qreg ln_wage age tenure hours wks_work, testname("nlswork: many covariates")
 
@@ -404,14 +404,14 @@ benchmark_qreg ln_wage age tenure hours wks_work, testname("nlswork: many covari
  ******************************************************************************/
 print_section "Webuse Datasets - grunfeld"
 
-capture webuse grunfeld, clear
+capture ctools_fixture grunfeld, clear
 if _rc == 0 {
     benchmark_qreg invest mvalue kstock, testname("grunfeld: median")
 
-    webuse grunfeld, clear
+    ctools_fixture grunfeld, clear
     benchmark_qreg invest mvalue kstock, quantile(0.25) testname("grunfeld: q=0.25")
 
-    webuse grunfeld, clear
+    ctools_fixture grunfeld, clear
     benchmark_qreg invest mvalue kstock, quantile(0.75) testname("grunfeld: q=0.75")
 }
 
@@ -420,14 +420,14 @@ if _rc == 0 {
  ******************************************************************************/
 print_section "Webuse Datasets - bplong"
 
-capture webuse bplong, clear
+capture ctools_fixture bplong, clear
 if _rc == 0 {
     benchmark_qreg bp agegrp when sex, testname("bplong: median")
 
-    webuse bplong, clear
+    ctools_fixture bplong, clear
     benchmark_qreg bp agegrp when sex, quantile(0.25) testname("bplong: q=0.25")
 
-    webuse bplong, clear
+    ctools_fixture bplong, clear
     benchmark_qreg bp agegrp when sex, quantile(0.75) testname("bplong: q=0.75")
 }
 
@@ -436,16 +436,16 @@ if _rc == 0 {
  ******************************************************************************/
 print_section "Webuse Datasets - cancer"
 
-capture webuse cancer, clear
+capture ctools_fixture cancer, clear
 if _rc == 0 {
     gen age2 = age^2
     benchmark_qreg studytime age drug, testname("cancer: median")
 
-    webuse cancer, clear
+    ctools_fixture cancer, clear
     gen age2 = age^2
     benchmark_qreg studytime age drug, quantile(0.25) testname("cancer: q=0.25")
 
-    webuse cancer, clear
+    ctools_fixture cancer, clear
     gen age2 = age^2
     benchmark_qreg studytime age drug, quantile(0.75) testname("cancer: q=0.75")
 }
@@ -1115,14 +1115,14 @@ sysuse auto, clear
 benchmark_qreg price mpg weight if mpg > 20, testname("if mpg > 20")
 
 /*******************************************************************************
- * SECTION 26: absorb Option (experimental)
+ * SECTION 26: Unsupported absorb Option
  ******************************************************************************/
-print_section "absorb Option (experimental)"
+print_section "Unsupported absorb Option"
 
 sysuse auto, clear
 capture cqreg price mpg weight, absorb(foreign)
-if _rc == 0 {
-    test_pass "absorb(foreign) accepted"
+if _rc == 198 {
+    test_pass "absorb(foreign) rejected"
 }
 else {
     test_fail "absorb option" "returned error `=_rc'"
@@ -1130,8 +1130,8 @@ else {
 
 sysuse auto, clear
 capture cqreg price mpg weight, absorb(rep78)
-if _rc == 0 {
-    test_pass "absorb(rep78) accepted"
+if _rc == 198 {
+    test_pass "absorb(rep78) rejected"
 }
 else {
     test_fail "absorb(rep78)" "returned error `=_rc'"
@@ -1491,7 +1491,7 @@ else {
 print_section "Time Series Variables (panel data)"
 
 * Create grunfeld panel dataset with lagged/differenced variables
-capture webuse grunfeld, clear
+capture ctools_fixture grunfeld, clear
 if _rc == 0 {
     quietly xtset company year
     by company: gen L_mvalue = mvalue[_n-1]
@@ -1553,7 +1553,7 @@ if _rc == 0 {
 }
 
 * Time series with nlswork panel data
-capture webuse nlswork, clear
+capture ctools_fixture nlswork, clear
 if _rc == 0 {
     keep in 1/5000
     quietly xtset idcode year
@@ -1636,3 +1636,6 @@ test_error_match, stata_cmd(qreg make mpg) ctools_cmd(cqreg make mpg) testname("
 * End of cqreg validation
 noi print_summary "cqreg"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cqreg"

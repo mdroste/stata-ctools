@@ -198,3 +198,9 @@ Manual: {bf:[D] encode}
 {psee}
 Online: {help encode}, {help decode}, {help cdecode}, {help label}, {help ctools}
 {p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+The complete source and output specification is validated even with zero observations. Generated targets must be distinct new names. A failed multi-variable operation restores source variables, outputs, and value labels; successful replace commits all requested variables together.
+{p_end}

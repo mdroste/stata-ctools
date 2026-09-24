@@ -615,7 +615,7 @@ void ivvce_compute_kiefer(
     - kernel_type, bw: HAC parameters
     - V: Output VCE matrix (K_total x K_total)
 */
-void ivvce_compute_full(
+ST_retcode ivvce_compute_full(
     const ST_double *Z,
     const ST_double *resid,
     const ST_double *temp_kiv_ktotal,
@@ -639,6 +639,7 @@ void ivvce_compute_full(
 )
 {
     ST_int i, j, k;
+    ST_retcode rc = 0;
 
     /* Compute residual sum of squares */
     ST_double rss = 0.0;
@@ -663,12 +664,12 @@ void ivvce_compute_full(
         for (i = 0; i < K_total * K_total; i++) {
             V[i] = sigma2 * XkX_inv[i];
         }
-        return;
+        return 0;
     }
 
     /* Compute P_Z X = Z * (Z'Z)^-1 Z'X = Z * temp_kiv_ktotal */
     ST_double *PzX = (ST_double *)calloc(N * K_total, sizeof(ST_double));
-    if (!PzX) return;
+    if (!PzX) return 920;
 
     #pragma omp parallel for schedule(static) if(N > 1000)
     for (i = 0; i < N; i++) {
@@ -685,7 +686,7 @@ void ivvce_compute_full(
     ST_double *meat = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
     if (!meat) {
         free(PzX);
-        return;
+        return 920;
     }
 
     if (vce_type == CIVREGHDFE_VCE_DKRAAY && cluster_ids && num_clusters > 0 && kernel_type > 0 && bw > 0) {
@@ -698,7 +699,7 @@ void ivvce_compute_full(
         ST_double *cluster_sums = (ST_double *)calloc(num_clusters * K_total, sizeof(ST_double));
         if (!cluster_sums) {
             free(PzX); free(meat);
-            return;
+            return 920;
         }
 
         /* Sum (PzX_i * e_i) at each time period (cluster) */
@@ -778,6 +779,7 @@ void ivvce_compute_full(
 
         /* V = XkX_inv * meat * XkX_inv * dof_adj */
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (!temp_v) { free(PzX); free(meat); return 920; }
         if (temp_v) {
             ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
             ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
@@ -793,7 +795,7 @@ void ivvce_compute_full(
         ST_int *cluster_ids_0 = (ST_int *)malloc(N * sizeof(ST_int));
         if (!cluster_ids_0) {
             free(PzX); free(meat);
-            return;
+            return 920;
         }
         for (i = 0; i < N; i++) {
             cluster_ids_0[i] = cluster_ids[i] - 1;
@@ -817,7 +819,7 @@ void ivvce_compute_full(
         d.K = K_total;
         d.normalize_weights = 1;  /* Normalize aw/pw weights for correct meat */
 
-        ctools_vce_cluster(&d, cluster_ids_0, num_clusters, dof_adj, V);
+        rc = ctools_vce_cluster(&d, cluster_ids_0, num_clusters, dof_adj, V);
         free(cluster_ids_0);
 
     } else if (kernel_type > 0 && bw > 0) {
@@ -836,7 +838,7 @@ void ivvce_compute_full(
             if (shat_ZZ) free(shat_ZZ);
             if (uZ) free(uZ);
             free(PzX); free(meat);
-            return;
+            return 920;
         }
 
         /* Compute Z-space score vectors: uZ[l,i] = Z[l,i] * e[i] */
@@ -862,7 +864,7 @@ void ivvce_compute_full(
                 if (panel_starts) free(panel_starts);
                 if (obs_by_panel) free(obs_by_panel);
                 free(PzX); free(meat);
-                return;
+                return 920;
             }
 
             for (i = 0; i < N; i++) {
@@ -973,6 +975,7 @@ void ivvce_compute_full(
         ST_double dof_adj = (ST_double)N_eff / (ST_double)df_r;
 
         ST_double *temp_v = (ST_double *)calloc(K_total * K_total, sizeof(ST_double));
+        if (!temp_v) { free(PzX); free(meat); return 920; }
         if (temp_v) {
             ctools_matmul_ab(XkX_inv, meat, K_total, K_total, K_total, temp_v);
             ctools_matmul_ab(temp_v, XkX_inv, K_total, K_total, K_total, V);
@@ -997,9 +1000,10 @@ void ivvce_compute_full(
         d.K = K_total;
         d.normalize_weights = 1;  /* Normalize aw/pw weights for correct meat (w^2*e^2) */
 
-        ctools_vce_robust(&d, dof_adj, V);
+        rc = ctools_vce_robust(&d, dof_adj, V);
     }
 
     free(PzX);
     free(meat);
+    return rc;
 }

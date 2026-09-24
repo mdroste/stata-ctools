@@ -230,8 +230,10 @@ int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers
     for (i = 0; i < num_workers; i++) {
         if (pthread_create(&pool->workers[i], NULL, persistent_worker_thread, pool) != 0) {
             /* Failed - shut down and clean up */
+            pthread_mutex_lock(&pool->queue_mutex);
             pool->shutdown = 1;
             pthread_cond_broadcast(&pool->work_available);
+            pthread_mutex_unlock(&pool->queue_mutex);
 
             for (size_t j = 0; j < i; j++) {
                 pthread_join(pool->workers[j], NULL);
@@ -241,6 +243,8 @@ int ctools_persistent_pool_init(ctools_persistent_pool *pool, size_t num_workers
             pthread_cond_destroy(&pool->work_available);
             pthread_mutex_destroy(&pool->queue_mutex);
             free(pool->workers);
+            pool->workers = NULL;
+            pool->num_workers = 0;
             pool->initialized = 0;
             return -1;
         }

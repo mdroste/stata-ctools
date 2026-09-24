@@ -24,28 +24,10 @@ if _rc != 0 {
     exit 601
 }
 
-* ships is hosted via webuse; provide a deterministic local fallback for offline runs
+* Use the pinned official ships fixture on every run.
 capture program drop load_ships_data
 program define load_ships_data
-    capture quietly webuse ships, clear
-    if _rc == 0 {
-        exit
-    }
-
-    clear
-    set seed 197901
-    set obs 240
-
-    gen int ship = mod(_n-1, 30) + 1
-    gen byte op_75_79 = (mod(_n-1, 4) == 0)
-    gen byte co_65_69 = (mod(_n-1, 5) == 0)
-    gen byte co_70_74 = (mod(_n-1, 6) <= 1)
-    gen byte co_75_79 = (mod(_n-1, 7) <= 1)
-    gen double service = 1 + mod(_n-1, 15)
-
-    gen double xb = -2 + 0.25*op_75_79 + 0.15*co_65_69 + 0.10*co_70_74 + 0.05*co_75_79 + 0.02*ship
-    gen int accident = rpoisson(exp(xb) * service)
-    drop xb
+    ctools_fixture ships, clear
 end
 
 quietly {
@@ -1174,3 +1156,6 @@ benchmark_ppmlhdfe y x [fw=fw], ///
  * Summary
  ******************************************************************************/
 print_summary "cpplmhdfe"
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cpplmhdfe"

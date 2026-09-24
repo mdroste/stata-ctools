@@ -22,6 +22,10 @@
 
 /* Atomic store for has_fallback flag (written from OMP parallel regions) */
 #if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
 #define ARENA_ATOMIC_STORE_INT(ptr, val) \
     InterlockedExchange((volatile LONG *)(ptr), (LONG)(val))
 #elif defined(__GNUC__) || defined(__clang__)

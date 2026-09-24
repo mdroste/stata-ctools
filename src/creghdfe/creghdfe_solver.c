@@ -365,18 +365,21 @@ ST_int cg_solve_column_threaded(HDFE_State *S, ST_double *y, ST_int thread_id)
  * For G=1, uses direct demean (no CG iteration needed).
  * ======================================================================== */
 
-ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads)
+HDFE_SolveResult partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, ST_int num_threads)
 {
     ST_int k;
     ST_int max_iters = 0;
     ST_int any_failed = 0;
 
-    (void)N;  /* N is stored in S->N */
+    if (!S || !data || N != S->N || K < 1 || S->num_threads < 1 ||
+        S->maxiter < 1 || !isfinite(S->tolerance) || S->tolerance <= 0) {
+        return (HDFE_SolveResult){198, 0, 0};
+    }
     (void)num_threads;  /* Use S->num_threads or OpenMP default */
 
     /* G=0 short-circuit: no FE factors, nothing to partial out */
     if (S->G == 0) {
-        return 0;
+        return (HDFE_SolveResult){0, 1, 0};
     }
 
     /* G=1 short-circuit: direct demean, no CG iteration */
@@ -389,7 +392,7 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
 #endif
             demean_column_single_fe(S, data + k * S->N, tid);
         }
-        return 1;  /* "1 iteration" */
+        return (HDFE_SolveResult){0, 1, 1};
     }
 
     /* General CG solve for G >= 2 */
@@ -410,5 +413,5 @@ ST_int partial_out_columns(HDFE_State *S, ST_double *data, ST_int N, ST_int K, S
         }
     }
 
-    return any_failed ? -max_iters : max_iters;
+    return (HDFE_SolveResult){any_failed ? 430 : 0, !any_failed, max_iters};
 }

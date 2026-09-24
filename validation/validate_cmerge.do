@@ -228,13 +228,13 @@ benchmark_merge 1:1 id using `using_1', keepusing(weight length) testname("keepu
 print_section "Multiple Key Variables"
 
 * Two keys
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/2000
 keep idcode year ln_wage age
 tempfile master
 save `master'
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/2000
 keep idcode year tenure ttl_exp
 tempfile using_1
@@ -501,13 +501,13 @@ benchmark_merge 1:1 state using `using_1', testname("state name 1:1")
  ******************************************************************************/
 print_section "Panel Data (nlswork)"
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 keep idcode year ln_wage hours
 tempfile master
 save `master'
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/5000
 keep idcode year age tenure wks_work
 tempfile using_1
@@ -517,13 +517,13 @@ use `master', clear
 benchmark_merge 1:1 idcode year using `using_1', testname("panel 1:1")
 
 * m:1 individual characteristics
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/3000
 keep idcode year ln_wage
 tempfile master
 save `master'
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/3000
 bysort idcode (year): keep if _n == 1
 keep idcode race grade
@@ -881,13 +881,13 @@ use `nlsw88_master', clear
 benchmark_merge m:1 industry using `industry_lookup', testname("nlsw88: m:1 by industry")
 
 * nlswork panel data - 1:1 by idcode year
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/3000
 keep idcode year ln_wage hours
 tempfile nlswork1
 save `nlswork1'
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/3000
 keep idcode year age tenure wks_work
 tempfile nlswork2
@@ -897,13 +897,13 @@ use `nlswork1', clear
 benchmark_merge 1:1 idcode year using `nlswork2', testname("nlswork: 1:1 panel by idcode year")
 
 * nlswork - m:1 individual time-invariant characteristics
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/2500
 keep idcode year ln_wage
 tempfile nlswork_panel
 save `nlswork_panel'
 
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep in 1/2500
 bysort idcode (year): keep if _n == 1
 keep idcode race grade
@@ -914,12 +914,12 @@ use `nlswork_panel', clear
 benchmark_merge m:1 idcode using `nlswork_indiv', testname("nlswork: m:1 individual characteristics")
 
 * Grunfeld panel data
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 keep company year invest
 tempfile grunfeld1
 save `grunfeld1'
 
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 keep company year mvalue kstock
 tempfile grunfeld2
 save `grunfeld2'
@@ -928,12 +928,12 @@ use `grunfeld1', clear
 benchmark_merge 1:1 company year using `grunfeld2', testname("grunfeld: 1:1 panel merge")
 
 * lifeexp dataset
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 keep region country popgrowth
 tempfile lifeexp1
 save `lifeexp1'
 
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 keep region country lexp gnppc
 tempfile lifeexp2
 save `lifeexp2'
@@ -2001,3 +2001,6 @@ else {
 * End of cmerge validation
 noi print_summary "cmerge"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cmerge"

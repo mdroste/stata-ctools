@@ -29,7 +29,7 @@ typedef struct {
     size_t nobs;                /* Number of observations */
     int is_string;              /* Non-zero if string variable (load only) */
     int str_width;              /* Actual string width (e.g. 17 for str17), 0 = unknown */
-    int success;                /* 1 on success, 0 on failure (out) */
+    int error;                  /* STATA_OK or the worker failure (out) */
 } ctools_var_io_args;
 
 /* ===========================================================================

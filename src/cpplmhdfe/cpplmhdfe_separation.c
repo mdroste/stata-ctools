@@ -79,3 +79,59 @@ ST_int ppml_detect_separation_mu(
 
     return num_new;
 }
+
+ST_int ppml_select_fe_sample(const ST_double *y, ST_int *const *levels,
+    const ST_int *num_levels, ST_int G, ST_int N, ST_int *mask,
+    ST_int *num_singletons, ST_int *num_separated)
+{
+    ST_int **counts = calloc((size_t)G, sizeof(*counts));
+    unsigned char **positive = calloc((size_t)G, sizeof(*positive));
+    ST_int rc = -1;
+    *num_singletons = *num_separated = 0;
+    if (!counts || !positive) goto cleanup;
+    for (ST_int g = 0; g < G; g++) {
+        if (num_levels[g] < 1) goto cleanup;
+        counts[g] = calloc((size_t)num_levels[g], sizeof(**counts));
+        positive[g] = calloc((size_t)num_levels[g], sizeof(**positive));
+        if (!counts[g] || !positive[g]) goto cleanup;
+        for (ST_int i = 0; i < N; i++)
+            if (levels[g][i] < 1 || levels[g][i] > num_levels[g]) goto cleanup;
+    }
+    for (;;) {
+        for (ST_int g = 0; g < G; g++) {
+            memset(counts[g], 0, (size_t)num_levels[g] * sizeof(**counts));
+            memset(positive[g], 0, (size_t)num_levels[g] * sizeof(**positive));
+            for (ST_int i = 0; i < N; i++) {
+                if (!mask[i]) continue;
+                ST_int level = levels[g][i] - 1;
+                counts[g][level]++;
+                if (y[i] > 0) positive[g][level] = 1;
+            }
+        }
+        ST_int removed = 0;
+        for (ST_int i = 0; i < N; i++) {
+            if (!mask[i]) continue;
+            ST_int singleton = 0, separated = 0;
+            for (ST_int g = 0; g < G; g++) {
+                ST_int level = levels[g][i] - 1;
+                singleton |= counts[g][level] == 1;
+                separated |= !positive[g][level];
+            }
+            if (singleton || separated) {
+                mask[i] = 0;
+                removed++;
+                if (singleton) (*num_singletons)++;
+                else (*num_separated)++;
+            }
+        }
+        if (!removed) break;
+    }
+    rc = 0;
+cleanup:
+    for (ST_int g = 0; g < G; g++) {
+        if (counts) free(counts[g]);
+        if (positive) free(positive[g]);
+    }
+    free(counts); free(positive);
+    return rc;
+}

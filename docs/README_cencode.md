@@ -4,7 +4,7 @@ High-performance C-accelerated string encoding for Stata datasets.
 
 ## Overview
 
-`cencode` is a drop-in replacement for Stata's `encode` command that provides 2-5x speedup over native Stata encoding. It converts string variables to numeric variables with value labels, using an optimized streaming algorithm.
+`cencode` is a drop-in replacement for Stata's `encode` command. It converts string variables to numeric variables with value labels, using an optimized streaming algorithm.
 
 ## Syntax
 
@@ -129,10 +129,13 @@ cencode timing breakdown:
 | Algorithm | Mata-based | C with hash table |
 | Memory | O(N) | O(K) unique values |
 | Lookup | Linear search | Hash table O(1) |
-| Typical Speedup | 1x | 2-5x |
 
 ## See Also
 
 - [ctools Overview](../README.md)
 - Stata's `encode` command: `help encode`
 - Stata's `decode` command for reverse operation
+
+## Validation and failure behavior
+
+The complete source and output specification is validated even with zero observations. Generated targets must be distinct new names. A failed multi-variable operation restores source variables, outputs, and value labels; successful replace commits all requested variables together.

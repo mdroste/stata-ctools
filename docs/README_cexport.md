@@ -4,7 +4,7 @@ High-performance C-accelerated delimited text export.
 
 ## Overview
 
-`cexport delimited` is a high-performance replacement for Stata's `export delimited` command that uses a C plugin with parallel data loading and chunked formatting. It can achieve up to 25x speedup over native Stata export.
+`cexport delimited` implements the documented subset of Stata's `export delimited` interface that uses a C plugin with parallel data loading and chunked formatting.
 
 ## Syntax
 
@@ -26,13 +26,12 @@ cexport delimited [varlist] using filename [if] [in] [, options]
 | `novarnames` | Do not write variable names as header row |
 | `quote` | Quote all string fields |
 | `noquoteif` | Never quote strings, even if they contain delimiters |
-| `datafmt` | Use display formats for numeric variables (not yet implemented) |
+| `datafmt` | Render Stata date/time display formats as text; other numeric display formats are not applied |
 
 ### Reporting Options
 | Option | Description |
 |--------|-------------|
 | `verbose` | Display progress information during export |
-| `timeit` | Display timing breakdown |
 
 ## Examples
 
@@ -50,7 +49,7 @@ cexport delimited using output.tsv, delimiter(tab) replace
 cexport delimited using output.csv, novarnames replace
 
 * Export with verbose timing output
-cexport delimited using output.csv, replace verbose timeit
+cexport delimited using output.csv, replace verbose
 
 * Export subset of observations
 cexport delimited using subset.csv if year > 2020, replace
@@ -81,7 +80,7 @@ cexport delimited using output.csv, quote replace
 
 ### Timing Breakdown
 
-With `timeit`, you'll see:
+With `verbose`, you'll see:
 - **Load time**: Time to read data from Stata
 - **Write time**: Time to format and write the file
 - **Throughput**: MB/s writing speed
@@ -131,10 +130,29 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 |---------|--------------------------|---------------------|
 | Implementation | Stata | C with OpenMP |
 | Parallelization | No | Yes |
-| Typical Speedup | 1x (baseline) | 10-25x |
 | Chunked I/O | No | Yes |
 
 ## See Also
 
 - [ctools Overview](../README.md)
 - [cimport](README_cimport.md) - Fast CSV import
+
+## Excel and output fidelity
+
+`cexport excel using "output file.xlsx", firstrow(variables) replace` writes an
+XLSX workbook. `sheet("A sheet")` and filenames may contain spaces. Text fields
+are transferred separately from plugin options, including text resembling
+`threads(2)`. `threads(#)` also limits Excel export workers.
+
+Both formats validate complete per-column metadata and write a sibling temporary
+file before publishing it. A failed export leaves an existing destination intact;
+without `replace`, publication refuses an existing file, including one created
+while export is running. The destination directory must allow temporary files.
+
+Excel export uses the 1900 date system. Daily dates retain their calendar day;
+`%tc` retains milliseconds as fractional days, and `%tC` is converted to `%tc`
+with `cofC()` first. Leap seconds cannot be represented in Excel. Monthly,
+quarterly, weekly, half-yearly, and yearly dates use the first day of the period.
+`datafmt` and `datestring()` instead export date/time values as text.
+
+`keepcellfmt` only copies an existing style-definition table. It does not retain worksheet cell-style assignments or other sheets; existing date style indices may be incompatible with newly written date cells. It is not a formatted-template update facility.

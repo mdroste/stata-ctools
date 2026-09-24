@@ -2,6 +2,19 @@
 
 program define creghdfe, eclass
     version 14.1
+    preserve
+    capture noisily _creghdfe_impl `0'
+    local rc = _rc
+    if `rc' {
+        restore
+        ereturn clear
+        exit `rc'
+    }
+    restore, not
+end
+
+program define _creghdfe_impl, eclass
+    version 14.1
 
     * Check observation limit (Stata plugin API limitation)
     if _N > 2147483647 {
@@ -19,6 +32,10 @@ program define creghdfe, eclass
         TOLerance(real 1e-8) ITERATE(integer 10000) NOSTANDardize RESID RESID2(name) RESIDuals(name) ///
         DOFadjustments(string) GROUPvar(name) THReads(integer 0) QUAD]
 
+    if `iterate' < 1 | missing(`tolerance') | `tolerance' <= 0 {
+        di as error "creghdfe: iterate() and tolerance() must be positive"
+        exit 198
+    }
     local __do_timing = ("`verbose'" != "")
 
     * Handle residuals() as alias for resid2()
@@ -78,9 +95,9 @@ program define creghdfe, eclass
     local weight_type = 0   // 0=none, 1=aweight, 2=fweight, 3=pweight
     if "`weight'" != "" {
         * Extract weight variable from expression (remove leading =)
-        local weight_var "`exp'"
-        local weight_var = subinstr("`weight_var'", "=", "", .)
-        local weight_var = trim("`weight_var'")
+        tempvar evaluated_weight
+        _ctools_weight, generate(`evaluated_weight') touse(`touse') type(`weight') expression(`"`exp'"')
+        local weight_var "`evaluated_weight'"
 
         if "`weight'" == "aweight" {
             local weight_type = 1
@@ -242,60 +259,11 @@ program define creghdfe, eclass
     }
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "creghdfe: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Handle resid option - determine residual variable name
     local resid_varname ""
@@ -308,11 +276,17 @@ program define creghdfe, eclass
         else {
             local resid_varname "_reghdfe_resid"
         }
-        * Drop existing variable if it exists
-        capture drop `resid_varname'
-        * Create the residual variable (will be filled by C plugin)
-        quietly gen double `resid_varname' = .
     }
+
+    * Validate the entire output list before creating any destination.
+    local output_names `resid_varname' `groupvar'
+    if `savefe' {
+        forvalues g=1/`nfe' {
+            local output_names `output_names' __hdfe`g'__
+        }
+    }
+    if "`output_names'" != "" _ctools_newvars `output_names'
+    if `compute_resid' quietly gen double `resid_varname' = .
 
     * Set up parameters via Stata scalars (expected by C plugin)
     scalar __creghdfe_K = `nvars'           // depvar + indepvars
@@ -370,7 +344,6 @@ program define creghdfe, eclass
     * Handle groupvar - create variable and add to plugin varlist
     local groupvar_var_pos = 0
     if "`groupvar'" != "" {
-        capture drop `groupvar'
         quietly gen long `groupvar' = .
         local groupvar_var_pos = `nvars' + `nfe' + (`vcetype' == 2) + (`weight_type' > 0) + `compute_resid' + 1
         local plugin_varlist `plugin_varlist' `groupvar'
@@ -383,7 +356,6 @@ program define creghdfe, eclass
     * Handle savefe - create FE variables and add to plugin varlist
     if `savefe' {
         forval g = 1/`nfe' {
-            capture drop __hdfe`g'__
             quietly gen double __hdfe`g'__ = .
             local plugin_varlist `plugin_varlist' __hdfe`g'__
         }
@@ -394,6 +366,13 @@ program define creghdfe, eclass
     else {
         scalar __creghdfe_savefe_idx = 0
     }
+
+    * The plugin returns the final sample after internal row removals.
+    tempvar final_sample
+    quietly generate byte `final_sample' = 0
+    local plugin_varlist `plugin_varlist' `final_sample'
+    local sample_idx : word count `plugin_varlist'
+    scalar __creghdfe_sample_idx = `sample_idx'
 
     * Create matrix to store results (plugin will fill __creghdfe_V)
     local K_x = `nvars' - 1  // number of indepvars (excluding depvar)
@@ -406,7 +385,7 @@ program define creghdfe, eclass
     local reg_rc = _rc
     if `reg_rc' {
         * Clean up scalars on error
-        capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
+        capture scalar drop __creghdfe_sample_idx __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
         capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
         capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
         capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad
@@ -713,7 +692,7 @@ program define creghdfe, eclass
     timer on 98
 
     * Post results
-    ereturn post `b' `V', esample(`touse') depname(`depvar_orig') obs(`N_final')
+    ereturn post `b' `V', esample(`final_sample') depname(`depvar_orig') obs(`N_final')
 
     * Store additional e() results
     ereturn scalar N = `N_final'
@@ -836,7 +815,7 @@ program define creghdfe, eclass
     } /* end if !__noabsorb */
 
     * Clean up scalars
-    capture scalar drop __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
+    capture scalar drop __creghdfe_sample_idx __creghdfe_K __creghdfe_G __creghdfe_drop_singletons
     capture scalar drop __creghdfe_verbose __creghdfe_maxiter __creghdfe_tolerance
     capture scalar drop __creghdfe_standardize __creghdfe_vce_type __creghdfe_compute_dof
     capture scalar drop __creghdfe_df_a_nested __creghdfe_compute_resid __creghdfe_use_quad

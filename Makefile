@@ -5,7 +5,7 @@
 # Builds high-performance Stata plugins for multiple platforms:
 #   - macOS Apple Silicon: ctools_mac_arm.plugin    (with OpenMP)
 #   - macOS Intel:         ctools_mac_x86.plugin    (with OpenMP)
-#   - Windows (x64):       ctools_windows.plugin    (with OpenMP via llvm-mingw)
+#   - Windows (x64):       ctools_windows.plugin    (with OpenMP via MSYS2 GCC)
 #   - Linux (x64):         ctools_linux.plugin      (with OpenMP)
 #
 # Usage:
@@ -23,8 +23,8 @@
 #   make help           - Show this help
 #
 # Requirements:
-#   macOS:   Xcode Command Line Tools, Homebrew with libomp
-#   Windows: Native MSVC/MinGW, or cross-compile with llvm-mingw
+#   macOS:   C compiler; macOS 11 static OpenMP for distribution (docs/PLATFORMS.md)
+#   Windows: MSYS2 GCC, or cross-compile with llvm-mingw/MinGW
 #   Linux:   GCC with OpenMP (libgomp)
 #
 # ==============================================================================
@@ -69,7 +69,8 @@ ALL_SOURCES  = $(shell find $(SRC_DIR) -name '*.c')
 LIBDEFLATE_SRCS = $(shell find $(SRC_DIR)/cimport/libdeflate -name '*.c' 2>/dev/null)
 SOURCES      = $(filter-out $(LIBDEFLATE_SRCS),$(ALL_SOURCES))
 HEADERS      = $(shell find $(SRC_DIR) -name '*.h')
-INCLUDE_DIRS = $(addprefix -I,$(sort $(dir $(ALL_SOURCES) $(HEADERS))))
+BUILD_REVISION ?= local
+INCLUDE_DIRS = -DCTOOLS_BUILD_REVISION=\"$(BUILD_REVISION)\" $(addprefix -I,$(sort $(dir $(ALL_SOURCES) $(HEADERS))))
 
 # ------------------------------------------------------------------------------
 # Output Configuration
@@ -90,28 +91,22 @@ LIBOMP_PREFIX := $(shell brew --prefix libomp 2>/dev/null || echo "/opt/homebrew
 LIBOMP_EXISTS := $(shell test -d $(LIBOMP_PREFIX) && echo yes || echo no)
 
 # Base optimization flags for macOS
-# SD_FASTMODE disables SPI bounds checking for max performance
+# Shared data I/O explicitly uses checked callbacks even with SD_FASTMODE.
 MAC_BASE_FLAGS = -O3 -Wall -Wextra -fPIC -DSYSTEM=APPLEMAC -DSD_FASTMODE \
-                 -ffast-math -funroll-loops -ftree-vectorize -flto \
+                 -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
                  -fno-strict-aliasing $(INCLUDE_DIRS)
 
 # macOS Apple Silicon (arm64) with OpenMP and Accelerate
 # Check for static libomp.a (preferred for bundling)
 LIBOMP_STATIC_ARM := $(shell test -f $(LIBOMP_PREFIX)/lib/libomp.a && echo yes || echo no)
 
-ifeq ($(LIBOMP_EXISTS),yes)
+ifeq ($(LIBOMP_STATIC_ARM),yes)
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
                      -mmacosx-version-min=11.0 \
                      -mcpu=apple-m1 \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_PREFIX)/include
-    ifeq ($(LIBOMP_STATIC_ARM),yes)
-        # Static linking - bundle libomp into the plugin
-        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_PREFIX)/lib/libomp.a \
-                          -framework Accelerate
-    else
-        LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip -L$(LIBOMP_PREFIX)/lib -lomp \
-                          -framework Accelerate
-    endif
+    LDFLAGS_MAC_ARM = -bundle -arch arm64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_PREFIX)/lib/libomp.a \
+                      -framework Accelerate
     MAC_ARM_HAS_OMP = yes
 else
     CFLAGS_MAC_ARM = $(MAC_BASE_FLAGS) -arch arm64 \
@@ -122,34 +117,25 @@ else
 endif
 
 # Check for x86_64 libomp (installed via Rosetta Homebrew)
-LIBOMP_INTEL = /usr/local/opt/libomp
-LIBOMP_INTEL_EXISTS := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.dylib && \
-                               file $(LIBOMP_INTEL)/lib/libomp.dylib 2>/dev/null | grep -q x86_64 && \
-                               echo yes || echo no)
+LIBOMP_INTEL ?= $(LIBOMP_PREFIX)
 # Use lipo to check .a architecture (file command doesn't show arch for archives)
 LIBOMP_STATIC_X86 := $(shell test -f $(LIBOMP_INTEL)/lib/libomp.a && \
                              lipo -info $(LIBOMP_INTEL)/lib/libomp.a 2>/dev/null | grep -q x86_64 && \
                              echo yes || echo no)
 
 # macOS Intel (x86_64) with Accelerate
-ifeq ($(LIBOMP_INTEL_EXISTS),yes)
+ifeq ($(LIBOMP_STATIC_X86),yes)
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
-                     -mmacosx-version-min=10.13 \
-                     -march=haswell \
+                     -mmacosx-version-min=11.0 \
+                     -march=x86-64 -mtune=generic \
                      -Xpreprocessor -fopenmp -I$(LIBOMP_INTEL)/include
-    ifeq ($(LIBOMP_STATIC_X86),yes)
-        # Static linking - bundle libomp into the plugin
-        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_INTEL)/lib/libomp.a \
-                          -framework Accelerate
-    else
-        LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip -L$(LIBOMP_INTEL)/lib -lomp \
-                          -framework Accelerate
-    endif
+    LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip $(LIBOMP_INTEL)/lib/libomp.a \
+                      -framework Accelerate
     MAC_X86_HAS_OMP = yes
 else
     CFLAGS_MAC_X86 = $(MAC_BASE_FLAGS) -arch x86_64 \
-                     -mmacosx-version-min=10.13 \
-                     -march=haswell
+                     -mmacosx-version-min=11.0 \
+                     -march=x86-64 -mtune=generic
     LDFLAGS_MAC_X86 = -bundle -arch x86_64 -flto -Wl,-S -Wl,-dead_strip -framework Accelerate
     MAC_X86_HAS_OMP = no
 endif
@@ -164,24 +150,24 @@ ifeq ($(DETECTED_OS),Windows)
     # Native Windows build (requires MSYS2/MinGW) - static link libgomp
     CC_WIN = gcc
     CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                 -ffast-math -funroll-loops -ftree-vectorize -flto \
+                 -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
                  -fdata-sections -ffunction-sections \
-                 -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
+                 -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
     LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S \
-                  -static-libgcc -Wl,-Bstatic -lgomp -Wl,-Bdynamic -lpthread
+                  -static-libgcc -Wl,-Bstatic -lgomp -lwinpthread -Wl,-Bdynamic
     WIN_HAS_OMP = yes
     WIN_OMP_STATIC = yes
 else
     LLVM_MINGW_EXISTS := $(shell test -x $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang && echo yes || echo no)
-    MINGW_EXISTS := $(shell which x86_64-w64-mingw32-gcc 2>/dev/null && echo yes || echo no)
+    MINGW_EXISTS := $(shell command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && echo yes || echo no)
 
     ifeq ($(LLVM_MINGW_EXISTS),yes)
         # llvm-mingw: OpenMP support via bundled libomp.dll
         CC_WIN = $(LLVM_MINGW_PREFIX)/bin/x86_64-w64-mingw32-clang
         CFLAGS_WIN = -O3 -Wall -shared -DSYSTEM=STWIN32 -DSD_FASTMODE -fopenmp \
-                     -ffast-math -funroll-loops -ftree-vectorize -flto \
+                     -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
-                     -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
+                     -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
         LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -fopenmp -lpthread
         WIN_HAS_OMP = yes
         WIN_OMP_STATIC = no
@@ -189,10 +175,10 @@ else
         # mingw-w64: no OpenMP
         CC_WIN = x86_64-w64-mingw32-gcc
         CFLAGS_WIN = -O3 -Wall -Wno-unknown-pragmas -shared -DSYSTEM=STWIN32 -DSD_FASTMODE \
-                     -ffast-math -funroll-loops -ftree-vectorize -flto \
+                     -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
                      -fdata-sections -ffunction-sections \
-                     -fno-strict-aliasing -march=haswell $(INCLUDE_DIRS)
-        LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -static-libgcc -lpthread
+                     -fno-strict-aliasing -march=x86-64 -mtune=generic $(INCLUDE_DIRS)
+        LDFLAGS_WIN = -flto -Wl,--gc-sections -Wl,-S -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic
         WIN_HAS_OMP = no
         WIN_OMP_STATIC = no
     else
@@ -212,7 +198,7 @@ ifeq ($(DETECTED_OS),Linux)
     CC_LINUX = gcc
 else
     # Check for a proper cross-compiler
-    LINUX_CROSS := $(shell which x86_64-linux-gnu-gcc 2>/dev/null && echo yes || echo no)
+    LINUX_CROSS := $(shell command -v x86_64-linux-gnu-gcc >/dev/null 2>&1 && echo yes || echo no)
     ifeq ($(LINUX_CROSS),yes)
         CC_LINUX = x86_64-linux-gnu-gcc
     else
@@ -221,15 +207,15 @@ else
 endif
 
 LINUX_BASE_FLAGS = -O3 -Wall -Wextra -shared -fPIC -DSYSTEM=STUNIX -DSD_FASTMODE \
-                   -ffast-math -funroll-loops -ftree-vectorize -flto \
+                   -fno-fast-math -ffp-contract=off -funroll-loops -ftree-vectorize -flto \
                    -fdata-sections -ffunction-sections \
                    -fno-strict-aliasing $(INCLUDE_DIRS)
 
-# Add -march=haswell for x86_64 targets (enables AVX2, FMA, BMI1/2, etc.)
+# Add -march=x86-64 -mtune=generic for x86_64 targets (baseline x86-64; no AVX2 requirement)
 ifeq ($(DETECTED_OS),Linux)
-    LINUX_BASE_FLAGS += -march=haswell
+    LINUX_BASE_FLAGS += -march=x86-64 -mtune=generic
 else ifneq ($(CC_LINUX),)
-    LINUX_BASE_FLAGS += -march=haswell
+    LINUX_BASE_FLAGS += -march=x86-64 -mtune=generic
 endif
 
 # Check for OpenMP support (test the actual compiler, not just host gcc)
@@ -245,8 +231,9 @@ endif
 # because libgomp uses TLS relocations incompatible with PIC code.
 # Linux plugins require libgomp.so at runtime.
 
-# Check for OpenBLAS (native Linux only)
-ifeq ($(DETECTED_OS),Linux)
+# Optional OpenBLAS is for custom builds; distribution plugins do not use it.
+USE_OPENBLAS ?= no
+ifeq ($(DETECTED_OS)-$(USE_OPENBLAS),Linux-yes)
     LINUX_HAS_OPENBLAS := $(shell pkg-config --exists openblas 2>/dev/null && echo yes || \
                                   (test -f /usr/include/cblas.h && test -f /usr/lib/libopenblas.so && echo yes) || \
                                   echo no)
@@ -330,21 +317,21 @@ check:
 	@echo ""
 	@echo "  macOS Apple Silicon (arm64)"
 	@printf "    clang:     " && (which clang >/dev/null 2>&1 && printf "OK\n" || printf "MISSING - install Xcode CLT\n")
-ifeq ($(LIBOMP_EXISTS),yes)
+ifeq ($(MAC_ARM_HAS_OMP),yes)
 	@echo "    libomp:    OK ($(LIBOMP_PREFIX))"
 	@echo "    OpenMP:    Enabled"
 else
-	@echo "    libomp:    MISSING - run: brew install libomp"
+	@echo "    libomp:    MISSING - see docs/PLATFORMS.md"
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
 	@echo "  macOS Intel (x86_64)"
 	@printf "    clang:     " && (which clang >/dev/null 2>&1 && printf "OK\n" || printf "MISSING\n")
 ifeq ($(MAC_X86_HAS_OMP),yes)
-	@echo "    libomp:    OK (/usr/local/opt/libomp)"
+	@echo "    libomp:    OK ($(LIBOMP_INTEL))"
 	@echo "    OpenMP:    Enabled"
 else
-	@echo "    libomp:    MISSING - run: arch -x86_64 /usr/local/bin/brew install libomp"
+	@echo "    libomp:    MISSING - see docs/PLATFORMS.md"
 	@echo "    OpenMP:    Disabled"
 endif
 	@echo ""
@@ -408,6 +395,9 @@ $(BUILD_DIR):
 # macOS Apple Silicon (arm64)
 # ------------------------------------------------------------------------------
 macos-arm: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+ifeq ($(MAC_ARM_HAS_OMP),yes)
+	@python3 validation/check_dependencies.py macos "$(LIBOMP_PREFIX)/lib/libomp.a" --arch arm64 --archive
+endif
 	@echo ""
 	@echo " Building MacOS plugin (arm64)"
 	@echo "    Compiler:  $(CC_MAC) -arch arm64"
@@ -421,14 +411,20 @@ else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
 ifeq ($(MAC_ARM_HAS_OMP),no)
-	@echo "    Warning:   Install libomp for OpenMP: brew install libomp"
+	@echo "    OpenMP:    Build a compatible static runtime; see docs/PLATFORMS.md"
 endif
-	@for f in $(LIBDEFLATE_SRCS); do \
-		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-		$(CC_MAC) $(CFLAGS_MAC_ARM) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_arm.o; \
-	done
-	@$(CC_MAC) $(CFLAGS_MAC_ARM) -o $(PLUGIN_MAC_ARM) $(SOURCES) $(BUILD_DIR)/ld_*_arm.o $(LDFLAGS_MAC_ARM)
-	@rm -f $(BUILD_DIR)/ld_*_arm.o
+	@set -e; \
+		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-arm.XXXXXX"); \
+		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
+		set --; \
+		for f in $(LIBDEFLATE_SRCS); do \
+			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+			object="$$objdir/ld_$${d}_$${b}.o"; \
+			$(CC_MAC) $(CFLAGS_MAC_ARM) -w -c $$f -o "$$object"; \
+			set -- "$$@" "$$object"; \
+		done; \
+		$(CC_MAC) $(CFLAGS_MAC_ARM) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_MAC_ARM); \
+		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_MAC_ARM)"
 	@echo "    Output:    $(PLUGIN_MAC_ARM)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_ARM) | awk '{print $$5}'
 
@@ -436,6 +432,9 @@ endif
 # macOS Intel (x86_64)
 # ------------------------------------------------------------------------------
 macos-intel: $(BUILD_DIR) $(SOURCES) $(HEADERS)
+ifeq ($(MAC_X86_HAS_OMP),yes)
+	@python3 validation/check_dependencies.py macos "$(LIBOMP_INTEL)/lib/libomp.a" --arch x86_64 --archive
+endif
 	@echo ""
 	@echo " Building MacOS plugin (x86_64)"
 	@echo "    Compiler:  $(CC_MAC) -arch x86_64"
@@ -448,12 +447,18 @@ endif
 else
 	@echo "    OpenMP:    Disabled (pthread only)"
 endif
-	@for f in $(LIBDEFLATE_SRCS); do \
-		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-		$(CC_MAC) $(CFLAGS_MAC_X86) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_x86.o; \
-	done
-	@$(CC_MAC) $(CFLAGS_MAC_X86) -o $(PLUGIN_MAC_X86) $(SOURCES) $(BUILD_DIR)/ld_*_x86.o $(LDFLAGS_MAC_X86)
-	@rm -f $(BUILD_DIR)/ld_*_x86.o
+	@set -e; \
+		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-x86.XXXXXX"); \
+		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
+		set --; \
+		for f in $(LIBDEFLATE_SRCS); do \
+			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+			object="$$objdir/ld_$${d}_$${b}.o"; \
+			$(CC_MAC) $(CFLAGS_MAC_X86) -w -c $$f -o "$$object"; \
+			set -- "$$@" "$$object"; \
+		done; \
+		$(CC_MAC) $(CFLAGS_MAC_X86) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_MAC_X86); \
+		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_MAC_X86)"
 	@echo "    Output:    $(PLUGIN_MAC_X86)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_MAC_X86) | awk '{print $$5}'
 
@@ -512,12 +517,18 @@ ifeq ($(WIN_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@for f in $(LIBDEFLATE_SRCS); do \
-		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-		$(CC_WIN) $(CFLAGS_WIN) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_win.o; \
-	done
-	@$(CC_WIN) $(CFLAGS_WIN) -o $(PLUGIN_WINDOWS) $(SOURCES) $(BUILD_DIR)/ld_*_win.o $(LDFLAGS_WIN)
-	@rm -f $(BUILD_DIR)/ld_*_win.o
+	@set -e; \
+		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-win.XXXXXX"); \
+		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
+		set --; \
+		for f in $(LIBDEFLATE_SRCS); do \
+			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+			object="$$objdir/ld_$${d}_$${b}.o"; \
+			$(CC_WIN) $(CFLAGS_WIN) -w -c $$f -o "$$object"; \
+			set -- "$$@" "$$object"; \
+		done; \
+		$(CC_WIN) $(CFLAGS_WIN) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_WIN); \
+		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_WINDOWS)"
 	@echo "    Output:    $(PLUGIN_WINDOWS)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_WINDOWS) | awk '{print $$5}'
 endif
@@ -548,12 +559,18 @@ ifeq ($(LINUX_HAS_OMP),yes)
 else
 	@echo "    OpenMP:    Disabled"
 endif
-	@for f in $(LIBDEFLATE_SRCS); do \
-		d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
-		$(CC_LINUX) $(CFLAGS_LINUX) -w -c $$f -o $(BUILD_DIR)/ld_$${d}_$${b}_linux.o; \
-	done
-	@$(CC_LINUX) $(CFLAGS_LINUX) -o $(PLUGIN_LINUX) $(SOURCES) $(BUILD_DIR)/ld_*_linux.o $(LDFLAGS_LINUX)
-	@rm -f $(BUILD_DIR)/ld_*_linux.o
+	@set -e; \
+		objdir=$$(mktemp -d "$(BUILD_DIR)/.ctools-linux.XXXXXX"); \
+		trap 'rm -rf "$$objdir"' 0; trap 'exit 1' 1 2 3 15; \
+		set --; \
+		for f in $(LIBDEFLATE_SRCS); do \
+			d=$$(basename $$(dirname $$f)); b=$$(basename $$f .c); \
+			object="$$objdir/ld_$${d}_$${b}.o"; \
+			$(CC_LINUX) $(CFLAGS_LINUX) -w -c $$f -o "$$object"; \
+			set -- "$$@" "$$object"; \
+		done; \
+		$(CC_LINUX) $(CFLAGS_LINUX) -o "$$objdir/ctools.plugin" $(SOURCES) "$$@" $(LDFLAGS_LINUX); \
+		mv -f "$$objdir/ctools.plugin" "$(PLUGIN_LINUX)"
 	@echo "    Output:    $(PLUGIN_LINUX)"
 	@printf "    Size:      " && ls -lh $(PLUGIN_LINUX) | awk '{print $$5}'
 endif
@@ -611,3 +628,9 @@ endif
 # Rebuild
 # ------------------------------------------------------------------------------
 rebuild: clean all
+
+# Stage an installable host-platform package. Use a fresh PACKAGE_DIR for each build.
+PACKAGE_DIR ?= dist/ctools
+.PHONY: package
+package: default
+	python3 scripts/stage_package.py --source "$(BUILD_DIR)" --output "$(PACKAGE_DIR)" --revision "$(BUILD_REVISION)"

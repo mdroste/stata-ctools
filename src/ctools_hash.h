@@ -76,13 +76,13 @@ int ctools_str_hash_insert(ctools_str_hash_table *ht, const char *key,
 
 /*
  * Insert a string key with a specific value.
- * If key exists, returns the existing value (does not update).
+ * If key exists, keeps its existing value (does not update).
  * Useful for loading existing label mappings.
  *
  * @param ht     Hash table
  * @param key    String key to insert
  * @param value  Value to associate with the key
- * @return       The value (new or existing), or -1 on error
+ * @return       0 on success, -1 on allocation failure
  */
 int ctools_str_hash_insert_value(ctools_str_hash_table *ht, const char *key,
                                   int value);
@@ -92,9 +92,10 @@ int ctools_str_hash_insert_value(ctools_str_hash_table *ht, const char *key,
  *
  * @param ht   Hash table
  * @param key  String key to find
- * @return     Associated value if found, 0 if not found
+ * @param value Output: associated signed code when found
+ * @return     1 if found, 0 if absent
  */
-int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key);
+int ctools_str_hash_lookup(ctools_str_hash_table *ht, const char *key, int *value);
 
 /* ============================================================================
  * Integer -> String Hash Table (for cdecode)

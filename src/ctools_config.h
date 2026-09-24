@@ -419,6 +419,18 @@ void ctools_init_thread_count(void);
  * captured at init (immune to external OpenMP pollution). */
 int ctools_get_max_threads(void);
 
+/* OpenMP kernels must not confuse pthread/CPU capacity with an OMP team.
+ * Manual partitions still need work-sharing loops: a runtime may supply fewer
+ * workers than requested, including inside nested parallel regions. */
+static inline int ctools_get_openmp_threads(void)
+{
+#ifdef _OPENMP
+    return ctools_get_max_threads();
+#else
+    return 1;
+#endif
+}
+
 /* Set the maximum thread count for ctools operations.
  * Pass 0 to reset to default (omp_get_max_threads()).
  * Pass n > 0 to set a specific limit. */

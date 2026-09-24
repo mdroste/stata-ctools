@@ -857,11 +857,11 @@ decode region, generate(region_str)
 benchmark_encode region_str, testname("census: region")
 
 * Test 9.4: lifeexp - country
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 benchmark_encode country, testname("lifeexp: country")
 
 * Test 9.5: nlswork - race (tostring first)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 tostring race, generate(race_str)
 benchmark_encode race_str, testname("nlswork: race")
 
@@ -881,7 +881,7 @@ decode candidat, generate(cand_str)
 benchmark_encode cand_str, testname("voter: candidat")
 
 * Test 9.9: educ99gdp - country
-webuse educ99gdp, clear
+ctools_fixture educ99gdp, clear
 benchmark_encode country, testname("educ99gdp: country")
 
 * Test 9.10: bpwide - patient
@@ -1183,7 +1183,7 @@ sysuse census, clear
 benchmark_encode state2, testname("sysuse census: state2")
 
 * Test 13.4: lifeexp - country (string variable)
-webuse lifeexp, clear
+ctools_fixture lifeexp, clear
 benchmark_encode country, testname("webuse lifeexp: country")
 
 * Test 13.5: nlsw88 - occupation (decode first since labeled)
@@ -1197,17 +1197,17 @@ decode industry, generate(ind_str)
 benchmark_encode ind_str, testname("sysuse nlsw88: industry")
 
 * Test 13.7: nlswork - occ (tostring since numeric)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 tostring occ, generate(occ_str)
 benchmark_encode occ_str, testname("webuse nlswork: occ")
 
 * Test 13.8: nlswork - ind (tostring since numeric)
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 tostring ind, generate(ind_str)
 benchmark_encode ind_str, testname("webuse nlswork: ind")
 
 * Test 13.9: grunfeld - company (tostring since numeric)
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 tostring company, generate(company_str)
 benchmark_encode company_str, testname("webuse grunfeld: company")
 
@@ -1227,7 +1227,7 @@ tostring patient, generate(pat_str)
 benchmark_encode pat_str, testname("sysuse bpwide: patient")
 
 * Test 13.13: educ99gdp - country
-webuse educ99gdp, clear
+ctools_fixture educ99gdp, clear
 benchmark_encode country, testname("webuse educ99gdp: country")
 
 /*******************************************************************************
@@ -2813,3 +2813,6 @@ test_error_match, stata_cmd(encode x, generate(test)) ctools_cmd(cencode x, gene
 * End of cencode validation
 noi print_summary "cencode"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cencode"

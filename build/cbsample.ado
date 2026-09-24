@@ -44,6 +44,7 @@ program define cbsample
 
     * Mark sample
     marksample touse, novarlist
+    markout `touse' `strata', strok
 
     * Count observations
     quietly count if `touse'
@@ -54,7 +55,7 @@ program define cbsample
 
     * Parse n (positional argument, defaults to _N)
     if "`n'" == "" {
-        local n = `nobs_sample'
+        local n = 0
     }
     else {
         capture confirm integer number `n'
@@ -70,70 +71,15 @@ program define cbsample
 
     * Validate weight variable exists if specified (matches bsample behavior)
     if "`__wgtvar'" != "" {
-        capture confirm variable `__wgtvar'
-        if _rc != 0 {
-            di as error "variable `__wgtvar' not found"
-            exit 111
-        }
+        confirm numeric variable `__wgtvar'
     }
 
     * Load plugin
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cbsample: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Generate seed from Stata's RNG (respects -set seed-)
     local stata_seed = floor(runiform() * 2147483647) + floor(runiform() * 2147483647) * 2147483648
@@ -197,7 +143,7 @@ program define cbsample
     * Build options
     local opts "n=`n' seed=`stata_seed'"
     if "`verbose'" != "" local opts "`opts' verbose"
-    if `"`if'"' == "" & `"`in'"' == "" local opts "`opts' skipif"
+    if `nobs_sample' == _N local opts "`opts' skipif"
 
     local threads_opt ""
     if `threads' > 0 {

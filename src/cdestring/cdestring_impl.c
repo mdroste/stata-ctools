@@ -388,12 +388,14 @@ ST_retcode cdestring_main(const char *args)
      * Uses obs_map to write to correct Stata observations.
      * ==================================================================== */
 
+    int store_rc = STATA_OK;
     if (nvars == 1) {
-        ctools_store_filtered_rowpar(results[0], nobs, opts.dst_indices[0], obs_map);
+        store_rc = ctools_store_filtered_rowpar(results[0], nobs, opts.dst_indices[0], obs_map);
     } else {
-        #pragma omp parallel for schedule(static)
+        #pragma omp parallel for schedule(static) reduction(max:store_rc)
         for (int v = 0; v < nvars; v++) {
-            ctools_store_filtered(results[v], nobs, opts.dst_indices[v], obs_map);
+            int rc = ctools_store_filtered(results[v], nobs, opts.dst_indices[v], obs_map);
+            if (rc > store_rc) store_rc = rc;
         }
     }
 
@@ -411,6 +413,7 @@ ST_retcode cdestring_main(const char *args)
     /* Free contiguous results block (results pointer array is stack-allocated) */
     free(results_block);
     /* var_converted and var_failed are stack-allocated */
+    if (store_rc) { free_options(&opts); return 459; }
 
     t_total = t_store - t_start;
 

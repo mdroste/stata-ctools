@@ -25,7 +25,7 @@ This guide documents the internal C infrastructure for developers contributing t
 
 ### Plugin Lifecycle
 
-Every ctools command follows this pattern:
+Most commands follow this pattern. `cdecode` delegates literal value-label decoding to Stata and commits staged outputs only after every variable succeeds.
 
 ```
 Stata -> C Plugin -> Stata
@@ -88,12 +88,12 @@ The following commands are registered in `ctools_plugin.c`:
 | `cencode` | `cencode_main` | `src/cencode/` |
 | `cwinsor` | `cwinsor_main` | `src/cwinsor/` |
 | `cdestring` | `cdestring_main` | `src/cdestring/` |
-| `cdecode` | `cdecode_main` | `src/cdecode/` |
-| `cdecode_scan` | `cdecode_scan_main` | `src/cdecode/` |
+| `cdecode`, `cdecode_scan` | Retired entry points; request matching ado update | `src/cdecode/` |
 | `csample` | `csample_main` | `src/csample/` |
 | `cbsample` | `cbsample_main` | `src/cbsample/` |
 | `crangestat` | `crangestat_main` | `src/crangestat/` |
 | `cpsmatch` | `cpsmatch_main` | `src/cpsmatch/` |
+| `cpplmhdfe` | `cpplmhdfe_main` | `src/cpplmhdfe/` |
 
 ---
 
@@ -237,9 +237,11 @@ Include: `#include "ctools_types.h"`
 
 ### Available Algorithms
 
+The public `csort` default is `algorithm(auto)`. It selects an engine based on the data; an explicit low-level LSD entry point does not define the public default.
+
 | Algorithm | Best For | Function |
 |-----------|----------|----------|
-| LSD Radix | Fixed-width keys (default) | `ctools_sort_radix_lsd()` |
+| LSD Radix | Fixed-width keys | `ctools_sort_radix_lsd()` |
 | MSD Radix | Variable-length strings | `ctools_sort_radix_msd()` |
 | Timsort | Partially sorted data | `ctools_sort_timsort()` |
 | Sample Sort | Large datasets, many cores | `ctools_sort_sample()` |
@@ -699,7 +701,7 @@ Fallback modes:
 
 Include: `#include "ctools_hash.h"`
 
-Open-addressing hash tables with linear probing, automatic resizing at 75% load factor. Used primarily by `cencode` and `cdecode`.
+Open-addressing hash tables with linear probing, automatic resizing at 75% load factor. Used by label and grouping utilities. The public `cdecode` command uses native Stata decoding and does not use the legacy label parser.
 
 ### String -> Integer (for cencode)
 
@@ -720,7 +722,7 @@ int val = ctools_str_hash_lookup(&ht, "label_text");
 ctools_str_hash_free(&ht);
 ```
 
-### Integer -> String (for cdecode)
+### Integer -> String (shared lookup utility)
 
 ```c
 ctools_int_hash_table ht;
@@ -738,7 +740,7 @@ ctools_int_hash_free(&ht);
 
 ### Label Utilities
 
-Shared label escape/unescape/parse/serialize functions for `cdecode` and `cencode`:
+Shared label escape/unescape/parse/serialize utilities (not the public `cdecode` path):
 
 ```c
 // Escape/unescape labels for serialization
@@ -956,15 +958,12 @@ else if (strcmp(cmd_name, "newcmd") == 0) {
 
 Also add a `CTOOLS_CMD_NEWCMD` entry to the `ctools_command_t` enum in `ctools_runtime.h` and handle it in `get_command_type()`.
 
-### 4. Update Makefile
+### 4. Source discovery
 
-```makefile
-NEWCMD_SRCS = src/newcmd/newcmd_impl.c
-NEWCMD_HEADERS = src/newcmd/newcmd_impl.h
-
-SRCS += $(NEWCMD_SRCS)
-HEADERS += $(NEWCMD_HEADERS)
-```
+The Makefile discovers every C/header file recursively under `src/`, tracks
+headers as dependencies, and adds source directories to the include path.
+Do not add per-command `*_SRCS`/`*_HEADERS` lists. Third-party libdeflate sources
+are compiled separately with their own warning flags.
 
 ### 5. Create Stata Files
 
@@ -972,6 +971,13 @@ HEADERS += $(NEWCMD_HEADERS)
 build/newcmd.ado    - Stata wrapper
 build/newcmd.sthlp  - Help file
 ```
+
+Add both files and every prediction/helper ado to `build/ctools.pkg`. Register
+the command in the help and compatibility inventories, add its component to
+`validation/validate_all.do` and `validation/run_stata_audit.py`, and put the
+completion marker at the actual end of the component. Define cleanup for every
+owned allocation and any persistent state. `validation/test_release_gate.py`
+checks agreement between the public help, source, package, and test inventories.
 
 ---
 
@@ -1082,3 +1088,53 @@ ST_retcode mycmd_main(const char *args)
     return 0;
 }
 ```
+
+## Correctness and distribution
+
+Use `scripts/fetch_validation_data.py` once to cache the checksum-pinned official
+Stata fixtures, then `validation/run_stata_audit.py` for the complete offline
+suite. The driver uses the machine's `oldstata` wrapper and exits cleanly.
+Every component must reach its completion marker. Missing references, unexpected
+skips, and failed assertions block publication. ATT-SE comparisons with psmatch2
+are separately counted as documented method differences, never as passes.
+
+Numeric variable indices are positions in the plugin varlist. Use shared checked
+I/O or `SD_SAFEMODE` for direct SPI calls; raw `SD_FASTMODE` stores can use a
+different index space and overwrite inputs. Never change `src/stplugin.c/h`.
+
+`make package` stages a host-platform manifest. The complete checker verifies
+exactly its declared platform scope and all helper files. CI release packages
+must declare all four platforms and require successful licensed Stata validation.
+
+## Shared failure and wrapper contracts
+
+`_ctools_load.ado` owns platform selection and plugin identity checks. Stata
+scopes plugin registration to the calling ado, so each wrapper registers the
+helper-selected binary in its own scope. Missing platform files may fall back to
+`ctools.plugin`; an incompatible file returns an error. `_ctools_newvars.ado`
+validates complete output-name lists before allocation, and `_ctools_weight.ado`
+stages expression weights while leaving command-specific sample rules in callers.
+`cqreg` uses native `qreg_p`; the unused custom prediction ado is no longer shipped.
+
+`partial_out_columns()` returns status, convergence, and iteration count.
+Callers must propagate a failed projection and must not post successful estimates.
+The shared robust/cluster covariance APIs also return status: allocation or
+cluster-sort failure is 920, invalid covariance configuration is 498. Output
+matrices remain unpublished after an error. Legitimate zero residual variance
+still produces a successful zero covariance matrix.
+
+OpenMP sort capacity is distinct from pthread/hardware capacity. Logical work
+partitions use work-sharing loops so reduced runtime teams still cover every row.
+Without OpenMP, sorting uses one usable OpenMP worker. Arena reset retains and
+reuses its block chain; aligned and ordinary allocation reject size overflow.
+
+Platform builds compile dependency sources in a fresh private directory, stop
+on the first compiler error, link only that directory's explicit object list,
+and publish the plugin only after a successful link. Failed builds preserve the
+previous plugin and remove temporary objects.
+
+The September 24 regressions are `validation/validate_sep24.do` and
+`validation/test_sep24_native.py`. The native runner accepts
+`CTOOLS_TEST_OPENMP_PREFIX` for constrained-team tests and
+`CTOOLS_SANITIZERS=address,undefined` for ASan plus UBSan. The Stata cases are part
+of the full offline release gate. See `SEP24_ASTRA_FIXES.md` for repair evidence.

@@ -159,9 +159,8 @@ processed in parallel using OpenMP, utilizing all available CPU cores.{p_end}
 SIMD-optimized operations for maximum throughput.{p_end}
 
 {pstd}
-For large datasets with wide time windows, {cmd:crangestat} can be 10-50x
-faster than {cmd:rangestat}, depending on the data size, window width, and
-available CPU cores.
+Runtime depends on dataset shape, options, and hardware. Benchmark comparisons
+should record the date, CPU/OS, Stata/reference versions, options, and dimensions.
 
 {pstd}
 {bf:Missing values} are handled correctly: observations with missing key
@@ -236,7 +235,6 @@ better performance:
 {p2col :Multiple statistics}Yes{space 10}Yes{p_end}
 {p2col :By-group support}Yes{space 10}Yes{p_end}
 {p2col :excludeself}Yes{space 10}Yes{p_end}
-{p2col :Speed (large data)}10-50x faster{space 2}Baseline{p_end}
 {p2line}
 
 
@@ -261,4 +259,10 @@ original authors for their excellent contribution to the Stata community.
 {psee}
 Online: {browse "https://ideas.repec.org/c/boc/bocode/s458161.html":rangestat} (if installed),
 {help summarize}, {help egen}, {help tsegen}, {help ctools}
+{p_end}
+
+{title:Validation and failure behavior}
+
+{pstd}
+Output targets must be distinct new variable names, including when a target aliases a source or interval key. Failed operations restore the dataset. Missing interval keys are excluded from the population used to compute statistics, including unbounded windows and excludeself, on both sides of the parallel execution threshold.
 {p_end}

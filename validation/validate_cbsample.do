@@ -280,15 +280,7 @@ set obs 100
 gen id = _n
 gen bsweight = .
 set seed 12345
-cbsample 200, weight(bsweight)
-summarize bsweight, meanonly
-local total = r(sum)
-if abs(`total' - 200) < 10 {
-    test_pass "n > nobs bootstrap (total weight ~200)"
-}
-else {
-    test_fail "n > nobs bootstrap" "total weight=`total'"
-}
+test_error_match, stata_cmd(bsample 200, weight(bsweight)) ctools_cmd(cbsample 200, weight(bsweight)) testname("oversized bootstrap draw rejected")
 
 /*******************************************************************************
  * SECTION 8: If/In Conditions
@@ -497,16 +489,9 @@ clear
 set obs 100
 gen id = _n
 set seed 12345
-cbsample 150
-
-local N_after = _N
-* Should have approximately 150 obs (some variance expected)
-if `N_after' > 110 & `N_after' < 190 {
-    test_pass "without weight() n=150: expanded to ~150 (got `N_after')"
-}
-else {
-    test_fail "without weight() n=150: expanded to ~150" "got `N_after'"
-}
+cbsample 50
+assert _N == 50
+test_pass "explicit count expands to exactly 50 observations"
 
 /*******************************************************************************
  * SECTION 12: Strata independence verification
@@ -662,3 +647,6 @@ test_error_match, stata_cmd(bsample, weight(bsweight) strata(nonexistent_var)) c
 * End of cbsample validation
 noi print_summary "cbsample"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cbsample"

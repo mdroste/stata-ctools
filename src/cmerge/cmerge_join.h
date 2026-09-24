@@ -44,7 +44,8 @@ typedef struct {
  * @param nkeys            Number of key variables
  * @param merge_type       Type of merge (1:1, m:1, 1:m, m:m)
  * @param output_specs_out Pointer to receive allocated output specs array
- * @return                 Number of output rows, or -1 on error
+ * @return                 Rows, -1 allocation failure, -2/-3 nonunique master/using,
+ *                         -4 incompatible key types
  */
 int64_t cmerge_sorted_join(
     stata_data *master_keys, stata_data *using_keys,

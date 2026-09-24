@@ -58,7 +58,8 @@ typedef enum {
     XLSX_CELL_SHARED_STRING,
     XLSX_CELL_BOOLEAN,
     XLSX_CELL_ERROR,
-    XLSX_CELL_DATE
+    XLSX_CELL_DATE,
+    XLSX_CELL_DATETIME
 } XLSXCellType;
 
 typedef struct {
@@ -110,7 +111,8 @@ typedef struct XLSXContext {
     uint32_t *shared_string_lengths; /* Pre-computed lengths for O(1) lookup */
 
     /* Date format detection (style indices that are dates) */
-    bool *date_styles;
+    bool date1904;           /* workbookPr date system */
+    uint8_t *date_styles;    /* 0 numeric, 1 daily date, 2 datetime */
     int num_styles;
 
     /* Arena for parse-phase allocations (inline strings) */

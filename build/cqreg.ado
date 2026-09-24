@@ -20,6 +20,16 @@ program define cqreg, eclass
     syntax varlist(min=2 numeric fv) [if] [in], [Quantile(real 0.5) Absorb(varlist) ///
         VCE(string) DENmethod(string) BWmethod(string) Verbose TOLerance(real 1e-12) MAXiter(integer 200) NOPReprocess(integer 0) THReads(integer 0)]
 
+    * Least-squares partialling is not valid for the quantile-loss objective.
+    if "`absorb'" != "" {
+        di as error "cqreg: absorb() is not supported; use explicit factor-variable indicators"
+        exit 198
+    }
+    if `maxiter' < 1 {
+        di as error "cqreg: maxiter() must be positive"
+        exit 198
+    }
+
     * Validate quantile
     if `quantile' >= 1 {
         di as error "cqreg: quantile must be between 0 and 1"
@@ -110,20 +120,12 @@ program define cqreg, eclass
                 exit 198
             }
             local clustervar_orig "`clustervar'"
-            * Check if cluster variable is string - convert to numeric if so
-            capture confirm numeric variable `clustervar'
-            if _rc != 0 {
-                tempvar clustervar_numeric
-                capture which gegen
-                if _rc == 0 {
-                    quietly gegen `clustervar_numeric' = group(`clustervar')
-                }
-                else {
-                    quietly egen `clustervar_numeric' = group(`clustervar')
-                }
-                local clustervar "`clustervar_numeric'"
-            }
-            markout `touse' `clustervar_orig'
+            confirm variable `clustervar', exact
+            markout `touse' `clustervar_orig', strok
+            * Preserve equality of fractional, large, and string identifiers.
+            tempvar clustervar_numeric
+            quietly egen long `clustervar_numeric' = group(`clustervar') if `touse'
+            local clustervar "`clustervar_numeric'"
         }
         else if "`vce_lower'" == "robust" | "`vce_lower'" == "r" {
             local vcetype = 1
@@ -204,60 +206,11 @@ program define cqreg, eclass
     * Note: q_v and sum_rdev are now computed in the C plugin for better performance
 
     * Load the platform-appropriate ctools plugin if not already loaded
-    capture program list ctools_plugin
-    if _rc != 0 {
-        local __os = c(os)
-        local __machine = c(machine_type)
-        local __is_mac = 0
-        if "`__os'" == "MacOSX" {
-            local __is_mac = 1
-        }
-        else if strpos(lower("`__machine'"), "mac") > 0 {
-            local __is_mac = 1
-        }
-        local __plugin = ""
-        if "`__os'" == "Windows" {
-            local __plugin "ctools_windows.plugin"
-        }
-        else if `__is_mac' {
-            local __is_arm = 0
-            if strpos(lower("`__machine'"), "apple") > 0 | strpos(lower("`__machine'"), "arm") > 0 | strpos(lower("`__machine'"), "silicon") > 0 {
-                local __is_arm = 1
-            }
-            if `__is_arm' == 0 {
-                tempfile __archfile
-                quietly shell uname -m > "`__archfile'" 2>&1
-                tempname __fh
-                file open `__fh' using "`__archfile'", read text
-                file read `__fh' __archline
-                file close `__fh'
-                capture erase "`__archfile'"
-                if strpos("`__archline'", "arm64") > 0 {
-                    local __is_arm = 1
-                }
-            }
-            if `__is_arm' {
-                local __plugin "ctools_mac_arm.plugin"
-            }
-            else {
-                local __plugin "ctools_mac_x86.plugin"
-            }
-        }
-        else if "`__os'" == "Unix" {
-            local __plugin "ctools_linux.plugin"
-        }
-        else {
-            local __plugin "ctools.plugin"
-        }
-        capture program ctools_plugin, plugin using("`__plugin'")
-        if _rc != 0 & _rc != 110 & "`__plugin'" != "ctools.plugin" {
-            capture program ctools_plugin, plugin using("ctools.plugin")
-        }
-        if _rc != 0 & _rc != 110 {
-            di as error "cqreg: Could not load ctools plugin"
-            exit 601
-        }
-    }
+    _ctools_load
+    * Stata scopes plugin registrations to the calling ado program.
+    capture program ctools_plugin, plugin using("`__ctools_plugin'")
+    if _rc != 0 & _rc != 110 exit 601
+    capture confirm number 0
 
     * Pre-compute bandwidth in Stata for exact precision match with qreg.
     * Using Stata's invnormal()/normalden() avoids C approximation errors.
@@ -524,6 +477,7 @@ program define cqreg, eclass
     ereturn scalar sum_rdev = `sum_rdev'
     ereturn scalar sum_adev = `sum_adev'
     ereturn scalar convcode = cond(`converged', 0, 1)
+    ereturn scalar iterations = `iterations'
     ereturn scalar r2_p = `r2_p'
 
     if `nfe' > 0 {

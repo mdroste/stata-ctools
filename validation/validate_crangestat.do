@@ -1132,12 +1132,12 @@ gen price = 100 + runiform() * 10
 benchmark_rangestat mean price, interval(date -4 0) testname("rolling mean (time series)")
 
 * Test 9.2: Panel data rolling window
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 sort company year
 benchmark_rangestat mean invest, interval(year -2 0) by(company) testname("panel data rolling window")
 
 * Test 9.3: Age-based similar observations
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep if !missing(ln_wage) & !missing(age)
 benchmark_rangestat mean ln_wage, interval(age -1 1) testname("age-based similar observations")
 
@@ -1348,14 +1348,14 @@ else {
 print_section "Rangestat Head-to-Head (real data)"
 
 * Test 11.1: Rolling stats on Grunfeld panel
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 sort company year
 benchmark_rangestat mean invest, interval(year -2 2) by(company) testname("grunfeld: rolling mean")
 benchmark_rangestat sd invest, interval(year -2 2) by(company) testname("grunfeld: rolling sd")
 benchmark_rangestat count invest, interval(year -2 2) by(company) testname("grunfeld: rolling count")
 
 * Test 11.2: nlswork age-based stats
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep if !missing(ln_wage) & !missing(age)
 benchmark_rangestat mean ln_wage, interval(age -2 2) testname("nlswork: mean by age")
 benchmark_rangestat min ln_wage, interval(age -2 2) testname("nlswork: min by age")
@@ -1453,27 +1453,17 @@ gen t = _n
 gen float x = _n + 0.1
 benchmark_rangestat mean x, interval(t -2 2) testname("float precision data")
 
-* Test 13.3: Result variable already exists (replace)
+* Test 13.3: An existing result is protected, as in rangestat.
 clear
 set obs 100
 gen t = _n
 gen x = _n
 gen double existing_var = 999
-crangestat (mean) existing_var=x, interval(t -2 2)
-* existing_var should be overwritten with actual mean
-if existing_var[50] != 999 & !missing(existing_var[50]) {
-    sigfigs `=existing_var[50]' 50
-    if r(sigfigs) >= $DEFAULT_SIGFIGS {
-        test_pass "result var already exists (overwrite)"
-    }
-    else {
-        local sf : display %5.1f r(sigfigs)
-        test_fail "result var overwrite" "sigfigs=`sf'"
-    }
-}
-else {
-    test_fail "result var overwrite" "variable not overwritten"
-}
+capture crangestat (mean) existing_var=x, interval(t -2 2)
+local result = _rc
+count if existing_var != 999
+if `result' == 110 & r(N) == 0 test_pass "existing result rejected without modification"
+else test_fail "existing result protection" "expected 110 and unchanged values"
 
 * Test 13.4: Very small interval with dense data
 clear
@@ -1701,7 +1691,7 @@ benchmark_rangestat mean x, interval(t -4 4) by(group) excludeself testname("com
 benchmark_rangestat count x, interval(t -4 4) by(group) excludeself testname("combined: count (by+excl+miss)")
 
 * Test 17.2: All percentiles with by-group on real data
-webuse grunfeld, clear
+ctools_fixture grunfeld, clear
 sort company year
 benchmark_rangestat median invest, interval(year -3 3) by(company) testname("grunfeld: median by company")
 crangestat (p10) c_p10=invest (p25) c_p25=invest (median) c_p50=invest (p75) c_p75=invest (p90) c_p90=invest, interval(year -3 3) by(company)
@@ -1723,7 +1713,7 @@ else {
 }
 
 * Test 17.3: Skewness and kurtosis with by-group + rangestat
-webuse nlswork, clear
+ctools_fixture nlswork, clear
 keep if !missing(ln_wage) & !missing(age) & !missing(race)
 sort race age
 benchmark_rangestat skewness ln_wage, interval(age -3 3) by(race) testname("nlswork: skewness by race")
@@ -1998,7 +1988,7 @@ gen x = cond(mod(_n, 2) == 0, 1e6, 1e-6)
 benchmark_rangestat mean x, interval(t -2 2) testname("mixed magnitude")
 
 * Test 20.5: Census dataset — population-based range stats
-capture webuse census, clear
+capture ctools_fixture census, clear
 if _rc == 0 {
     keep if !missing(pop) & !missing(medage)
     benchmark_rangestat mean pop, interval(medage -1 1) testname("census: mean pop by medage")
@@ -2013,3 +2003,6 @@ else {
 * End of crangestat validation
 noi print_summary "crangestat"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "crangestat"

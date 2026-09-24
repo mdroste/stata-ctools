@@ -1998,3 +1998,6 @@ test_error_match, stata_cmd(destring x, generate(test)) ctools_cmd(cdestring x, 
 * End of cdestring validation
 noi print_summary "cdestring"
 }
+
+* Reached only after the complete component script.
+global CTOOLS_COMPONENT_COMPLETE "cdestring"

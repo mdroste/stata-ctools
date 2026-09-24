@@ -2,26 +2,65 @@ name: Build Plugins
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main, dev, develop ]
     paths:
       - 'src/**'
       - 'Makefile'
+      - 'build/*.ado'
+      - 'build/*.sthlp'
+      - 'build/*.pkg'
+      - 'build/stata.toc'
+      - 'build/LICENSE'
+      - 'build/THIRD_PARTY_NOTICES'
+      - 'scripts/**'
+      - 'validation/**'
+      - 'release.json'
+      - 'README.md'
+      - 'FEATURES.md'
+      - 'DEVELOPERS.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES'
       - '.github/workflows/build.yml'
   pull_request:
-    branches: [ main ]
+    branches: [ main, dev, develop ]
     paths:
       - 'src/**'
       - 'Makefile'
-  workflow_dispatch:  # Allow manual triggering
+      - 'build/*.ado'
+      - 'build/*.sthlp'
+      - 'build/*.pkg'
+      - 'build/stata.toc'
+      - 'build/LICENSE'
+      - 'build/THIRD_PARTY_NOTICES'
+      - 'scripts/**'
+      - 'validation/**'
+      - 'release.json'
+      - 'README.md'
+      - 'FEATURES.md'
+      - 'DEVELOPERS.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - 'THIRD_PARTY_NOTICES'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
   release:
     types: [created]
+
+# Superseded branch builds must not publish binaries from an older source tree.
+concurrency:
+  group: ctools-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
+permissions:
+  contents: read
 
 jobs:
   # ===========================================================================
   # Linux x64 Build
   # ===========================================================================
   build-linux:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -32,26 +71,22 @@ jobs:
           sudo apt-get install -y gcc make libgomp1
           # Note: Linux uses dynamic libgomp (static linking not possible for shared libs)
 
-      - name: Build Linux plugin
-        run: make linux
-
-      - name: Verify build
+      - name: Validate native code and release metadata
         run: |
-          ls -la build/
-          file build/ctools_linux.plugin
+          python3 scripts/sync_release.py --check
+          python3 validation/check_package.py build --metadata-only
+          CC=gcc python3 validation/test_p1_native.py
+          CC=gcc python3 validation/test_p2_native.py
+          CC=gcc python3 validation/test_sep22_native.py
+          CC=gcc CTOOLS_SANITIZERS=address,undefined python3 validation/test_sep24_native.py
+          python3 validation/test_release_gate.py
+          python3 validation/test_build_contract.py
 
-          echo ""
-          echo "=== Dynamic dependencies ==="
-          ldd build/ctools_linux.plugin
+      - name: Build Linux plugin
+        run: make linux BUILD_REVISION=${{ github.sha }}
 
-          echo ""
-          echo "=== OpenMP status ==="
-          if ldd build/ctools_linux.plugin | grep -q "libgomp"; then
-            echo "✓ OpenMP enabled (libgomp dynamically linked)"
-            echo "  Note: Linux requires libgomp.so at runtime (installed via libgomp1 package)"
-          else
-            echo "OpenMP not linked"
-          fi
+      - name: Check Linux dependency contract
+        run: python3 validation/check_dependencies.py linux build/ctools_linux.plugin
 
       - name: Upload Linux plugin
         uses: actions/upload-artifact@v4
@@ -69,36 +104,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Cache Homebrew downloads
-        uses: actions/cache@v4
+      - uses: actions/setup-python@v5
         with:
-          path: ~/Library/Caches/Homebrew/downloads
-          key: brew-${{ runner.os }}-${{ runner.arch }}-libomp
+          python-version: '3.12'
 
-      - name: Install OpenMP (libomp)
-        run: |
-          brew install libomp
-          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> $GITHUB_ENV
+      - name: Build OpenMP for macOS 11
+        run: python3 scripts/build_macos_openmp.py arm64 "$RUNNER_TEMP/libomp" --work "$RUNNER_TEMP/llvm-openmp"
 
-      - name: Build macOS ARM plugin
-        run: make macos-arm
+      - name: Build macOS plugin
+        run: make macos-arm LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
-      - name: Verify build
-        run: |
-          ls -la build/
-          file build/ctools_mac_arm.plugin
-
-          echo ""
-          echo "=== Checking OpenMP linking ==="
-          if otool -L build/ctools_mac_arm.plugin | grep -q "libomp"; then
-            echo "⚠ libomp is dynamically linked"
-          else
-            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
-          fi
-
-          echo ""
-          echo "=== Dynamic dependencies ==="
-          otool -L build/ctools_mac_arm.plugin
+      - name: Check macOS dependency contract
+        run: python3 validation/check_dependencies.py macos build/ctools_mac_arm.plugin --arch arm64
 
       - name: Upload macOS ARM plugin
         uses: actions/upload-artifact@v4
@@ -111,41 +128,23 @@ jobs:
   # macOS Intel (x86_64) Build
   # ===========================================================================
   build-macos-intel:
-    runs-on: macos-15-large  # Intel runner (x86_64)
+    runs-on: macos-15-intel  # Standard Intel runner (x86_64)
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Cache Homebrew downloads
-        uses: actions/cache@v4
+      - uses: actions/setup-python@v5
         with:
-          path: ~/Library/Caches/Homebrew/downloads
-          key: brew-${{ runner.os }}-${{ runner.arch }}-libomp
+          python-version: '3.12'
 
-      - name: Install OpenMP (libomp)
-        run: |
-          brew install libomp
-          echo "LIBOMP_PREFIX=$(brew --prefix libomp)" >> $GITHUB_ENV
+      - name: Build OpenMP for macOS 11
+        run: python3 scripts/build_macos_openmp.py x86_64 "$RUNNER_TEMP/libomp" --work "$RUNNER_TEMP/llvm-openmp"
 
-      - name: Build macOS Intel plugin
-        run: make macos-intel
+      - name: Build macOS plugin
+        run: make macos-intel LIBOMP_PREFIX="$RUNNER_TEMP/libomp" BUILD_REVISION=${{ github.sha }}
 
-      - name: Verify build
-        run: |
-          ls -la build/
-          file build/ctools_mac_x86.plugin
-
-          echo ""
-          echo "=== Checking OpenMP linking ==="
-          if otool -L build/ctools_mac_x86.plugin | grep -q "libomp"; then
-            echo "⚠ libomp is dynamically linked"
-          else
-            echo "✓ libomp is NOT in dynamic dependencies (statically linked)"
-          fi
-
-          echo ""
-          echo "=== Dynamic dependencies ==="
-          otool -L build/ctools_mac_x86.plugin
+      - name: Check macOS dependency contract
+        run: python3 validation/check_dependencies.py macos build/ctools_mac_x86.plugin --arch x86_64
 
       - name: Upload macOS Intel plugin
         uses: actions/upload-artifact@v4
@@ -179,34 +178,15 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-openmp
             mingw-w64-x86_64-winpthreads-git
+            mingw-w64-x86_64-python
 
       - name: Build Windows plugin
         shell: msys2 {0}
-        run: make windows
+        run: make windows BUILD_REVISION=${{ github.sha }}
 
-      - name: Verify build
+      - name: Check Windows dependency contract
         shell: msys2 {0}
-        run: |
-          echo "=== File type ==="
-          file build/ctools_windows.plugin
-
-          echo ""
-          echo "=== Checking OpenMP is statically linked ==="
-          if nm build/ctools_windows.plugin | grep -q "GOMP_parallel"; then
-            echo "✓ OpenMP symbols found (GOMP_parallel present)"
-          else
-            echo "✗ WARNING: OpenMP symbols NOT found"
-          fi
-
-          if objdump -p build/ctools_windows.plugin | grep -qi "libgomp"; then
-            echo "✗ WARNING: libgomp found in DLL imports - dynamically linked"
-          else
-            echo "✓ libgomp NOT in DLL imports (statically linked)"
-          fi
-
-          echo ""
-          echo "=== DLL dependencies ==="
-          objdump -p build/ctools_windows.plugin | grep "DLL Name" || echo "No DLL dependencies found"
+        run: python validation/check_dependencies.py windows build/ctools_windows.plugin
 
       - name: Upload Windows plugin
         uses: actions/upload-artifact@v4
@@ -215,12 +195,43 @@ jobs:
           path: build/ctools_windows.plugin
           if-no-files-found: error
 
+  # Licensed runner required for publication. Configure CTOOLS_STATA_RUNNER as a JSON label list,
+  # e.g. ["self-hosted", "macOS", "stata"], with the user's oldstata wrapper.
+  # Never run untrusted pull-request code on a persistent licensed runner.
+  stata-validation:
+    if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNER != ''
+    needs: [build-macos-arm, build-macos-intel]
+    runs-on: ${{ fromJSON(vars.CTOOLS_STATA_RUNNER || '["self-hosted","macOS","stata"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ctools_mac_*
+          path: build
+          merge-multiple: true
+      - name: Prepare pinned offline examples
+        run: python3 scripts/fetch_validation_data.py
+      - name: Run complete Stata correctness gate
+        run: python3 validation/run_stata_audit.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stata-audit-log
+          path: validation/audit_ci.log
+
   # ===========================================================================
   # Combine all artifacts into single release package
   # ===========================================================================
   package:
-    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows]
-    runs-on: ubuntu-latest
+    needs: [build-linux, build-macos-arm, build-macos-intel, build-windows, stata-validation]
+    if: >-
+      always() && !cancelled() &&
+      needs.build-linux.result == 'success' &&
+      needs.build-macos-arm.result == 'success' &&
+      needs.build-macos-intel.result == 'success' &&
+      needs.build-windows.result == 'success' &&
+      (github.event_name == 'pull_request' || needs.stata-validation.result == 'success')
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -241,8 +252,11 @@ jobs:
           cp plugins/ctools_windows/ctools_windows.plugin release/build/
 
           # Copy ado and help files
-          cp build/*.ado release/build/ 2>/dev/null || true
-          cp build/*.sthlp release/build/ 2>/dev/null || true
+          cp build/*.ado build/*.sthlp release/build/
+          cp build/ctools.pkg build/stata.toc build/LICENSE build/THIRD_PARTY_NOTICES release/build/
+          printf '%s\n' '${{ github.sha }}' > release/SOURCE_COMMIT
+          python3 scripts/sync_release.py --check
+          python3 validation/check_package.py release/build
 
           echo "Release package contents:"
           ls -la release/build/
@@ -260,14 +274,14 @@ jobs:
   commit-plugins:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
 
       - name: Download package
         uses: actions/download-artifact@v4
@@ -284,11 +298,17 @@ jobs:
 
       - name: Commit and push
         run: |
+          test "$(cat release/SOURCE_COMMIT)" = "$GITHUB_SHA"
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || {
+            echo "main advanced after this build; refusing stale plugin publication"
+            exit 1
+          }
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -f build/*.plugin
           git diff --staged --quiet || git commit -m "Update compiled plugins [skip ci]"
-          git push
+          git push origin HEAD:main
 
   # ===========================================================================
   # Create GitHub Release (only on release events)
@@ -296,7 +316,7 @@ jobs:
   release:
     if: github.event_name == 'release'
     needs: [package]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     permissions:
       contents: write
     steps:
@@ -309,7 +329,7 @@ jobs:
       - name: Create release archive
         run: |
           cd release
-          zip -r ../ctools-${{ github.event.release.tag_name }}.zip build/
+          zip -r ../ctools-${{ github.event.release.tag_name }}.zip build/ SOURCE_COMMIT
           cd ..
           ls -la *.zip
 

@@ -79,7 +79,7 @@
 {synopt:{opt datafmt}}export date/time variables using their display formats{p_end}
 {synopt:{opt datestring(fmt)}}custom format for date/time variables{p_end}
 {synopt:{opt missing(string)}}replacement value for missing data; default is empty cell{p_end}
-{synopt:{opt keepcellfmt}}preserve cell formatting from existing file{p_end}
+{synopt:{opt keepcellfmt}}copy existing workbook style definitions (limited support){p_end}
 
 {syntab:Reporting}
 {synopt:{opt verbose}}display progress information{p_end}
@@ -218,10 +218,12 @@ By default, missing values are exported as empty cells. For example,
 exports them as periods.
 
 {phang}
-{opt keepcellfmt} preserves cell formatting (fonts, colors, borders, number
-formats) from an existing Excel file when replacing it. This allows you to
-update data in a formatted template without losing the formatting. The option
-has no effect when creating a new file. Requires the {cmd:replace} option.
+{opt keepcellfmt} copies the existing workbook's style-definition table when
+{cmd:replace} is specified. It does not retain worksheet cell-style assignments,
+column widths, conditional formatting, or other sheets. It is not a formatted-
+template update facility, and existing style indices may differ from the indices
+used for newly exported date cells. Omit it when date-format fidelity is required.
+The option has no effect when creating a new file.
 
 {dlgtab:Reporting}
 
@@ -312,4 +314,21 @@ Manual: {bf:[D] export delimited}, {bf:[D] export excel}
 
 {psee}
 Online: {help export delimited}, {help export excel}, {help cimport}, {help ctools}
+{p_end}
+
+{title:File and date fidelity}
+
+{pstd}
+CSV and XLSX exports validate complete metadata, write a sibling temporary file,
+and publish the destination only after success. Without {opt replace}, publication
+refuses an existing destination. Filenames and sheet names may contain spaces
+or text such as threads(2). {opt threads(#)} is accepted for both formats.
+{p_end}
+
+{pstd}
+Excel uses the 1900 date system. Daily dates keep their calendar date; %tc values
+retain fractional days, including milliseconds. %tC is converted with cofC()
+because Excel cannot represent leap seconds. Other Stata period dates use the
+first day of the period. {opt datafmt} renders date/time display formats as text;
+it does not apply arbitrary numeric display formats.
 {p_end}

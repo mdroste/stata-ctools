@@ -98,15 +98,14 @@ typedef struct {
 
 /* Check if two adjacent observations are in the same group */
 static inline int same_group_check(stata_data *data, size_t nvars, size_t i, double miss) {
+    (void)miss;
     for (size_t b = 0; b < nvars; b++) {
-        double prev = data->vars[b].data.dbl[i - 1];
-        double curr = data->vars[b].data.dbl[i];
-
-        int prev_miss = (prev >= miss);
-        int curr_miss = (curr >= miss);
-
-        if (prev_miss && curr_miss) continue;
-        if (prev_miss || curr_miss || prev != curr) {
+        const stata_variable *var = &data->vars[b];
+        if (var->type == STATA_TYPE_STRING) {
+            const char *prev = var->data.str[i - 1];
+            const char *curr = var->data.str[i];
+            if (strcmp(prev ? prev : "", curr ? curr : "") != 0) return 0;
+        } else if (var->data.dbl[i - 1] != var->data.dbl[i]) {
             return 0;
         }
     }

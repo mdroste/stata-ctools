@@ -2,7 +2,10 @@
 
 This document describes features available **only** in ctools commands—functionality that does not exist in the standard Stata commands or popular user-written alternatives they replace.
 
-All ctools commands are high-performance, C-accelerated replacements for their standard counterparts with multi-threaded parallel processing, but this document focuses on new capabilities rather than speed improvements.
+Most ctools commands use C implementations with parallel processing. `cdecode`
+uses Stata's native decoding engine to preserve literal and long value labels.
+This document describes added capabilities; see `docs/COMPATIBILITY.md` for the
+supported scope and differences from reference commands.
 
 ---
 
@@ -92,11 +95,11 @@ cexport excel using output.xlsx, replace
 
 ## csample
 
-Stata's native `sample` command does not support a `by()` option for within-group sampling.
+Both native `sample` and `csample` support `by()` for within-group sampling.
 
 **ctools adds:**
 
-- **By-group sampling**: `by()` option to sample separately within groups, drawing a specified percentage or count from each group
+- **Parallel implementation**: sample separately within groups; `csample` uses `count(#)` where native `sample` uses `# , count`
 
 ```stata
 * Draw a 50% sample within each foreign category
@@ -110,16 +113,9 @@ csample, count(5) by(foreign)
 
 ## cqreg
 
-Stata's native `qreg` command does not support fixed effects absorption.
-
-**ctools adds:**
-
-- **HDFE support**: `absorb()` option to absorb high-dimensional fixed effects in quantile regression
-
-```stata
-* Quantile regression with two-way fixed effects
-cqreg ln_wage age tenure, absorb(idcode year) quantile(0.5)
-```
+`absorb()` is currently unavailable: least-squares partialling does not estimate
+fixed-effect quantile regression. Use explicit indicators, such as
+`cqreg ln_wage age tenure i.idcode i.year`, when the number of groups permits it.
 
 ---
 

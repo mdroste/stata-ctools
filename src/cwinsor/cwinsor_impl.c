@@ -255,7 +255,7 @@ static void detect_groups(double **by_data, size_t nobs, size_t nby,
 ST_retcode cwinsor_main(const char *args)
 {
     double t_start, t_load, t_sort, t_groups, t_winsor, t_store;
-    int *store_indices = NULL;   /* Global dataset positions for SF_vstore */
+    int *store_indices = NULL;   /* Plugin-local positions for checked stores */
     int *load_indices = NULL;    /* Sequential plugin-local indices for SF_vdata */
     int *by_load_indices = NULL; /* Sequential plugin-local indices for by-vars */
     double **var_data = NULL;
@@ -312,7 +312,7 @@ ST_retcode cwinsor_main(const char *args)
     }
     p = end;
 
-    /* Parse global store indices (for SF_vstore which uses global dataset positions) */
+    /* Parse plugin-local store indices. */
     store_indices = (int *)malloc(nvars * sizeof(int));
     if (!store_indices) {
         ctools_error_alloc(CWINSOR_MODULE);
@@ -675,56 +675,29 @@ ST_retcode cwinsor_main(const char *args)
     /* === Store Phase using obs_map === */
     double store_start = ctools_timer_seconds();
 
+    int store_rc = STATA_OK;
+    perm_idx_t *write_map = obs_map;
+    perm_idx_t *composed_map = NULL;
     if (nby > 0 && sort_indices != NULL) {
-        /* Store in original order using sort_indices directly.
-         * sort_indices[j] = original (pre-sort) index of the j-th sorted element.
-         * data[j] = winsorized value at sorted position j.
-         * obs_map[sort_indices[j]] = Stata observation for that original index.
-         * This avoids computing and storing an inverse permutation. */
-        if (nvars == 1) {
-            /* Single variable: compose obs_map for row-parallel store */
-            perm_idx_t *composed_map = (perm_idx_t *)malloc(nobs * sizeof(perm_idx_t));
-            if (composed_map) {
-                for (size_t j = 0; j < nobs; j++) {
-                    composed_map[j] = obs_map[sort_indices[j]];
-                }
-                ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], composed_map);
-                free(composed_map);
-            } else {
-                /* Fallback: sequential store */
-                for (size_t j = 0; j < nobs; j++) {
-                    SF_vstore(store_indices[0], (ST_int)obs_map[sort_indices[j]], var_data[0][j]);
-                }
-            }
-        } else {
-            #ifdef _OPENMP
-            #pragma omp parallel for schedule(static)
-            #endif
-            for (size_t v = 0; v < nvars; v++) {
-                int idx = store_indices[v];
-                double *data = var_data[v];
-                for (size_t j = 0; j < nobs; j++) {
-                    SF_vstore(idx, (ST_int)obs_map[sort_indices[j]], data[j]);
-                }
-            }
+        composed_map = (perm_idx_t *)ctools_safe_malloc2(nobs, sizeof(perm_idx_t));
+        if (!composed_map) store_rc = STATA_ERR_MEMORY;
+        else {
+            for (size_t j = 0; j < nobs; j++) composed_map[j] = obs_map[sort_indices[j]];
+            write_map = composed_map;
         }
-    } else {
+    }
+    if (!store_rc) {
         if (nvars == 1) {
-            /* Single variable: row-parallel store */
-            ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], obs_map);
+            store_rc = ctools_store_filtered_rowpar(var_data[0], nobs, store_indices[0], write_map);
         } else {
-            #ifdef _OPENMP
-            #pragma omp parallel for schedule(static)
-            #endif
+            #pragma omp parallel for schedule(static) reduction(max:store_rc)
             for (size_t v = 0; v < nvars; v++) {
-                int idx = store_indices[v];
-                double *data = var_data[v];
-                for (size_t i = 0; i < nobs; i++) {
-                    SF_vstore(idx, (ST_int)obs_map[i], data[i]);
-                }
+                int rc = ctools_store_filtered(var_data[v], nobs, store_indices[v], write_map);
+                if (rc > store_rc) store_rc = rc;
             }
         }
     }
+    free(composed_map);
 
     t_store = ctools_timer_seconds() - store_start;
 
@@ -745,6 +718,8 @@ ST_retcode cwinsor_main(const char *args)
     free(store_indices);
     free(load_indices);
     free(by_load_indices);
+
+    if (store_rc) return store_rc == STATA_ERR_MEMORY ? 920 : 459;
 
     /* Store timing scalars */
     double total = ctools_timer_seconds() - t_start;

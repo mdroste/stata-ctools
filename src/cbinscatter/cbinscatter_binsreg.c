@@ -175,9 +175,9 @@ ST_retcode adjust_bins_binsreg(
     }
 
     /* Solve (X'X) * gamma = X'y using shared Cholesky */
-    if (ctools_solve_cholesky(XtX, Xty, K, gamma) != 0) {
-        /* If singular, gamma remains zero - bin means are just raw Y means */
-        memset(gamma, 0, K * sizeof(ST_double));
+    rc = cbinscatter_solve_with_collinearity(XtX, Xty, K, gamma);
+    if (rc != CBINSCATTER_OK) {
+        goto cleanup;
     }
 
     /* Step 5: Compute overall mean of each control (for "at mean" evaluation) */
@@ -416,20 +416,9 @@ ST_retcode adjust_bins_binsreg_hdfe(
         }
     }
 
-    /* Solve using regularized Cholesky (add small ridge for stability) */
-    ST_double ridge = 1e-12;
-    for (ST_int j = 0; j < num_regressors; j++) {
-        XtX_full[j * num_regressors + j] += ridge;
-    }
-
-    if (ctools_solve_cholesky(XtX_full, Xty_full, num_regressors, coef) != 0) {
-        /* Fallback: use simple bin means adjusted by y_mean */
-        rc = compute_bin_means(y_hdfe, bin_ids, weights, N, num_bins, beta);
-        if (rc == CBINSCATTER_OK) {
-            for (ST_int b = 0; b < num_bins; b++) {
-                result->bins[b].y_mean = beta[b] + y_mean;
-            }
-        }
+    /* Omit redundant columns; never substitute unadjusted means on failure. */
+    rc = cbinscatter_solve_with_collinearity(XtX_full, Xty_full, num_regressors, coef);
+    if (rc != CBINSCATTER_OK) {
         free(XtX_full);
         free(Xty_full);
         free(coef);

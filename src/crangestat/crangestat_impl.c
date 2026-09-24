@@ -258,6 +258,7 @@ typedef struct {
     double *prefix_sum2;   /* Prefix sum of squares */
     size_t *prefix_count;  /* Prefix count of non-missing */
     size_t nobs;
+    double origin;         /* Center moments before accumulating squares. */
 } prefix_arrays;
 
 /* Build prefix arrays for a source variable within a group */
@@ -265,6 +266,10 @@ static void build_prefix_arrays(const double *data, size_t start, size_t count,
                                 prefix_arrays *pa)
 {
     const double miss = SV_missval;
+    pa->origin = 0.0;
+    for (size_t i = 0; i < count; i++) {
+        if (data[start + i] < miss) { pa->origin = data[start + i]; break; }
+    }
 
     /* prefix[0] = 0 (empty prefix) */
     pa->prefix_sum[0] = 0.0;
@@ -317,6 +322,7 @@ static void build_prefix_arrays(const double *data, size_t start, size_t count,
                 size_t idx = i + 1;
 
                 if (val < miss) {
+                    val -= pa->origin;
                     local_sum += val;
                     local_sum2 += val * val;
                     local_count++;
@@ -383,6 +389,7 @@ sequential_prefix:;
             size_t idx = i + 1;
 
             if (val < miss) {
+                val -= pa->origin;
                 sum += val;
                 sum2 += val * val;
                 cnt++;
@@ -740,6 +747,30 @@ static int stat_uses_sparse_table(stat_type type)
     }
 }
 
+/* Two-pass centered moments for small windows and ill-conditioned prefix
+ * differences. Long double helps on platforms where it exceeds double precision. */
+static double stable_window_variance(const double *data, size_t start, size_t end,
+                                     size_t self, int exclude_self)
+{
+    size_t n = 0;
+    long double origin = 0, sum = 0;
+    for (size_t i = start; i < end; i++) {
+        if ((exclude_self && i == self) || !(data[i] < SV_missval)) continue;
+        if (n == 0) origin = data[i];
+        sum += (long double)data[i] - origin;
+        n++;
+    }
+    if (n < 2) return SV_missval;
+    long double mean = sum / n, ss = 0, correction = 0;
+    for (size_t i = start; i < end; i++) {
+        if ((exclude_self && i == self) || !(data[i] < SV_missval)) continue;
+        long double d = ((long double)data[i] - origin) - mean;
+        ss += d * d;
+        correction += d;
+    }
+    return (double)((ss - correction * correction / n) / (n - 1));
+}
+
 /*
     compute_stat_with_prefix - O(1) stat computation using prefix sums
 
@@ -761,6 +792,7 @@ static double compute_stat_with_prefix(stat_type type, const prefix_arrays *pa,
     if (exclude_self && self_idx >= win_start && self_idx < win_end) {
         double self_val = data[self_idx];
         if (self_val < SV_missval) {
+            self_val -= pa->origin;
             sum -= self_val;
             sum2 -= self_val * self_val;
             n -= 1;
@@ -778,17 +810,22 @@ static double compute_stat_with_prefix(stat_type type, const prefix_arrays *pa,
             return (double)n;
 
         case STAT_SUM:
-            return sum;
+            return sum + (double)n * pa->origin;
 
         case STAT_MEAN:
-            return sum / (double)n;
+            return pa->origin + sum / (double)n;
 
         case STAT_SD:
         case STAT_VARIANCE: {
             if (n < 2) return SV_missval;
             double mean = sum / (double)n;
-            double var = (sum2 - sum * mean) / (double)(n - 1);
-            if (var < 0.0) var = 0.0;  /* Numerical stability */
+            double ss = sum2 - sum * mean;
+            double scale = fabs(pa->prefix_sum2[win_end - g_start]) +
+                           fabs(pa->prefix_sum2[win_start - g_start]) + fabs(sum * mean);
+            double var = ss / (double)(n - 1);
+            /* Fall back before cancellation consumes half the mantissa. */
+            if (!isfinite(var) || ss <= sqrt(DBL_EPSILON) * scale)
+                var = stable_window_variance(data, win_start, win_end, self_idx, exclude_self);
             return (type == STAT_SD) ? sqrt(var) : var;
         }
 
@@ -960,6 +997,10 @@ static double compute_window_stat_simple(stat_type type, const double *data,
                                          size_t win_start, size_t win_end,
                                          size_t self_idx, int exclude_self)
 {
+    if (type == STAT_SD || type == STAT_VARIANCE) {
+        double var = stable_window_variance(data, win_start, win_end, self_idx, exclude_self);
+        return type == STAT_SD && var < SV_missval ? sqrt(var) : var;
+    }
     const double miss = SV_missval;
     size_t n = 0;
     double sum = 0.0, sum2 = 0.0;
@@ -1533,6 +1574,7 @@ ST_retcode crangestat_main(const char *args)
     /* Apply permutation to sort data in place */
     rc = ctools_apply_permutation(&filtered.data);
     if (rc != STATA_OK) {
+        free(fwd_perm);
         free(inv_perm);
         free(sort_vars);
         ctools_filtered_data_free(&filtered);
@@ -1561,6 +1603,7 @@ ST_retcode crangestat_main(const char *args)
     /* Set up source_data pointers (don't allocate, just point into stata_data) */
     source_data = (double **)malloc(nsource * sizeof(double *));
     if (!source_data) {
+        free(fwd_perm);
         free(inv_perm);
         ctools_filtered_data_free(&filtered);
         free(load_indices);
@@ -1580,6 +1623,7 @@ ST_retcode crangestat_main(const char *args)
         by_data = (double **)malloc(nby * sizeof(double *));
         if (!by_data) {
             free(source_data);
+            free(fwd_perm);
             free(inv_perm);
             ctools_filtered_data_free(&filtered);
             free(load_indices);
@@ -1600,6 +1644,7 @@ ST_retcode crangestat_main(const char *args)
     if (!result_data) {
         if (by_data) free(by_data);
         free(source_data);
+        free(fwd_perm);
         free(inv_perm);
         ctools_filtered_data_free(&filtered);
         free(load_indices);
@@ -1618,6 +1663,7 @@ ST_retcode crangestat_main(const char *args)
             free(result_data);
             if (by_data) free(by_data);
             free(source_data);
+            free(fwd_perm);
             free(inv_perm);
             ctools_filtered_data_free(&filtered);
             free(load_indices);
@@ -1640,6 +1686,7 @@ ST_retcode crangestat_main(const char *args)
     size_t ngroups = 1;
     groups = (group_info *)malloc((nobs + 1) * sizeof(group_info));
     if (!groups) {
+        free(fwd_perm);
         free(inv_perm);
         for (size_t s = 0; s < nstats; s++) free(result_data[s]);
         free(result_data);
@@ -1686,6 +1733,7 @@ ST_retcode crangestat_main(const char *args)
     work_arrays = (double **)malloc(num_threads * sizeof(double *));
     if (!work_arrays) {
         free(groups);
+        free(fwd_perm);
         free(inv_perm);
         for (size_t s = 0; s < nstats; s++) free(result_data[s]);
         free(result_data);
@@ -1707,6 +1755,7 @@ ST_retcode crangestat_main(const char *args)
             for (int j = 0; j < t; j++) free(work_arrays[j]);
             free(work_arrays);
             free(groups);
+            free(fwd_perm);
             free(inv_perm);
             for (size_t s = 0; s < nstats; s++) free(result_data[s]);
             free(result_data);
@@ -1799,6 +1848,11 @@ ST_retcode crangestat_main(const char *args)
             size_t g_start = groups[g].start;
             size_t g_count = groups[g].count;
             size_t g_end = g_start + g_count;
+            /* Stata missing codes are finite; an unbounded window must still
+             * exclude missing interval keys in every optimized path. */
+            while (g_end > g_start && key_data[g_end - 1] >= SV_missval) g_end--;
+            g_count = g_end - g_start;
+            if (g_count == 0) continue;
 
             /* Build O(1) structures for this group */
             int group_has_o1 = a_has_o1 && (g_count >= CRANGESTAT_PREFIX_SUM_THRESHOLD);
@@ -2017,6 +2071,11 @@ ST_retcode crangestat_main(const char *args)
             size_t g_start = groups[g].start;
             size_t g_count = groups[g].count;
             size_t g_end = g_start + g_count;
+            /* Stata missing codes are finite; an unbounded window must still
+             * exclude missing interval keys in every optimized path. */
+            while (g_end > g_start && key_data[g_end - 1] >= SV_missval) g_end--;
+            g_count = g_end - g_start;
+            if (g_count == 0) continue;
 
             /*
              * OPTIMIZATION: When excludeself is false, observations with the same

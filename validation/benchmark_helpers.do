@@ -346,6 +346,7 @@ program define benchmark_reghdfe
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_creghdfe"
         }
     }
@@ -553,6 +554,7 @@ program define benchmark_qreg
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_cqreg"
         }
     }
@@ -1098,6 +1100,7 @@ program define benchmark_psmatch2
         * 2. cpsmatch uses a different approximation for the SE
         * 3. Both are known to be approximations that can differ significantly
         * The ATT point estimate comparison is the meaningful validation
+        test_method_difference "`testname' ATT SE"
     }
 
     * Compare propensity scores variable using significant figures
@@ -1110,7 +1113,8 @@ program define benchmark_psmatch2
         quietly gen double `sf_var' = 15 if _pscore == `pscore_psm2'
         quietly replace `sf_var' = -log10(abs(_pscore - `pscore_psm2') / max(abs(_pscore), abs(`pscore_psm2'))) if `sf_var' == .
         quietly replace `sf_var' = 0 if `sf_var' < 0
-        quietly replace `sf_var' = 15 if `sf_var' > 15
+        quietly replace `sf_var' = 15 if `sf_var' > 15 & !missing(`sf_var')
+        quietly replace `sf_var' = 0 if missing(`sf_var')
         quietly sum `sf_var'
         local min_sf = r(min)
         if `min_sf' < `minsf' {
@@ -1122,7 +1126,7 @@ program define benchmark_psmatch2
     drop _pscore_diff
 
     * Compare _support variable (exact match)
-    quietly count if _support != `support_psm2' & !missing(_support) & !missing(`support_psm2')
+    quietly count if _support != `support_psm2'
     local support_diff = r(N)
     if `support_diff' > 0 {
         local has_failure = 1
@@ -1132,7 +1136,7 @@ program define benchmark_psmatch2
     * Compare _weight for control observations on support
     * For treated obs, both assign _weight=1 (skip).
     * For controls, _weight represents match frequency.
-    quietly count if `treated_psm2' == 0 & `support_psm2' == 1 & !missing(_weight) & !missing(`weight_psm2')
+    quietly count if `treated_psm2' == 0 & `support_psm2' == 1 & !missing(`weight_psm2')
     local n_ctrl_compare = r(N)
     if `n_ctrl_compare' > 0 {
         tempvar wt_sf_var
@@ -1140,8 +1144,9 @@ program define benchmark_psmatch2
         quietly replace `wt_sf_var' = -log10(abs(_weight - `weight_psm2') / max(abs(_weight), abs(`weight_psm2'), 1e-300)) ///
             if `treated_psm2' == 0 & `support_psm2' == 1 & `wt_sf_var' == .
         quietly replace `wt_sf_var' = 0 if `wt_sf_var' < 0
-        quietly replace `wt_sf_var' = 15 if `wt_sf_var' > 15
-        quietly sum `wt_sf_var' if `treated_psm2' == 0 & `support_psm2' == 1
+        quietly replace `wt_sf_var' = 15 if `wt_sf_var' > 15 & !missing(`wt_sf_var')
+        quietly replace `wt_sf_var' = 0 if missing(`wt_sf_var')
+        quietly sum `wt_sf_var' if `treated_psm2' == 0 & `support_psm2' == 1 & !missing(`weight_psm2')
         local min_wt_sf = r(min)
         if `min_wt_sf' < `minsf' {
             local has_failure = 1
@@ -1391,6 +1396,7 @@ program define benchmark_ivreghdfe
             }
         }
         else if !missing(`val1') & missing(`val2') {
+            local has_failure = 1
             local all_diffs "`all_diffs' e(`scalar'):missing_in_civreghdfe"
         }
     }
@@ -1877,7 +1883,8 @@ program define benchmark_winsor
                 replace `sf' = 0 if (`sf' == .) & ((`cvar' == 0) | (`gvar' == 0))
                 replace `sf' = -log10(abs(`cvar' - `gvar') / max(abs(`cvar'), abs(`gvar'))) if `sf' == .
                 replace `sf' = 0 if `sf' < 0
-                replace `sf' = 15 if `sf' > 15
+                replace `sf' = 15 if `sf' > 15 & !missing(`sf')
+                replace `sf' = 0 if missing(`sf')
             }
 
             quietly count if `sf' < $DEFAULT_SIGFIGS & !missing(`cvar') & !missing(`gvar')
@@ -2076,7 +2083,8 @@ program define benchmark_destring
                 replace `_sf_`v'' = 0 if (`_sf_`v'' == .) & ((`v'_c == 0) | (`v'_s == 0))
                 replace `_sf_`v'' = -log10(abs(`v'_c - `v'_s) / max(abs(`v'_c), abs(`v'_s))) if `_sf_`v'' == .
                 replace `_sf_`v'' = 0 if `_sf_`v'' < 0
-                replace `_sf_`v'' = 15 if `_sf_`v'' > 15
+                replace `_sf_`v'' = 15 if `_sf_`v'' > 15 & !missing(`_sf_`v'')
+                replace `_sf_`v'' = 0 if missing(`_sf_`v'')
             }
             quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`v'_c) & !missing(`v'_s)
             local ndiff_total = `ndiff_total' + r(N)
@@ -2147,7 +2155,8 @@ program define benchmark_destring
                 replace `_sf_`v'' = 0 if (`_sf_`v'' == .) & ((`vc' == 0) | (`vs' == 0))
                 replace `_sf_`v'' = -log10(abs(`vc' - `vs') / max(abs(`vc'), abs(`vs'))) if `_sf_`v'' == .
                 replace `_sf_`v'' = 0 if `_sf_`v'' < 0
-                replace `_sf_`v'' = 15 if `_sf_`v'' > 15
+                replace `_sf_`v'' = 15 if `_sf_`v'' > 15 & !missing(`_sf_`v'')
+                replace `_sf_`v'' = 0 if missing(`_sf_`v'')
             }
             quietly count if `_sf_`v'' < $DEFAULT_SIGFIGS & !missing(`vc') & !missing(`vs')
             local ndiff_total = `ndiff_total' + r(N)
@@ -2674,13 +2683,16 @@ capture program drop test_error_match
 program define test_error_match
     syntax, stata_cmd(string asis) ctools_cmd(string asis) testname(string)
 
-    * Run Stata native command
+    * Each command must see the same input, including successful edge cases.
+    preserve
     capture `stata_cmd'
     local stata_rc = _rc
+    restore
 
-    * Run ctools command
+    preserve
     capture `ctools_cmd'
     local ctools_rc = _rc
+    restore
 
     * Compare error codes
     if `stata_rc' == `ctools_rc' {

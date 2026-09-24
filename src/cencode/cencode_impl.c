@@ -185,7 +185,10 @@ ST_retcode cencode_main(const char *args)
 
     /* Allocate array to store codes for each filtered observation */
     int *obs_codes = malloc(nobs * sizeof(int));
-    if (!obs_codes) {
+    unsigned char *obs_found = have_existing ? calloc(nobs, 1) : NULL;
+    if (!obs_codes || (have_existing && !obs_found)) {
+        free(obs_codes);
+        free(obs_found);
         if (need_ht) ctools_str_hash_free(&ht);
         ctools_filtered_data_free(&filtered);
         if (have_existing) ctools_str_hash_free(&existing_ht);
@@ -206,8 +209,7 @@ ST_retcode cencode_main(const char *args)
 
         if (have_existing) {
             /* Use existing label mapping - look up string in existing_ht */
-            int code = ctools_str_hash_lookup(&existing_ht, str_ptr);
-            obs_codes[i] = code;  /* 0 if not found (will become missing) */
+            obs_found[i] = ctools_str_hash_lookup(&existing_ht, str_ptr, &obs_codes[i]);
         } else {
             /* Normal path - collect unique strings */
             uint32_t hash = ctools_str_hash_compute(str_ptr);
@@ -222,6 +224,7 @@ ST_retcode cencode_main(const char *args)
 
     if (collect_error) {
         free(obs_codes);
+        free(obs_found);
         if (need_ht) ctools_str_hash_free(&ht);
         ctools_filtered_data_free(&filtered);
         if (have_existing) ctools_str_hash_free(&existing_ht);
@@ -241,21 +244,23 @@ ST_retcode cencode_main(const char *args)
         double *enc_values = malloc(nobs * sizeof(double));
         if (!enc_values) {
             free(obs_codes);
+            free(obs_found);
             ctools_filtered_data_free(&filtered);
             ctools_str_hash_free(&existing_ht);
             SF_error("cencode: memory allocation failed\n");
             return 920;
         }
         for (size_t i = 0; i < nobs; i++) {
-            int code = obs_codes[i];
-            enc_values[i] = (code > 0) ? (double)code : SV_missval;
+            enc_values[i] = obs_found[i] ? (double)obs_codes[i] : SV_missval;
         }
-        ctools_store_filtered_rowpar(enc_values, nobs, gen_idx, obs_map);
+        stata_retcode store_rc = ctools_store_filtered_rowpar(enc_values, nobs, gen_idx, obs_map);
         free(enc_values);
 
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&existing_ht);
+        if (store_rc) return 459;
 
         t_total = ctools_timer_seconds();
 
@@ -285,20 +290,20 @@ ST_retcode cencode_main(const char *args)
     if (n_unique == 0) {
         /* All values were empty/missing - write all missing */
         double *miss_values = malloc(nobs * sizeof(double));
+        stata_retcode store_rc = STATA_OK;
         if (miss_values) {
             for (size_t i = 0; i < nobs; i++) miss_values[i] = SV_missval;
-            ctools_store_filtered_rowpar(miss_values, nobs, gen_idx, obs_map);
+            store_rc = ctools_store_filtered_rowpar(miss_values, nobs, gen_idx, obs_map);
             free(miss_values);
         } else {
-            for (size_t i = 0; i < nobs; i++)
-                SF_vstore(gen_idx, (ST_int)obs_map[i], SV_missval);
+            store_rc = STATA_ERR_MEMORY;
         }
-        SF_scal_save("_cencode_n_unique", 0);
-        /* (no label file or macros needed for this early-return path) */
-
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
+        if (store_rc) return store_rc == STATA_ERR_MEMORY ? 920 : 459;
+        SF_scal_save("_cencode_n_unique", 0);
 
         t_total = ctools_timer_seconds();
         SF_scal_save("_cencode_time_parse", time_parse);
@@ -317,6 +322,7 @@ ST_retcode cencode_main(const char *args)
                  n_unique, CTOOLS_MAX_LABELS);
         SF_error(msg);
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
         return 198;
@@ -329,6 +335,7 @@ ST_retcode cencode_main(const char *args)
     cencode_string_entry *sorted_strings = malloc(n_unique * sizeof(cencode_string_entry));
     if (!sorted_strings) {
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
         SF_error("cencode: memory allocation failed\n");
@@ -350,6 +357,7 @@ ST_retcode cencode_main(const char *args)
     if (n_unique >= SIZE_MAX) {
         free(sorted_strings);
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
         SF_error("cencode: too many unique values\n");
@@ -361,6 +369,7 @@ ST_retcode cencode_main(const char *args)
     if (!code_map) {
         free(sorted_strings);
         free(obs_codes);
+        free(obs_found);
         ctools_filtered_data_free(&filtered);
         ctools_str_hash_free(&ht);
         SF_error("cencode: memory allocation failed\n");
@@ -386,6 +395,7 @@ ST_retcode cencode_main(const char *args)
         double *enc_values = malloc(nobs * sizeof(double));
         if (!enc_values) {
             free(obs_codes);
+            free(obs_found);
             free(code_map);
             free(sorted_strings);
             ctools_filtered_data_free(&filtered);
@@ -397,11 +407,21 @@ ST_retcode cencode_main(const char *args)
             int orig_code = obs_codes[i];
             enc_values[i] = (orig_code > 0) ? (double)code_map[orig_code] : SV_missval;
         }
-        ctools_store_filtered_rowpar(enc_values, nobs, gen_idx, obs_map);
+        stata_retcode store_rc = ctools_store_filtered_rowpar(enc_values, nobs, gen_idx, obs_map);
         free(enc_values);
+        if (store_rc) {
+            free(obs_codes);
+            free(obs_found);
+            free(code_map);
+            free(sorted_strings);
+            ctools_filtered_data_free(&filtered);
+            ctools_str_hash_free(&ht);
+            return 459;
+        }
     }
 
     free(obs_codes);
+    free(obs_found);
 
     t_encode = ctools_timer_seconds();
     double time_encode = t_encode - t_sort;

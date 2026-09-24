@@ -311,9 +311,9 @@ static ST_retcode export_single_threaded(size_t nobs, size_t avg_row_size,
         return 693;
     }
 
-    fclose(g_ctx.fp);
+    int close_rc = fclose(g_ctx.fp);
     g_ctx.fp = NULL;
-    return 0;
+    return close_rc ? 693 : 0;
 }
 
 /*
@@ -773,13 +773,21 @@ ST_retcode cexport_main(const char *args)
     char *header_buf = NULL;
     size_t header_len = 0;
     if (g_ctx.write_header) {
-        header_buf = (char *)malloc(65536);
+        size_t header_capacity = 3;
+        for (size_t j = 0; j < nvars; j++) {
+            size_t bytes = 2 * strlen(g_ctx.varnames[j]) + 3;
+            if (bytes > SIZE_MAX - header_capacity) {
+                cexport_context_cleanup(&g_ctx); return 920;
+            }
+            header_capacity += bytes;
+        }
+        header_buf = (char *)malloc(header_capacity);
         if (header_buf == NULL) {
             SF_error("cexport: memory allocation failed for header\n");
             cexport_context_cleanup(&g_ctx);
             return 920;
         }
-        int hlen = cexport_format_header(&g_ctx, header_buf, 65536);
+        int hlen = cexport_format_header(&g_ctx, header_buf, header_capacity);
         if (hlen < 0) {
             SF_error("cexport: failed to format header\n");
             free(header_buf);
@@ -787,6 +795,16 @@ ST_retcode cexport_main(const char *args)
             return 920;
         }
         header_len = (size_t)hlen;
+    }
+
+    cexport_output output;
+    rc = cexport_output_prepare(&output, g_ctx.filename, g_ctx.replace);
+    if (rc) { free(header_buf); cexport_context_cleanup(&g_ctx); return rc; }
+    free(g_ctx.filename);
+    g_ctx.filename = strdup(output.temporary);
+    if (!g_ctx.filename) {
+        free(header_buf); cexport_output_cleanup(&output);
+        cexport_context_cleanup(&g_ctx); return 920;
     }
 
     /* Choose export path */
@@ -820,6 +838,13 @@ ST_retcode cexport_main(const char *args)
         }
     }
 
+    /* Close before publication; a late buffered-write error is fatal. */
+    if (g_ctx.fp) {
+        if (fclose(g_ctx.fp) && !export_rc) export_rc = 603;
+        g_ctx.fp = NULL;
+    }
+    if (!export_rc) export_rc = cexport_output_commit(&output);
+    cexport_output_cleanup(&output);
     if (export_rc != 0) {
         cexport_context_cleanup(&g_ctx);
         return export_rc;
