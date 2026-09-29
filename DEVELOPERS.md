@@ -44,7 +44,7 @@ On each invocation the dispatcher in `ctools_plugin.c`:
 
 - **Column-major storage**: Each variable is a contiguous array
 - **Numeric variables**: `double[]` (8 bytes per observation)
-- **String variables**: `char*[]` (pointer array, heap-allocated strings)
+- **String variables**: `char*[]` pointing into owned flat buffers or arenas, with individually allocated fallback strings
 - **Aligned allocations**: 64-byte cache line alignment for SIMD/prefetch efficiency
 
 ### Key Files
@@ -65,6 +65,7 @@ On each invocation the dispatcher in `ctools_plugin.c`:
 | `src/ctools_spi.h` | Stata Plugin Interface convenience wrappers |
 | `src/ctools_simd.h` | SIMD intrinsic utilities |
 | `src/ctools_select.h` | Selection algorithms (nth element) |
+| `src/ctools_order.h/c` | Stable lexicographic row-index ordering with distinct extended missing keys |
 | `src/ctools_sort_pairs.h` | Pair sorting utilities |
 | `src/ctools_unroll.h` | Loop unrolling macros |
 | `src/ctools_eisel_lemire.h` | Fast float parsing (Eisel-Lemire algorithm) |
@@ -77,6 +78,9 @@ The following commands are registered in `ctools_plugin.c`:
 | Dispatch name | Handler | Source directory |
 |---------------|---------|------------------|
 | `csort` | `csort_main` | `src/csort/` |
+| `cipolate` | `cipolate_main` | `src/cipolate/` |
+| `csplit` | `csplit_main` | `src/csplit/` |
+| `crangejoin` | `crangejoin_main` | `src/crangejoin/` |
 | `creghdfe` | `creghdfe_main` | `src/creghdfe/` |
 | `cimport` | `cimport_main` | `src/cimport/` |
 | `cexport` | `cexport_main` | `src/cexport/` |
@@ -120,7 +124,7 @@ typedef struct {
     size_t nobs;             // Number of observations
     union {
         double *dbl;         // Numeric: contiguous double[nobs]
-        char **str;          // String: char*[nobs], heap-allocated
+        char **str;          // String: char*[nobs], column-owned storage
     } data;
     size_t str_maxlen;       // Max string length (string vars only)
     void *_arena;            // Internal: string arena for bulk free
@@ -136,7 +140,7 @@ typedef struct {
     size_t nobs;             // Number of observations
     size_t nvars;            // Number of variables (columns)
     stata_variable *vars;    // Array of all variables [nvars]
-    perm_idx_t *sort_order;  // Permutation array (0-based) [nobs] - uint32_t
+    perm_idx_t *sort_order;  // Identity/order [nobs], or NULL with NO_SORT_ORDER
 } stata_data;
 ```
 
@@ -184,25 +188,59 @@ ctools_filtered_data_init(&fd);
 int var_indices[] = {1, 3, 5};
 stata_retcode rc = ctools_data_load(&fd, var_indices, 3, 0, 0, CTOOLS_LOAD_CHECK_IF);
 
-// Or load ALL variables (pass NULL for var_indices)
-rc = ctools_data_load(&fd, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF);
-
-// Skip if/in filtering (load everything in range)
-rc = ctools_data_load(&fd, var_indices, 3, 0, 0, CTOOLS_LOAD_SKIP_IF);
-
 // Access data: fd.data.vars[k].data.dbl[i]
 // Observation count: fd.data.nobs (= N_filtered)
 ```
 
 Parameters:
-- `var_indices`: Array of 1-based Stata variable indices, or `NULL` to load all
+
+- `var_indices`: Array of 1-based plugin-visible Stata variable indices, or `NULL` to load all
 - `nvars`: Number of variables (ignored if `var_indices` is NULL)
 - `obs_start`, `obs_end`: 1-based range (0 = use `SF_in1()`/`SF_in2()`)
-- `flags`: `CTOOLS_LOAD_CHECK_IF` (default) or `CTOOLS_LOAD_SKIP_IF`
+- `flags`: Bitwise OR of the options below
 
-Loading performs two passes:
-1. Count observations passing `SF_ifobs()` and build `obs_map`
-2. Load only filtered observations (memory = O(N_filtered x K))
+| Flag | Value | Behavior |
+|------|-------|----------|
+| `CTOOLS_LOAD_CHECK_IF` | `0x00` | Evaluate `SF_ifobs()` in the resolved observation range. |
+| `CTOOLS_LOAD_SKIP_IF` | `0x01` | Load every observation in the range; use only when the caller knows filtering is unnecessary. |
+| `CTOOLS_LOAD_NO_SORT_ORDER` | `0x02` | Omit the identity permutation and leave `fd.data.sort_order == NULL`. |
+
+Loading first resolves the selection into `obs_map`, then loads only selected
+observations. The map always contains the original 1-based Stata observation
+indices. Memory for the loaded values is O(N_selected x K).
+
+The default load creates an identity `sort_order`. Callers that only inspect or
+transform columns can add `CTOOLS_LOAD_NO_SORT_ORDER`; filtering, column order,
+and `obs_map` are unchanged. This saves `sizeof(perm_idx_t) * N_selected` bytes
+and their initialization. Timing benefits depend on the data shape.
+The flag is used by the regression families, binscatter, matching, encode,
+destring, split, and the bulk CSV/XLSX export paths. Sort, sampling, and other
+order-dependent paths retain the default.
+
+A caller using this flag must not pass the result to sorting or permutation
+routines that require `sort_order`. Ordinary and filtered stores remain valid;
+`ctools_data_store_sorted()` rejects a nonempty dataset with no order. If later
+processing needs to sort, load with the default flag instead.
+
+`ctools_data_load_ex()` optionally accepts string-width hints. Its array is
+indexed by **plugin-visible variable index minus one** and must have
+`SF_nvars()` entries, even when the loaded varlist selects or reorders a subset.
+Passing `NULL` reads the caller's `_ctools_strw` metadata when available.
+Hints select an allocation strategy; they do not relax read bounds. Known
+`str2045` columns use packed arenas with a reservation capped at 2 GiB per
+column, then retry the original 64-byte-per-row estimate if allocation fails.
+Actual strings are stored densely. Virtual/committed memory accounting depends
+on the platform; short values are not expanded into 2046-byte slots.
+
+`strL` reads stay on the calling thread. Fixed strings and numeric columns may
+use the transport schedulers. Shared numeric writes retain the checked SPI
+callback; switching to the unchecked store has produced cross-column corruption
+in real Stata. See [the transport measurements](docs/PERFORMANCE_TRANSPORT.md).
+
+Small transfers avoid worker-pool setup using a width-weighted work estimate.
+All-numeric loads use 512-row tiles when there are at least 128 columns and
+50,000 selected observations. See [the adaptive transport benchmarks](docs/PERFORMANCE_TRANSPORT_ADAPTIVE.md)
+for the measured thresholds, allocation changes, and performance tradeoffs.
 
 ### Storing Data to Stata
 
@@ -222,12 +260,37 @@ rc = ctools_stream_var_permuted(var_idx, source_rows, output_nobs, obs1);
 
 ### Cleanup
 
+The filtered result owns its column buffers, string arenas/fallback strings,
+observation map, and optional sort order. Free the previous result before
+loading into the same object again. Do not free individual loaded string
+pointers: they may point inside an arena. A caller that takes ownership of a
+buffer must clear the corresponding pointer in the result before cleanup.
+String-column ownership includes both the pointer array and its arena metadata.
+
 ```c
 ctools_filtered_data_free(&fd);  // Safe to call multiple times
 
 // Or for raw stata_data:
 stata_data_free(&data);
 ```
+
+### Transport validation
+
+The native transport suites use independent SPI mocks and build both serial
+and OpenMP variants:
+
+- `validation/test_transport_native.py`: selection, values, width bounds, and ownership.
+- `validation/test_transport_scheduling.py`: variable/row scheduling, permutations, destination maps, and SPI failures.
+- `validation/test_transport_adaptive_native.py`: wide numeric gate boundaries, allocation retries, packed-string ownership, optional sort order, and reordered fixed-string/strL/numeric loads with errors.
+- `validation/test_transport_store_native.py`: duplicate and invalid destination maps, sparse/OOM fallbacks, checked writes and cancellation, and the sorted-gather size boundary.
+
+Run a suite directly with Python, or run the complete native inventory with
+`python3 validation/suite_registry.py --native`. `CTOOLS_TEST_SOURCE` selects an
+isolated source directory; `CTOOLS_SANITIZERS=address,undefined` enables ASan plus
+UBSan where supported. Linux CI includes the suites and explicitly checks the
+new adaptive-load and sorted-store ownership paths with both sanitizers and
+leak detection. Mock tests complement the real-Stata command and transport regressions;
+they do not establish SPI thread safety or end-to-end performance.
 
 ---
 
@@ -239,30 +302,30 @@ Include: `#include "ctools_types.h"`
 
 The public `csort` default is `algorithm(auto)`. It selects an engine based on the data; an explicit low-level LSD entry point does not define the public default.
 
-| Algorithm | Best For | Function |
-|-----------|----------|----------|
-| LSD Radix | Fixed-width keys | `ctools_sort_radix_lsd()` |
-| MSD Radix | Variable-length strings | `ctools_sort_radix_msd()` |
-| Timsort | Partially sorted data | `ctools_sort_timsort()` |
-| Sample Sort | Large datasets, many cores | `ctools_sort_sample()` |
-| Counting Sort | Integers with small range | `ctools_sort_counting()` |
-| Merge Sort | Stable, predictable O(n log n) | `ctools_sort_merge()` |
-| IPS4o | Memory-efficient parallel | `ctools_sort_ips4o()` |
+Every engine computes `data->sort_order` without moving the loaded columns (an "order-only" sort). Most callers should go through `ctools_sort_dispatch()`.
+
+| Algorithm | Best For | Order-only function |
+|-----------|----------|---------------------|
+| LSD Radix | Fixed-width keys | `ctools_sort_radix_lsd_order_only()` |
+| MSD Radix | Variable-length strings | `ctools_sort_radix_msd_order_only()` |
+| Timsort | Partially sorted data | `ctools_sort_timsort_order_only()` |
+| Sample Sort | Large datasets, many cores | `ctools_sort_sample_order_only()` |
+| Counting Sort | Integers with small range | `ctools_sort_counting_order_only()` |
+| Merge Sort | Stable, predictable O(n log n) | `ctools_sort_merge_order_only()` |
+| IPS4o | Memory-efficient parallel | `ctools_sort_ips4o_order_only()` |
+
+`ctools_sort_ips4o_with_perm()` also reorders `data->vars` and returns the permutation; cmerge uses it.
 
 ### Usage
 
 ```c
-// Sort by variables 1 and 2 (1-based indices), applies permutation immediately
+// Sort by variables 1 and 2 (1-based indices); computes sort_order only
 int sort_vars[] = {1, 2};
-stata_retcode rc = ctools_sort_radix_lsd(&data, sort_vars, 2);
+stata_retcode rc = ctools_sort_dispatch(&data, sort_vars, 2, SORT_ALG_AUTO);
 
-// Sort + get permutation mapping (sorted_idx -> original_idx)
-size_t *perm = malloc(data.nobs * sizeof(size_t));
-rc = ctools_sort_radix_lsd_with_perm(&data, sort_vars, 2, perm);
-
-// Or use the unified dispatcher (order-only: computes sort_order, does NOT apply)
-rc = ctools_sort_dispatch(&data, sort_vars, 2, SORT_ALG_LSD);
-// ... then apply separately:
+// Then either write straight to Stata in sorted order...
+rc = ctools_data_store_sorted(&data, 1);
+// ...or physically reorder the loaded columns first
 rc = ctools_apply_permutation(&data);
 ```
 
@@ -281,28 +344,11 @@ typedef enum {
 } sort_algorithm_t;
 ```
 
-### Order-Only Variants
-
-Every sort algorithm has an `_order_only` variant that computes `data->sort_order` without applying the permutation. Use `ctools_apply_permutation()` to apply afterward:
-
-```c
-rc = ctools_sort_radix_lsd_order_only(&data, sort_vars, 2);
-// data->sort_order is set, data is unchanged
-rc = ctools_apply_permutation(&data);
-// data is now reordered
-```
-
 ### Choosing an Algorithm
 
-```c
-// Check if counting sort is suitable
-if (ctools_counting_sort_suitable(&data, var_idx)) {
-    ctools_sort_counting(&data, sort_vars, nsort);
-} else {
-    ctools_sort_radix_lsd(&data, sort_vars, nsort);
-}
+`SORT_ALG_AUTO` uses MSD when any key is a string and counting sort otherwise, falling back to LSD when the data are unsuitable for counting sort. An explicit `SORT_ALG_COUNTING` also falls back to LSD:
 
-// Or let the dispatcher handle it (SORT_ALG_COUNTING falls back to LSD if unsuitable)
+```c
 ctools_sort_dispatch(&data, sort_vars, nsort, SORT_ALG_COUNTING);
 ```
 
@@ -439,7 +485,7 @@ ctools_data_load(&fd, NULL, 0, 0, 0, 0);
 CTOOLS_TIMER_STORE(load, t_load);
 
 CTOOLS_TIMER_BEGIN(sort);
-ctools_sort_radix_lsd(&fd.data, sort_vars, nsort);
+ctools_sort_dispatch(&fd.data, sort_vars, nsort, SORT_ALG_AUTO);
 CTOOLS_TIMER_STORE(sort, t_sort);
 ```
 
@@ -483,9 +529,6 @@ ctools_parse_int_option(args, "threads", &nthreads);
 // Get double option with default
 double pctl = ctools_parse_double_option(args, "p", 1.0);
 
-// Get size_t option with default
-size_t chunk = ctools_parse_size_option(args, "chunk", 10000);
-
 // Get string option
 char name[64];
 if (ctools_parse_string_option(args, "name", name, sizeof(name))) {
@@ -504,9 +547,6 @@ if (ctools_parse_int_array(arr, 3, &cursor) == 0) {
 }
 
 // Parse one value at a time
-size_t val;
-ctools_parse_next_size(&cursor, &val);
-
 int ival;
 ctools_parse_next_int(&cursor, &ival);
 ```
@@ -535,9 +575,6 @@ ctools_verbose("csort", verbose, "Sorted in %.1f ms", elapsed);
 ```c
 ctools_error_alloc("csort");
 // Output: "csort: memory allocation failed"
-
-ctools_error_alloc_ctx("csort", "thread buffers");
-// Output: "csort: failed to allocate thread buffers"
 ```
 
 ### Check Macros
@@ -701,60 +738,32 @@ Fallback modes:
 
 Include: `#include "ctools_hash.h"`
 
-Open-addressing hash tables with linear probing, automatic resizing at 75% load factor. Used by label and grouping utilities. The public `cdecode` command uses native Stata decoding and does not use the legacy label parser.
+An open-addressing string -> integer hash table with linear probing and automatic resizing at 75% load factor, used by cencode. The public `cdecode` command uses native Stata decoding.
 
 ### String -> Integer (for cencode)
 
 ```c
 ctools_str_hash_table ht;
-ctools_str_hash_init(&ht, CTOOLS_HASH_INIT_SIZE);
+ctools_str_hash_init(&ht, 1024);
 
 // Insert with auto-assigned value (1-based)
 uint32_t hash = ctools_str_hash_compute("label_text");
 int code = ctools_str_hash_insert(&ht, "label_text", hash);  // returns assigned code
 
-// Insert with specific value
-int code2 = ctools_str_hash_insert_value(&ht, "other", 42);
+// Insert with a specific value (0 on success, -1 on allocation failure)
+ctools_str_hash_insert_value(&ht, "other", 42);
 
-// Lookup (returns 0 if not found)
-int val = ctools_str_hash_lookup(&ht, "label_text");
+// Lookup (returns 1 and sets val if found, 0 otherwise)
+int val;
+if (ctools_str_hash_lookup(&ht, "label_text", &val)) { /* ... */ }
 
 ctools_str_hash_free(&ht);
 ```
 
-### Integer -> String (shared lookup utility)
+### Value Label Output
 
 ```c
-ctools_int_hash_table ht;
-ctools_int_hash_init(&ht, CTOOLS_HASH_INIT_SIZE);
-
-// Insert
-ctools_int_hash_insert(&ht, 1, "Male");
-ctools_int_hash_insert(&ht, 2, "Female");
-
-// Lookup (returns NULL if not found)
-const char *label = ctools_int_hash_lookup(&ht, 1);
-
-ctools_int_hash_free(&ht);
-```
-
-### Label Utilities
-
-Shared label escape/unescape/parse/serialize utilities (not the public `cdecode` path):
-
-```c
-// Escape/unescape labels for serialization
-char dst[2048];
-ctools_label_unescape("escaped\\|text", dst, sizeof(dst));
-size_t len = ctools_label_escape("raw|text", dst, sizeof(dst));
-
-// Parse label files directly
-ctools_int_hash_table ht;
-ctools_int_hash_init(&ht, 1024);
-int max_len;
-ctools_label_parse_stata_file_int("labels.do", &ht, &max_len);
-
-// Write labels as Stata .do file
+// Write a .do file that rebuilds the labels with Mata st_vlmodify()
 ctools_label_write_stata_file(strings, codes, n_labels, "myvar", "output.do");
 ```
 
@@ -836,18 +845,13 @@ void ctools_vce_cluster(const ctools_vce_data *d, const ST_int *cluster_ids,
 typedef struct { ST_int num_levels, max_level; ST_int *levels; ... } FE_Factor;
 typedef struct { ST_int G, N, K; FE_Factor *factors; ... } HDFE_State;
 
-// Singleton detection (iterative, handles cascading)
+// Singleton detection: peels to the fixed point (cascading chains included);
+// with fweights a level is a singleton only when its total fweight is 1
 ST_int ctools_remove_singletons(ST_int **fe_levels, ST_int G, ST_int N,
-                                 ST_int *mask, ST_int max_iter, ST_int verbose);
+                                 ST_int *mask, const ST_double *fweights, ST_int verbose);
 
 // Cluster/FE remapping to contiguous indices
 ST_int ctools_remap_cluster_ids(ST_int *cluster_ids, ST_int N, ST_int *num_clusters);
-
-// Array compaction (remove flagged observations)
-ST_int ctools_compact_array_double(const ST_double *src, ST_double *dest,
-                                    const ST_int *mask, ST_int N_src, ST_int N_dest);
-ST_int ctools_compact_matrix_double(const ST_double *src, ST_double *dest,
-                                     const ST_int *mask, ST_int N_src, ST_int N_dest, ST_int K);
 
 // Connected components (for mobility groups / DOF)
 ST_int ctools_count_connected_components(const ST_int *fe1_levels, const ST_int *fe2_levels,
@@ -860,9 +864,6 @@ ST_int ctools_fe_nested_in_cluster(const ST_int *fe_levels, ST_int num_fe_levels
 // DOF calculation
 ST_int ctools_compute_hdfe_dof(const FE_Factor *factors, ST_int G, ST_int N,
                                 ST_int *df_a, ST_int *mobility_groups);
-
-// Cache-friendly FE projection via sorted permutation
-ST_int ctools_build_sorted_permutation(FE_Factor *f, ST_int N);
 
 // Allocate CG solver buffers
 ST_int ctools_hdfe_alloc_buffers(HDFE_State *state, ST_int alloc_proj, ST_int max_columns);
@@ -983,6 +984,13 @@ checks agreement between the public help, source, package, and test inventories.
 
 ## Performance Guidelines
 
+The [README command benchmarks](docs/BENCHMARKS_README_COMMANDS.md) compare
+`cipolate`, `csplit`, and `crangejoin` against native/SSC commands at 1M, 5M, and
+20M rows. Use `validation/prepare_readme_benchmarks.py` with a frozen build,
+then `validation/summarize_readme_benchmarks.py` to validate complete logs and
+retain every trial. The harness uses a monotonic clock, alternates execution
+order, and checks every output cell outside the timed region.
+
 ### Parallelization
 
 1. **Check data size before parallelizing**:
@@ -1093,7 +1101,7 @@ ST_retcode mycmd_main(const char *args)
 
 Use `scripts/fetch_validation_data.py` once to cache the checksum-pinned official
 Stata fixtures, then `validation/run_stata_audit.py` for the complete offline
-suite. The driver uses the machine's `oldstata` wrapper and exits cleanly.
+suite. The driver uses the machine's `stata` shell alias and exits cleanly.
 Every component must reach its completion marker. Missing references, unexpected
 skips, and failed assertions block publication. ATT-SE comparisons with psmatch2
 are separately counted as documented method differences, never as passes.
@@ -1138,3 +1146,36 @@ The September 24 regressions are `validation/validate_sep24.do` and
 `CTOOLS_TEST_OPENMP_PREFIX` for constrained-team tests and
 `CTOOLS_SANITIZERS=address,undefined` for ASan plus UBSan. The Stata cases are part
 of the full offline release gate. See `SEP24_ASTRA_FIXES.md` for repair evidence.
+
+## Interpolation, splitting, and interval joins
+
+`cipolate` performs one stable index sort and scans groups. `csplit` has a
+scan/size phase followed by a write to temporary output variables. `crangejoin`
+caches using columns, prepares matches and checked output counts, then writes
+the expanded dataset. Both multi-phase commands register cache cleanup with
+`ctools_runtime`; their ado wrappers clear caches after errors.
+
+The three command suites are part of `validate_all.do`. The interval-join
+reference tests additionally require SSC `rangejoin` 1.1.3 (and `rangestat`) on
+the test runner's adopath. Production `crangejoin` has neither dependency.
+`python3 validation/test_newcommands_native.py` checks the kernels under UBSan
+and fails each allocation in turn; set `CTOOLS_SANITIZERS=address,undefined` to
+include ASan. Linux CI runs both sanitizers. `validation/benchmark_newcommands.do`
+provides reproducible end-to-end timings and reference-result checks.
+
+The shared stable order helper selects radix passes for large numeric inputs,
+parallel merge tiles for string/mixed inputs, and a no-sort path for ordered data.
+It preserves extended missing values and stable ties. Run
+`python3 validation/test_order_parallel.py` with `CTOOLS_LIBOMP_PREFIX` pointing
+to the macOS OpenMP prefix (Linux uses `-fopenmp`).
+`python3 validation/test_split_tokens_native.py` checks in-place token storage
+with the existing SPI/allocator mock; it also accepts `CTOOLS_SANITIZERS`.
+`validation/validate_command_optimizations.do` adds reference checks for the
+optimized paths; run it through an error-capturing Stata driver.
+
+For repeated timing and phase profiles, use
+`validation/prepare_command_performance.py` and
+`validation/summarize_command_performance.py`. The benchmark uses separate
+processes for frozen baseline and candidate plugins and a monotonic timer.
+See [the measurement report](docs/PERFORMANCE_NEWCOMMANDS.md) for workload
+shapes, raw observations, build identities, results, and reproduction commands.

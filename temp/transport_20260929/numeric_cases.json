@@ -1,0 +1,142 @@
+[
+  {
+    "name": "n200k_k32_byte",
+    "rows": 200000,
+    "columns": 32,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k32_double",
+    "rows": 200000,
+    "columns": 32,
+    "storage": "double"
+  },
+  {
+    "name": "n200k_k32_cycle",
+    "rows": 200000,
+    "columns": 32,
+    "storage": "cycle"
+  },
+  {
+    "name": "n200k_k64_byte",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k64_double",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "double"
+  },
+  {
+    "name": "n200k_k64_cycle",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "cycle"
+  },
+  {
+    "name": "n200k_k128_byte",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k128_double",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "double"
+  },
+  {
+    "name": "n200k_k128_cycle",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "cycle"
+  },
+  {
+    "name": "n200k_k256_byte",
+    "rows": 200000,
+    "columns": 256,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k256_double",
+    "rows": 200000,
+    "columns": 256,
+    "storage": "double"
+  },
+  {
+    "name": "n200k_k256_cycle",
+    "rows": 200000,
+    "columns": 256,
+    "storage": "cycle"
+  },
+  {
+    "name": "n50000_k64_cycle",
+    "rows": 50000,
+    "columns": 64,
+    "storage": "cycle"
+  },
+  {
+    "name": "n100000_k64_cycle",
+    "rows": 100000,
+    "columns": 64,
+    "storage": "cycle"
+  },
+  {
+    "name": "n1000000_k64_cycle",
+    "rows": 1000000,
+    "columns": 64,
+    "storage": "cycle"
+  },
+  {
+    "name": "n50000_k128_cycle",
+    "rows": 50000,
+    "columns": 128,
+    "storage": "cycle"
+  },
+  {
+    "name": "n100000_k128_cycle",
+    "rows": 100000,
+    "columns": 128,
+    "storage": "cycle"
+  },
+  {
+    "name": "n1000000_k128_cycle",
+    "rows": 1000000,
+    "columns": 128,
+    "storage": "cycle"
+  },
+  {
+    "name": "sparse_wide",
+    "rows": 1000000,
+    "columns": 128,
+    "mode": "filteredread",
+    "predicate": "mod(_n,100)==0"
+  },
+  {
+    "name": "dense_wide",
+    "rows": 400000,
+    "columns": 128,
+    "mode": "filteredread"
+  },
+  {
+    "name": "subset8_host256",
+    "rows": 200000,
+    "columns": 8,
+    "host_columns": 256,
+    "layout": "spread"
+  },
+  {
+    "name": "wide_t1",
+    "rows": 200000,
+    "columns": 128,
+    "threads": 1
+  },
+  {
+    "name": "wide_t12",
+    "rows": 200000,
+    "columns": 128,
+    "threads": 12
+  }
+]

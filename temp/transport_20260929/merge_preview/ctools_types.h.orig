@@ -1,0 +1,604 @@
+/*
+    ctools_types.h
+    common type definitions for ctools modules
+
+    Defines shared data structures used across Stata plugin modules (load, sort,
+    store). These types enable modular, reusable components for Stata plugins.
+
+    Memory Model:
+    - Column-major: each variable stored as contiguous array
+    - Numeric: double[] (8 bytes per observation)
+    - String: char*[] (pointer array, each pointing to heap-allocated string)
+*/
+
+#ifndef CTOOLS_TYPES_H
+#define CTOOLS_TYPES_H
+
+#include <stdint.h>
+#include <stddef.h>
+#include <stdbool.h>
+#include <string.h>
+
+/*
+    Return codes for all Stata-C operations.
+    STATA_OK (0) indicates success; non-zero indicates error.
+*/
+typedef enum {
+    STATA_OK = 0,               /* Success */
+    STATA_ERR_MEMORY = 1,       /* Memory allocation failed */
+    STATA_ERR_INVALID_INPUT = 2,/* NULL pointer or invalid parameter */
+    STATA_ERR_STATA_READ = 3,   /* Stata plugin read error */
+    STATA_ERR_STATA_WRITE = 4,  /* Stata plugin write error */
+    STATA_ERR_UNSUPPORTED_TYPE = 5, /* Unsupported variable type */
+    STATA_ERR_CANCELLED = 6,
+    STATA_ERR_SINGULAR = 7,
+    STATA_ERR_NONCONVERGENCE = 8
+} stata_retcode;
+
+/* Internal codes must never escape as raw Stata r() values. Call only at
+ * command boundaries, never on an already-native SPI return code. */
+static inline int ctools_stata_rc(stata_retcode status)
+{
+    switch (status) {
+    case STATA_OK: return 0;
+    case STATA_ERR_MEMORY: return 920;
+    case STATA_ERR_INVALID_INPUT: return 198;
+    case STATA_ERR_STATA_READ:
+    case STATA_ERR_STATA_WRITE: return 459;
+    case STATA_ERR_UNSUPPORTED_TYPE: return 109;
+    case STATA_ERR_CANCELLED: return 1;
+    case STATA_ERR_SINGULAR: return 506;
+    case STATA_ERR_NONCONVERGENCE: return 430;
+    default: return 459; /* Unknown internal failure, never accidental success. */
+    }
+}
+
+/* SPI r(1) means user cancellation, not allocation failure. Keep this
+ * conversion at the read/write callback, while the original rc is available. */
+static inline stata_retcode ctools_spi_status(int rc, stata_retcode failure)
+{
+    return rc == 0 ? STATA_OK : rc == 1 ? STATA_ERR_CANCELLED : failure;
+}
+
+/*
+    Permutation index type for sort operations.
+
+    Stata's SPI limits observations to < 2^31 (SF_in2 returns int).
+    Using uint32_t instead of size_t saves 50% memory for permutation arrays
+    and improves cache utilization during sorting.
+
+    Memory savings for 10M rows:
+    - size_t (64-bit): 80MB per permutation array
+    - uint32_t (32-bit): 40MB per permutation array
+
+    The PERM_IDX_MAX constant can be used for validation.
+*/
+typedef uint32_t perm_idx_t;
+#define PERM_IDX_MAX UINT32_MAX
+
+// Variable type: numeric (double) or string
+typedef enum {
+    STATA_TYPE_DOUBLE = 0,      /* Numeric variable (8-byte double) */
+    STATA_TYPE_STRING = 1       /* String variable (char* array) */
+} stata_vartype;
+
+/* Zero initialization preserves the default owning/aligned storage contract.
+ * Borrowed contents must outlive every store that reads the column. */
+typedef enum {
+    CTOOLS_BUFFER_ALIGNED = 0,
+    CTOOLS_BUFFER_HEAP,
+    CTOOLS_BUFFER_BORROWED
+} ctools_buffer_storage;
+typedef enum {
+    CTOOLS_STRINGS_OWNED = 0,
+    CTOOLS_STRINGS_BORROWED
+} ctools_string_storage;
+
+//  Single variable's data in C memory
+// Storage is contiguous for cache-friendly access patterns
+typedef struct {
+    stata_vartype type;         /* STATA_TYPE_DOUBLE or STATA_TYPE_STRING */
+    size_t nobs;                /* Number of observations */
+    union {
+        double *dbl;            /* Numeric: contiguous double[nobs] */
+        char **str;             /* String: char*[nobs], each heap-allocated */
+    } data;
+    size_t str_maxlen;          /* Max string length (string vars only) */
+    void *_arena;               /* Internal: string arena for fast bulk free (NULL if not used) */
+    ctools_buffer_storage buffer_storage;
+    ctools_string_storage string_storage;
+} stata_variable;
+
+/*
+    Complete dataset in C memory.
+
+    Layout:
+    - vars[0..nvars-1]: array of stata_variable, one per Stata variable
+    - sort_order[0..nobs-1]: permutation array (0-based), used internally by sort
+
+    Lifecycle operation example with sorting (see ctools_data_io.c):
+    1. ctools_data_load: populates vars[], sort_order = identity
+    2. ctools_sort_dispatch: computes sort_order, leaves vars[] unchanged
+    3. ctools_data_store_sorted: writes vars[] to Stata in sort_order
+    4. stata_data_free: releases all allocated memory
+
+*/
+typedef struct {
+    size_t nobs;                /* Number of observations */
+    size_t nvars;               /* Number of variables (columns) */
+    stata_variable *vars;       /* Array of all variables [nvars] */
+    perm_idx_t *sort_order;     /* Permutation array (0-based) [nobs] - uses uint32_t for 50% memory savings */
+} stata_data;
+
+// Performance timing
+typedef struct {
+    double load_time;           /* Stata → C transfer time (seconds) */
+    double sort_time;           /* Radix sort time (seconds) */
+    double store_time;          /* C → Stata transfer time (seconds) */
+    double total_time;          /* Wall-clock total (seconds) */
+} stata_timer;
+
+// Initialize stata_data to safe empty state
+// Sets all pointers to NULL, all counts to 0
+void stata_data_init(stata_data *data);
+
+// Free all memory associated with stata_data.
+// Safe to call multiple times; resets structure to empty state
+void stata_data_free(stata_data *data);
+void stata_variable_free(stata_variable *var);
+
+/* ---------------------------------------------------------------------------
+   Data I/O Operations
+   --------------------------------------------------------------------------- */
+
+// Write all variables from C memory back to Stata
+stata_retcode ctools_data_store(stata_data *data, size_t obs1);
+
+// Write in data->sort_order without copying/permuting the loaded columns.
+// Leaves both the columns and sort_order unchanged.
+stata_retcode ctools_data_store_sorted(stata_data *data, size_t obs1);
+
+// Write variables from C memory to specified Stata variable indices
+// var_indices[j] is the 1-based Stata variable index for data->vars[j]
+stata_retcode ctools_data_store_selective(stata_data *data, int *var_indices,
+                                           size_t nvars, size_t obs1);
+
+// Unified store with auto-dispatch: row-parallel for nvars==1, column-parallel for nvars>=2
+// var_indices == NULL → sequential 1..data->nvars
+stata_retcode ctools_data_store_ex(stata_data *data, int *var_indices,
+                                    size_t nvars, size_t obs1);
+
+// Write specific output variable values to Stata using a source row mapping
+// For each output row i, reads from source_rows[i] (0-based, -1 = missing)
+// var_idx: 1-based Stata variable index
+// Handles both numeric and string variables
+stata_retcode ctools_stream_var_permuted(int var_idx, int64_t *source_rows,
+                                          size_t output_nobs, size_t obs1);
+
+/* ---------------------------------------------------------------------------
+   Sort Algorithms
+
+   Each *_order_only function computes data->sort_order without moving the
+   loaded columns. Call ctools_apply_permutation() or ctools_data_store_sorted()
+   afterwards. Most callers should use ctools_sort_dispatch() below.
+   --------------------------------------------------------------------------- */
+
+// LSD radix sort: best for fixed-width numeric keys
+stata_retcode ctools_sort_radix_lsd_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// MSD radix sort: optimized for variable-length strings, where it can
+// short-circuit on unique prefixes
+stata_retcode ctools_sort_radix_msd_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Timsort: adaptive, stable merge/insertion hybrid; O(N) on data with long
+// natural runs (panel data, time series)
+stata_retcode ctools_sort_timsort_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Parallel sample sort: splitter-based partitioning for large datasets and
+// high core counts
+stata_retcode ctools_sort_sample_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Parallel counting sort: integer keys with a small range (year, state codes).
+// Returns STATA_ERR_UNSUPPORTED_TYPE if the data is not suitable.
+stata_retcode ctools_sort_counting_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// Parallel merge sort: stable, predictable O(n log n)
+stata_retcode ctools_sort_merge_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// IPS4o (In-place Parallel Super Scalar Samplesort)
+stata_retcode ctools_sort_ips4o_order_only(stata_data *data, int *sort_vars, size_t nsort);
+
+// IPS4o that also physically reorders data->vars and returns the permutation
+// (perm_out[sorted_idx] = original_idx; pre-allocated with data->nobs elements).
+// Used by cmerge.
+stata_retcode ctools_sort_ips4o_with_perm(stata_data *data, int *sort_vars,
+                                           size_t nsort, size_t *perm_out);
+
+/* ---------------------------------------------------------------------------
+   Permutation Application
+   --------------------------------------------------------------------------- */
+
+// Apply permutation (sort_order) to all variables in the dataset.
+// Requires owned aligned column buffers; views/heap output vectors use
+// order-only sorting plus ctools_data_store_sorted instead.
+// After calling, data is physically reordered and sort_order is reset to identity.
+// This is used when sorting was done with _order_only variants.
+stata_retcode ctools_apply_permutation(stata_data *data);
+
+/* ---------------------------------------------------------------------------
+   Sort Algorithm Selection
+   --------------------------------------------------------------------------- */
+
+// Sort algorithm enumeration
+typedef enum {
+    SORT_ALG_LSD = 0,      // LSD radix sort - best for fixed-width keys
+    SORT_ALG_MSD = 1,      // MSD radix sort - best for variable-length strings
+    SORT_ALG_TIMSORT = 2,  // Timsort - best for partially sorted data
+    SORT_ALG_SAMPLE = 3,   // Sample sort - best for large datasets with many cores
+    SORT_ALG_COUNTING = 4, // Counting sort - best for integer data with small range
+    SORT_ALG_MERGE = 5,    // Parallel merge sort - stable, predictable O(n log n)
+    SORT_ALG_IPS4O = 6,    // IPS4o - in-place parallel super scalar samplesort
+    SORT_ALG_AUTO = 7      // Auto-select best algorithm based on data characteristics
+} sort_algorithm_t;
+
+/*
+    Unified sort dispatcher for order-only sort operations.
+
+    Dispatches to the appropriate *_order_only sort function based on the
+    algorithm enum. Computes sort_order but does NOT apply the permutation.
+    Call ctools_apply_permutation() separately to reorder the data.
+
+    For SORT_ALG_COUNTING, if the data is unsuitable (non-integer or range too
+    large), automatically falls back to SORT_ALG_LSD.
+
+    @param data       [in/out] stata_data with allocated sort_order
+    @param sort_vars  [in] Array of 1-based variable indices specifying sort keys
+    @param nsort      [in] Number of sort key variables
+    @param algorithm  [in] Sort algorithm to use
+    @return           STATA_OK on success, or error code
+*/
+stata_retcode ctools_sort_dispatch(stata_data *data, int *sort_vars, size_t nsort,
+                                    sort_algorithm_t algorithm);
+
+/* ---------------------------------------------------------------------------
+   Type Conversion Utilities
+
+   Shared functions for fast numeric/string conversion used across ctools.
+   These avoid sprintf/sscanf overhead for performance-critical code paths.
+   --------------------------------------------------------------------------- */
+
+/*
+    Convert double to sortable uint64 for radix sort.
+
+    IEEE 754 doubles don't sort correctly as raw bit patterns because:
+    - Negative numbers have sign bit set but are "less than" positive
+    - Negative numbers sort in reverse order when compared as unsigned
+
+    This function transforms the bit pattern so that:
+    - Positive numbers: flip sign bit (0x8000... becomes 0x0000...)
+    - Negative numbers: flip all bits (preserves ordering)
+
+    Stata's missing values are finite doubles above every nonmissing value
+    (. < .a < ... < .z), so they need no special case: the transform keeps
+    them after all numbers and in Stata's order. -0 is mapped to +0 because
+    Stata treats them as equal.
+
+    @param d  Input double value
+    @return   Sortable uint64 representation
+*/
+static inline uint64_t ctools_double_to_sortable(double d)
+{
+    uint64_t bits;
+    if (d == 0) d = 0;
+    memcpy(&bits, &d, sizeof(bits));
+    return bits ^ ((bits >> 63) ? UINT64_MAX : UINT64_C(0x8000000000000000));
+}
+
+/*
+    Fast unsigned integer to string conversion.
+    Writes digits in reverse order then reverses.
+
+    @param val  Value to convert
+    @param buf  Output buffer (must hold at least 21 chars)
+    @return     Number of characters written (not including null terminator)
+*/
+int ctools_uint64_to_str(uint64_t val, char *buf);
+
+/*
+    Fast signed integer to string conversion.
+
+    @param val  Value to convert
+    @param buf  Output buffer (must hold at least 22 chars for sign + digits)
+    @return     Number of characters written (not including null terminator)
+*/
+int ctools_int64_to_str(int64_t val, char *buf);
+
+/*
+    Fast string to double parser.
+    Handles integers, decimals, scientific notation, and common missing values.
+    Much faster than strtod/atof for typical numeric data.
+
+    Recognized missing value representations:
+    - Empty string or whitespace only
+    - "." (Stata missing)
+    - "NA", "na", "NaN", "nan"
+
+    @param str     Input string (not necessarily null-terminated)
+    @param len     Length of input string
+    @param result  Output: parsed double value (SV_missval for missing)
+    @param missval The value to use for missing (typically SV_missval from stplugin.h)
+    @return        true if successfully parsed, false if invalid format
+*/
+bool ctools_parse_double_fast(const char *str, int len, double *result, double missval);
+
+/*
+    Fast double parser with custom decimal and group separators.
+    Handles European formats like "1.234,56" (decimal=',', group='.').
+
+    @param str       Input string (need not be null-terminated)
+    @param len       Length of input
+    @param result    [out] Parsed double value
+    @param missval   The value to use for missing
+    @param dec_sep   Decimal separator character (default '.')
+    @param grp_sep   Group/thousands separator character ('\0' = none)
+    @return          true if successfully parsed, false if invalid format
+*/
+bool ctools_parse_double_with_separators(const char *str, int len, double *result, double missval,
+                                          char dec_sep, char grp_sep);
+
+/*
+    Power of 10 lookup table for fast float parsing/formatting.
+    Covers 10^0 through 10^22 (full double precision range without overflow).
+*/
+extern const double ctools_pow10_table[23];
+
+/*
+    Two-digit lookup table for fast digit pair output.
+    "00", "01", "02", ... "99" stored as pairs of characters.
+    Usage: buf[0] = CTOOLS_DIGIT_PAIRS[val*2]; buf[1] = CTOOLS_DIGIT_PAIRS[val*2+1];
+*/
+extern const char CTOOLS_DIGIT_PAIRS[200];
+
+/* ---------------------------------------------------------------------------
+   Safe String-to-Number Parsing
+
+   These functions replace unsafe atoi()/atof() which return 0 on parse failure,
+   making it impossible to distinguish "0" from invalid input like "abc".
+   --------------------------------------------------------------------------- */
+
+#include <stdlib.h>
+#include <errno.h>
+#include <limits.h>
+
+/*
+    Safe string to int conversion.
+    Uses strtol internally with full error checking.
+
+    @param str     Input string to parse
+    @param result  Output: parsed integer value (unchanged on failure)
+    @return        true if successfully parsed, false if:
+                   - str is NULL or empty
+                   - contains non-numeric characters
+                   - value overflows int range
+*/
+static inline bool ctools_safe_atoi(const char *str, int *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    long val = strtol(str, &endptr, 10);
+
+    /* Check for conversion errors */
+    if (errno == ERANGE || val > INT_MAX || val < INT_MIN) {
+        return false;  /* Overflow */
+    }
+    if (endptr == str) {
+        return false;  /* No digits found */
+    }
+    /* Allow trailing whitespace but not other characters */
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;  /* Trailing non-whitespace characters */
+    }
+
+    *result = (int)val;
+    return true;
+}
+
+/*
+    Safe string to size_t conversion.
+
+    @param str     Input string to parse
+    @param result  Output: parsed size_t value (unchanged on failure)
+    @return        true if successfully parsed, false on error or negative value
+*/
+static inline bool ctools_safe_atozu(const char *str, size_t *result)
+{
+    if (str == NULL || *str == '\0') {
+        return false;
+    }
+
+    /* Reject negative numbers for size_t */
+    const char *p = str;
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == '-') {
+        return false;
+    }
+
+    char *endptr;
+    errno = 0;
+    unsigned long long val = strtoull(str, &endptr, 10);
+
+    if (errno == ERANGE || val > SIZE_MAX) {
+        return false;
+    }
+    if (endptr == str) {
+        return false;
+    }
+    while (*endptr == ' ' || *endptr == '\t') {
+        endptr++;
+    }
+    if (*endptr != '\0') {
+        return false;
+    }
+
+    *result = (size_t)val;
+    return true;
+}
+
+/* ---------------------------------------------------------------------------
+   Filtered Data Loading
+
+   Unified data loading with if/in filtering at load time. Eliminates per-command
+   filtering code and reduces memory allocation to only filtered observations.
+   --------------------------------------------------------------------------- */
+
+/*
+    Filtered dataset structure.
+
+    Contains the standard stata_data plus observation mapping for write-back.
+    Memory is allocated only for N_filtered observations, not the full in-range.
+
+    Usage:
+    1. Call ctools_data_load() to load only observations passing SF_ifobs()
+    2. Access data directly: fd.data.vars[k].data.dbl[i] (no indirection needed)
+    3. For write-back: ctools_store_filtered(values, N, var_idx, fd.obs_map)
+    4. Call ctools_filtered_data_free() when done
+*/
+typedef struct {
+    stata_data data;              /* Standard data structure (N = N_filtered) */
+    perm_idx_t *obs_map;          /* obs_map[i] = 1-based Stata obs for filtered index i */
+    size_t n_range;               /* Original range size (before filtering) */
+    int was_filtered;             /* 1 if any filtering occurred, 0 if identity */
+} ctools_filtered_data;
+
+/*
+    Initialize filtered data structure to safe empty state.
+    Sets all pointers to NULL, all counts to 0.
+*/
+void ctools_filtered_data_init(ctools_filtered_data *fd);
+
+/*
+    Free all memory associated with filtered data.
+    Safe to call multiple times; resets structure to empty state.
+*/
+void ctools_filtered_data_free(ctools_filtered_data *fd);
+
+/*
+    Flags for ctools_data_load()
+*/
+#define CTOOLS_LOAD_CHECK_IF    0x00  /* Default: check SF_ifobs for each observation */
+#define CTOOLS_LOAD_SKIP_IF     0x01  /* Skip SF_ifobs checks, assume all observations pass */
+
+/*
+    Load variables with if/in filtering applied at load time.
+
+    This is the PRIMARY data loading function for ctools. It handles:
+    - Selective loading of specific variables
+    - "Load all" mode when var_indices is NULL
+    - If/in filtering at load time (or skip with CTOOLS_LOAD_SKIP_IF)
+
+    Performs two-pass loading:
+    1. Count observations passing SF_ifobs() and build obs_map
+    2. Load only filtered observations (memory = O(N_filtered × K))
+
+    Special modes:
+    - If var_indices is NULL: loads ALL variables (equivalent to old ctools_data_load)
+    - If CTOOLS_LOAD_SKIP_IF flag is set: skips SF_ifobs() checks entirely
+
+    @param result       [out] Filtered data structure to populate (caller frees)
+    @param var_indices  [in]  Array of 1-based Stata variable indices to load,
+                              or NULL to load all variables
+    @param nvars        [in]  Number of variables (ignored if var_indices is NULL)
+    @param obs_start    [in]  First observation (1-based), 0 = use SF_in1()
+    @param obs_end      [in]  Last observation (1-based), 0 = use SF_in2()
+    @param flags        [in]  CTOOLS_LOAD_CHECK_IF (0) or CTOOLS_LOAD_SKIP_IF
+
+    @return STATA_OK on success, or:
+            STATA_ERR_INVALID_INPUT if result is NULL
+            STATA_ERR_MEMORY on allocation failure
+*/
+stata_retcode ctools_data_load(ctools_filtered_data *result,
+                                         int *var_indices, size_t nvars,
+                                         size_t obs_start, size_t obs_end,
+                                         int flags);
+
+/*
+    Resolve the if/in selection without loading variables.
+
+    Fills result->obs_map, n_range and was_filtered, and sets
+    result->data.nobs to the number of selected observations (no variables
+    are allocated). Free with ctools_filtered_data_free().
+*/
+stata_retcode ctools_data_select(ctools_filtered_data *result,
+                                 size_t obs_start, size_t obs_end, int flags);
+
+/*
+    Extended data load with string width hints for flat buffer optimization.
+
+    Same as ctools_data_load but accepts an optional array of string variable
+    widths. When provided, string variables are loaded into contiguous flat
+    buffers (one SF_sdata read per observation, no arena overhead) instead
+    of the default arena path (strlen + memcpy + atomic CAS per string).
+
+    @param str_widths   [in]  Array of string widths per variable position
+                              (e.g. 17 for str17, 0 for numeric/unknown/strL).
+                              NULL = use default arena path for all strings.
+                              Array length must match nvars (or SF_nvars() if
+                              var_indices is NULL).
+
+    All other parameters are identical to ctools_data_load.
+*/
+stata_retcode ctools_data_load_ex(ctools_filtered_data *result,
+                                   int *var_indices, size_t nvars,
+                                   size_t obs_start, size_t obs_end,
+                                   int flags, const int *str_widths);
+
+/*
+    Write filtered variable values back to Stata using obs_map.
+
+    For each filtered index i, writes values[i] to Stata observation obs_map[i].
+    This enables write-back after processing without maintaining full-range arrays.
+
+    @param values       [in] Array of values to store (length n_filtered)
+    @param n_filtered   [in] Number of filtered observations
+    @param var_idx      [in] 1-based Stata variable index to store to
+    @param obs_map      [in] Observation mapping from filtered to Stata indices
+
+    @return STATA_OK on success, STATA_ERR_INVALID_INPUT if parameters invalid
+*/
+stata_retcode ctools_store_filtered(double *values, size_t n_filtered,
+                                     int var_idx, perm_idx_t *obs_map);
+
+/*
+    Row-parallel store for a single numeric variable.
+    Counterpart to ctools_data_load_single_var_rowpar().
+    Skips per-element bounds checks (obs_map is trusted).
+
+    @param values       [in] Array of values to store (length n_filtered)
+    @param n_filtered   [in] Number of filtered observations
+    @param var_idx      [in] 1-based Stata variable index to store to
+    @param obs_map      [in] Observation mapping from filtered to Stata indices
+*/
+stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
+                                            int var_idx, perm_idx_t *obs_map);
+
+/*
+    Write filtered string values back to Stata using obs_map.
+
+    @param strings      [in] Array of strings to store (length n_filtered)
+    @param n_filtered   [in] Number of filtered observations
+    @param var_idx      [in] 1-based Stata variable index to store to
+    @param obs_map      [in] Observation mapping from filtered to Stata indices
+
+    @return STATA_OK on success, STATA_ERR_INVALID_INPUT if parameters invalid
+*/
+stata_retcode ctools_store_filtered_str(char **strings, size_t n_filtered,
+                                         int var_idx, perm_idx_t *obs_map);
+
+#endif /* CTOOLS_TYPES_H */

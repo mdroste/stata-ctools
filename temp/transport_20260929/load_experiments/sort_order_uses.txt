@@ -1,0 +1,44 @@
+src/cipolate/cipolate_impl.c:48:    const perm_idx_t *p = fd.data.sort_order;
+src/cbsample/cbsample_impl.c:488:    /* === Sort and Detect Groups Phase using ctools_sort_dispatch === */
+src/cbsample/cbsample_impl.c:530:        rc = ctools_sort_dispatch(&by_filtered.data, sort_vars, total_by, SORT_ALG_COUNTING);
+src/cbsample/cbsample_impl.c:558:        memcpy(sort_perm, by_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
+src/cbsample/cbsample_impl.c:561:        rc = ctools_apply_permutation(&by_filtered.data);
+src/cbsample/cbsample_impl.c:586:        strata_view.sort_order = NULL;
+src/cbsample/cbsample_impl.c:601:        cluster_view.sort_order = NULL;
+src/crangejoin/crangejoin_impl.c:56:        if (compare_group(m, state.using.data.sort_order[state.groups[mid]]) > 0) l = mid+1;
+src/crangejoin/crangejoin_impl.c:59:    if (l < state.ngroups && !compare_group(m, state.using.data.sort_order[state.groups[l]])) return l;
+src/crangejoin/crangejoin_impl.c:90:        const perm_idx_t *p = state.using.data.sort_order;
+src/crangejoin/crangejoin_impl.c:204:                        size_t source = ismaster ? i : (matched ? state.using.data.sort_order[state.lo[i]+j-state.offset[i]] : 0);
+src/cmerge/cmerge_impl.c:49:#include "ctools_sort_pairs.h"
+src/cmerge/cmerge_impl.c:403:        rc = ctools_sort_ips4o_with_perm(&g_using_cache.keys.data, sort_vars, nkeys, perm);
+src/cmerge/cmerge_impl.c:835:        rc = ctools_sort_ips4o_order_only(&master_data.data, sort_vars, nkeys);
+src/cmerge/cmerge_impl.c:846:        /* Copy sort_order to sort_perm (perm_idx_t -> size_t) */
+src/cmerge/cmerge_impl.c:851:            sort_perm[i] = (size_t)master_data.data.sort_order[i];
+src/cmerge/cmerge_impl.c:892:            /* Reset sort_order to identity */
+src/cmerge/cmerge_impl.c:897:                master_data.data.sort_order[i] = (perm_idx_t)i;
+src/cmerge/cmerge_impl.c:1089:        ctools_sort_order_pairs(pairs, output_nobs);
+src/csort/csort_stream.c:852:    /* Call unified sort dispatcher (computes sort_order only) */
+src/csort/csort_stream.c:853:    rc = ctools_sort_dispatch(&key_filtered.data, local_sort_vars, nkeys, algorithm);
+src/csort/csort_stream.c:870:    memcpy(saved_perm, key_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
+src/csort/csort_stream.c:877:    rc = ctools_apply_permutation(&key_filtered.data);
+src/csample/csample_impl.c:459:    /* === Sort Phase using ctools_sort_dispatch (if by-variables) === */
+src/csample/csample_impl.c:489:        rc = ctools_sort_dispatch(&by_filtered.data, sort_vars, nby, SORT_ALG_COUNTING);
+src/csample/csample_impl.c:511:        memcpy(sort_perm, by_filtered.data.sort_order, nobs * sizeof(perm_idx_t));
+src/csample/csample_impl.c:514:        rc = ctools_apply_permutation(&by_filtered.data);
+src/csort/csort_impl.c:399:    /* Call unified sort dispatcher (computes sort_order only) */
+src/csort/csort_impl.c:400:    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, algorithm);
+src/csort/csort_impl.c:421:    rc = ctools_data_store_sorted(&filtered.data, obs1);
+src/cwinsor/cwinsor_impl.c:7:    - Uses ctools_sort_dispatch() for by-variable sorting
+src/cwinsor/cwinsor_impl.c:39:/* Note: By-variable sorting now uses ctools_sort_dispatch() instead of qsort */
+src/cwinsor/cwinsor_impl.c:381:    /* === Sort Phase using ctools_sort_dispatch() === */
+src/cwinsor/cwinsor_impl.c:402:        stata_retcode sort_rc = ctools_sort_dispatch(&by_filtered.data, sort_keys, nby, SORT_ALG_AUTO);
+src/cwinsor/cwinsor_impl.c:434:        /* Copy sort_order from by_filtered.data (converting perm_idx_t to size_t) */
+src/cwinsor/cwinsor_impl.c:436:            sort_indices[i] = (size_t)by_filtered.data.sort_order[i];
+src/cwinsor/cwinsor_impl.c:440:         * in load order; group detection reads them through sort_order. */
+src/cwinsor/cwinsor_impl.c:475:        ngroups = ctools_group_starts(&by_filtered.data, by_filtered.data.sort_order,
+src/crangestat/crangestat_impl.c:1465:    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, SORT_ALG_COUNTING);
+src/crangestat/crangestat_impl.c:1480:     * sort_order[sorted_idx] = original_idx
+src/crangestat/crangestat_impl.c:1500:        inv_perm[filtered.data.sort_order[i]] = i;
+src/crangestat/crangestat_impl.c:1504:     * sort_order[sorted_idx] = original_idx, so iterating sorted_idx gives
+src/crangestat/crangestat_impl.c:1508:        memcpy(fwd_perm, filtered.data.sort_order, nobs * sizeof(perm_idx_t));
+src/crangestat/crangestat_impl.c:1513:    rc = ctools_apply_permutation(&filtered.data);

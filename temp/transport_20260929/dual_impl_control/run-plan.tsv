@@ -1,0 +1,3 @@
+block	command
+0	/bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/b0/run.do'
+1	/bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/dual_impl_control/b1/run.do'

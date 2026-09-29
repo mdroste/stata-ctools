@@ -1,0 +1,71 @@
+--- baseline/ctools_data_io.c
++++ packed_retry/ctools_data_io.c
+@@ -230,7 +230,7 @@
+     for (size_t j = 0; j < nvars && *p != '\0'; j++) {
+         char *endptr;
+         long val = strtol(p, &endptr, 10);
+-        widths[j] = (val > 0 && val < STATA_STR_MAXLEN) ? (int)val : 0;
++        widths[j] = (val > 0 && val <= STATA_STR_MAXLEN) ? (int)val : 0;
+         p = endptr;
+         if (*p == ',') p++;
+     }
+@@ -253,6 +253,28 @@
+     char *result = strdup(value);
+     if (result && arena) arena->has_fallback = 1;
+     return result;
++}
++
++/* Pack maximum-width strings densely in a reservation bounded at 2 GiB.
++ * On demand-paged systems this avoids touching unused declared-width bytes;
++ * platforms may account for committed/virtual memory differently. If the
++ * larger reservation fails, retry the original 64-byte-per-row estimate
++ * before falling back to individual strings. The caller checks N * 64. */
++static ctools_string_arena *create_private_string_arena(size_t nobs, int str_width)
++{
++    const size_t original_capacity = nobs * 64;
++    size_t capacity = original_capacity;
++    if (str_width == STATA_STR_MAXLEN) {
++        const size_t cap = (size_t)2048 * 1024 * 1024;
++        const size_t stride = STATA_STR_MAXLEN + 1;
++        capacity = nobs <= cap / stride ? nobs * stride : cap;
++    }
++    ctools_string_arena *arena = ctools_string_arena_create(capacity,
++                                        CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++    if (!arena && capacity != original_capacity)
++        arena = ctools_string_arena_create(original_capacity,
++                                          CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++    return arena;
+ }
+ 
+ /* ===========================================================================
+@@ -392,8 +414,7 @@
+         /* Overflow check: nobs * 64 - skip arena if overflow, rely on strdup fallback */
+         ctools_string_arena *arena = NULL;
+         if (nobs <= SIZE_MAX / 64) {
+-            size_t arena_capacity = nobs * 64;
+-            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++            arena = create_private_string_arena(nobs, str_width);
+         }
+         if (arena != NULL) {
+             var->_arena = arena;
+@@ -1523,9 +1544,7 @@
+             /* Fallback: arena with per-thread slabs */
+             ctools_string_arena *arena = NULL;
+             if (n_filtered <= SIZE_MAX / 64) {
+-                size_t arena_capacity = n_filtered * 64;
+-                arena = ctools_string_arena_create(arena_capacity,
+-                                                   CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++                arena = create_private_string_arena(n_filtered, str_width);
+             }
+             if (arena != NULL) {
+                 var->_arena = arena;
+@@ -1805,8 +1824,7 @@
+         /* Create arena for string storage */
+         ctools_string_arena *arena = NULL;
+         if (n_filtered <= SIZE_MAX / 64) {
+-            size_t arena_capacity = n_filtered * 64;
+-            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++            arena = create_private_string_arena(n_filtered, str_width);
+         }
+         if (arena != NULL) {
+             var->_arena = arena;

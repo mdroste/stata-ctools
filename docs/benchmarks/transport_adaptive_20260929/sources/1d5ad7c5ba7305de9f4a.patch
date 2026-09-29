@@ -1,0 +1,21 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -69,7 +69,7 @@
+  * See docs/PERFORMANCE_TRANSPORT.md for the measured cases and tile sweep. */
+ #define IO_MIN_TILED_VARS 4
+ #define IO_MIN_TILED_STRING_BYTES 256
+-#define IO_LOAD_TILE_ROWS 512
++#define IO_LOAD_TILE_ROWS 128
+ #define IO_STORE_TILE_ROWS 4096
+ 
+ /* Validate plugin-visible indices before type queries or unchecked string SPI.
+@@ -2078,7 +2078,8 @@
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }
+-    if (tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES) {
++    if (tile_ok && (string_bytes >= IO_MIN_TILED_STRING_BYTES ||
++                    (string_bytes == 0 && nvars >= 64))) {
+         rc = load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
+         if (rc != STATA_ERR_MEMORY) {
+             if (rc) ctools_filtered_data_free(result);

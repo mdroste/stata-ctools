@@ -15,11 +15,14 @@ supported scope and differences from reference commands.
 |---------|----------|---------------|
 | `csort` | `sort` | Yes |
 | `cmerge` | `merge` | — |
-| `cimport` | `import delimited`, `import excel` | Yes |
-| `cexport` | `export delimited`, `export excel` | Yes |
+| `cimport` | `import` file-format subcommands | Yes |
+| `cexport` | `export` file-format subcommands | Yes |
 | `cencode` | `encode` | Yes |
 | `cdecode` | `decode` | Yes |
 | `cdestring` | `destring` | — |
+| `cipolate` | `ipolate` | Preserves input row order |
+| `csplit` | `split` | — |
+| `crangejoin` | `rangejoin` | — |
 | `cwinsor` | `winsor2` | — |
 | `csample` | `sample` | Yes |
 | `cbsample` | `bsample` | — |
@@ -29,6 +32,12 @@ supported scope and differences from reference commands.
 | `cqreg` | `qreg` | Yes |
 | `cpsmatch` | `psmatch2` | — |
 | `cbinscatter` | `binscatter` | Yes |
+
+`cipolate`, `csplit`, and `crangejoin` support `threads()` and `verbose` for
+controlling C workers and inspecting phase timings. Their full syntax, examples,
+and limits are in the [README usage notes](README.md#linear-interpolation-cipolate).
+ctools `cipolate` performs linear interpolation; it is distinct from the SSC
+cubic interpolator with the same name.
 
 ---
 
@@ -69,12 +78,17 @@ csort id, stream(4)
 
 ## cimport / cexport
 
-Stata's `import delimited` and `import excel` (and their `export` counterparts) are separate commands with different syntax. ctools unifies each pair under a single command.
+The command family reads and writes delimited text, XLS/XLSX, dBase, SAS7BDAT,
+SAS XPORT5/8, SPSS and ESRI shapefiles through C engines. Catalog and ZSAV import
+are supported. FRED/Haver engines and some options remain unimplemented; see
+[the I/O parity audit](docs/IO_PARITY.md) for the verified scope.
 
 **ctools adds:**
 
+- **Workbook editing**: XLSX and BIFF8 XLS support adding worksheets, `sheet(..., modify/replace)` and `keepcellfmt`.
+- **Long text and encodings**: Delimited fields use strL when needed; UTF-8/16/32 and named code pages are supported.
 - **Unified interface**: `cimport delimited` and `cimport excel` under one command (same for `cexport`), providing a consistent syntax for both CSV and Excel workflows
-- **Locale-aware number parsing** (cimport): `locale()` and `parselocale` options for automatic handling of locale-specific decimal and grouping separators (e.g., `locale(de_DE)` for German number formatting)
+- **Locale-aware number parsing** (cimport delimited): `parselocale()` uses C profiles for 1,016 locale names, Unicode digits, decimal/grouping separators and signs.
 
 ```stata
 * Import a CSV file
@@ -84,7 +98,7 @@ cimport delimited using data.csv, clear
 cimport excel using data.xlsx, clear firstrow
 
 * Import with German number formatting (comma = decimal, period = thousands)
-cimport delimited using data_de.csv, clear locale(de_DE) parselocale
+cimport delimited using data_de.csv, clear parselocale(de_DE)
 
 * Export to CSV and Excel with the same command family
 cexport delimited using output.csv, replace

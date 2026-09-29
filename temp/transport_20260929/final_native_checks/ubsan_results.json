@@ -1,0 +1,37 @@
+{
+  "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/src",
+  "source_io_sha256": "c4c18472878f8b89767c4f15bc24448c8798d63f5f504a6197758e4e8381f1f4",
+  "sanitizers": "undefined",
+  "compiler": "clang",
+  "libomp": "/private/tmp/ctools-memory-audit/libomp",
+  "results": [
+    {
+      "suite": "test_transport_native",
+      "exit_code": 0,
+      "elapsed_seconds": 2.469,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks/test_transport_native_ubsan.log",
+      "test_sha256": "7bfaf4daf11440fdeb17edcaa044e5e61ece9ed13ef0d93f481a6ec0537f3551"
+    },
+    {
+      "suite": "test_transport_scheduling",
+      "exit_code": 0,
+      "elapsed_seconds": 3.88,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks/test_transport_scheduling_ubsan.log",
+      "test_sha256": "a53422b6ad89feab09676148943dc54f5ac386a944486a876e7ff5aa6e796d9e"
+    },
+    {
+      "suite": "test_transport_adaptive_native",
+      "exit_code": 0,
+      "elapsed_seconds": 3.068,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks/test_transport_adaptive_native_ubsan.log",
+      "test_sha256": "c5e5f14c476bca5a5261643a456a69717a39ed96698f1aebd5c98123f319fd30"
+    },
+    {
+      "suite": "test_transport_store_native",
+      "exit_code": 0,
+      "elapsed_seconds": 2.249,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks/test_transport_store_native_ubsan.log",
+      "test_sha256": "ef5fb8aed5121930677b32290c372981d33ecdc9a58589467206c19adf835133"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "status": "runtime_unavailable",
+  "diagnosis": "AddressSanitizer recursive initialization deadlock before main: shadow-memory mapping calls dyld enumeration, re-enters malloc/AsanInit, spins in StaticSpinMutex.",
+  "tests_executed": false,
+  "native_exit": "serial runtime timeout after 120s",
+  "scheduling_exit": "serial runtime terminated after same startup stall",
+  "remaining_suites": "not attempted with broken runtime",
+  "process_cleanup": "parent and remaining child terminated; ps check returned no matching test process",
+  "profile": "asan_startup_profile.txt"
+}

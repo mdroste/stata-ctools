@@ -1,0 +1,38 @@
+{
+  "baseline": {
+    "build/ctools_mac_arm.plugin": "9c59724b3978fb7d5713d5daf23ce9e782d6fd09ece08671fea8e4296b13f516",
+    "build/cipolate.ado": "b87125471fce50d92d84692b08a86e7e56628fd8fa06bf1e0f864df850974d92",
+    "build/crangejoin.ado": "c85a6abd5f9ce5ecc2f9be0e1738f8e65a5e60c1fe82ea100b5c4fe0ca827186",
+    "build/csplit.ado": "e1e04f1cce24128c53f5e1564281f90da52c7e161097160bbffd5c03f68abcdf",
+    "src/ctools_order.c": "b9d8b85e264a2aa5a61bb1ae7f29de110cb022c4fa19c2b2ef54615765bbba04",
+    "src/cipolate/cipolate_impl.c": "5e72028cc3888534642fd7d2e55d47c094113224e51a2c4be9051d56948f832c",
+    "src/crangejoin/crangejoin_impl.c": "4ff31bb083916ed28a8935947d582fe15d1c37c963201a56497e06a21b8291ac",
+    "src/csplit/csplit_impl.c": "32390ac488bf1cd9545744ba75c79fe4d3e5fabf8a0ecd4196ea7d5e1e0b66e2",
+    "src/ctools_data_io.c": "14e90747aecd7dd50a7455eae7c43e8bc852b5aa6879749819b21a45a2d59883",
+    "Makefile": "bc0fc6467887814b15f44afb2c80c14cc472a6c06145bd8d0ad949696cf7f7a8"
+  },
+  "candidate-v1": {
+    "build/ctools_mac_arm.plugin": "6876d789b36f218cf67984ecb4cd3dcbcfdba6282064c912189ec2a5d9e3f683",
+    "build/cipolate.ado": "ab8651e3bdd1b6a2b323a71499c67c94e54b80104cc12e9692ab924f3818a3e7",
+    "build/crangejoin.ado": "21772466391c53579a04599ebed257d0dbfe4b82b09fe73d5bbece81b239be80",
+    "build/csplit.ado": "e1e04f1cce24128c53f5e1564281f90da52c7e161097160bbffd5c03f68abcdf",
+    "src/ctools_order.c": "4fff76ed560fe280d79a840a54a6109c2b6443fc71c6db4032d71872e14f5ae9",
+    "src/cipolate/cipolate_impl.c": "11650ffb3a3222530f9ac2a7883a00d375121f250620fc11ee2d72baa56a4fdf",
+    "src/crangejoin/crangejoin_impl.c": "efd0357bcd55900c4db30143020fdb2354598778c091669c5a73cf289cb4f15b",
+    "src/csplit/csplit_impl.c": "62acd2e2ff2f82f48e85eee20661c6b53b36837e49839c64483d2cda668eab21",
+    "src/ctools_data_io.c": "14e90747aecd7dd50a7455eae7c43e8bc852b5aa6879749819b21a45a2d59883",
+    "Makefile": "bc0fc6467887814b15f44afb2c80c14cc472a6c06145bd8d0ad949696cf7f7a8"
+  },
+  "candidate": {
+    "build/ctools_mac_arm.plugin": "f520b74970630389cd112af51dae4968713628bccd887b463a25388960104204",
+    "build/cipolate.ado": "ab8651e3bdd1b6a2b323a71499c67c94e54b80104cc12e9692ab924f3818a3e7",
+    "build/crangejoin.ado": "21772466391c53579a04599ebed257d0dbfe4b82b09fe73d5bbece81b239be80",
+    "build/csplit.ado": "e1e04f1cce24128c53f5e1564281f90da52c7e161097160bbffd5c03f68abcdf",
+    "src/ctools_order.c": "4fff76ed560fe280d79a840a54a6109c2b6443fc71c6db4032d71872e14f5ae9",
+    "src/cipolate/cipolate_impl.c": "11650ffb3a3222530f9ac2a7883a00d375121f250620fc11ee2d72baa56a4fdf",
+    "src/crangejoin/crangejoin_impl.c": "efd0357bcd55900c4db30143020fdb2354598778c091669c5a73cf289cb4f15b",
+    "src/csplit/csplit_impl.c": "b960167971dbea65a042711b74e40dc50934b56bd0078cd1fab2e91e8d5fbe89",
+    "src/ctools_data_io.c": "14e90747aecd7dd50a7455eae7c43e8bc852b5aa6879749819b21a45a2d59883",
+    "Makefile": "bc0fc6467887814b15f44afb2c80c14cc472a6c06145bd8d0ad949696cf7f7a8"
+  }
+}

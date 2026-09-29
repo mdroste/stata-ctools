@@ -8,8 +8,8 @@ d
 d Included commands:
 d   csort       - Parallel sorting (IPS4o, radix, timsort, etc.)
 d   cmerge      - C-accelerated dataset merging
-d   cimport     - Multi-threaded delimited text and XLSX import
-d   cexport     - Delimited text and XLSX export
+d   cimport     - Delimited text, Excel, and binary statistical file import
+d   cexport     - Delimited text, Excel, and binary statistical file export
 d   creghdfe    - HDFE regression with CG solver
 d   civreghdfe  - IV/2SLS regression with HDFE
 d   cqreg       - Quantile regression with IPM solver
@@ -19,6 +19,9 @@ d   cdestring   - Convert strings to numeric data
 d   csample/cbsample - Sampling and bootstrap draws
 d   cwinsor     - Winsorize or trim variables
 d   crangestat  - Range statistics
+d   cipolate    - Linear interpolation
+d   csplit      - String splitting
+d   crangejoin  - Interval joins
 d   cpsmatch    - Propensity score matching (ATT)
 d   cpplmhdfe   - PPML with high-dimensional fixed effects
 d
@@ -34,6 +37,10 @@ f csort.ado
 f csort.sthlp
 f cmerge.ado
 f cmerge.sthlp
+f ctools-codecs-LICENSE.txt
+f _cio_import.ado
+f _cio_export.ado
+f _cio_shp_export.ado
 f cimport.ado
 f cimport.sthlp
 f cexport.ado
@@ -71,6 +78,12 @@ f csample.ado
 f csample.sthlp
 f cwinsor.ado
 f cwinsor.sthlp
+f cipolate.ado
+f cipolate.sthlp
+f csplit.ado
+f csplit.sthlp
+f crangejoin.ado
+f crangejoin.sthlp
 f ctools_mac_arm.plugin
 f ctools_mac_x86.plugin
 f ctools_windows.plugin

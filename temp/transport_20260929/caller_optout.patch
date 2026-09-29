@@ -1,0 +1,121 @@
+--- a/cbinscatter/cbinscatter_impl.c
++++ b/cbinscatter/cbinscatter_impl.c
+@@ -222,7 +222,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       num_vars_to_load, 0, 0, 0);
++                                                       num_vars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/cdestring/cdestring_impl.c
++++ b/cdestring/cdestring_impl.c
+@@ -331,7 +331,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices,
+-                                              (size_t)nvars, 0, 0, 0);
++                                              (size_t)nvars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     if (load_rc != STATA_OK) {
+         ctools_filtered_data_free(&filtered);
+         free_options(&opts);
+--- a/cencode/cencode_impl.c
++++ b/cencode/cencode_impl.c
+@@ -113,7 +113,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     int load_var_idx = var_idx;
+-    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+ 
+     if (load_rc != STATA_OK) {
+         ctools_filtered_data_free(&filtered);
+--- a/cexport/cexport_impl.c
++++ b/cexport/cexport_impl.c
+@@ -783,7 +783,7 @@
+     ctools_filtered_data_init(&g_ctx.filtered);
+     rc = g_ctx.stream ? ctools_data_select(&g_ctx.filtered, 0, 0, CTOOLS_LOAD_CHECK_IF)
+        : longtext ? cexport_load_text_data(&g_ctx.filtered, SF_nvars(), false)
+-                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF);
++                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     if (rc != STATA_OK) {
+         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
+         SF_error(msg);
+--- a/cexport/cexport_xlsx.c
++++ b/cexport/cexport_xlsx.c
+@@ -1673,7 +1673,7 @@
+         for (ST_int j = 0; j < ctx.nvars; j++)
+             if (SF_var_is_strl(j + 1)) longtext = 1;
+         rc = longtext ? xlsx_load_long_text(&ctx, &filtered)
+-                      : ctools_data_load(&filtered, var_indices, ctx.nvars, 0, 0, CTOOLS_LOAD_CHECK_IF);
++                      : ctools_data_load(&filtered, var_indices, ctx.nvars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+         free(var_indices);
+ 
+         if (rc != 0) {
+--- a/civreghdfe/civreghdfe_impl.c
++++ b/civreghdfe/civreghdfe_impl.c
+@@ -446,7 +446,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     /* Capture pure SPI data load time */
+--- a/cpplmhdfe/cpplmhdfe_irls.c
++++ b/cpplmhdfe/cpplmhdfe_irls.c
+@@ -580,7 +580,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/cpsmatch/cpsmatch_impl.c
++++ b/cpsmatch/cpsmatch_impl.c
+@@ -759,7 +759,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       nvars_to_load, 0, 0, 0);
++                                                       nvars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/cqreg/cqreg_regress.c
++++ b/cqreg/cqreg_regress.c
+@@ -772,7 +772,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       (size_t)nvars_to_load, 0, 0, 0);
++                                                       (size_t)nvars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+     var_indices = NULL;
+ 
+--- a/creghdfe/creghdfe_regress.c
++++ b/creghdfe/creghdfe_regress.c
+@@ -310,7 +310,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/csplit/csplit_impl.c
++++ b/csplit/csplit_impl.c
+@@ -109,7 +109,7 @@
+             state.next[d] = state.head[first]; state.head[first] = d;
+         }
+         int var = 1;
+-        if ((rc = ctools_stata_rc(ctools_data_load(&state.input, &var, 1, 0, 0, CTOOLS_LOAD_CHECK_IF)))) { goto fail; }
++        if ((rc = ctools_stata_rc(ctools_data_load(&state.input, &var, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER)))) { goto fail; }
+         state.nobs = SF_nobs();
+         state.tokens = malloc(state.input.data.nobs * sizeof(*state.tokens));
+         if (!state.tokens) { rc = 920; goto fail; }

@@ -1,0 +1,5 @@
+run	command
+b0_baseline	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b0_baseline/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b0_baseline/resources.txt
+b0_tiny	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b0_tiny/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b0_tiny/resources.txt
+b1_tiny	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b1_tiny/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b1_tiny/resources.txt
+b1_baseline	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b1_baseline/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/tiny_campaign/b1_baseline/resources.txt

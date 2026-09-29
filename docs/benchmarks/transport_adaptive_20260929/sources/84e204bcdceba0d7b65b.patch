@@ -1,0 +1,31 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -750,21 +750,13 @@
+         if (var->type == STATA_TYPE_DOUBLE) {
+             const double *values = var->data.dbl;
+             ST_IIID store_fn = IO_VSTORE_FN;
+-            double gathered[1024];
+-            for (size_t start = 0; start < nobs; start += 1024) {
+-                size_t count = nobs - start;
+-                if (count > 1024) count = 1024;
+-                for (i = 0; i < count; i++) {
+-                    #if defined(__GNUC__) || defined(__clang__)
+-                    if (start + i + 16 < nobs)
+-                        __builtin_prefetch(values + order[start + i + 16], 0, 0);
+-                    #endif
+-                    gathered[i] = values[order[start + i]];
+-                }
+-                for (i = 0; i < count; i++) {
+-                    if (store_fn(stata_var_idx, (ST_int)(start + i + obs1), gathered[i]))
+-                        return STATA_ERR_STATA_WRITE;
+-                }
++            for (i = 0; i < nobs; i++) {
++                #if defined(__GNUC__) || defined(__clang__)
++                if (i + 16 < nobs)
++                    __builtin_prefetch(values + order[i + 16], 0, 0);
++                #endif
++                if (store_fn(stata_var_idx, (ST_int)(i + obs1), values[order[i]]))
++                    return STATA_ERR_STATA_WRITE;
+             }
+         } else {
+             char * const *values = var->data.str;

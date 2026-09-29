@@ -1,0 +1,30 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -2383,14 +2383,19 @@
+         if (rc) return rc;
+     } else {
+         if (!obs_map) return STATA_ERR_INVALID_INPUT;
+-        size_t available = (size_t)SF_nobs();
+-        distinct = 1;
+-        /* The usual filtered map is increasing. Fuse that proof into its
+-         * required bounds pass, without min/max work or extra allocation. */
+-        for (size_t i = 0; i < n_filtered; i++) {
+-            if (obs_map[i] < 1 || obs_map[i] > available) return STATA_ERR_INVALID_INPUT;
+-            if (i && obs_map[i] <= obs_map[i - 1]) distinct = 0;
+-        }
++        const perm_idx_t available = (perm_idx_t)SF_nobs();
++        /* Independent OR reductions let the compiler vectorize both proofs.
++         * Unsigned subtraction rejects zero as well as values above nobs.
++         * Examine every destination before permitting any worker writes. */
++        unsigned invalid = (obs_map[0] - 1u >= available);
++        unsigned nonincreasing = 0;
++        for (size_t i = 1; i < n_filtered; i++) {
++            const perm_idx_t obs = obs_map[i];
++            invalid |= (obs - 1u >= available);
++            nonincreasing |= (obs <= obs_map[i - 1]);
++        }
++        if (invalid) return STATA_ERR_INVALID_INPUT;
++        distinct = !nonincreasing;
+         if (!distinct) {
+             size_t min_obs = (size_t)obs_map[0], max_obs = min_obs;
+             int decreasing = 1;

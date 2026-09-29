@@ -1,0 +1,62 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -1060,9 +1060,14 @@
+     /* nvars >= 2: chunked column store when enough rows are available for
+      * the queue to balance unequal or indivisible column counts. */
+     size_t per_col = io_chunks_per_column(nvars, nobs, MIN_OBS_PER_THREAD);
++    #ifdef _OPENMP
++    int chunk_schedule_ok = per_col >= 2;
++    #else
+     ctools_persistent_pool *chunk_pool = per_col >= 2 ? ctools_get_global_pool() : NULL;
++    int chunk_schedule_ok = chunk_pool != NULL;
++    #endif
+     size_t store_tasks;
+-    if (chunk_pool && ctools_safe_mul_size(nvars, per_col, &store_tasks) == 0) {
++    if (chunk_schedule_ok && ctools_safe_mul_size(nvars, per_col, &store_tasks) == 0) {
+         ctools_store_chunk *chunks = (ctools_store_chunk *)
+             ctools_safe_malloc2(store_tasks, sizeof(ctools_store_chunk));
+         if (chunks) {
+@@ -1085,11 +1090,16 @@
+                     dest += count;
+                 }
+             }
++            #ifdef _OPENMP
++            #pragma omp parallel for schedule(static)
++            for (size_t t = 0; t < built; t++) store_chunk_thread(&chunks[t]);
++            #else
+             if (ctools_persistent_pool_submit_batch(chunk_pool, store_chunk_thread,
+                                     chunks, built, sizeof(ctools_store_chunk)) != 0)
+                 record_io_error(&error, STATA_ERR_MEMORY);
+             else if (ctools_persistent_pool_wait(chunk_pool))
+                 record_io_error(&error, STATA_ERR_MEMORY);
++            #endif
+             free(chunks);
+             ctools_memory_barrier();
+             return store_status(atomic_load(&error));
+@@ -1106,7 +1116,16 @@
+     init_io_thread_args(thread_args, data, var_indices, nvars, obs1, nobs,
+                         IO_MODE_STORE, NULL);
+     for (size_t j = 0; j < nvars; j++) thread_args[j].store_order = order;
++    #ifdef _OPENMP
++    #pragma omp parallel for schedule(static)
++    for (size_t j = 0; j < nvars; j++) store_variable_thread(&thread_args[j]);
++    rc = STATA_OK;
++    for (size_t j = 0; j < nvars; j++) {
++        if (thread_args[j].error) { rc = thread_args[j].error; break; }
++    }
++    #else
+     rc = execute_io_parallel(thread_args, nvars, store_variable_thread);
++    #endif
+     free(thread_args);
+ 
+     ctools_memory_barrier();
+@@ -2078,7 +2097,8 @@
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }
+-    if (tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES) {
++    if (tile_ok && (string_bytes >= IO_MIN_TILED_STRING_BYTES ||
++                    (string_bytes == 0 && nvars >= 64))) {
+         rc = load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
+         if (rc != STATA_ERR_MEMORY) {
+             if (rc) ctools_filtered_data_free(result);

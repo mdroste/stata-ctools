@@ -1,0 +1,22 @@
+{
+  "baseline_plugin_sha256": "5e7f4b12498591015e8ab5c7aacc4c06345416f1663eed5d985489f93dfc8366",
+  "candidate_plugin_sha256": "4472bf71a40362d9b0ee18d32ef80a70ceaaff14c0b7199c2e4b94fe72856bb4",
+  "makefile_sha256": "aad0d61807a84d0aeafcf356eac4562aa2620a58d1feab892ab6340e86edaa3f",
+  "libomp_archive_sha256": "cae862c1f95b23e9db8146934f66df67d7aeab0a726a1a56c3575e3f033ecfa4",
+  "baseline_build_command": "make macos-arm SRC_DIR=temp/transport_20260929/production_baseline/src BUILD_DIR=temp/transport_20260929/production_final_baseline_build CC_MAC=/opt/homebrew/Cellar/llvm/21.1.8/bin/clang LIBOMP_PREFIX=/private/tmp/ctools-memory-audit/libomp",
+  "candidate_build_command": "make macos-arm SRC_DIR=temp/transport_20260929/production_final/src BUILD_DIR=temp/transport_20260929/production_final/build LIBOMP_PREFIX=/private/tmp/ctools-memory-audit/libomp",
+  "candidate_compiler_resolved": "/opt/homebrew/opt/llvm/bin/clang",
+  "baseline_dependency_check": {
+    "command": [
+      "python3",
+      "validation/check_dependencies.py",
+      "macos",
+      "temp/transport_20260929/production_final_baseline_build/ctools_mac_arm.plugin",
+      "--arch",
+      "arm64"
+    ],
+    "exit_code": 0,
+    "stdout": "Dependency contract checked: temp/transport_20260929/production_final_baseline_build/ctools_mac_arm.plugin\n",
+    "stderr": ""
+  }
+}

@@ -1,0 +1,47 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -230,7 +230,7 @@
+     for (size_t j = 0; j < nvars && *p != '\0'; j++) {
+         char *endptr;
+         long val = strtol(p, &endptr, 10);
+-        widths[j] = (val > 0 && val < STATA_STR_MAXLEN) ? (int)val : 0;
++        widths[j] = (val > 0 && val <= STATA_STR_MAXLEN) ? (int)val : 0;
+         p = endptr;
+         if (*p == ',') p++;
+     }
+@@ -311,7 +311,7 @@
+            - Fixed strides for strings
+            - Better cache locality for subsequent sort comparisons
+            - O(1) cleanup via ctools_string_arena_free wrapper */
+-        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
++        if (str_width > 0 && str_width <= STATA_STR_MAXLEN) {
+             size_t stride = (size_t)str_width + 1;
+             size_t flat_size = nobs * stride;
+ 
+@@ -1461,7 +1461,7 @@
+ 
+         /* Fast path: flat buffer when string width is known */
+         int used_flat_buffer = 0;
+-        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
++        if (str_width > 0 && str_width <= STATA_STR_MAXLEN) {
+             size_t stride = (size_t)str_width + 1;
+             size_t flat_size;
+             if (ctools_safe_mul_size(n_filtered, stride, &flat_size) == 0) {
+@@ -1734,7 +1734,7 @@
+         var->type = STATA_TYPE_STRING;
+ 
+         /* ---- Flat buffer path: known string width ---- */
+-        if (str_width > 0 && str_width < STATA_STR_MAXLEN) {
++        if (str_width > 0 && str_width <= STATA_STR_MAXLEN) {
+             size_t stride = (size_t)str_width + 1;
+             size_t flat_size = n_filtered * stride;
+ 
+@@ -2074,7 +2074,7 @@
+         if (SF_var_is_string(idx)) {
+             int width = str_widths ? str_widths[idx - 1] : 0;
+             if (width > 0) string_bytes += (size_t)width;
+-            if (SF_var_is_strl(idx) || width < 1 || width >= STATA_STR_MAXLEN ||
++            if (SF_var_is_strl(idx) || width < 1 || width > STATA_STR_MAXLEN ||
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }

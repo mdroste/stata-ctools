@@ -1,0 +1,27 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -1068,11 +1068,11 @@
+         if (chunks) {
+             atomic_int error = 0;
+             size_t built = 0;
+-            for (size_t j = 0; j < nvars; j++) {
+-                size_t share = nobs / per_col, extra = nobs % per_col;
+-                size_t dest = 0;
+-                for (size_t c = 0; c < per_col; c++) {
+-                    size_t count = share + (c < extra);
++            size_t share = nobs / per_col, extra = nobs % per_col;
++            for (size_t c = 0; c < per_col; c++) {
++                size_t dest = c * share + (c < extra ? c : extra);
++                size_t count = share + (c < extra);
++                for (size_t j = 0; j < nvars; j++) {
+                     ctools_store_chunk *ck = &chunks[built++];
+                     ck->var = &data->vars[j];
+                     ck->var_idx = var_indices ? var_indices[j] : (int)j + 1;
+@@ -1082,7 +1082,6 @@
+                     ck->total_nobs = nobs;
+                     ck->order = order;
+                     ck->error = &error;
+-                    dest += count;
+                 }
+             }
+             if (ctools_persistent_pool_submit_batch(chunk_pool, store_chunk_thread,

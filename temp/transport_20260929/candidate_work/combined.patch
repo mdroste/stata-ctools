@@ -1,0 +1,444 @@
+--- a/src/cbinscatter/cbinscatter_impl.c
++++ b/src/cbinscatter/cbinscatter_impl.c
+@@ -222,7 +222,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       num_vars_to_load, 0, 0, 0);
++                                                       num_vars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/src/cdestring/cdestring_impl.c
++++ b/src/cdestring/cdestring_impl.c
+@@ -331,7 +331,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, opts.src_indices,
+-                                              (size_t)nvars, 0, 0, 0);
++                                              (size_t)nvars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     if (load_rc != STATA_OK) {
+         ctools_filtered_data_free(&filtered);
+         free_options(&opts);
+--- a/src/cencode/cencode_impl.c
++++ b/src/cencode/cencode_impl.c
+@@ -113,7 +113,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     int load_var_idx = var_idx;
+-    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, &load_var_idx, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+ 
+     if (load_rc != STATA_OK) {
+         ctools_filtered_data_free(&filtered);
+--- a/src/cexport/cexport_impl.c
++++ b/src/cexport/cexport_impl.c
+@@ -783,7 +783,7 @@
+     ctools_filtered_data_init(&g_ctx.filtered);
+     rc = g_ctx.stream ? ctools_data_select(&g_ctx.filtered, 0, 0, CTOOLS_LOAD_CHECK_IF)
+        : longtext ? cexport_load_text_data(&g_ctx.filtered, SF_nvars(), false)
+-                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF);
++                  : ctools_data_load(&g_ctx.filtered, NULL, 0, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     if (rc != STATA_OK) {
+         snprintf(msg, sizeof(msg), "cexport: failed to load data (error %d)\n", rc);
+         SF_error(msg);
+--- a/src/cexport/cexport_xlsx.c
++++ b/src/cexport/cexport_xlsx.c
+@@ -1673,7 +1673,7 @@
+         for (ST_int j = 0; j < ctx.nvars; j++)
+             if (SF_var_is_strl(j + 1)) longtext = 1;
+         rc = longtext ? xlsx_load_long_text(&ctx, &filtered)
+-                      : ctools_data_load(&filtered, var_indices, ctx.nvars, 0, 0, CTOOLS_LOAD_CHECK_IF);
++                      : ctools_data_load(&filtered, var_indices, ctx.nvars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+         free(var_indices);
+ 
+         if (rc != 0) {
+--- a/src/civreghdfe/civreghdfe_impl.c
++++ b/src/civreghdfe/civreghdfe_impl.c
+@@ -403,7 +403,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     /* Capture pure SPI data load time */
+--- a/src/cpplmhdfe/cpplmhdfe_irls.c
++++ b/src/cpplmhdfe/cpplmhdfe_irls.c
+@@ -577,7 +577,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/src/cpsmatch/cpsmatch_impl.c
++++ b/src/cpsmatch/cpsmatch_impl.c
+@@ -759,7 +759,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       nvars_to_load, 0, 0, 0);
++                                                       nvars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/src/cqreg/cqreg_regress.c
++++ b/src/cqreg/cqreg_regress.c
+@@ -772,7 +772,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+     stata_retcode load_rc = ctools_data_load(&filtered, var_indices,
+-                                                       (size_t)nvars_to_load, 0, 0, 0);
++                                                       (size_t)nvars_to_load, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+     var_indices = NULL;
+ 
+--- a/src/creghdfe/creghdfe_regress.c
++++ b/src/creghdfe/creghdfe_regress.c
+@@ -310,7 +310,7 @@
+     ctools_filtered_data filtered;
+     ctools_filtered_data_init(&filtered);
+ 
+-    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
++    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER);
+     free(var_indices);
+ 
+     if (load_rc != STATA_OK) {
+--- a/src/csplit/csplit_impl.c
++++ b/src/csplit/csplit_impl.c
+@@ -109,7 +109,7 @@
+             state.next[d] = state.head[first]; state.head[first] = d;
+         }
+         int var = 1;
+-        if (ctools_data_load(&state.input, &var, 1, 0, 0, CTOOLS_LOAD_CHECK_IF)) { rc = 920; goto fail; }
++        if (ctools_data_load(&state.input, &var, 1, 0, 0, CTOOLS_LOAD_CHECK_IF | CTOOLS_LOAD_NO_SORT_ORDER)) { rc = 920; goto fail; }
+         state.nobs = SF_nobs();
+         state.tokens = malloc(state.input.data.nobs * sizeof(*state.tokens));
+         if (!state.tokens) { rc = 920; goto fail; }
+--- a/src/ctools_data_io.c
++++ b/src/ctools_data_io.c
+@@ -230,7 +230,7 @@
+     for (size_t j = 0; j < nvars && *p != '\0'; j++) {
+         char *endptr;
+         long val = strtol(p, &endptr, 10);
+-        widths[j] = (val > 0 && val < STATA_STR_MAXLEN) ? (int)val : 0;
++        widths[j] = (val > 0 && val <= STATA_STR_MAXLEN) ? (int)val : 0;
+         p = endptr;
+         if (*p == ',') p++;
+     }
+@@ -253,6 +253,28 @@
+     char *result = strdup(value);
+     if (result && arena) arena->has_fallback = 1;
+     return result;
++}
++
++/* Pack maximum-width strings densely in a reservation bounded at 2 GiB.
++ * On demand-paged systems this avoids touching unused declared-width bytes;
++ * platforms may account for committed/virtual memory differently. If the
++ * larger reservation fails, retry the original 64-byte-per-row estimate
++ * before falling back to individual strings. The caller checks N * 64. */
++static ctools_string_arena *create_private_string_arena(size_t nobs, int str_width)
++{
++    const size_t original_capacity = nobs * 64;
++    size_t capacity = original_capacity;
++    if (str_width == STATA_STR_MAXLEN) {
++        const size_t cap = (size_t)2048 * 1024 * 1024;
++        const size_t stride = STATA_STR_MAXLEN + 1;
++        capacity = nobs <= cap / stride ? nobs * stride : cap;
++    }
++    ctools_string_arena *arena = ctools_string_arena_create(capacity,
++                                        CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++    if (!arena && capacity != original_capacity)
++        arena = ctools_string_arena_create(original_capacity,
++                                          CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++    return arena;
+ }
+ 
+ /* ===========================================================================
+@@ -392,8 +414,7 @@
+         /* Overflow check: nobs * 64 - skip arena if overflow, rely on strdup fallback */
+         ctools_string_arena *arena = NULL;
+         if (nobs <= SIZE_MAX / 64) {
+-            size_t arena_capacity = nobs * 64;
+-            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++            arena = create_private_string_arena(nobs, str_width);
+         }
+         if (arena != NULL) {
+             var->_arena = arena;
+@@ -487,7 +508,7 @@
+     Allocates vars array and sort_order with proper alignment.
+     Returns STATA_OK on success, error code on failure.
+ */
+-static stata_retcode init_data_structure(stata_data *data, size_t nvars, size_t nobs)
++static stata_retcode init_data_structure(stata_data *data, size_t nvars, size_t nobs, int flags)
+ {
+     /* Initialize the data structure */
+     stata_data_init(data);
+@@ -500,6 +521,9 @@
+         return STATA_ERR_MEMORY;
+     }
+     memset(data->vars, 0, nvars * sizeof(stata_variable));
++
++    /* Read-only/column-transform callers can omit the unused row order. */
++    if (flags & CTOOLS_LOAD_NO_SORT_ORDER) return STATA_OK;
+ 
+     /* Allocate sort order array (cache-line aligned, overflow-safe) */
+     data->sort_order = (perm_idx_t *)ctools_safe_cacheline_alloc2(nobs, sizeof(perm_idx_t));
+@@ -571,6 +595,29 @@
+ 
+     @return 0 on success, non-zero on failure
+ */
++/* Estimate tiny transfer work before paying pool/task wakeup overhead.
++ * One numeric callback costs one unit; strings include callback overhead
++ * and a term proportional to their declared bytes. Unknown widths use the
++ * largest supported fixed width. Saturate the sum rather than overflowing. */
++static size_t io_column_work(int is_string, size_t width)
++{
++    if (!is_string) return 1;
++    if (width < 1 || width > STATA_STR_MAXLEN) width = STATA_STR_MAXLEN;
++    return 2 + (width + 7) / 8;
++}
++
++static size_t io_add_work(size_t total, size_t column)
++{
++    return total > SIZE_MAX - column ? SIZE_MAX : total + column;
++}
++
++static int io_serial_work(size_t nobs, size_t nvars, size_t row_work)
++{
++    if (nvars < 2 || row_work == 0) return 0;
++    size_t budget = nvars > (SIZE_MAX - 16384) / 256 ? SIZE_MAX : 16384 + 256 * nvars;
++    return nobs <= budget / row_work;
++}
++
+ static int execute_io_parallel(ctools_var_io_args *args, size_t nvars,
+                                io_thread_func func)
+ {
+@@ -586,7 +633,17 @@
+         }
+         nvars = parallel_count;
+     }
+-    ctools_persistent_pool *pool = nvars >= 2 ? ctools_get_global_pool() : NULL;
++    size_t row_work = 0;
++    for (size_t j = 0; j < nvars; j++) {
++        int is_string = func == load_variable_thread
++            ? args[j].is_string : args[j].var->type == STATA_TYPE_STRING;
++        size_t width = func == load_variable_thread
++            ? (args[j].str_width > 0 ? (size_t)args[j].str_width : 0)
++            : args[j].var->str_maxlen;
++        row_work = io_add_work(row_work, io_column_work(is_string, width));
++    }
++    int serial = nvars >= 2 && io_serial_work(args[0].nobs, nvars, row_work);
++    ctools_persistent_pool *pool = nvars >= 2 && !serial ? ctools_get_global_pool() : NULL;
+     if (pool) {
+         if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
+                                                sizeof(ctools_var_io_args)) != 0)
+@@ -1523,9 +1580,7 @@
+             /* Fallback: arena with per-thread slabs */
+             ctools_string_arena *arena = NULL;
+             if (n_filtered <= SIZE_MAX / 64) {
+-                size_t arena_capacity = n_filtered * 64;
+-                arena = ctools_string_arena_create(arena_capacity,
+-                                                   CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++                arena = create_private_string_arena(n_filtered, str_width);
+             }
+             if (arena != NULL) {
+                 var->_arena = arena;
+@@ -1805,8 +1860,7 @@
+         /* Create arena for string storage */
+         ctools_string_arena *arena = NULL;
+         if (n_filtered <= SIZE_MAX / 64) {
+-            size_t arena_capacity = n_filtered * 64;
+-            arena = ctools_string_arena_create(arena_capacity, CTOOLS_STRING_ARENA_STRDUP_FALLBACK);
++            arena = create_private_string_arena(n_filtered, str_width);
+         }
+         if (arena != NULL) {
+             var->_arena = arena;
+@@ -2048,7 +2102,7 @@
+     if (n_filtered == 0) {
+         if (n_range > 0) {
+             /* Some obs in range but all filtered out */
+-            rc = init_data_structure(&result->data, nvars, 0);
++            rc = init_data_structure(&result->data, nvars, 0, flags);
+         }
+         free(auto_str_widths);
+         free(auto_indices);
+@@ -2056,7 +2110,7 @@
+     }
+ 
+     /* Allocate data structure */
+-    rc = init_data_structure(&result->data, nvars, n_filtered);
++    rc = init_data_structure(&result->data, nvars, n_filtered, flags);
+     if (rc != STATA_OK) {
+         ctools_filtered_data_free(result);
+         free(auto_str_widths);
+@@ -2066,7 +2120,10 @@
+ 
+     int tile_ok = 0;
+     #ifdef _OPENMP
+-    tile_ok = nvars >= IO_MIN_TILED_VARS && n_filtered >= MIN_OBS_PER_THREAD * 2;
++    tile_ok = nvars >= IO_MIN_TILED_VARS &&
++        (n_filtered >= MIN_OBS_PER_THREAD * 2 ||
++         (nvars >= 64 && n_filtered >= 4096 &&
++          nvars >= (2000000 + n_filtered - 1) / n_filtered));
+     #endif
+     size_t string_bytes = 0;
+     for (size_t j = 0; j < nvars && tile_ok; j++) {
+@@ -2078,7 +2135,10 @@
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }
+-    if (tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES) {
++    if (tile_ok &&
++        ((n_filtered >= MIN_OBS_PER_THREAD * 2 && string_bytes >= IO_MIN_TILED_STRING_BYTES) ||
++         (string_bytes == 0 && nvars >= 64 && n_filtered >= 4096 &&
++          nvars >= (2000000 + n_filtered - 1) / n_filtered))) {
+         rc = load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
+         if (rc != STATA_ERR_MEMORY) {
+             if (rc) ctools_filtered_data_free(result);
+@@ -2088,7 +2148,7 @@
+         /* Speculative flat allocations must not remove the existing arena
+          * fallback when address space or available memory is constrained. */
+         stata_data_free(&result->data);
+-        rc = init_data_structure(&result->data, nvars, n_filtered);
++        rc = init_data_structure(&result->data, nvars, n_filtered, flags);
+         if (rc) {
+             ctools_filtered_data_free(result);
+             free(auto_str_widths); free(auto_indices);
+@@ -2197,7 +2257,14 @@
+             }
+         }
+ 
+-        ctools_persistent_pool *pool = parallel_count >= 2 ? ctools_get_global_pool() : NULL;
++        size_t row_work = 0;
++        for (size_t j = 0; j < parallel_count; j++) {
++            int width = thread_args[j].str_width;
++            row_work = io_add_work(row_work, io_column_work(thread_args[j].is_string,
++                                  width > 0 ? (size_t)width : 0));
++        }
++        int serial = io_serial_work(n_filtered, parallel_count, row_work);
++        ctools_persistent_pool *pool = parallel_count >= 2 && !serial ? ctools_get_global_pool() : NULL;
+         if (pool != NULL) {
+             if (ctools_persistent_pool_submit_batch(pool, load_filtered_variable_thread,
+                                                      thread_args, parallel_count,
+@@ -2279,15 +2346,75 @@
+     if (!values) return STATA_ERR_INVALID_INPUT;
+     stata_retcode rc = validate_variable(var_idx, 0);
+     if (rc) return rc;
+-    rc = validate_obs_map(obs_map, n_filtered);
+-    if (rc) return rc;
++    int parallel = 0, distinct = 0;
++    #ifdef _OPENMP
++    parallel = n_filtered >= MIN_OBS_PER_THREAD * 2 && ctools_get_max_threads() > 1;
++    #endif
++    if (!parallel) {
++        /* Serial writes already preserve repeated destinations; only bounds
++         * need checking for small transfers and builds without OpenMP. */
++        rc = validate_obs_map(obs_map, n_filtered);
++        if (rc) return rc;
++    } else {
++        if (!obs_map) return STATA_ERR_INVALID_INPUT;
++        size_t available = (size_t)SF_nobs();
++        distinct = 1;
++        /* The usual filtered map is increasing. Fuse that proof into its
++         * required bounds pass, without min/max work or extra allocation. */
++        for (size_t i = 0; i < n_filtered; i++) {
++            if (obs_map[i] < 1 || obs_map[i] > available) return STATA_ERR_INVALID_INPUT;
++            if (i && obs_map[i] <= obs_map[i - 1]) distinct = 0;
++        }
++        if (!distinct) {
++            size_t min_obs = (size_t)obs_map[0], max_obs = min_obs;
++            int decreasing = 1;
++            for (size_t i = 1; i < n_filtered; i++) {
++                size_t obs = (size_t)obs_map[i];
++                if (obs_map[i] >= obs_map[i - 1]) decreasing = 0;
++                if (obs < min_obs) min_obs = obs;
++                if (obs > max_obs) max_obs = obs;
++            }
++            distinct = decreasing;
++            /* By-group commands supply unordered unique permutations.
++             * Prove uniqueness with scratch no larger than the existing
++             * map; sparse ranges or OOM safely retain sequential writes. */
++            size_t bytes = (max_obs - min_obs) / 8 + 1;
++            size_t map_cells = bytes / sizeof(perm_idx_t) +
++                               (bytes % sizeof(perm_idx_t) != 0);
++            if (!distinct && map_cells <= n_filtered) {
++                unsigned char *seen = (unsigned char *)calloc(bytes, 1);
++                if (seen) {
++                    distinct = 1;
++                    for (size_t i = 0; i < n_filtered; i++) {
++                        size_t bit = (size_t)obs_map[i] - min_obs;
++                        unsigned char mask = (unsigned char)(1u << (bit & 7));
++                        if (seen[bit >> 3] & mask) { distinct = 0; break; }
++                        seen[bit >> 3] |= mask;
++                    }
++                    free(seen);
++                }
++            }
++        }
++    }
++    ST_IIID store_fn = IO_VSTORE_FN;
++    if (!parallel || !distinct) {
++        /* Repeated destinations require input-order last-write-wins. */
++        for (size_t i = 0; i < n_filtered; i++)
++            if (store_fn(var_idx, (ST_int)obs_map[i], values[i]))
++                return store_status(STATA_ERR_STATA_WRITE);
++        return STATA_OK;
++    }
++    /* The existing OpenMP callback contract is unchanged: checked numeric
++     * SPI writes to disjoint destinations. The map proof establishes that
++     * disjointness before any worker may modify Stata's data. */
+     atomic_int error = 0;
+-    #pragma omp parallel for schedule(static) if(n_filtered >= MIN_OBS_PER_THREAD * 2)
++    #pragma omp parallel for schedule(static)
+     for (size_t i = 0; i < n_filtered; i++) {
+-        if (IO_VSTORE_FN(var_idx, (ST_int)obs_map[i], values[i])) record_io_error(&error, STATA_ERR_STATA_WRITE);
++        if (store_fn(var_idx, (ST_int)obs_map[i], values[i])) record_io_error(&error, STATA_ERR_STATA_WRITE);
+     }
+     return store_status(atomic_load(&error));
+ }
++
+ 
+ /*
+     Write filtered string values back to Stata using obs_map.
+--- a/src/ctools_types.h
++++ b/src/ctools_types.h
+@@ -449,6 +449,7 @@
+ */
+ #define CTOOLS_LOAD_CHECK_IF    0x00  /* Default: check SF_ifobs for each observation */
+ #define CTOOLS_LOAD_SKIP_IF     0x01  /* Skip SF_ifobs checks, assume all observations pass */
++#define CTOOLS_LOAD_NO_SORT_ORDER 0x02 /* Omit identity sort_order; caller will not sort */
+ 
+ /*
+     Load variables with if/in filtering applied at load time.
+@@ -465,6 +466,9 @@
+     Special modes:
+     - If var_indices is NULL: loads ALL variables (equivalent to old ctools_data_load)
+     - If CTOOLS_LOAD_SKIP_IF flag is set: skips SF_ifobs() checks entirely
++    - If CTOOLS_LOAD_NO_SORT_ORDER is set: leaves data.sort_order NULL.
++      Use only when no subsequent operation requires a sort/permutation order.
++      Without this flag the identity sort_order is always populated.
+ 
+     @param result       [out] Filtered data structure to populate (caller frees)
+     @param var_indices  [in]  Array of 1-based Stata variable indices to load,
+@@ -501,11 +505,12 @@
+     buffers (one SF_sdata read per observation, no arena overhead) instead
+     of the default arena path (strlen + memcpy + atomic CAS per string).
+ 
+-    @param str_widths   [in]  Array of string widths per variable position
++    @param str_widths   [in]  Array indexed by plugin-visible variable index - 1
+                               (e.g. 17 for str17, 0 for numeric/unknown/strL).
+-                              NULL = use default arena path for all strings.
+-                              Array length must match nvars (or SF_nvars() if
+-                              var_indices is NULL).
++                              Array length must be SF_nvars(), including when
++                              var_indices selects or reorders a subset.
++                              NULL = auto-detect the caller width macro; if
++                              unavailable, use the default arena path.
+ 
+     All other parameters are identical to ctools_data_load.
+ */

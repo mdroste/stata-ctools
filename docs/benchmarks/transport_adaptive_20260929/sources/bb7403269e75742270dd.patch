@@ -1,0 +1,40 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -586,7 +586,9 @@
+         }
+         nvars = parallel_count;
+     }
+-    ctools_persistent_pool *pool = nvars >= 2 ? ctools_get_global_pool() : NULL;
++    ctools_persistent_pool *pool = nvars >= 2 &&
++        (func != load_variable_thread || args[0].nobs > 65536 / nvars)
++        ? ctools_get_global_pool() : NULL;
+     if (pool) {
+         if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
+                                                sizeof(ctools_var_io_args)) != 0)
+@@ -962,6 +964,16 @@
+     if (order) {
+         for (size_t i = 0; i < nobs; i++)
+             if (order[i] >= nobs) return STATA_ERR_INVALID_INPUT;
++    }
++
++    /* Experiment: eliminate pool dispatch for small complete stores. */
++    if (nvars && nobs <= 65536 / nvars) {
++        for (size_t j = 0; j < nvars; j++) {
++            int err = store_single_variable(&data->vars[j],
++                var_indices ? var_indices[j] : (int)j + 1, obs1, nobs, order);
++            if (err) return store_status(err);
++        }
++        return STATA_OK;
+     }
+ 
+     /* Wide rows: keep a bounded row range hot while writing each column.
+@@ -2197,7 +2209,8 @@
+             }
+         }
+ 
+-        ctools_persistent_pool *pool = parallel_count >= 2 ? ctools_get_global_pool() : NULL;
++        ctools_persistent_pool *pool = parallel_count >= 2 &&
++            n_filtered > 65536 / parallel_count ? ctools_get_global_pool() : NULL;
+         if (pool != NULL) {
+             if (ctools_persistent_pool_submit_batch(pool, load_filtered_variable_thread,
+                                                      thread_args, parallel_count,

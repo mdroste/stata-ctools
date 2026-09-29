@@ -1,0 +1,3 @@
+run	command
+b0	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/b0/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/b0/resources.txt
+b1	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/b1/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/numeric_scheduler_toggle/b1/resources.txt

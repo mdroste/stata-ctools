@@ -27,7 +27,7 @@ creghdfe depvar indepvars [if] [in] [weight], absorb(varlist) [options]
 Where `vcetype` can be:
 - `unadjusted` or `ols` - Standard VCE assuming homoskedasticity
 - `robust` - Heteroskedasticity-robust (HC1) standard errors
-- `cluster varlist` - Cluster-robust standard errors
+- `cluster clustvar` - Cluster-robust standard errors (one cluster variable; multi-way clustering is not supported and exits with an error)
 
 ### Reporting Options
 | Option | Description |
@@ -79,8 +79,7 @@ creghdfe y x1 x2, absorb(firm year industry)
 - **Symmetric Kaczmarz transform**: Forward + backward sweep per CG iteration doubles convergence rate compared to a one-directional sweep
 - **Pre-computed inverse group counts**: Multiplies by `1.0/count` instead of dividing, to avoid repeated division
 - **Counting sort for CSR index construction**: Builds compressed sparse row indices in O(N+L) instead of O(N log N), where L is the number of FE levels
-- **Two-pass singleton detection**: First pass counts group sizes, second pass marks singletons—avoids expensive repeated scans
-- **Iterative singleton removal**: Handles connected components where dropping one singleton creates new singletons
+- **Queue-based singleton removal**: Counts rows per FE level once, then peels singleton levels from a queue until none remain, so chains where dropping one singleton creates another cost O(N·G) in total
 
 **Linear Algebra:**
 - **K-way unrolled dot product**: `ctools_dot_unrolled` processes 8 or 16 elements per loop iteration, improving instruction-level parallelism and reducing loop overhead
@@ -145,7 +144,7 @@ where αᵢ represents the fixed effects for each absorbed variable.
 ## Technical Notes
 
 - The absorbed fixed effects consume degrees of freedom
-- Singleton groups (groups with only one observation) are dropped
+- Singleton groups (groups with only one observation) are dropped, repeatedly, until none remain; with frequency weights a group is a singleton only when its total weight is 1, as in reghdfe
 - Multicollinear fixed effects are automatically handled
 - The constant term is absorbed with the fixed effects
 

@@ -1,0 +1,19 @@
+--- 
++++ 
+@@ -962,6 +962,16 @@
+     if (order) {
+         for (size_t i = 0; i < nobs; i++)
+             if (order[i] >= nobs) return STATA_ERR_INVALID_INPUT;
++    }
++
++    /* Experiment: eliminate pool dispatch for small complete stores. */
++    if (nvars && nobs <= 65536 / nvars) {
++        for (size_t j = 0; j < nvars; j++) {
++            int err = store_single_variable(&data->vars[j],
++                var_indices ? var_indices[j] : (int)j + 1, obs1, nobs, order);
++            if (err) return store_status(err);
++        }
++        return STATA_OK;
+     }
+ 
+     /* Wide rows: keep a bounded row range hot while writing each column.

@@ -1,0 +1,11 @@
+{
+  "candidate_plugin_sha256": "e2d01da5f81c5df11a8c87b64ec72d9de261945d03777133f6ef2af2514ece41",
+  "dependency_command": "python3 validation/check_dependencies.py macos temp/transport_20260929/production_candidate/build/ctools_mac_arm.plugin --arch arm64",
+  "dependency_exit_code": 0,
+  "observed_stdout": "Dependency contract checked: temp/transport_20260929/production_candidate/build/ctools_mac_arm.plugin",
+  "deployment_target": "macOS11",
+  "static_openmp": "21.1.8",
+  "full_build_log": "production_candidate_build.log",
+  "asan_status": "Runtime initialization deadlocked before main; no ASan test result",
+  "ubsan_results": "final_native_checks/ubsan_results.json"
+}

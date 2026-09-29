@@ -1,0 +1,338 @@
+[
+  {
+    "name": "n1_k2_numeric",
+    "rows": 1,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1_k2_mixed",
+    "rows": 1,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1_k2_strings",
+    "rows": 1,
+    "columns": 2,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n1_k20_numeric",
+    "rows": 1,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1_k20_mixed",
+    "rows": 1,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1_k20_strings",
+    "rows": 1,
+    "columns": 20,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n1_k200_numeric",
+    "rows": 1,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1_k200_mixed",
+    "rows": 1,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1_k200_strings",
+    "rows": 1,
+    "columns": 200,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n100_k2_numeric",
+    "rows": 100,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n100_k2_mixed",
+    "rows": 100,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n100_k2_strings",
+    "rows": 100,
+    "columns": 2,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n100_k20_numeric",
+    "rows": 100,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n100_k20_mixed",
+    "rows": 100,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n100_k20_strings",
+    "rows": 100,
+    "columns": 20,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n100_k200_numeric",
+    "rows": 100,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n100_k200_mixed",
+    "rows": 100,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n100_k200_strings",
+    "rows": 100,
+    "columns": 200,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n1000_k2_numeric",
+    "rows": 1000,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1000_k2_mixed",
+    "rows": 1000,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1000_k2_strings",
+    "rows": 1000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n1000_k20_numeric",
+    "rows": 1000,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1000_k20_mixed",
+    "rows": 1000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1000_k20_strings",
+    "rows": 1000,
+    "columns": 20,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n1000_k200_numeric",
+    "rows": 1000,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n1000_k200_mixed",
+    "rows": 1000,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n1000_k200_strings",
+    "rows": 1000,
+    "columns": 200,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n10000_k2_numeric",
+    "rows": 10000,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n10000_k2_mixed",
+    "rows": 10000,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n10000_k2_strings",
+    "rows": 10000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n10000_k20_numeric",
+    "rows": 10000,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n10000_k20_mixed",
+    "rows": 10000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n10000_k20_strings",
+    "rows": 10000,
+    "columns": 20,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "n10000_k200_numeric",
+    "rows": 10000,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "n10000_k200_mixed",
+    "rows": 10000,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "n10000_k200_strings",
+    "rows": 10000,
+    "columns": 200,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "boundary_n32767_k2_numeric",
+    "rows": 32767,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n32767_k2_mixed",
+    "rows": 32767,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "boundary_n32769_k2_numeric",
+    "rows": 32769,
+    "columns": 2,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n32769_k2_mixed",
+    "rows": 32769,
+    "columns": 2,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "boundary_n3275_k20_numeric",
+    "rows": 3275,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n3275_k20_mixed",
+    "rows": 3275,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "boundary_n3277_k20_numeric",
+    "rows": 3277,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n3277_k20_mixed",
+    "rows": 3277,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "boundary_n326_k200_numeric",
+    "rows": 326,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n326_k200_mixed",
+    "rows": 326,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "boundary_n328_k200_numeric",
+    "rows": 328,
+    "columns": 200,
+    "shape": "numeric",
+    "width": 32
+  },
+  {
+    "name": "boundary_n328_k200_mixed",
+    "rows": 328,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  }
+]

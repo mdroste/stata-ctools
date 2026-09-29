@@ -1,0 +1,19 @@
+--- a/src/ctools_types.h
++++ b/src/ctools_types.h
+@@ -501,11 +501,12 @@
+     buffers (one SF_sdata read per observation, no arena overhead) instead
+     of the default arena path (strlen + memcpy + atomic CAS per string).
+ 
+-    @param str_widths   [in]  Array of string widths per variable position
++    @param str_widths   [in]  Array indexed by plugin-visible variable index - 1
+                               (e.g. 17 for str17, 0 for numeric/unknown/strL).
+-                              NULL = use default arena path for all strings.
+-                              Array length must match nvars (or SF_nvars() if
+-                              var_indices is NULL).
++                              Array length must be SF_nvars(), including when
++                              var_indices selects or reorders a subset.
++                              NULL = auto-detect the caller width macro; if
++                              unavailable, use the default arena path.
+ 
+     All other parameters are identical to ctools_data_load.
+ */

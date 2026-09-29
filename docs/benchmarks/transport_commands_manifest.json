@@ -1,0 +1,13 @@
+{
+  "script_sha256": "708c49c9cf142746066f77a2937c15aa651da4cefa0f5695903ea8ecde6c8de8",
+  "clock_source_sha256": "9033f0e3851d84a923d96d2cf7e38c8ec1fa42d5ecd3a1fb6ae1b4e45265102a",
+  "baseline_plugin_sha256": "7109322fb652e33be21b9239104cf389158fb728f650c71d7e3411722bbe54a5",
+  "candidate_plugin_sha256": "85b92e26cc1ae1ec661ff8f98c2536175f1fc6643cd3b899d09db16dcf202c3f",
+  "input_variables": 21,
+  "rows": 2000000,
+  "repetitions": 5,
+  "threads": 8,
+  "clock": "CLOCK_MONOTONIC",
+  "variant_order": "baseline block, then candidate block",
+  "openmp_wait_settings": "production defaults"
+}

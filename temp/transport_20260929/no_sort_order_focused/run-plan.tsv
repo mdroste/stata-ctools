@@ -1,0 +1,5 @@
+run	command
+b0_baseline	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b0_baseline/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b0_baseline/resources.txt
+b0_noorder	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b0_noorder/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b0_noorder/resources.txt
+b1_noorder	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b1_noorder/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b1_noorder/resources.txt
+b1_baseline	/usr/bin/time -l /bin/zsh -lic 'oldstata -q -b do /Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b1_baseline/run.do' 2>/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/no_sort_order_focused/b1_baseline/resources.txt

@@ -1,0 +1,1644 @@
+/*
+ * creghdfe_regress.c
+ *
+ * Full regression command for creghdfe
+ * Orchestrates HDFE init, partial out, and OLS
+ * Part of the ctools Stata plugin suite
+ */
+
+/* Resolve output indices in the plugin varlist, including hidden Stata variables. */
+#define SD_SAFEMODE
+#include "creghdfe_regress.h"
+#include "creghdfe_utils.h"
+#include "creghdfe_hdfe.h"
+#include "creghdfe_solver.h"
+#include "../ctools_ols.h"
+#include "creghdfe_vce.h"
+#include "../ctools_hdfe_utils.h"
+#include "../ctools_config.h"
+#include "../ctools_types.h"  /* For ctools_data_load */
+#include "../ctools_spi.h"  /* Error-checking SPI wrappers */
+
+/* Recover the additive FE component y - Xb - residual, not the already
+ * orthogonal regression residual. Backfitting starts at zero and preserves the
+ * weighted zero-mean normalization for each intercept effect. */
+static ST_retcode store_fixed_effects(HDFE_State *S, const perm_idx_t *obs_map,
+    const ST_int *mask, ST_int N_orig, ST_int K_keep, const ST_int *keep_idx,
+    const ST_double *beta, const ST_double *resid, ST_int first_var)
+{
+    ST_int N = S->N, G = S->G, idx = 0;
+    ST_retcode rc = 0;
+    ST_double *error = malloc((size_t)N * sizeof(*error));
+    ST_double **alpha = calloc((size_t)G, sizeof(*alpha));
+    ST_double **update = calloc((size_t)G, sizeof(*update));
+    ST_double scale = 1.0;
+    if (!error || !alpha || !update) { rc = 920; goto cleanup; }
+    for (ST_int g = 0; g < G; g++) {
+        alpha[g] = calloc((size_t)S->factors[g].num_levels, sizeof(**alpha));
+        update[g] = calloc((size_t)S->factors[g].num_levels, sizeof(**update));
+        if (!alpha[g] || !update[g]) { rc = 920; goto cleanup; }
+    }
+    for (ST_int row = 0; row < N_orig; row++) {
+        if (!mask[row]) continue;
+        ST_double y, x;
+        rc = SF_vdata(1, (ST_int)obs_map[row], &y);
+        if (rc) goto cleanup;
+        error[idx] = y - beta[K_keep] - resid[idx];
+        for (ST_int k = 0; k < K_keep; k++) {
+            rc = SF_vdata(keep_idx[k] + 1, (ST_int)obs_map[row], &x);
+            if (rc) goto cleanup;
+            error[idx] -= beta[k] * x;
+        }
+        if (fabs(error[idx]) > scale) scale = fabs(error[idx]);
+        idx++;
+    }
+    ST_int converged = 0;
+    for (ST_int iteration = 0; iteration < S->maxiter; iteration++) {
+        ST_double largest_update = 0.0;
+        for (ST_int g = 0; g < G; g++) {
+            FE_Factor *f = &S->factors[g];
+            memset(update[g], 0, (size_t)f->num_levels * sizeof(**update));
+            for (ST_int i = 0; i < N; i++) {
+                ST_double weight = S->weights ? S->weights[i] : 1.0;
+                update[g][f->levels[i] - 1] += weight * error[i];
+            }
+            for (ST_int level = 0; level < f->num_levels; level++) {
+                ST_double count = S->weights ? f->weighted_counts[level] : f->counts[level];
+                update[g][level] = count > 0 ? update[g][level] / count : 0;
+                alpha[g][level] += update[g][level];
+                if (fabs(update[g][level]) > largest_update) largest_update = fabs(update[g][level]);
+            }
+            for (ST_int i = 0; i < N; i++) error[i] -= update[g][f->levels[i] - 1];
+        }
+        if (largest_update <= 1e-14 * scale) { converged = 1; break; }
+    }
+    if (!converged) { rc = 430; goto cleanup; }
+    for (ST_int g = 0; g < G; g++) {
+        idx = 0;
+        for (ST_int row = 0; row < N_orig; row++) {
+            if (!mask[row]) continue;
+            rc = SF_vstore(first_var + g, (ST_int)obs_map[row], alpha[g][S->factors[g].levels[idx++] - 1]);
+            if (rc) goto cleanup;
+        }
+    }
+cleanup:
+    for (ST_int g = 0; g < G; g++) {
+        if (alpha) free(alpha[g]);
+        if (update) free(update[g]);
+    }
+    free(alpha); free(update); free(error);
+    return rc;
+}
+
+/*
+ * FULLY COMBINED: HDFE init + Partial out + OLS in one shot
+ * This reads ALL variables exactly once, eliminating data transfer overhead
+ *
+ * Expected varlist: depvar indepvars... fe1_var fe2_var ... feG_var [cluster_var]
+ * Expected scalars:
+ *   __creghdfe_K: number of data variables (depvar + indepvars)
+ *   __creghdfe_G: number of FE groups
+ *   __creghdfe_drop_singletons: whether to drop singletons
+ *   __creghdfe_maxiter, __creghdfe_tolerance: CG solver parameters
+ *   __creghdfe_verbose, __creghdfe_standardize
+ *   __creghdfe_vce_type (0=unadjusted, 1=robust, 2=cluster)
+ *   __creghdfe_compute_dof: whether to compute DOF/mobility groups
+ *
+ * Returns via scalars:
+ *   __creghdfe_N: final number of observations
+ *   __creghdfe_num_singletons: total singletons dropped
+ *   __creghdfe_num_levels_1, __creghdfe_num_levels_2, ...: levels per FE
+ *   __creghdfe_df_a: degrees of freedom absorbed
+ *   __creghdfe_mobility_groups: mobility groups (if G>=2)
+ *   __creghdfe_ols_N, __creghdfe_K_keep, etc.: OLS results
+ */
+ST_retcode do_full_regression(int argc, char *argv[])
+{
+    ST_int K, G, N_orig, N, in1, in2;
+    ST_int k, g, i, j, idx;
+    ST_double val;
+    ST_int drop_singletons, verbose, compute_dof;
+    ST_int num_singletons;
+    ST_int *mask = NULL;  /* 1 = keep, 0 = drop */
+    FactorData *factors = NULL;
+    char scalar_name[64];
+    double t_start, t_load, t_copy, t_remap, t_singleton, t_dof, t_partial, t_ols, t_vce;
+    ST_int mobility_groups = 1;
+    ST_double df_a = 0;
+    ST_int compute_resid = 0;
+    ST_int resid_var_idx = 0;
+    ST_retcode output_rc = 0;
+
+    /* Data arrays */
+    ST_double *data = NULL;  /* N x K matrix (column-major) */
+    ST_double *xtx = NULL, *xtx_keep = NULL, *xty_keep = NULL;
+    ST_double *beta_keep = NULL, *inv_xx_keep = NULL, *V_keep = NULL;
+    ST_double *data_keep = NULL;
+    ST_int *is_collinear = NULL, *keep_idx = NULL;
+    ST_int num_collinear, K_keep, K_x, vcetype;
+    ST_double df_a_nested;
+    ST_double df_r;
+    ST_double tss_within, rss;
+    ST_double *means = NULL, *stdevs = NULL, *tss = NULL;
+    ST_int maxiter, standardize;
+    ST_int num_threads;
+    ST_int *cluster_ids = NULL;
+    ST_int num_clusters = 0;
+    perm_idx_t *obs_map = NULL;  /* Maps filtered index to 1-based Stata obs */
+
+    ST_int *fe1_compact = NULL;
+    ST_int *fe2_compact = NULL;
+    ST_int *remap1 = NULL;
+    ST_int *remap2 = NULL;
+    ST_int *parent = NULL;
+    ST_int *root_to_group = NULL;
+    ST_double *weights = NULL;
+    double *cluster_raw_values = NULL;
+    ST_int *group_assignments = NULL;
+    ST_double *data_compact = NULL;
+    ST_double *means_compact = NULL;
+    ST_int *compact_map = NULL;
+    ST_double *weights_compact = NULL;
+    ST_double *means_x = NULL;
+    ST_double *inv_xx_x = NULL;
+    ST_double *side = NULL;
+    ST_double *data_with_cons = NULL;
+    double *cluster_values_compact = NULL;
+    ST_int *cluster_levels = NULL;
+    ST_double *resid = NULL;
+    ST_double *weighted_counts_orig[10] = {NULL};
+
+    (void)argc;  /* Unused */
+    (void)argv;  /* Unused */
+
+    t_start = get_time_sec();
+
+    in1 = SF_in1();
+    in2 = SF_in2();
+
+    /* Read parameters */
+    SF_scal_use("__creghdfe_K", &val); K = (ST_int)val;
+    SF_scal_use("__creghdfe_G", &val); G = (ST_int)val;
+    SF_scal_use("__creghdfe_drop_singletons", &val); drop_singletons = (ST_int)val;
+    SF_scal_use("__creghdfe_verbose", &val); verbose = (ST_int)val;
+    SF_scal_use("__creghdfe_maxiter", &val); maxiter = (ST_int)val;
+    SF_scal_use("__creghdfe_tolerance", &val);
+    ST_double tolerance = val;
+    SF_scal_use("__creghdfe_standardize", &val); standardize = (ST_int)val;
+    SF_scal_use("__creghdfe_vce_type", &val); vcetype = (ST_int)val;
+    SF_scal_use("__creghdfe_df_a_nested", &val); df_a_nested = val;
+
+    /* Read weight parameters */
+    ST_int has_weights = 0, weight_type = 0;
+    if (SF_scal_use("__creghdfe_has_weights", &val) == 0) {
+        has_weights = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_weight_type", &val) == 0) {
+        weight_type = (ST_int)val;
+    }
+
+    compute_dof = 0;
+    if (SF_scal_use("__creghdfe_compute_dof", &val) == 0) {
+        compute_dof = (ST_int)val;
+    }
+
+    /* Read DOF adjustment type: 0=all, 1=none, 2=firstpair, 3=pairwise */
+    ST_int dof_adjust_type = 0;
+    if (SF_scal_use("__creghdfe_dof_adjust_type", &val) == 0) {
+        dof_adjust_type = (ST_int)val;
+    }
+
+    /* Read savefe flag */
+    ST_int savefe = 0;
+    ST_int savefe_var_idx = 0;
+    if (SF_scal_use("__creghdfe_savefe", &val) == 0) {
+        savefe = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_savefe_idx", &val) == 0) {
+        savefe_var_idx = (ST_int)val;
+    }
+
+    /* Individual FE estimates require a more precise projection than slopes. */
+    if (savefe && tolerance > 1e-12) tolerance = 1e-12;
+
+    /* Read groupvar flag */
+    ST_int compute_groupvar = 0;
+    ST_int groupvar_var_idx = 0;
+    if (SF_scal_use("__creghdfe_compute_groupvar", &val) == 0) {
+        compute_groupvar = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_groupvar_idx", &val) == 0) {
+        groupvar_var_idx = (ST_int)val;
+    }
+
+    /* Check if we should compute and store residuals */
+    if (SF_scal_use("__creghdfe_compute_resid", &val) == 0) {
+        compute_resid = (ST_int)val;
+    }
+    if (SF_scal_use("__creghdfe_resid_var_idx", &val) == 0) {
+        resid_var_idx = (ST_int)val;
+    }
+
+    /* Check if quad-precision accumulation is requested */
+    ST_int use_quad = 0;
+    if (SF_scal_use("__creghdfe_use_quad", &val) == 0) {
+        use_quad = (ST_int)val;
+    }
+
+    if (G < 1 || G > 10) {
+        SF_error("creghdfe: invalid number of FE groups (must be 1-10)\n");
+        return 198;
+    }
+    if (K < 2) {
+        SF_error("creghdfe: need at least depvar and one indepvar (K < 2)\n");
+        return 198;
+    }
+    if (K > 1000) {
+        SF_error("creghdfe: too many variables (K > 1000)\n");
+        return 198;
+    }
+
+    /* Every variable position below follows the wrapper's layout: K data
+     * vars, G FE vars, [cluster], [weight], [resid], [groupvar], [G savefe
+     * vars], final-sample flag. Refuse any other length rather than read or
+     * write the wrong variables. */
+    {
+        ST_int expected_nvars = K + G + (vcetype == 2) + (has_weights != 0) +
+                                (compute_resid != 0) + (compute_groupvar != 0) +
+                                (savefe ? G : 0) + 1;
+        if (SF_nvars() != expected_nvars) {
+            char msg[160];
+            snprintf(msg, sizeof(msg),
+                     "creghdfe: plugin received %d variables, expected %d\n",
+                     (int)SF_nvars(), (int)expected_nvars);
+            SF_error(msg);
+            return 198;
+        }
+    }
+
+    /* Determine threads */
+#ifdef _OPENMP
+    num_threads = ctools_get_max_threads();
+    if (num_threads > K) num_threads = K;
+    if (num_threads < 1) num_threads = 1;
+#else
+    num_threads = 1;
+#endif
+
+    /* ================================================================
+     * STEP 1: PARALLEL data loading using ctools_data_load
+     * This handles if/in filtering at load time, loading only filtered observations.
+     * ================================================================ */
+
+    /* Calculate total variables to load:
+     * K numeric (depvar + indepvars) + G FE vars + (1 cluster if vcetype==2) + (1 weight if has_weights) */
+    ST_int total_vars = K + G + (vcetype == 2 ? 1 : 0) + (has_weights ? 1 : 0);
+
+    /* Build variable indices array (1-based for Stata) */
+    int *var_indices = (int *)malloc(total_vars * sizeof(int));
+    if (!var_indices) {
+        SF_error("creghdfe: memory allocation failed\n");
+        return 920;
+    }
+
+    /* Variables 1..K are numeric data, K+1..K+G are FE vars */
+    for (i = 0; i < total_vars; i++) {
+        var_indices[i] = i + 1;
+    }
+
+    /* Load all variables in parallel with if/in filtering */
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+
+    stata_retcode load_rc = ctools_data_load(&filtered, var_indices, total_vars, 0, 0, 0);
+    free(var_indices);
+
+    if (load_rc != STATA_OK) {
+        ctools_filtered_data_free(&filtered);
+        SF_error("creghdfe: parallel data load failed\n");
+        return ctools_stata_rc(load_rc);
+    }
+
+    /* Get filtered observation count and obs_map */
+    N_orig = (ST_int)filtered.data.nobs;
+    obs_map = filtered.obs_map;
+
+    if (N_orig <= 0) {
+        ctools_filtered_data_free(&filtered);
+        SF_error("creghdfe: no observations\n");
+        return 198;
+    }
+
+    /* Verify all variables were loaded successfully (defensive check) */
+    for (i = 0; i < total_vars; i++) {
+        if (filtered.data.vars[i].nobs > 0) {
+            if (filtered.data.vars[i].type == STATA_TYPE_DOUBLE && filtered.data.vars[i].data.dbl == NULL) {
+                char errmsg[128];
+                snprintf(errmsg, sizeof(errmsg), "creghdfe: variable %d failed to load (NULL data pointer, nobs=%zu)\n",
+                         i + 1, filtered.data.vars[i].nobs);
+                SF_error(errmsg);
+                ctools_filtered_data_free(&filtered);
+                return 920;
+            }
+            if (filtered.data.vars[i].type == STATA_TYPE_STRING && filtered.data.vars[i].data.str == NULL) {
+                char errmsg[128];
+                snprintf(errmsg, sizeof(errmsg), "creghdfe: string variable %d failed to load (NULL data pointer, nobs=%zu)\n",
+                         i + 1, filtered.data.vars[i].nobs);
+                SF_error(errmsg);
+                ctools_filtered_data_free(&filtered);
+                return 920;
+            }
+        }
+    }
+
+    t_load = get_time_sec();
+
+    filtered.obs_map = NULL;  /* obs_map is now owned by this command. */
+    /* Allocate factor structures (no hash tables needed with sort-based remapping) */
+    factors = (FactorData *)calloc(G, sizeof(FactorData));
+    mask = (ST_int *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_int));
+
+    /* Allocate data matrix (column-major) */
+    data = (ST_double *)ctools_safe_malloc3((size_t)N_orig, (size_t)K, sizeof(ST_double));
+    means = (ST_double *)malloc(K * sizeof(ST_double));
+    stdevs = (ST_double *)malloc(K * sizeof(ST_double));
+    tss = (ST_double *)malloc(K * sizeof(ST_double));
+
+    /* Allocate weight array if using weights */
+
+    if (has_weights) {
+        weights = (ST_double *)ctools_safe_malloc2((size_t)N_orig, sizeof(ST_double));
+    }
+
+    if (!factors || !mask || !data || !means || !stdevs || !tss ||
+        (has_weights && !weights)) {
+
+        SF_error("creghdfe: memory allocation failed\n");
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* Initialize */
+    for (i = 0; i < N_orig; i++) mask[i] = 1;
+    for (k = 0; k < K; k++) means[k] = 0.0;
+
+    /* Allocate per-factor level arrays */
+    for (g = 0; g < G; g++) {
+        factors[g].levels = (ST_int *)malloc(N_orig * sizeof(ST_int));
+        factors[g].num_obs = N_orig;
+        factors[g].counts = NULL;
+        factors[g].num_levels = 0;
+
+        if (!factors[g].levels) {
+            output_rc = 920;
+            goto cleanup;
+        }
+    }
+
+    /* Copy numeric data from filtered.data to column-major data array.
+     * Data is already filtered, so use direct copy. */
+    for (k = 0; k < K; k++) {
+        double *src = filtered.data.vars[k].data.dbl;
+        double *dst = &data[(size_t)k * N_orig];
+        double sum = 0.0;
+        for (idx = 0; idx < N_orig; idx++) {
+            dst[idx] = src[idx];
+            sum += src[idx];
+        }
+        means[k] = sum;
+    }
+    if (has_weights) {
+        ST_int weight_var_pos = K + G + (vcetype == 2 ? 1 : 0);
+        memcpy(weights, filtered.data.vars[weight_var_pos].data.dbl, N_orig * sizeof(ST_double));
+    }
+
+    /* Compute means */
+    for (k = 0; k < K; k++) {
+        means[k] /= N_orig;
+    }
+
+    t_copy = get_time_sec();
+
+    /* Fused remap + counting for FE variables.
+     * Uses O(N) counting-based approach for integer FEs (common case),
+     * eliminating O(N log N) sort and separate count passes. */
+
+    int remap_status[10] = {0};
+    #ifdef _OPENMP
+    #pragma omp parallel for schedule(dynamic)
+    #endif
+    for (g = 0; g < G; g++) {
+        ST_int *counts_g = NULL;
+        ST_double *wcounts_g = NULL;
+        remap_status[g] = remap_and_count(filtered.data.vars[K + g].data.dbl, N_orig,
+                            factors[g].levels, &factors[g].num_levels,
+                            &counts_g,
+                            has_weights ? weights : NULL,
+                            has_weights ? &wcounts_g : NULL);
+        if (!remap_status[g]) {
+            factors[g].counts = counts_g;
+            if (has_weights && wcounts_g) {
+                weighted_counts_orig[g] = wcounts_g;
+            }
+        }
+    }
+
+    /* Save cluster variable raw values BEFORE freeing filtered data (if clustering).
+     * Also check if cluster variable matches any FE variable (common optimization). */
+
+    ST_int cluster_matches_fe = -1;  /* -1 = no match, 0..G-1 = which FE it matches */
+
+    if (vcetype == 2) {
+        /* Cluster variable is at position K+G in filtered.data */
+        cluster_raw_values = (double *)malloc(N_orig * sizeof(double));
+        if (cluster_raw_values) {
+            /* Extract cluster values - direct copy since data is filtered */
+            memcpy(cluster_raw_values, filtered.data.vars[K + G].data.dbl, N_orig * sizeof(double));
+
+            /* Check if cluster values match any FE variable (common case: vce(cluster i) with absorb(i t)). */
+            double *cluster_data = filtered.data.vars[K + G].data.dbl;
+            for (g = 0; g < G; g++) {
+                double *fe_data = filtered.data.vars[K + g].data.dbl;
+
+                /* Quick rejection: check first, middle, and last values */
+                if (cluster_data[0] != fe_data[0] ||
+                    cluster_data[N_orig/2] != fe_data[N_orig/2] ||
+                    cluster_data[N_orig-1] != fe_data[N_orig-1]) {
+                    continue;
+                }
+
+                /* Full comparison - data is already filtered, compare directly */
+                ST_int all_match = 1;
+                for (idx = 0; idx < N_orig && all_match; idx++) {
+                    if (cluster_data[idx] != fe_data[idx]) {
+                        all_match = 0;
+                    }
+                }
+
+                if (all_match) {
+                    cluster_matches_fe = g;
+                    break;
+                }
+            }
+        }
+    }
+
+    /* Free filtered.data but keep obs_map for write-back operations */
+    stata_data_free(&filtered.data);
+    /* obs_map kept for write-back of residuals/groupvar/savefe */
+
+    /* Verify FE remapping succeeded */
+    for (g = 0; g < G; g++) {
+        if (remap_status[g] || factors[g].num_levels == 0) {
+
+            SF_error("creghdfe: FE remapping failed\n");
+            output_rc = 920;
+            goto cleanup;
+        }
+    }
+
+    /* Counts and weighted counts already computed by remap_and_count above */
+
+    t_remap = get_time_sec();
+
+    /* ================================================================
+     * STEP 2: Iteratively drop singletons using shared utility
+     * ================================================================ */
+    num_singletons = 0;
+    N = N_orig;
+
+    if (drop_singletons) {
+        /* Build array of level pointers for shared utility (cast to ST_int* for API compatibility) */
+        ST_int **fe_levels = (ST_int **)malloc(G * sizeof(ST_int *));
+        num_singletons = -1;
+        if (fe_levels) {
+            for (g = 0; g < G; g++) {
+                fe_levels[g] = (ST_int *)factors[g].levels;
+            }
+
+            /* As in reghdfe, fweights drop only levels whose total weight is 1;
+             * aweights and pweights use the unweighted rule. */
+            num_singletons = ctools_remove_singletons(fe_levels, G, N_orig, mask,
+                (has_weights && weight_type == 2) ? weights : NULL, (verbose >= 1));
+            free(fe_levels);
+        }
+
+        /* Count remaining observations (a failure leaves N = 0, handled below) */
+        N = 0;
+        if (num_singletons >= 0) {
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) N++;
+            }
+        }
+    }
+
+    /* Check if all observations were dropped as singletons */
+    if (N == 0) {
+        if (num_singletons >= 0) {
+            if ((output_rc = ctools_scal_save("__creghdfe_N", 0.0))) goto cleanup;
+            if ((output_rc = ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons))) goto cleanup;
+            if ((output_rc = ctools_scal_save("__creghdfe_K_keep", 0.0))) goto cleanup;
+            SF_error("creghdfe: all observations are singletons\n");
+        } else {
+            SF_error("creghdfe: singleton removal failed (out of memory)\n");
+        }
+
+        output_rc = num_singletons >= 0 ? 2001 : 920;
+        goto cleanup;  /* 2001: all singletons */
+    }
+
+    t_singleton = get_time_sec();
+
+    /* Store original num_levels BEFORE recount (needed for remap array sizing) */
+    ST_int orig_num_levels[10];  /* Max 10 FE groups */
+    for (g = 0; g < G; g++) {
+        orig_num_levels[g] = factors[g].num_levels;
+    }
+
+    /* Recount levels after singleton removal.
+     * Re-accumulate counts from masked observations, then count non-zeros. */
+    for (g = 0; g < G; g++) {
+        memset(factors[g].counts, 0, orig_num_levels[g] * sizeof(ST_int));
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                ST_int level = factors[g].levels[i] - 1;
+                if (level >= 0 && level < orig_num_levels[g]) {
+                    factors[g].counts[level]++;
+                }
+            }
+        }
+        ST_int num_levels_after = 0;
+        for (i = 0; i < orig_num_levels[g]; i++) {
+            if (factors[g].counts[i] > 0) num_levels_after++;
+        }
+        factors[g].num_levels = num_levels_after;
+    }
+
+    /* ================================================================
+     * STEP 3: Compute DOF and mobility groups
+     * Respects dof_adjust_type: 0=all, 1=none, 2=firstpair, 3=pairwise
+     * ================================================================ */
+    df_a = 0;
+    for (g = 0; g < G; g++) {
+        df_a += factors[g].num_levels;
+    }
+
+    /* Array to store group assignments if groupvar requested */
+
+    if (compute_groupvar) {
+        group_assignments = (ST_int *)calloc(N, sizeof(ST_int));
+        if (!group_assignments) { output_rc = 920; goto cleanup; }
+    }
+
+    if (dof_adjust_type == 1) {
+        /* dofadjustments(none): skip mobility calculation but still subtract 1
+         * for the intercept that is always identified by 2+ FE sets */
+        if (G >= 2) {
+            mobility_groups = 1;
+            df_a -= 1;
+        }
+        /* All observations in group 1 if groupvar requested */
+        if (group_assignments) {
+            for (idx = 0; idx < N; idx++) {
+                group_assignments[idx] = 1;
+            }
+        }
+    } else if (compute_dof && G >= 2) {
+        /* Build compact level arrays for remaining observations only */
+        fe1_compact = (ST_int *)malloc(N * sizeof(ST_int));
+        fe2_compact = (ST_int *)malloc(N * sizeof(ST_int));
+
+        if (!(fe1_compact && fe2_compact)) { output_rc = 920; goto cleanup; }
+        /* Use orig_num_levels for remap array sizing since factors[g].levels
+         * still contains original IDs from 1 to orig_num_levels[g] */
+        remap1 = (ST_int *)calloc(orig_num_levels[0] + 1, sizeof(ST_int));
+        remap2 = (ST_int *)calloc(orig_num_levels[1] + 1, sizeof(ST_int));
+
+        if (!(remap1 && remap2)) { output_rc = 920; goto cleanup; }
+        ST_int next1 = 1, next2 = 1;
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                ST_int lev1 = factors[0].levels[i];
+                ST_int lev2 = factors[1].levels[i];
+                if (remap1[lev1] == 0) remap1[lev1] = next1++;
+                if (remap2[lev2] == 0) remap2[lev2] = next2++;
+                fe1_compact[idx] = remap1[lev1];
+                fe2_compact[idx] = remap2[lev2];
+                idx++;
+            }
+        }
+
+        /* Count connected components with optional group tracking */
+        mobility_groups = count_connected_components(
+            fe1_compact, fe2_compact, N,
+            factors[0].num_levels, factors[1].num_levels
+        );
+
+        /* If groupvar requested, compute group assignments using union-find */
+        if (group_assignments) {
+            /* Use union-find to assign each observation to a group */
+            if (factors[0].num_levels > INT_MAX - factors[1].num_levels) {
+                output_rc = 920; goto cleanup;
+            }
+            ST_int total_nodes = factors[0].num_levels + factors[1].num_levels;
+            parent = (ST_int *)malloc(total_nodes * sizeof(ST_int));
+            if (!(parent)) { output_rc = 920; goto cleanup; }
+            /* Initialize: each node is its own parent */
+            for (i = 0; i < total_nodes; i++) parent[i] = i;
+
+            /* Find with path compression */
+            #define FIND(x) ({ ST_int _x = (x); while (parent[_x] != _x) { parent[_x] = parent[parent[_x]]; _x = parent[_x]; } _x; })
+
+            /* Union the FE levels */
+            for (idx = 0; idx < N; idx++) {
+                ST_int node1 = fe1_compact[idx] - 1;
+                ST_int node2 = factors[0].num_levels + fe2_compact[idx] - 1;
+                ST_int root1 = FIND(node1);
+                ST_int root2 = FIND(node2);
+                if (root1 != root2) parent[root1] = root2;
+            }
+
+            /* Assign group IDs (1-indexed) */
+            root_to_group = (ST_int *)calloc(total_nodes, sizeof(ST_int));
+            ST_int next_group = 1;
+            if (!(root_to_group)) { output_rc = 920; goto cleanup; }
+            for (idx = 0; idx < N; idx++) {
+                ST_int node1 = fe1_compact[idx] - 1;
+                ST_int root = FIND(node1);
+                if (root_to_group[root] == 0) {
+                    root_to_group[root] = next_group++;
+                }
+                group_assignments[idx] = root_to_group[root];
+            }
+            free(root_to_group); root_to_group = NULL;
+
+            #undef FIND
+            free(parent); parent = NULL;
+
+        }
+
+        if (mobility_groups < 0) { output_rc = 920; goto cleanup; }
+
+        free(remap1); remap1 = NULL;
+        free(remap2); remap2 = NULL;
+
+        free(fe1_compact); fe1_compact = NULL;
+        free(fe2_compact); fe2_compact = NULL;
+
+        df_a -= mobility_groups;
+
+        /* For G >= 3, add additional mobility groups for each FE beyond the second.
+         * This approximates reghdfe's more complex multi-way FE DOF calculation.
+         * Only apply if dof_adjust_type is 0 (all) or 3 (pairwise) */
+        if (G > 2 && (dof_adjust_type == 0 || dof_adjust_type == 3)) {
+            ST_int extra_mobility = G - 2;
+            df_a -= extra_mobility;
+            mobility_groups += extra_mobility;
+        }
+    } else if (G == 1) {
+        mobility_groups = 0;
+        /* All observations in group 1 if groupvar requested */
+        if (group_assignments) {
+            for (idx = 0; idx < N; idx++) {
+                group_assignments[idx] = 1;
+            }
+        }
+    }
+
+    t_dof = get_time_sec();
+
+    /* ================================================================
+     * STEP 4: Set up global state for CG solver (compacted data)
+     * ================================================================ */
+    cleanup_state();
+    g_state = (HDFE_State *)calloc(1, sizeof(HDFE_State));
+
+    if (!g_state) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    g_state->G = G;
+    g_state->N = N;
+    g_state->K = K;
+    g_state->in1 = in1;
+    g_state->in2 = in2;
+    g_state->maxiter = maxiter;
+    g_state->tolerance = tolerance;
+    g_state->verbose = verbose;
+    g_state->num_threads = num_threads;
+    g_state->factors_initialized = 1;
+    g_state->df_a = df_a;
+    g_state->mobility_groups = mobility_groups;
+    g_state->has_weights = has_weights;
+    g_state->weight_type = weight_type;
+    g_state->weights = NULL;  /* Will be set after compaction */
+    g_state->sum_weights = 0.0;
+
+    /* Allocate and copy compacted factors to global state */
+    g_state->factors = (FE_Factor *)calloc(G, sizeof(FE_Factor));
+    if (!g_state->factors) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    for (g = 0; g < G; g++) {
+        g_state->factors[g].num_levels = factors[g].num_levels;
+        g_state->factors[g].max_level = factors[g].num_levels - 1;  /* Remapped levels are 0 to n-1 */
+        g_state->factors[g].has_intercept = 1;
+        g_state->factors[g].levels = (ST_int *)malloc(N * sizeof(ST_int));
+        g_state->factors[g].counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
+        g_state->factors[g].means = NULL;  /* Not used in creghdfe - CG solver uses thread_fe_means */
+        g_state->factors[g].weighted_counts = NULL;
+
+        /* Allocate weighted_counts if using weights */
+        if (has_weights) {
+            g_state->factors[g].weighted_counts = (ST_double *)calloc(factors[g].num_levels, sizeof(ST_double));
+        }
+
+        if (!g_state->factors[g].levels || !g_state->factors[g].counts ||
+            (has_weights && !g_state->factors[g].weighted_counts)) {
+            output_rc = 920;
+            goto cleanup;
+        }
+
+        /* Remap to contiguous levels and copy.
+         * Use orig_num_levels since factors[g].levels still has original IDs. */
+        ST_int *remap = (ST_int *)calloc(orig_num_levels[g] + 1, sizeof(ST_int));
+        if (!remap) {
+            output_rc = 920;
+            goto cleanup;
+        }
+        ST_int next_level = 1;
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                ST_int old_level = factors[g].levels[i];
+                if (remap[old_level] == 0) {
+                    remap[old_level] = next_level++;
+                }
+                g_state->factors[g].levels[idx] = remap[old_level];
+                g_state->factors[g].counts[remap[old_level] - 1] += 1.0;
+                /* Accumulate weighted counts if using weights */
+                if (has_weights) {
+                    g_state->factors[g].weighted_counts[remap[old_level] - 1] += weights[i];
+                }
+                idx++;
+            }
+        }
+        free(remap);
+    }
+
+    /* Allocate inv_counts, inv_weighted_counts, and thread buffers */
+    g_state->num_threads = num_threads;
+    if (ctools_hdfe_alloc_buffers(g_state, 0, K) != 0) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* ================================================================
+     * STEP 5: Compact data (remove singleton rows)
+     * ================================================================ */
+    data_compact = (ST_double *)ctools_safe_malloc3((size_t)N, (size_t)K, sizeof(ST_double));
+    means_compact = (ST_double *)ctools_safe_malloc2((size_t)K, sizeof(ST_double));
+
+    if (!data_compact || !means_compact) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* Compact data and recompute means (weighted if using weights).
+     * Build compact index first, then parallelize column copy + means. */
+    for (k = 0; k < K; k++) means_compact[k] = 0.0;
+
+    /* Build compact index map: compact_idx[j] = destination index for j-th valid obs */
+    compact_map = (ST_int *)malloc(N * sizeof(ST_int));
+    if (!compact_map) {
+        output_rc = 920;
+        goto cleanup;
+    }
+    idx = 0;
+    for (i = 0; i < N_orig; i++) {
+        if (mask[i]) {
+            compact_map[idx] = i;
+            idx++;
+        }
+    }
+
+    /* Compute sum_w_compact */
+    ST_double sum_w_compact = 0.0;
+    if (has_weights) {
+        for (idx = 0; idx < N; idx++) {
+            sum_w_compact += weights[compact_map[idx]];
+        }
+    }
+
+    /* Parallel copy + mean accumulation per column */
+    #pragma omp parallel for schedule(static) if(K > 1)
+    for (k = 0; k < K; k++) {
+        ST_double col_mean = 0.0;
+        const ST_double *src_col = data + (size_t)k * N_orig;
+        ST_double *dst_col = data_compact + (size_t)k * N;
+        ST_int ii;
+        for (ii = 0; ii < N; ii++) {
+            ST_int orig_i = compact_map[ii];
+            ST_double val = src_col[orig_i];
+            dst_col[ii] = val;
+            ST_double w = (has_weights) ? weights[orig_i] : 1.0;
+            col_mean += w * val;
+        }
+        means_compact[k] = col_mean;
+    }
+    free(compact_map); compact_map = NULL;
+
+    /* Divide by sum of weights (or N if unweighted) */
+    ST_double mean_divisor = (has_weights) ? sum_w_compact : (ST_double)N;
+    if (!isfinite(mean_divisor) || mean_divisor <= 0.0) {
+        output_rc = 498; goto cleanup;
+    }
+    for (k = 0; k < K; k++) {
+        means_compact[k] /= mean_divisor;
+    }
+
+    /* Free original data, use compacted */
+    free(data);
+    data = data_compact; data_compact = NULL;
+    free(means);
+    means = means_compact; means_compact = NULL;
+
+    /* Compact weights and assign to g_state */
+    if (has_weights) {
+        weights_compact = (ST_double *)malloc(N * sizeof(ST_double));
+        if (!weights_compact) {
+            output_rc = 920;
+            goto cleanup;
+        }
+
+        /* Copy weights for non-singleton observations */
+        ST_double sum_w = 0.0;
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                weights_compact[idx] = weights[i];
+                sum_w += weights[i];
+                idx++;
+            }
+        }
+
+        /* For aweight/pweight: normalize weights so sum(w) = N
+         * This is what reghdfe does (reghdfe.mata line 3598)
+         * For fweight: keep raw weights (no normalization) */
+        if (weight_type == 1 || weight_type == 3) {
+            ST_double scale = (ST_double)N / sum_w;
+            for (idx = 0; idx < N; idx++) {
+                weights_compact[idx] *= scale;
+            }
+            /* Also normalize the weighted_counts in factors and recompute inv_weighted_counts */
+            for (g = 0; g < G; g++) {
+                if (g_state->factors[g].weighted_counts) {
+                    for (i = 0; i < g_state->factors[g].num_levels; i++) {
+                        g_state->factors[g].weighted_counts[i] *= scale;
+                    }
+                    /* Recompute inv_weighted_counts after scaling */
+                    if (g_state->factors[g].inv_weighted_counts) {
+                        for (i = 0; i < g_state->factors[g].num_levels; i++) {
+                            g_state->factors[g].inv_weighted_counts[i] =
+                                (g_state->factors[g].weighted_counts[i] > 0) ?
+                                1.0 / g_state->factors[g].weighted_counts[i] : 0.0;
+                        }
+                    }
+                }
+            }
+            /* After normalization, sum_w should be N for aw/pw */
+            /* But we keep the original sum_w for fweight calculations */
+        }
+
+        free(weights); weights = NULL;
+        g_state->weights = weights_compact; weights_compact = NULL;
+        g_state->sum_weights = sum_w;
+
+        /* Free original weighted counts */
+        for (g = 0; g < G; g++) {
+            free(weighted_counts_orig[g]);
+            weighted_counts_orig[g] = NULL;
+        }
+    }
+
+    /* ================================================================
+     * STEP 6: Compute TSS and stdevs on compacted data (weighted if using weights)
+     * Note: for aweight/pweight, weights have been normalized so sum(w) = N
+     * ================================================================ */
+    for (k = 0; k < K; k++) {
+        ST_double *col = &data[(size_t)k * N];
+        ST_double mean_k = means[k];
+
+        /* Compute TSS = sum((x - mean)^2) [or weighted variant].
+         * When quad option is specified, use double-double arithmetic
+         * to match Mata's quadcross() precision. Otherwise use Kahan
+         * compensated summation for near-quad precision without
+         * blocking FMA/SIMD vectorization. */
+        ST_double ss = 0.0;
+        if (has_weights && g_state->weights != NULL) {
+            if (use_quad) {
+                ss = dd_sum_sq_dev_weighted(col, mean_k, g_state->weights, N);
+            } else {
+                /* Kahan compensated summation */
+                ST_double kc = 0.0;
+                for (idx = 0; idx < N; idx++) {
+                    ST_double d = col[idx] - mean_k;
+                    ST_double sq = d * d;
+                    ST_double wsq = g_state->weights[idx] * sq;
+                    ST_double t = ss + wsq;
+                    kc += (ss - t) + wsq;
+                    ss = t;
+                }
+                ss += kc;
+            }
+            ST_double df_stdev = (weight_type == 2) ? (g_state->sum_weights - 1.0) : (ST_double)(N - 1);
+            tss[k] = ss;
+            stdevs[k] = sqrt(ss / df_stdev);
+        } else {
+            if (use_quad) {
+                ss = dd_sum_sq_dev(col, mean_k, N);
+            } else {
+                /* Kahan compensated summation */
+                ST_double kc = 0.0;
+                for (idx = 0; idx < N; idx++) {
+                    ST_double d = col[idx] - mean_k;
+                    ST_double sq = d * d;
+                    ST_double t = ss + sq;
+                    kc += (ss - t) + sq;
+                    ss = t;
+                }
+                ss += kc;
+            }
+            tss[k] = ss;
+            stdevs[k] = sqrt(ss / (N - 1));
+        }
+        if (stdevs[k] < 1e-30) stdevs[k] = 1.0;
+    }
+
+    /* ================================================================
+     * STEP 7: Standardize and partial out
+     * ================================================================ */
+    if (standardize) {
+        for (k = 0; k < K; k++) {
+            ST_double *col = &data[(size_t)k * N];
+            ST_double inv_stdev = 1.0 / stdevs[k];
+            #pragma omp simd
+            for (idx = 0; idx < N; idx++) {
+                col[idx] *= inv_stdev;
+            }
+        }
+    }
+
+    /* Partial out via CG solver using shared helper */
+    HDFE_SolveResult projection = partial_out_columns(g_state, data, N, K, num_threads);
+    if (projection.status) {
+        SF_error("creghdfe: fixed-effect projection did not converge\n");
+
+        output_rc = projection.status;
+        goto cleanup;
+    }
+    ST_int max_iters = projection.iterations;
+
+    /* Save iteration count to Stata scalar */
+    if ((output_rc = ctools_scal_save("__creghdfe_iterations", (ST_double)max_iters))) goto cleanup;
+
+    t_partial = get_time_sec();
+
+    /* ================================================================
+     * STEP 8: OLS with collinearity detection
+     * ================================================================ */
+    K_x = K - 1;  /* Excluding y */
+    /* For fweight, use sum(weights) as effective N in df calculation (reghdfe.mata line 3594) */
+    ST_double N_eff_df = (weight_type == 2) ? g_state->sum_weights : N;
+    df_r = N_eff_df - df_a;
+
+    /* Allocate for collinearity detection - cast to size_t to prevent 32-bit overflow */
+    xtx = (ST_double *)malloc((size_t)K_x * K_x * sizeof(ST_double));
+    is_collinear = (ST_int *)malloc(K_x * sizeof(ST_int));
+
+    if (!xtx || !is_collinear) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    memset(is_collinear, 0, K_x * sizeof(ST_int));
+
+    /* Check for FE-absorbed collinearity - use very small tolerance
+     * Variables that are constant within FE groups but vary across groups
+     * (like time-invariant covariates) should NOT be marked collinear.
+     * Only mark as collinear if the variable has essentially zero variance
+     * after partialling (relative tolerance 1e-14 or absolute < 1e-30). */
+    ST_double collinear_tol = 1e-14;
+    num_collinear = 0;
+    for (k = 0; k < K_x; k++) {
+        ST_double xx_partial = fast_dot(&data[(size_t)(k+1) * N], &data[(size_t)(k+1) * N], N);
+        ST_double xx_orig = tss[k + 1];
+        /* Only mark collinear if essentially zero (both relative and absolute) */
+        if (xx_orig > 0 && (xx_partial / xx_orig) <= collinear_tol && xx_partial < 1e-30) {
+            is_collinear[k] = 1;
+            num_collinear++;
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_collinear_varnum_%d", k + 1);
+            if ((output_rc = ctools_scal_save(scalar_name, 1.0))) goto cleanup;
+        }
+    }
+
+    /* Compute X'X */
+    memset(xtx, 0, K_x * K_x * sizeof(ST_double));
+    for (i = 0; i < K_x; i++) {
+        for (j = 0; j < K_x; j++) {
+            xtx[i * K_x + j] = fast_dot(&data[(size_t)(i+1) * N], &data[(size_t)(j+1) * N], N);
+        }
+    }
+
+    /* Detect numerical collinearity via Cholesky */
+    ST_int num_numerical_collinear = detect_collinearity(xtx, K_x, is_collinear, verbose);
+    if (num_numerical_collinear < 0) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* Recount collinear */
+    num_collinear = 0;
+    for (k = 0; k < K_x; k++) {
+        if (is_collinear[k]) num_collinear++;
+    }
+
+    K_keep = K_x - num_collinear;
+
+    /* Store collinearity flags */
+    if ((output_rc = ctools_scal_save("__creghdfe_num_collinear", (ST_double)num_collinear))) goto cleanup;
+    for (k = 0; k < K_x; k++) {
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_collinear_%d", k + 1);
+        if ((output_rc = ctools_scal_save(scalar_name, (ST_double)is_collinear[k]))) goto cleanup;
+    }
+
+    ST_int sample_var_idx = 0;
+    if (SF_scal_use("__creghdfe_sample_idx", &val) == 0)
+        sample_var_idx = (ST_int)val;
+    if (sample_var_idx > 0) {
+        for (i = 0; i < N_orig && !output_rc; i++) {
+            if (mask[i]) output_rc = SF_vstore(sample_var_idx, (ST_int)obs_map[i], 1.0);
+        }
+    }
+
+    if (output_rc) goto cleanup;
+
+    if (K_keep == 0) {
+        /* All X variables are collinear with FE - report as omitted (like reghdfe) */
+        if ((output_rc = ctools_scal_save("__creghdfe_K_keep", 0.0))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_ols_N", (ST_double)N))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_N", (ST_double)N))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_has_cons", 1.0))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_cons", means[0]))) goto cleanup;  /* Constant = mean(y) */
+        if ((output_rc = ctools_scal_save("__creghdfe_rss", tss[0]))) goto cleanup;  /* RSS = TSS when no X vars */
+        if ((output_rc = ctools_scal_save("__creghdfe_tss", tss[0]))) goto cleanup;  /* Total TSS */
+        if ((output_rc = ctools_scal_save("__creghdfe_tss_within", tss[0]))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_df_a", (ST_double)df_a))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_df_a_nested_computed", 0.0))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups))) goto cleanup;
+        if ((output_rc = ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons))) goto cleanup;
+        /* Save number of FE levels */
+        for (g = 0; g < G; g++) {
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_num_levels_%d", g + 1);
+            if ((output_rc = ctools_scal_save(scalar_name, (ST_double)factors[g].num_levels))) goto cleanup;
+        }
+
+        goto cleanup;
+    }
+
+    /* Build index of non-collinear variables */
+    keep_idx = (ST_int *)malloc(K_keep * sizeof(ST_int));
+    if (!keep_idx) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    idx = 0;
+    for (k = 0; k < K_x; k++) {
+        if (!is_collinear[k]) {
+            keep_idx[idx++] = k + 1;  /* +1 to skip y */
+        }
+    }
+
+    /* Allocate for OLS - cast to size_t to prevent 32-bit overflow */
+    ST_int K_with_cons = K_keep + 1;
+    data_keep = (ST_double *)malloc((size_t)N * (K_keep + 1) * sizeof(ST_double));
+    xtx_keep = (ST_double *)malloc(K_keep * K_keep * sizeof(ST_double));
+    xty_keep = (ST_double *)malloc(K_keep * sizeof(ST_double));
+    beta_keep = (ST_double *)malloc(K_with_cons * sizeof(ST_double));
+    inv_xx_keep = (ST_double *)malloc(K_with_cons * K_with_cons * sizeof(ST_double));
+    V_keep = (ST_double *)calloc(K_with_cons * K_with_cons, sizeof(ST_double));
+    means_x = (ST_double *)malloc(K_keep * sizeof(ST_double));
+
+    if (!data_keep || !xtx_keep || !xty_keep || !beta_keep || !inv_xx_keep || !V_keep || !means_x) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* Copy y and non-collinear X */
+    for (idx = 0; idx < N; idx++) {
+        data_keep[0 * N + idx] = data[0 * N + idx];
+    }
+    for (k = 0; k < K_keep; k++) {
+        for (idx = 0; idx < N; idx++) {
+            data_keep[(size_t)(k+1) * N + idx] = data[(size_t)keep_idx[k] * N + idx];
+        }
+        if (standardize) {
+            means_x[k] = means[keep_idx[k]] / stdevs[keep_idx[k]];
+        } else {
+            means_x[k] = means[keep_idx[k]];
+        }
+    }
+
+    /* Compute X'X and X'y on non-collinear data (weighted if using weights) */
+    if (has_weights) {
+        compute_xtx_xty_weighted(data_keep, g_state->weights, weight_type, N, K_keep + 1, xtx_keep, xty_keep);
+        /* Weighted TSS_within = sum(w_i * y_i^2)
+         * Use quad-precision or Kahan summation based on option. */
+        if (use_quad) {
+            tss_within = dd_sum_sq_weighted(data_keep, g_state->weights, N);
+        } else {
+            tss_within = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                volatile ST_double sq = data_keep[idx] * data_keep[idx];
+                tss_within += g_state->weights[idx] * sq;
+            }
+        }
+    } else {
+        compute_xtx_xty(data_keep, N, K_keep + 1, xtx_keep, xty_keep);
+        /* Compute tss_within: use quad-precision or Kahan summation. */
+        if (use_quad) {
+            tss_within = dd_sum_sq(data_keep, N);
+        } else {
+            tss_within = 0.0;
+            for (idx = 0; idx < N; idx++) {
+                volatile ST_double sq = data_keep[idx] * data_keep[idx];
+                tss_within += sq;
+            }
+        }
+    }
+
+    t_ols = get_time_sec();
+
+    /* Cholesky and invert */
+    inv_xx_x = (ST_double *)malloc(K_keep * K_keep * sizeof(ST_double));
+    if (!inv_xx_x) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    memcpy(inv_xx_x, xtx_keep, K_keep * K_keep * sizeof(ST_double));
+    if (ctools_cholesky(inv_xx_x, K_keep) != 0) {
+        SF_error("creghdfe: X'X not positive definite\n");
+
+        output_rc = 198;
+        goto cleanup;
+    }
+
+    stata_retcode inverse_status_0 = ctools_invert_from_cholesky(inv_xx_x, K_keep, inv_xx_x);
+    if (inverse_status_0 != STATA_OK) {
+        output_rc = ctools_stata_rc(inverse_status_0);
+        goto cleanup;
+    }
+
+    /* Compute beta */
+    for (i = 0; i < K_keep; i++) {
+        beta_keep[i] = 0.0;
+        for (j = 0; j < K_keep; j++) {
+            beta_keep[i] += inv_xx_x[i * K_keep + j] * xty_keep[j];
+        }
+    }
+
+    /* Compute RSS */
+    rss = tss_within;
+    for (k = 0; k < K_keep; k++) {
+        rss -= beta_keep[k] * xty_keep[k];
+    }
+
+    /* Extend inv_xx using block partition formula */
+    side = (ST_double *)malloc(K_keep * sizeof(ST_double));
+    if (!side) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    for (j = 0; j < K_keep; j++) {
+        side[j] = 0.0;
+        for (i = 0; i < K_keep; i++) {
+            side[j] -= means_x[i] * inv_xx_x[i * K_keep + j];
+        }
+    }
+
+    /* For fweight, use sum(weights) as effective N in corner calculation
+     * This is the 1'W1 term in the block partition formula */
+    ST_double N_corner = (weight_type == 2 && has_weights) ? g_state->sum_weights : (ST_double)N;
+    ST_double corner = 1.0 / N_corner;
+    for (i = 0; i < K_keep; i++) {
+        corner -= means_x[i] * side[i];
+    }
+
+    /* Build extended inv_xx matrix */
+    for (i = 0; i < K_keep; i++) {
+        for (j = 0; j < K_keep; j++) {
+            inv_xx_keep[i * K_with_cons + j] = inv_xx_x[i * K_keep + j];
+        }
+        inv_xx_keep[i * K_with_cons + K_keep] = side[i];
+        inv_xx_keep[K_keep * K_with_cons + i] = side[i];
+    }
+    inv_xx_keep[K_keep * K_with_cons + K_keep] = corner;
+
+    /* Compute constant */
+    ST_double y_mean = means[0];
+    ST_double xb_mean = 0.0;
+    for (k = 0; k < K_keep; k++) {
+        xb_mean += means_x[k] * beta_keep[k];
+    }
+    beta_keep[K_keep] = y_mean - xb_mean;
+
+    free(side); side = NULL;
+    free(inv_xx_x); inv_xx_x = NULL;
+
+    /* Build data with constant for VCE - cast to size_t to prevent 32-bit overflow */
+    data_with_cons = (ST_double *)malloc((size_t)N * (K_with_cons + 1) * sizeof(ST_double));
+    if (!data_with_cons) {
+        output_rc = 920;
+        goto cleanup;
+    }
+
+    /* Copy y (partialled) */
+    for (idx = 0; idx < N; idx++) {
+        data_with_cons[0 * N + idx] = data_keep[0 * N + idx];
+    }
+    /* Copy X and add back means */
+    for (k = 0; k < K_keep; k++) {
+        for (idx = 0; idx < N; idx++) {
+            data_with_cons[(size_t)(k + 1) * N + idx] = data_keep[(size_t)(k + 1) * N + idx] + means_x[k];
+        }
+    }
+    /* Add constant column */
+    for (idx = 0; idx < N; idx++) {
+        data_with_cons[(size_t)K_with_cons * N + idx] = 1.0;
+    }
+
+    /* ================================================================
+     * STEP 9: Compute VCE
+     * ================================================================ */
+
+    /* Read cluster variable if clustering */
+    ST_double df_a_nested_computed = 0;  /* Track FEs nested within cluster */
+
+    if (vcetype == 2) {
+        cluster_ids = (ST_int *)malloc(N * sizeof(ST_int));
+        if (!cluster_ids) {
+            output_rc = 920;
+            goto cleanup;
+        }
+
+        /* FAST PATH: If cluster variable matches an FE variable (e.g., vce(cluster i) with absorb(i t)),
+         * we can reuse the existing FE levels as cluster IDs - no hashing or SF_vdata needed! */
+        if (cluster_matches_fe >= 0) {
+            /* Use existing FE levels (converted to 0-based) as cluster_ids */
+            ST_int *fe_levels_for_cluster = g_state->factors[cluster_matches_fe].levels;
+            num_clusters = g_state->factors[cluster_matches_fe].num_levels;
+
+            for (idx = 0; idx < N; idx++) {
+                cluster_ids[idx] = fe_levels_for_cluster[idx] - 1;  /* Convert 1-based to 0-based */
+            }
+
+            /* Check FE nesting within cluster */
+            for (g = 0; g < G; g++) {
+                ST_int is_nested;
+                if (g == cluster_matches_fe) {
+                    is_nested = 1;  /* FE is the cluster variable - trivially nested */
+                } else {
+                    is_nested = ctools_fe_nested_in_cluster(
+                        g_state->factors[g].levels, g_state->factors[g].num_levels,
+                        cluster_ids, N);
+                    if (is_nested < 0) { output_rc = 920; goto cleanup; }
+                }
+                if (is_nested) df_a_nested_computed += g_state->factors[g].num_levels;
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                if ((output_rc = ctools_scal_save(scalar_name, (ST_double)is_nested))) goto cleanup;
+            }
+        } else {
+            /* Cluster variable is different from all FE variables.
+             * Use saved cluster_raw_values and remap with sort (still much faster than SF_vdata + hash). */
+            if (!cluster_raw_values) {
+                output_rc = 920;
+                goto cleanup;
+            }
+
+            /* Extract cluster values for non-singleton observations and remap using sort */
+            cluster_values_compact = (double *)malloc(N * sizeof(double));
+            cluster_levels = (ST_int *)malloc(N * sizeof(ST_int));
+
+            if (!cluster_values_compact || !cluster_levels) {
+                output_rc = 920;
+                goto cleanup;
+            }
+
+            /* Compact cluster values (remove singletons) */
+            idx = 0;
+            for (i = 0; i < N_orig; i++) {
+                if (mask[i]) {
+                    cluster_values_compact[idx] = cluster_raw_values[i];
+                    idx++;
+                }
+            }
+
+            /* Remap using sort (much faster than hash table) */
+            ST_int num_cluster_levels = 0;
+            if (remap_values_sorted(cluster_values_compact, N, cluster_levels, &num_cluster_levels) != 0) {
+                output_rc = 920;
+                goto cleanup;
+            }
+
+            num_clusters = num_cluster_levels;
+            for (idx = 0; idx < N; idx++) {
+                cluster_ids[idx] = cluster_levels[idx] - 1;  /* Convert 1-based to 0-based */
+            }
+
+            free(cluster_values_compact); cluster_values_compact = NULL;
+            free(cluster_levels); cluster_levels = NULL;
+
+            /* Check if any FE is nested within cluster */
+            for (g = 0; g < G; g++) {
+                ST_int is_nested = ctools_fe_nested_in_cluster(
+                    g_state->factors[g].levels, g_state->factors[g].num_levels,
+                    cluster_ids, N);
+                if (is_nested < 0) { output_rc = 920; goto cleanup; }
+                if (is_nested) df_a_nested_computed += g_state->factors[g].num_levels;
+                snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+                if ((output_rc = ctools_scal_save(scalar_name, (ST_double)is_nested))) goto cleanup;
+            }
+        }
+
+        /* Free saved cluster raw values */
+        free(cluster_raw_values);
+        cluster_raw_values = NULL;
+    } else {
+        /* No clustering - save 0 for all FE nested status */
+        for (g = 0; g < G; g++) {
+            snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_fe_nested_%d", g + 1);
+            if ((output_rc = ctools_scal_save(scalar_name, 0.0))) goto cleanup;
+        }
+    }
+
+    /* Use computed df_a_nested if we found nested FEs, otherwise use passed value */
+    if (df_a_nested_computed > 0) {
+        df_a_nested = df_a_nested_computed;
+    }
+
+    df_r -= K_keep;
+
+    /* Compute residuals (needed for robust/cluster VCE and optionally stored) */
+    resid = (ST_double *)malloc(N * sizeof(ST_double));
+    if (!resid) {
+        SF_error("creghdfe: memory allocation failed for residuals\n");
+        output_rc = 920;
+        free(data_with_cons); data_with_cons = NULL;
+        goto cleanup;
+    }
+    if (resid) {
+        for (idx = 0; idx < N; idx++) {
+            ST_double y_hat = 0.0;
+            for (k = 0; k < K_keep; k++) {
+                /* Use volatile to prevent FMA, matching Mata's matrix multiply */
+                volatile ST_double prod = data_keep[(size_t)(k + 1) * N + idx] * beta_keep[k];
+                y_hat += prod;
+            }
+            resid[idx] = data_keep[idx] - y_hat;
+        }
+
+        /* Recompute RSS from residuals: use quad-precision or Kahan. */
+        if (use_quad) {
+            if (has_weights) {
+                rss = dd_sum_sq_weighted(resid, g_state->weights, N);
+            } else {
+                rss = dd_sum_sq(resid, N);
+            }
+        } else {
+            rss = 0.0;
+            if (has_weights) {
+                for (idx = 0; idx < N; idx++) {
+                    volatile ST_double sq = resid[idx] * resid[idx];
+                    rss += g_state->weights[idx] * sq;
+                }
+            } else {
+                for (idx = 0; idx < N; idx++) {
+                    volatile ST_double sq = resid[idx] * resid[idx];
+                    rss += sq;
+                }
+            }
+        }
+    }
+
+    if (vcetype == 0) {
+        output_rc = compute_vce_unadjusted(inv_xx_keep, rss, df_r, K_with_cons, V_keep);
+    } else if (vcetype == 1 || vcetype == 2) {
+        if (resid) {
+            /* Pass weights for weighted VCE (NULL if no weights) */
+            ST_double *vce_weights = has_weights ? g_state->weights : NULL;
+            /* N_eff = sum(weights) for fweight, else N */
+            ST_double N_eff = (weight_type == 2) ? g_state->sum_weights : N;
+            if (vcetype == 1) {
+                output_rc = compute_vce_robust(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, N, N_eff, K_with_cons, df_a, V_keep);
+            } else {
+                ST_int df_m_cluster = K_keep;
+                output_rc = compute_vce_cluster(data_with_cons, resid, inv_xx_keep, vce_weights, weight_type, cluster_ids, N, N_eff, K_with_cons, num_clusters, V_keep, df_m_cluster, df_a, df_a_nested);
+            }
+        }
+    }
+
+    free(data_with_cons); data_with_cons = NULL;
+    if (output_rc) {
+        SF_error("creghdfe: covariance calculation failed\n");
+        free(resid); resid = NULL;
+        goto cleanup;
+    }
+
+    /* Destandardize if needed */
+    if (standardize) {
+        ST_double stdev_y = stdevs[0];
+
+        /* Destandardize residuals first */
+        if (resid) {
+            for (idx = 0; idx < N; idx++) {
+                resid[idx] *= stdev_y;
+            }
+        }
+
+        /* Match reghdfe: multiply standardized RSS/TSS_within by stdev_y^2.
+         * reghdfe computes RSS from standardized residuals via quadcross(),
+         * then does sol.rss = sol.rss * stdev_y ^ 2 (reghdfe.mata:3717). */
+        rss = rss * stdev_y * stdev_y;
+        tss_within = tss_within * stdev_y * stdev_y;
+
+        for (k = 0; k < K_keep; k++) {
+            ST_int orig_idx = keep_idx[k];
+            ST_double stdev_x = stdevs[orig_idx];
+            beta_keep[k] = beta_keep[k] * stdev_y / stdev_x;
+        }
+
+        for (i = 0; i < K_with_cons; i++) {
+            ST_double stdev_x_i = (i < K_keep) ? (stdevs[keep_idx[i]] / stdev_y) : (1.0 / stdev_y);
+            for (j = 0; j < K_with_cons; j++) {
+                ST_double stdev_x_j = (j < K_keep) ? (stdevs[keep_idx[j]] / stdev_y) : (1.0 / stdev_y);
+                V_keep[i * K_with_cons + j] = V_keep[i * K_with_cons + j] / (stdev_x_i * stdev_x_j);
+            }
+        }
+
+        /* Re-compute constant */
+        xb_mean = 0.0;
+        for (k = 0; k < K_keep; k++) {
+            xb_mean += means[keep_idx[k]] * beta_keep[k];
+        }
+        beta_keep[K_keep] = means[0] - xb_mean;
+    }
+
+    /* Store residuals back to Stata if requested.
+     * Uses obs_map to write to correct Stata observations. */
+    if (compute_resid && resid_var_idx > 0 && resid) {
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                if (!output_rc) output_rc = SF_vstore(resid_var_idx, (ST_int)obs_map[i], resid[idx]);
+                idx++;
+            }
+        }
+    }
+
+    /* Store groupvar (mobility group assignments) back to Stata if requested */
+    if (compute_groupvar && groupvar_var_idx > 0 && group_assignments) {
+        idx = 0;
+        for (i = 0; i < N_orig; i++) {
+            if (mask[i]) {
+                if (!output_rc) output_rc = SF_vstore(groupvar_var_idx, (ST_int)obs_map[i], (ST_double)group_assignments[idx]);
+                idx++;
+            }
+        }
+    }
+
+    if (savefe && savefe_var_idx > 0 && resid && !output_rc) {
+        output_rc = store_fixed_effects(g_state, obs_map, mask, N_orig,
+            K_keep, keep_idx, beta_keep, resid, savefe_var_idx);
+    }
+
+    /* Free residuals and group assignments */
+    free(resid);
+    resid = NULL;
+    free(group_assignments);
+    group_assignments = NULL;
+
+    if (output_rc) goto cleanup;
+    t_vce = get_time_sec();
+
+    /* ================================================================
+     * STEP 10: Store all results
+     * ================================================================ */
+
+    /* HDFE init results */
+    /* For fweight, report N as sum of weights (like reghdfe) */
+    if (weight_type == 2 && has_weights) {
+        if ((output_rc = ctools_scal_save("__creghdfe_N", g_state->sum_weights))) goto cleanup;
+    } else {
+        if ((output_rc = ctools_scal_save("__creghdfe_N", (ST_double)N))) goto cleanup;
+    }
+    if ((output_rc = ctools_scal_save("__creghdfe_num_singletons", (ST_double)num_singletons))) goto cleanup;
+    for (g = 0; g < G; g++) {
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_num_levels_%d", g + 1);
+        if ((output_rc = ctools_scal_save(scalar_name, (ST_double)factors[g].num_levels))) goto cleanup;
+    }
+    if ((output_rc = ctools_scal_save("__creghdfe_df_a", (ST_double)df_a))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_df_a_nested_computed", (ST_double)df_a_nested))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_mobility_groups", (ST_double)mobility_groups))) goto cleanup;
+
+    /* OLS results */
+    /* For fweight, report N as sum of weights (like reghdfe) */
+    if (weight_type == 2 && has_weights) {
+        if ((output_rc = ctools_scal_save("__creghdfe_ols_N", g_state->sum_weights))) goto cleanup;
+    } else {
+        if ((output_rc = ctools_scal_save("__creghdfe_ols_N", (ST_double)N))) goto cleanup;
+    }
+    if ((output_rc = ctools_scal_save("__creghdfe_K_keep", (ST_double)K_keep))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_has_cons", 1.0))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_rss", rss))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_tss_within", tss_within))) goto cleanup;
+    if ((output_rc = ctools_scal_save("__creghdfe_tss", tss[0]))) goto cleanup;
+
+    /* Store betas */
+    for (k = 0; k < K_keep; k++) {
+        snprintf(scalar_name, sizeof(scalar_name), "__creghdfe_beta_%d", k + 1);
+        if ((output_rc = ctools_scal_save(scalar_name, beta_keep[k]))) goto cleanup;
+    }
+    if ((output_rc = ctools_scal_save("__creghdfe_cons", beta_keep[K_keep]))) goto cleanup;
+
+    /* Store VCE matrix directly */
+    for (i = 0; i < K_with_cons; i++) {
+        for (j = 0; j < K_with_cons; j++) {
+            if ((output_rc = ctools_mat_store("__creghdfe_V", i + 1, j + 1, V_keep[i * K_with_cons + j]))) goto cleanup;
+        }
+    }
+
+    /* Store number of clusters */
+    if (vcetype == 2 && num_clusters > 0) {
+        if ((output_rc = ctools_scal_save("__creghdfe_N_clust", (ST_double)num_clusters))) goto cleanup;
+    }
+
+    /* Save timing results to Stata scalars */
+    if ((output_rc = ctools_scal_save("_creghdfe_time_load", t_load - t_start))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_copy", t_copy - t_load))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_remap", t_remap - t_copy))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_singleton", t_singleton - t_remap))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_dof", t_dof - t_singleton))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_partial", t_partial - t_dof))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_ols", t_ols - t_partial))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_vce", t_vce - t_ols))) goto cleanup;
+    if ((output_rc = ctools_scal_save("_creghdfe_time_total", t_vce - t_start))) goto cleanup;
+    CTOOLS_SAVE_THREAD_INFO("_creghdfe");
+
+    /* ================================================================
+     * Cleanup
+     * ================================================================ */
+cleanup:
+    ctools_filtered_data_free(&filtered);
+    ctools_aligned_free(obs_map);
+    for (g = 0; g < G; g++) {
+        if (factors) {
+            free(factors[g].levels);
+            free(factors[g].counts);
+        }
+        free(weighted_counts_orig[g]);
+    }
+    free(factors); free(mask);
+    free(data); free(means); free(stdevs); free(tss);
+    free(data_keep); free(xtx_keep); free(xty_keep); free(beta_keep);
+    free(inv_xx_keep); free(V_keep); free(keep_idx); free(xtx); free(is_collinear);
+    free(cluster_ids);
+    free(weights);
+    free(cluster_raw_values);
+    free(group_assignments);
+    free(data_compact);
+    free(means_compact);
+    free(compact_map);
+    free(weights_compact);
+    free(means_x);
+    free(inv_xx_x);
+    free(side);
+    free(data_with_cons);
+    free(cluster_values_compact);
+    free(cluster_levels);
+    free(fe1_compact);
+    free(fe2_compact);
+    free(remap1);
+    free(remap2);
+    free(parent);
+    free(root_to_group);
+    free(resid);
+    cleanup_state();
+    return output_rc;
+}

@@ -1,0 +1,110 @@
+[
+  {
+    "length": 0,
+    "load_s": 0.000963,
+    "cleanup_s": 5e-06,
+    "maxrss_bytes": 6406144,
+    "resident_bytes": 6406144,
+    "virtual_bytes": 445774921728,
+    "variant": "baseline"
+  },
+  {
+    "length": 8,
+    "load_s": 0.001153,
+    "cleanup_s": 6e-06,
+    "maxrss_bytes": 9551872,
+    "resident_bytes": 9551872,
+    "virtual_bytes": 445774364672,
+    "variant": "baseline"
+  },
+  {
+    "length": 64,
+    "load_s": 0.001549,
+    "cleanup_s": 0.000456,
+    "maxrss_bytes": 32145408,
+    "resident_bytes": 32145408,
+    "virtual_bytes": 445774544896,
+    "variant": "baseline"
+  },
+  {
+    "length": 2045,
+    "load_s": 0.069096,
+    "cleanup_s": 0.028686,
+    "maxrss_bytes": 828276736,
+    "resident_bytes": 828276736,
+    "virtual_bytes": 445778149376,
+    "variant": "baseline"
+  },
+  {
+    "length": 0,
+    "load_s": 0.000833,
+    "cleanup_s": 7e-06,
+    "maxrss_bytes": 6406144,
+    "resident_bytes": 6406144,
+    "virtual_bytes": 446567284736,
+    "variant": "str2045_packed"
+  },
+  {
+    "length": 8,
+    "load_s": 0.00091,
+    "cleanup_s": 5e-06,
+    "maxrss_bytes": 9551872,
+    "resident_bytes": 9551872,
+    "virtual_bytes": 446566973440,
+    "variant": "str2045_packed"
+  },
+  {
+    "length": 64,
+    "load_s": 0.001341,
+    "cleanup_s": 7e-06,
+    "maxrss_bytes": 31965184,
+    "resident_bytes": 31965184,
+    "virtual_bytes": 446567677952,
+    "variant": "str2045_packed"
+  },
+  {
+    "length": 2045,
+    "load_s": 0.024576,
+    "cleanup_s": 2e-05,
+    "maxrss_bytes": 824344576,
+    "resident_bytes": 824344576,
+    "virtual_bytes": 446567841792,
+    "variant": "str2045_packed"
+  },
+  {
+    "length": 0,
+    "load_s": 0.029679,
+    "cleanup_s": 1.1e-05,
+    "maxrss_bytes": 824344576,
+    "resident_bytes": 824344576,
+    "virtual_bytes": 446567383040,
+    "variant": "str2045"
+  },
+  {
+    "length": 8,
+    "load_s": 0.012915,
+    "cleanup_s": 1.6e-05,
+    "maxrss_bytes": 824360960,
+    "resident_bytes": 824360960,
+    "virtual_bytes": 446566875136,
+    "variant": "str2045"
+  },
+  {
+    "length": 64,
+    "load_s": 0.017458,
+    "cleanup_s": 1.6e-05,
+    "maxrss_bytes": 824360960,
+    "resident_bytes": 824360960,
+    "virtual_bytes": 446567743488,
+    "variant": "str2045"
+  },
+  {
+    "length": 2045,
+    "load_s": 0.032851,
+    "cleanup_s": 1.4e-05,
+    "maxrss_bytes": 824377344,
+    "resident_bytes": 824377344,
+    "virtual_bytes": 446567776256,
+    "variant": "str2045"
+  }
+]

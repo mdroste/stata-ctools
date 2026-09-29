@@ -1,0 +1,45 @@
+{
+  "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_final/src",
+  "source_io_sha256": "af1442727a737eab81571074f7e6f10e366a9019ecedf70cc329fe661fd30c19",
+  "sanitizers": "undefined",
+  "compiler": "/usr/bin/clang",
+  "compiler_version": "Apple clang version 21.0.0 (clang-2100.3.34.2)\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin\n",
+  "libomp": "/private/tmp/ctools-memory-audit/libomp",
+  "libomp_archive_sha256": "cae862c1f95b23e9db8146934f66df67d7aeab0a726a1a56c3575e3f033ecfa4",
+  "results": [
+    {
+      "suite": "test_transport_native",
+      "exit_code": 0,
+      "elapsed_seconds": 2.961,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks_final/test_transport_native_ubsan.log",
+      "test_sha256": "7bfaf4daf11440fdeb17edcaa044e5e61ece9ed13ef0d93f481a6ec0537f3551"
+    },
+    {
+      "suite": "test_transport_scheduling",
+      "exit_code": 0,
+      "elapsed_seconds": 3.971,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks_final/test_transport_scheduling_ubsan.log",
+      "test_sha256": "a53422b6ad89feab09676148943dc54f5ac386a944486a876e7ff5aa6e796d9e"
+    },
+    {
+      "suite": "test_transport_adaptive_native",
+      "exit_code": 0,
+      "elapsed_seconds": 6.595,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks_final/test_transport_adaptive_native_ubsan.log",
+      "test_sha256": "4344a88b568f51c74a9c4ae781ae523f08f00c92c1fb435403b806f7111db5b6"
+    },
+    {
+      "suite": "test_transport_store_native",
+      "exit_code": 0,
+      "elapsed_seconds": 2.29,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks_final/test_transport_store_native_ubsan.log",
+      "test_sha256": "ef5fb8aed5121930677b32290c372981d33ecdc9a58589467206c19adf835133"
+    }
+  ],
+  "post_check_comment_cleanup": {
+    "path": "/Users/Mike/Documents/GitHub/stata-ctools/validation/test_transport_adaptive_native.py",
+    "tested_source_copy": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks_final/test_transport_adaptive_native_ubsan_tested.py",
+    "current_sha256": "cfbefb44af63effde731b09ba70eadd47ba1b2de13133f305ceeaf43f5b7377d",
+    "description": "Comment wording/wrapping only; no functional changes after successful UBSan run."
+  }
+}

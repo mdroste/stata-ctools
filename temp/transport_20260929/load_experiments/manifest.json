@@ -1,0 +1,43 @@
+{
+  "tiny_serial": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/tiny_serial/src",
+    "sha256": "32b97001f66c6ce2372671ea72d00fecee0e090d1b5fa9d447a18421d372c563"
+  },
+  "str2045": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/str2045/src",
+    "sha256": "93772b691bcd0ba62150fb1dd427c462e1071e9a5ff845ba71fd9e2dd429cc67"
+  },
+  "numeric_tiles": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/numeric_tiles/src",
+    "sha256": "df23deecbecc828088907deeb6351992244b48d5fd132de8e384b3bc65dc271c"
+  },
+  "str2045_packed": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/str2045_packed/src",
+    "sha256": "f692e0c6ed95d16ba8472ae7f2ba67428a26c74c7041ec80ffd356fcfe98860f"
+  },
+  "numeric_tiles_cells": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/numeric_tiles_cells/src",
+    "sha256": "3e113c1fa6f8170e5b6339d99b83c35f9afced673ec247f981702cb68a062332"
+  },
+  "packed_retry": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/packed_retry/src",
+    "sha256": "f1bd052f7d7bc6db1494b9213aa6714006e34f66f9ccaa2694e899eac1fc2e9e"
+  },
+  "no_sort_order": {
+    "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/load_experiments/no_sort_order/src",
+    "sha256": "833cf1aa6ef2f2535e7db92e3d2a5e38b10afbc22f061f80d50fe2bb9bb1bfb1",
+    "callers": [
+      "creghdfe/creghdfe_regress.c",
+      "civreghdfe/civreghdfe_impl.c",
+      "cpplmhdfe/cpplmhdfe_irls.c",
+      "cqreg/cqreg_regress.c",
+      "cbinscatter/cbinscatter_impl.c",
+      "cpsmatch/cpsmatch_impl.c",
+      "cencode/cencode_impl.c",
+      "cdestring/cdestring_impl.c",
+      "csplit/csplit_impl.c",
+      "cexport/cexport_impl.c",
+      "cexport/cexport_xlsx.c"
+    ]
+  }
+}

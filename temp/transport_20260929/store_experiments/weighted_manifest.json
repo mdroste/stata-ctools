@@ -1,0 +1,13 @@
+{
+  "baseline_sha256": "1e42ccdc0242af59a0eb3762b8016de8fa585b7620ddb781e1e671c5c602e188",
+  "variants": {
+    "tiny_weighted": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/tiny_weighted/src",
+      "sha256": "f20255b9ca8b4bbcaa383ac878231e17f813385e4d8d1cd76dff3491ea4414a3"
+    },
+    "tiny_adaptive": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/tiny_adaptive/src",
+      "sha256": "b11682f9e5777a775146c5013b848f78c0b5f1c34282902409686b9dd16161c2"
+    }
+  }
+}

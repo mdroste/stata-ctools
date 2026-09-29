@@ -1,0 +1,21 @@
+setUsingNetworkTime: Off
+Wed Jul  1 00:00:00 PDT 2026
+setUsingNetworkTime: On
+       37.46 real        59.31 user         3.19 sys
+          4701995008  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+              379096  page reclaims
+                 140  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 228  signals received
+                 614  voluntary context switches
+               32101  involuntary context switches
+          2789486893  instructions retired
+           914166545  cycles elapsed
+             5702016  peak memory footprint

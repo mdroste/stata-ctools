@@ -1,0 +1,1180 @@
+{
+  "schema": 1,
+  "suites": [
+    {
+      "name": "csort",
+      "path": "validation/validate_csort.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "csort",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cmerge",
+      "path": "validation/validate_cmerge.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cmerge",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cimport",
+      "path": "validation/validate_cimport.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cimport",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cexport",
+      "path": "validation/validate_cexport.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cexport",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "creghdfe",
+      "path": "validation/validate_creghdfe.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "creghdfe",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cqreg",
+      "path": "validation/validate_cqreg.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cqreg",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "civreghdfe",
+      "path": "validation/validate_civreghdfe.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "civreghdfe",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cdecode",
+      "path": "validation/validate_cdecode.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cdecode",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cencode",
+      "path": "validation/validate_cencode.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cencode",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cdestring",
+      "path": "validation/validate_cdestring.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cdestring",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "csample",
+      "path": "validation/validate_csample.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "csample",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cbsample",
+      "path": "validation/validate_cbsample.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cbsample",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cbinscatter",
+      "path": "validation/validate_cbinscatter.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cbinscatter",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cpsmatch",
+      "path": "validation/validate_cpsmatch.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cpsmatch",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "crangestat",
+      "path": "validation/validate_crangestat.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "crangestat",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cwinsor",
+      "path": "validation/validate_cwinsor.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cwinsor",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cpplmhdfe",
+      "path": "validation/validate_cpplmhdfe.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cpplmhdfe",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "cipolate",
+      "path": "validation/validate_cipolate.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "cipolate",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "csplit",
+      "path": "validation/validate_csplit.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "csplit",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "crangejoin",
+      "path": "validation/validate_crangejoin.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "crangejoin",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": true
+    },
+    {
+      "name": "audit_p1",
+      "path": "validation/validate_audit_p1.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "audit_p1",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "audit_p2",
+      "path": "validation/validate_audit_p2.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "audit_p2",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "sep22",
+      "path": "validation/validate_sep22.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "sep22",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "sep24",
+      "path": "validation/validate_sep24.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "sep24",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "memory_safety",
+      "path": "validation/validate_memory_safety.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "memory_safety",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "command_optimizations",
+      "path": "validation/validate_command_optimizations.do",
+      "runner": "master",
+      "category": "correctness",
+      "marker": "command_optimizations",
+      "fixtures": [
+        "pinned-validation-data"
+      ],
+      "dependencies": [
+        "reghdfe",
+        "ivreghdfe",
+        "ppmlhdfe",
+        "psmatch2",
+        "binscatter",
+        "rangestat",
+        "rangejoin",
+        "winsor2",
+        "gstats"
+      ],
+      "public": false
+    },
+    {
+      "name": "io_parity",
+      "path": "validation/validate_io_parity.do",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "IO_PARITY_DRIVER_RC=0",
+      "fixtures": [
+        "run_io_parity.py: fixtures prepared before Stata"
+      ],
+      "dependencies": [
+        "Stata"
+      ],
+      "command": [
+        "python3",
+        "validation/run_io_parity.py"
+      ]
+    },
+    {
+      "name": "io_formats",
+      "path": "validation/validate_io_formats.do",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "IO_FORMATS_DRIVER_RC=0",
+      "fixtures": [
+        "run_io_formats.py: fixtures prepared before Stata"
+      ],
+      "dependencies": [
+        "Stata"
+      ],
+      "command": [
+        "python3",
+        "validation/run_io_formats.py"
+      ]
+    },
+    {
+      "name": "io_delimited_options",
+      "path": "validation/validate_io_delimited_options.do",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "CSV_OPTIONS_DRIVER_RC=0",
+      "fixtures": [
+        "run_io_delimited_options.py: fixtures prepared before Stata"
+      ],
+      "dependencies": [
+        "Stata"
+      ],
+      "command": [
+        "python3",
+        "validation/run_io_delimited_options.py"
+      ]
+    },
+    {
+      "name": "io_excel_options",
+      "path": "validation/validate_io_excel_options.do",
+      "runner": "python",
+      "category": "correctness",
+      "marker": "IO_OPTIONS_DRIVER_RC=0",
+      "fixtures": [
+        "run_io_excel_options.py: fixtures prepared before Stata"
+      ],
+      "dependencies": [
+        "Stata"
+      ],
+      "command": [
+        "python3",
+        "validation/run_io_excel_options.py"
+      ]
+    },
+    {
+      "name": "cqreg_performance",
+      "path": "validation/validate_cqreg_performance.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "cqreg performance smoke checks passed",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "bigdata",
+      "path": "validation/validate_bigdata.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "BIGDATA_EDGE_PASS",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "transport_strl",
+      "path": "validation/validate_transport_strl.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "TRANSPORT_STRL_COMPLETE",
+      "fixtures": [
+        "transport-plugin"
+      ],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "data_io",
+      "path": "validation/test_data_io.do",
+      "runner": "do",
+      "category": "correctness",
+      "marker": "ALL TESTS PASSED",
+      "fixtures": [],
+      "dependencies": [
+        "Stata"
+      ]
+    },
+    {
+      "name": "validate_all.do",
+      "path": "validation/validate_all.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Master orchestrator generated from registry."
+    },
+    {
+      "name": "validate_setup.do",
+      "path": "validation/validate_setup.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Assertion and reference helpers loaded by each master suite."
+    },
+    {
+      "name": "validate_cimport_helper.do",
+      "path": "validation/validate_cimport_helper.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Helper loaded by validate_cimport.do."
+    },
+    {
+      "name": "validate_io_excel_formulas.do",
+      "path": "validation/validate_io_excel_formulas.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Executed by io_excel_options; Python verifies generated workbooks."
+    },
+    {
+      "name": "test_validation_helpers.do",
+      "path": "validation/test_validation_helpers.do",
+      "runner": "helper",
+      "category": "helper",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Harness mutation tests run by audit_p1."
+    },
+    {
+      "name": "test_bigdata_native",
+      "path": "validation/test_bigdata_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_build_contract",
+      "path": "validation/test_build_contract.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "env": {}
+    },
+    {
+      "name": "test_cimport_options_native",
+      "path": "validation/test_cimport_options_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_cpplmhdfe_native",
+      "path": "validation/test_cpplmhdfe_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_cqreg_native",
+      "path": "validation/test_cqreg_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_io_formats_native",
+      "path": "validation/test_io_formats_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_io_parity_native",
+      "path": "validation/test_io_parity_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_memory_safety_native",
+      "path": "validation/test_memory_safety_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined,float-cast-overflow"
+      }
+    },
+    {
+      "name": "test_newcommands_native",
+      "path": "validation/test_newcommands_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_order_parallel",
+      "path": "validation/test_order_parallel.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_p1_native",
+      "path": "validation/test_p1_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_p2_native",
+      "path": "validation/test_p2_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_release_gate",
+      "path": "validation/test_release_gate.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "env": {}
+    },
+    {
+      "name": "test_sep22_native",
+      "path": "validation/test_sep22_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_sep24_native",
+      "path": "validation/test_sep24_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_spi_matrix_native",
+      "path": "validation/test_spi_matrix_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_split_tokens_native",
+      "path": "validation/test_split_tokens_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_transport_adaptive_native",
+      "path": "validation/test_transport_adaptive_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_transport_native",
+      "path": "validation/test_transport_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_transport_scheduling",
+      "path": "validation/test_transport_scheduling.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_transport_store_native",
+      "path": "validation/test_transport_store_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_xls_edit_native",
+      "path": "validation/test_xls_edit_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_xlsx_edit_native",
+      "path": "validation/test_xlsx_edit_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "test_xlsx_strl_native",
+      "path": "validation/test_xlsx_strl_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {}
+    },
+    {
+      "name": "benchmark_bigdata",
+      "path": "validation/benchmark_bigdata.do",
+      "runner": "manual",
+      "category": "large",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_bigdata_native",
+      "path": "validation/benchmark_bigdata_native.py",
+      "runner": "manual",
+      "category": "large",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_command_performance",
+      "path": "validation/benchmark_command_performance.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_helpers",
+      "path": "validation/benchmark_helpers.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_newcommands",
+      "path": "validation/benchmark_newcommands.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_readme_commands",
+      "path": "validation/benchmark_readme_commands.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_speed",
+      "path": "validation/benchmark_speed.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_speed_synthetic",
+      "path": "validation/benchmark_speed_synthetic.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_transport",
+      "path": "validation/benchmark_transport.py",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_transport_campaign",
+      "path": "validation/benchmark_transport_campaign.py",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "benchmark_transport_commands",
+      "path": "validation/benchmark_transport_commands.do",
+      "runner": "manual",
+      "category": "performance",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "test_settings",
+      "path": "validation/test_settings.do",
+      "runner": "manual",
+      "category": "large",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [],
+      "reason": "Opt-in experiment; requires explicit size/variant/output parameters. See script usage."
+    },
+    {
+      "name": "test_contracts_native",
+      "path": "validation/test_contracts_native.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": [
+        "C compiler"
+      ],
+      "env": {
+        "CTOOLS_SANITIZERS": "address,undefined"
+      }
+    },
+    {
+      "name": "test_validation_registry",
+      "path": "validation/test_validation_registry.py",
+      "runner": "native",
+      "category": "correctness",
+      "marker": "",
+      "fixtures": [],
+      "dependencies": []
+    }
+  ]
+}

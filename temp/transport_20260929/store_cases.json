@@ -1,0 +1,194 @@
+[
+  {
+    "name": "n200000_k8_numeric8_identity",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k8_numeric8_sorted",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n200000_k8_mixed8_identity",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k8_mixed8_sorted",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n200000_k8_mixed32_identity",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k8_mixed32_sorted",
+    "rows": 200000,
+    "columns": 8,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k13_numeric8_identity",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k13_numeric8_sorted",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k13_mixed8_identity",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k13_mixed8_sorted",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k13_mixed32_identity",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k13_mixed32_sorted",
+    "rows": 1000000,
+    "columns": 13,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "sorted"
+  },
+  {
+    "name": "n200000_k64_numeric8_identity",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k64_numeric8_sorted",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n200000_k64_mixed8_identity",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k64_mixed8_sorted",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n200000_k64_mixed32_identity",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "identity"
+  },
+  {
+    "name": "n200000_k64_mixed32_sorted",
+    "rows": 200000,
+    "columns": 64,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k20_numeric8_identity",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k20_numeric8_sorted",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "numeric",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k20_mixed8_identity",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k20_mixed8_sorted",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 8,
+    "mode": "sorted"
+  },
+  {
+    "name": "n1000000_k20_mixed32_identity",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "identity"
+  },
+  {
+    "name": "n1000000_k20_mixed32_sorted",
+    "rows": 1000000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32,
+    "mode": "sorted"
+  }
+]

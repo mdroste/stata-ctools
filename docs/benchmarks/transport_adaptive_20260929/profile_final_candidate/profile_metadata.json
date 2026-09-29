@@ -1,0 +1,7 @@
+{
+  "pid": 55711,
+  "elapsed_monotonic": 20.525329874999443,
+  "exit_code": 0,
+  "sample_duration_seconds": 5,
+  "profiled_timings_excluded_from_benchmark_evidence": true
+}

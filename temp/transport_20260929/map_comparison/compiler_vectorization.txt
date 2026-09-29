@@ -1,0 +1,27 @@
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:1190:5: remark: interleaved loop (interleaved count: 4) [-Rpass=loop-vectorize]
+ 1190 |     for (size_t j = 0; j < nvars; j++) thread_args[j].store_order = order;
+      |     ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:577:5: remark: interleaved loop (interleaved count: 2) [-Rpass=loop-vectorize]
+  577 |     for (size_t j = 0; j < nvars; j++) {
+      |     ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:1388:9: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+ 1388 |         for (size_t i = 0; i < n_filtered; i++) {
+      |         ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:1451:5: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+ 1451 |     for (size_t i = 0; i < prefix; i++) obs_map[i] = (perm_idx_t)(obs1 + (ST_int)i);
+      |     ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:1405:13: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+ 1405 |             for (size_t i = 0; i < n_filtered; i++) {
+      |             ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:2093:9: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+ 2093 |         for (size_t i = 0; i < nvars; i++) {
+      |         ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:545:5: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+  545 |     #pragma omp parallel for schedule(static) if(nobs >= MIN_OBS_PER_THREAD * 2)
+      |     ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:2392:9: remark: vectorized loop (vectorization width: 4, interleaved count: 4) [-Rpass=loop-vectorize]
+ 2392 |         for (size_t i = 1; i < n_filtered; i++) {
+      |         ^
+temp/transport_20260929/store_experiments/map_vector/src/ctools_data_io.c:2402:13: remark: vectorized loop (vectorization width: 4, interleaved count: 2) [-Rpass=loop-vectorize]
+ 2402 |             for (size_t i = 1; i < n_filtered; i++) {
+      |             ^

@@ -1,0 +1,45 @@
+[
+  {
+    "name": "n200k_k64_cycle",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "cycle"
+  },
+  {
+    "name": "n200k_k64_byte",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k64_double",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "double"
+  },
+  {
+    "name": "n200k_k128_cycle",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "cycle"
+  },
+  {
+    "name": "n200k_k128_byte",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "byte"
+  },
+  {
+    "name": "n200k_k128_double",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "double"
+  },
+  {
+    "name": "mixed20_str32_control",
+    "rows": 200000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  }
+]

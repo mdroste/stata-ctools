@@ -1,0 +1,268 @@
+EXPERIMENT abba RUN b1
+PROFILE_BEGIN label=b1 case=ip_sorted
+cipolate: load 0.0152s; sort 0.0068s; interpolate 0.0030s; store 0.0032s
+PROFILE_END label=b1 case=ip_sorted
+PROFILE_BEGIN label=b1 case=ip_shuffled
+cipolate: load 0.0149s; sort 0.0404s; interpolate 0.0039s; store 0.0031s
+PROFILE_END label=b1 case=ip_shuffled
+PROFILE_BEGIN label=b1 case=ip_single
+cipolate: load 0.0147s; sort 0.0274s; interpolate 0.0147s; store 0.0033s
+PROFILE_END label=b1 case=ip_single
+PROFILE_BEGIN label=b1 case=ip_skew
+cipolate: load 0.0159s; sort 0.0400s; interpolate 0.0149s; store 0.0031s
+PROFILE_END label=b1 case=ip_skew
+PROFILE_BEGIN label=b1 case=ip_string
+cipolate: load 0.0235s; sort 0.0995s; interpolate 0.0326s; store 0.0033s
+PROFILE_END label=b1 case=ip_string
+PROFILE_BEGIN label=b1 case=sp_short
+csplit: load 0.0136s; tokenize/size 0.0050s; 5 output fields
+csplit: write 0.0136s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=b1 case=sp_short
+PROFILE_BEGIN label=b1 case=sp_long
+csplit: load 0.0142s; tokenize/size 0.0146s; 17 output fields
+csplit: write 0.0252s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=b1 case=sp_long
+PROFILE_BEGIN label=b1 case=sp_multi
+csplit: load 0.0458s; tokenize/size 0.0524s; 10 output fields
+csplit: write 0.0608s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=b1 case=sp_multi
+PROFILE_BEGIN label=b1 case=rj_sorted
+crangejoin: using load 0.0057s; index sort 0.0030s
+crangejoin: master load 0.0052s; match/count 0.0043s; 598500 output rows
+crangejoin: write 0.0062s
+PROFILE_END label=b1 case=rj_sorted
+PROFILE_BEGIN label=b1 case=rj_string
+crangejoin: using load 0.0075s; index sort 0.0239s
+crangejoin: master load 0.0076s; match/count 0.0232s; 896865 output rows
+crangejoin: write 0.0353s
+PROFILE_END label=b1 case=rj_string
+PROFILE_BEGIN label=b1 case=rj_dense
+crangejoin: using load 0.0014s; index sort 0.0014s
+crangejoin: master load 0.0013s; match/count 0.0017s; 2027000 output rows
+crangejoin: write 0.0252s
+PROFILE_END label=b1 case=rj_dense
+PROFILE_BEGIN label=b1 case=rj_wide
+crangejoin: using load 0.0081s; index sort 0.0028s
+crangejoin: master load 0.0071s; match/count 0.0043s; 598500 output rows
+crangejoin: write 0.0152s
+PROFILE_END label=b1 case=rj_wide
+EXPERIMENT abba RUN c1
+PROFILE_BEGIN label=c1 case=ip_sorted
+cipolate: load 0.0150s; sort 0.0012s; interpolate 0.0017s; store 0.0033s
+PROFILE_END label=c1 case=ip_sorted
+PROFILE_BEGIN label=c1 case=ip_shuffled
+cipolate: load 0.0155s; sort 0.0157s; interpolate 0.0029s; store 0.0032s
+PROFILE_END label=c1 case=ip_shuffled
+PROFILE_BEGIN label=c1 case=ip_single
+cipolate: load 0.0182s; sort 0.0065s; interpolate 0.0168s; store 0.0032s
+PROFILE_END label=c1 case=ip_single
+PROFILE_BEGIN label=c1 case=ip_skew
+cipolate: load 0.0153s; sort 0.0143s; interpolate 0.0149s; store 0.0033s
+PROFILE_END label=c1 case=ip_skew
+PROFILE_BEGIN label=c1 case=ip_string
+cipolate: load 0.0229s; sort 0.0619s; interpolate 0.0062s; store 0.0032s
+PROFILE_END label=c1 case=ip_string
+PROFILE_BEGIN label=c1 case=sp_short
+csplit: load 0.0190s; tokenize/size 0.0071s; 5 output fields
+csplit: write 0.0116s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=c1 case=sp_short
+PROFILE_BEGIN label=c1 case=sp_long
+csplit: load 0.0146s; tokenize/size 0.0159s; 17 output fields
+csplit: write 0.0202s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=c1 case=sp_long
+PROFILE_BEGIN label=c1 case=sp_multi
+csplit: load 0.0676s; tokenize/size 0.0291s; 10 output fields
+csplit: write 0.0162s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=c1 case=sp_multi
+PROFILE_BEGIN label=c1 case=rj_sorted
+crangejoin: using load 0.0038s; index sort 0.0004s; group/key index 0.0007s
+crangejoin: master load 0.0061s; match/count 0.0016s; 598500 output rows
+crangejoin: write 0.0040s
+PROFILE_END label=c1 case=rj_sorted
+PROFILE_BEGIN label=c1 case=rj_string
+crangejoin: using load 0.0045s; index sort 0.0167s; group/key index 0.0037s
+crangejoin: master load 0.0038s; match/count 0.0153s; 896865 output rows
+crangejoin: write 0.0129s
+PROFILE_END label=c1 case=rj_string
+PROFILE_BEGIN label=c1 case=rj_dense
+crangejoin: using load 0.0013s; index sort 0.0001s; group/key index 0.0002s
+crangejoin: master load 0.0012s; match/count 0.0006s; 2027000 output rows
+crangejoin: write 0.0116s
+PROFILE_END label=c1 case=rj_dense
+PROFILE_BEGIN label=c1 case=rj_wide
+crangejoin: using load 0.0137s; index sort 0.0004s; group/key index 0.0006s
+crangejoin: master load 0.0754s; match/count 0.0043s; 598500 output rows
+crangejoin: write 0.0195s
+PROFILE_END label=c1 case=rj_wide
+EXPERIMENT abba RUN c2
+PROFILE_BEGIN label=c2 case=ip_sorted
+cipolate: load 0.0150s; sort 0.0012s; interpolate 0.0016s; store 0.0032s
+PROFILE_END label=c2 case=ip_sorted
+PROFILE_BEGIN label=c2 case=ip_shuffled
+cipolate: load 0.0149s; sort 0.0093s; interpolate 0.0032s; store 0.0032s
+PROFILE_END label=c2 case=ip_shuffled
+PROFILE_BEGIN label=c2 case=ip_single
+cipolate: load 0.0148s; sort 0.0073s; interpolate 0.0151s; store 0.0032s
+PROFILE_END label=c2 case=ip_single
+PROFILE_BEGIN label=c2 case=ip_skew
+cipolate: load 0.0149s; sort 0.0166s; interpolate 0.0143s; store 0.0033s
+PROFILE_END label=c2 case=ip_skew
+PROFILE_BEGIN label=c2 case=ip_string
+cipolate: load 0.0237s; sort 0.0596s; interpolate 0.0082s; store 0.0032s
+PROFILE_END label=c2 case=ip_string
+PROFILE_BEGIN label=c2 case=sp_short
+csplit: load 0.0139s; tokenize/size 0.0064s; 5 output fields
+csplit: write 0.0085s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=c2 case=sp_short
+PROFILE_BEGIN label=c2 case=sp_long
+csplit: load 0.0175s; tokenize/size 0.0151s; 17 output fields
+csplit: write 0.0172s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=c2 case=sp_long
+PROFILE_BEGIN label=c2 case=sp_multi
+csplit: load 0.0464s; tokenize/size 0.0174s; 10 output fields
+csplit: write 0.0153s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=c2 case=sp_multi
+PROFILE_BEGIN label=c2 case=rj_sorted
+crangejoin: using load 0.0044s; index sort 0.0004s; group/key index 0.0007s
+crangejoin: master load 0.0046s; match/count 0.0015s; 598500 output rows
+crangejoin: write 0.0038s
+PROFILE_END label=c2 case=rj_sorted
+PROFILE_BEGIN label=c2 case=rj_string
+crangejoin: using load 0.0038s; index sort 0.0156s; group/key index 0.0033s
+crangejoin: master load 0.0040s; match/count 0.0159s; 896865 output rows
+crangejoin: write 0.0116s
+PROFILE_END label=c2 case=rj_string
+PROFILE_BEGIN label=c2 case=rj_dense
+crangejoin: using load 0.0014s; index sort 0.0001s; group/key index 0.0003s
+crangejoin: master load 0.0012s; match/count 0.0006s; 2027000 output rows
+crangejoin: write 0.0107s
+PROFILE_END label=c2 case=rj_dense
+PROFILE_BEGIN label=c2 case=rj_wide
+crangejoin: using load 0.0102s; index sort 0.0004s; group/key index 0.0006s
+crangejoin: master load 0.0121s; match/count 0.0014s; 598500 output rows
+crangejoin: write 0.0113s
+PROFILE_END label=c2 case=rj_wide
+EXPERIMENT abba RUN b2
+PROFILE_BEGIN label=b2 case=ip_sorted
+cipolate: load 0.0150s; sort 0.0074s; interpolate 0.0031s; store 0.0033s
+PROFILE_END label=b2 case=ip_sorted
+PROFILE_BEGIN label=b2 case=ip_shuffled
+cipolate: load 0.0147s; sort 0.0445s; interpolate 0.0044s; store 0.0032s
+PROFILE_END label=b2 case=ip_shuffled
+PROFILE_BEGIN label=b2 case=ip_single
+cipolate: load 0.0151s; sort 0.0313s; interpolate 0.0174s; store 0.0031s
+PROFILE_END label=b2 case=ip_single
+PROFILE_BEGIN label=b2 case=ip_skew
+cipolate: load 0.0149s; sort 0.0438s; interpolate 0.0159s; store 0.0033s
+PROFILE_END label=b2 case=ip_skew
+PROFILE_BEGIN label=b2 case=ip_string
+cipolate: load 0.0254s; sort 0.1312s; interpolate 0.0452s; store 0.0034s
+PROFILE_END label=b2 case=ip_string
+PROFILE_BEGIN label=b2 case=sp_short
+csplit: load 0.0161s; tokenize/size 0.0065s; 5 output fields
+csplit: write 0.0141s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=b2 case=sp_short
+PROFILE_BEGIN label=b2 case=sp_long
+csplit: load 0.0180s; tokenize/size 0.0166s; 17 output fields
+csplit: write 0.0316s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=b2 case=sp_long
+PROFILE_BEGIN label=b2 case=sp_multi
+csplit: load 0.0473s; tokenize/size 0.0567s; 10 output fields
+csplit: write 0.0627s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=b2 case=sp_multi
+PROFILE_BEGIN label=b2 case=rj_sorted
+crangejoin: using load 0.0061s; index sort 0.0029s
+crangejoin: master load 0.0057s; match/count 0.0057s; 598500 output rows
+crangejoin: write 0.0065s
+PROFILE_END label=b2 case=rj_sorted
+PROFILE_BEGIN label=b2 case=rj_string
+crangejoin: using load 0.0070s; index sort 0.0267s
+crangejoin: master load 0.0115s; match/count 0.0281s; 896865 output rows
+crangejoin: write 0.0347s
+PROFILE_END label=b2 case=rj_string
+PROFILE_BEGIN label=b2 case=rj_dense
+crangejoin: using load 0.0017s; index sort 0.0029s
+crangejoin: master load 0.0028s; match/count 0.0030s; 2027000 output rows
+crangejoin: write 0.0309s
+PROFILE_END label=b2 case=rj_dense
+PROFILE_BEGIN label=b2 case=rj_wide
+crangejoin: using load 0.0072s; index sort 0.0030s
+crangejoin: master load 0.0083s; match/count 0.0051s; 598500 output rows
+crangejoin: write 0.0156s
+PROFILE_END label=b2 case=rj_wide
+EXPERIMENT split-abba RUN b1
+PROFILE_BEGIN label=b1 case=sp_short
+csplit: load 0.0932s; tokenize/size 0.0251s; 5 output fields
+csplit: write 0.0262s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=b1 case=sp_short
+PROFILE_BEGIN label=b1 case=sp_long
+csplit: load 0.0197s; tokenize/size 0.0167s; 17 output fields
+csplit: write 0.0409s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=b1 case=sp_long
+PROFILE_BEGIN label=b1 case=sp_multi
+csplit: load 0.0536s; tokenize/size 0.0533s; 10 output fields
+csplit: write 0.0837s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=b1 case=sp_multi
+EXPERIMENT split-abba RUN c1
+PROFILE_BEGIN label=c1 case=sp_short
+csplit: load 0.0209s; tokenize/size 0.0112s; 5 output fields
+csplit: write 0.0341s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=c1 case=sp_short
+PROFILE_BEGIN label=c1 case=sp_long
+csplit: load 0.0204s; tokenize/size 0.0143s; 17 output fields
+csplit: write 0.0196s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=c1 case=sp_long
+PROFILE_BEGIN label=c1 case=sp_multi
+csplit: load 0.0737s; tokenize/size 0.0222s; 10 output fields
+csplit: write 0.0132s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=c1 case=sp_multi
+EXPERIMENT split-abba RUN c2
+PROFILE_BEGIN label=c2 case=sp_short
+csplit: load 0.0209s; tokenize/size 0.0117s; 5 output fields
+csplit: write 0.0148s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=c2 case=sp_short
+PROFILE_BEGIN label=c2 case=sp_long
+csplit: load 0.0182s; tokenize/size 0.0151s; 17 output fields
+csplit: write 0.0189s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=c2 case=sp_long
+PROFILE_BEGIN label=c2 case=sp_multi
+csplit: load 0.0477s; tokenize/size 0.0182s; 10 output fields
+csplit: write 0.0128s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=c2 case=sp_multi
+EXPERIMENT split-abba RUN b2
+PROFILE_BEGIN label=b2 case=sp_short
+csplit: load 0.0145s; tokenize/size 0.0097s; 5 output fields
+csplit: write 0.0149s
+variables created: part1 part2 part3 part4 part5
+PROFILE_END label=b2 case=sp_short
+PROFILE_BEGIN label=b2 case=sp_long
+csplit: load 0.0182s; tokenize/size 0.0166s; 17 output fields
+csplit: write 0.0792s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10 part11 part12 part13 part14 part15 part16 part17
+PROFILE_END label=b2 case=sp_long
+PROFILE_BEGIN label=b2 case=sp_multi
+csplit: load 0.0482s; tokenize/size 0.0509s; 10 output fields
+csplit: write 0.0644s
+variables created: part1 part2 part3 part4 part5 part6 part7 part8 part9 part10
+PROFILE_END label=b2 case=sp_multi

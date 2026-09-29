@@ -1,0 +1,185 @@
+[
+  {
+    "name": "tiny_n1_k2",
+    "rows": 1,
+    "columns": 2
+  },
+  {
+    "name": "tiny_n100_k20",
+    "rows": 100,
+    "columns": 20
+  },
+  {
+    "name": "tiny_n1000_k20",
+    "rows": 1000,
+    "columns": 20
+  },
+  {
+    "name": "tiny_mixed_n100_k200",
+    "rows": 100,
+    "columns": 200,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "tiny_strings_control",
+    "rows": 100,
+    "columns": 200,
+    "shape": "strings",
+    "width": 244
+  },
+  {
+    "name": "tiny_mixed_control",
+    "rows": 1000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "wide_byte",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "byte"
+  },
+  {
+    "name": "wide_double",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "double"
+  },
+  {
+    "name": "wide_cycle",
+    "rows": 200000,
+    "columns": 256
+  },
+  {
+    "name": "wide_million",
+    "rows": 1000000,
+    "columns": 128
+  },
+  {
+    "name": "wide_short",
+    "rows": 50000,
+    "columns": 128
+  },
+  {
+    "name": "wide_k2000",
+    "rows": 10000,
+    "columns": 2000
+  },
+  {
+    "name": "wide_sorted",
+    "rows": 200000,
+    "columns": 128,
+    "mode": "sorted"
+  },
+  {
+    "name": "large_sorted_control",
+    "rows": 1000000,
+    "columns": 20,
+    "mode": "sorted"
+  },
+  {
+    "name": "mixed_w8",
+    "rows": 500000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 8
+  },
+  {
+    "name": "mixed_w32",
+    "rows": 500000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "mixed_w244",
+    "rows": 500000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 244
+  },
+  {
+    "name": "maxstr_full",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045
+  },
+  {
+    "name": "maxstr_short",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8
+  },
+  {
+    "name": "maxstr_filtered",
+    "rows": 300000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "mode": "filtered"
+  },
+  {
+    "name": "numeric_control",
+    "rows": 1000000,
+    "columns": 20
+  },
+  {
+    "name": "filtered_dense",
+    "rows": 500000,
+    "columns": 128,
+    "mode": "filtered"
+  },
+  {
+    "name": "filtered_sparse",
+    "rows": 1000000,
+    "columns": 128,
+    "mode": "filtered",
+    "predicate": "mod(_n,100)==0"
+  },
+  {
+    "name": "unknown_strings",
+    "rows": 100000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 244,
+    "hints": 0
+  },
+  {
+    "name": "strl_control",
+    "rows": 100000,
+    "columns": 2,
+    "shape": "long",
+    "width": 32,
+    "mode": "read"
+  },
+  {
+    "name": "checked_control",
+    "rows": 1000000,
+    "columns": 20,
+    "mode": "checked"
+  },
+  {
+    "name": "empty",
+    "rows": 1000000,
+    "columns": 20,
+    "mode": "filtered",
+    "predicate": "0"
+  },
+  {
+    "name": "wide_t1",
+    "rows": 200000,
+    "columns": 128,
+    "threads": 1
+  },
+  {
+    "name": "wide_t12",
+    "rows": 200000,
+    "columns": 128,
+    "threads": 12
+  }
+]

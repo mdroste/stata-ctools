@@ -1,0 +1,73 @@
+[
+  {
+    "name": "tiny_n100_k20",
+    "rows": 100,
+    "columns": 20
+  },
+  {
+    "name": "wide_byte",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "byte"
+  },
+  {
+    "name": "wide_byte128",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "byte"
+  },
+  {
+    "name": "wide_cycle",
+    "rows": 200000,
+    "columns": 256
+  },
+  {
+    "name": "wide_million",
+    "rows": 1000000,
+    "columns": 128
+  },
+  {
+    "name": "wide_short",
+    "rows": 50000,
+    "columns": 128
+  },
+  {
+    "name": "large_sorted_control",
+    "rows": 1000000,
+    "columns": 20,
+    "mode": "sorted"
+  },
+  {
+    "name": "mixed_w32",
+    "rows": 500000,
+    "columns": 20,
+    "shape": "mixed",
+    "width": 32
+  },
+  {
+    "name": "maxstr_full",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045
+  },
+  {
+    "name": "maxstr_short",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8
+  },
+  {
+    "name": "numeric_control",
+    "rows": 1000000,
+    "columns": 20
+  },
+  {
+    "name": "filtered_dense",
+    "rows": 500000,
+    "columns": 128,
+    "mode": "filtered"
+  }
+]

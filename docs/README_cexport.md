@@ -1,10 +1,37 @@
-# cexport delimited
+# cexport
 
-High-performance C-accelerated delimited text export.
+C writers for delimited text, Excel (.xls/.xlsx), dBase, SAS7BDAT, SAS XPORT5/8,
+SPSS SAV, and ESRI shapefiles. Full native parity is not yet established; see
+[the compatibility audit](IO_PARITY.md).
+
+## Other file formats
+
+```stata
+cexport excel using "output.xls", firstrow(variables) replace
+cexport spss id amount using "output.sav", replace
+cexport sasxport5 using "output.xpt", rename vallabfile(both) replace
+cexport sasxport8 using "output.v8xpt", vallabfile replace
+cexport dbase using "output.dbf", datafmt replace
+cexport shp using "boundaries.shp", shx replace
+cexport sas using "output.sas7bdat", replace
+```
+
+Statistical writers accept variable lists and if/in selection. Native SAS export
+is unavailable in the local installation, so that writer has reader-based
+validation rather than a native writer comparison. XLS supports long text via
+BIFF8 SST continuation. XLSX loads long text through a dedicated C path rather
+than the general str2045 transfer buffer. Both Excel writers support
+`sheet(..., modify/replace)`, adding worksheets, and `keepcellfmt`. Modification
+retains untouched cells and workbook content; keepcellfmt preserves styles in
+the written rectangle. XLSX edits move overwritten shared-formula anchors to
+surviving cells, remove calculation chains, and request recalculation on opening.
+See the audit for complex-workbook validation limits.
+
+## Delimited text
 
 ## Overview
 
-`cexport delimited` implements the documented subset of Stata's `export delimited` interface that uses a C plugin with parallel data loading and chunked formatting.
+`cexport delimited` uses a C plugin with parallel data loading, long-string support and chunked formatting.
 
 ## Syntax
 
@@ -26,7 +53,7 @@ cexport delimited [varlist] using filename [if] [in] [, options]
 | `novarnames` | Do not write variable names as header row |
 | `quote` | Quote all string fields |
 | `noquoteif` | Never quote strings, even if they contain delimiters |
-| `datafmt` | Render Stata date/time display formats as text; other numeric display formats are not applied |
+| `datafmt` | Apply numeric and date/time display formats |
 
 ### Reporting Options
 | Option | Description |
@@ -113,7 +140,7 @@ Embedded quotes within strings are escaped by doubling them (`"` becomes `""`).
 
 ## Output Format
 
-- Numeric missing values are written as empty fields
+- Ordinary numeric missing values are written as empty fields; `.a`–`.z` retain their codes
 - String missing values are written as empty strings
 - Line endings use the system default (LF on Unix/Mac, CRLF on Windows)
 - UTF-8 encoding is used for output
@@ -144,7 +171,7 @@ XLSX workbook. `sheet("A sheet")` and filenames may contain spaces. Text fields
 are transferred separately from plugin options, including text resembling
 `threads(2)`. `threads(#)` also limits Excel export workers.
 
-Both formats validate complete per-column metadata and write a sibling temporary
+Delimited and Excel exports validate per-column metadata and write a sibling temporary
 file before publishing it. A failed export leaves an existing destination intact;
 without `replace`, publication refuses an existing file, including one created
 while export is running. The destination directory must allow temporary files.
@@ -156,3 +183,7 @@ quarterly, weekly, half-yearly, and yearly dates use the first day of the period
 `datafmt` and `datestring()` instead export date/time values as text.
 
 `keepcellfmt` only copies an existing style-definition table. It does not retain worksheet cell-style assignments or other sheets; existing date style indices may be incompatible with newly written date cells. It is not a formatted-template update facility.
+
+## Parity audit
+
+Excel export now writes data in the first row by default, matching Stata. Use `firstrow(variables)` for variable names or `firstrow(varlabels)` for labels. See [the full import/export audit](IO_PARITY.md) for exact regression coverage and remaining gaps.

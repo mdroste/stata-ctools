@@ -22,7 +22,12 @@ civreghdfe depvar (endogvars = instruments) [exogvars] [if] [in] [weight], absor
 ### Variance/Standard Error Options
 | Option | Description |
 |--------|-------------|
-| `vce(vcetype)` | Variance estimation: `unadjusted`, `robust`, or `cluster clustvar` |
+| `vce(vcetype)` | Variance estimation: `unadjusted`, `robust`, `cluster clustvar`, or `cluster clustvar1 clustvar2` |
+| `robust`, `cluster(varlist)` | Aliases for `vce(robust)` and `vce(cluster varlist)` |
+| `bw(#)` | Kernel bandwidth: AC standard errors, or HAC with `robust` (data must be `tsset`) |
+| `kernel(string)` | Kernel for `bw()`: `bartlett` (default), `parzen`, `qs`, `truncated`, `thann` |
+| `dkraay(#)` | Driscoll-Kraay standard errors with bandwidth `#` (tsset panel data) |
+| `kiefer` | Kiefer standard errors: within-panel autocorrelation (tsset panel data) |
 
 ### Estimation Options
 | Option | Description |
@@ -55,6 +60,12 @@ civreghdfe ln_wage (tenure = union) age, absorb(idcode) vce(robust)
 
 * With clustered standard errors
 civreghdfe ln_wage (tenure = union) age, absorb(idcode year) vce(cluster idcode)
+
+* Kernel-based standard errors (the data must be tsset; nlswork is xtset idcode year)
+civreghdfe ln_wage (tenure = union) age, absorb(idcode) bw(2)            // AC
+civreghdfe ln_wage (tenure = union) age, absorb(idcode) bw(2) robust     // HAC
+civreghdfe ln_wage (tenure = union) age, absorb(idcode) dkraay(2)        // Driscoll-Kraay
+civreghdfe ln_wage (tenure = union) age, absorb(idcode) kiefer
 
 * Display first-stage statistics
 civreghdfe ln_wage (tenure = union wks_ue) age, absorb(idcode) first
@@ -117,8 +128,18 @@ Computed from the partial R-squared of excluded instruments in first-stage regre
 | `unadjusted` | Standard VCE assuming homoskedasticity |
 | `robust` | Heteroskedasticity-robust (HC1) |
 | `cluster clustvar` | Cluster-robust, clustered on `clustvar` |
+| `cluster clustvar1 clustvar2` | Two-way cluster-robust (Cameron-Gelbach-Miller; small-sample factor from the smaller dimension) |
+| `bw(#)` | AC: autocorrelation-consistent, conditionally homoskedastic |
+| `bw(#) robust` | HAC: heteroskedasticity- and autocorrelation-consistent |
+| `dkraay(#)` or `cluster(timevar) bw(#)` | Driscoll-Kraay: time-period clusters with a kernel over periods |
+| `cluster(panelvar timevar) bw(#)` | Two-way clustering on panel and time with the kernel over time |
+| `kiefer` | Truncated kernel over the whole panel (AC; HAC with pweights) |
 
-All VCE computations use the proper 2SLS sandwich formula with original endogenous regressors (not first-stage fitted values).
+All VCE computations use the proper sandwich formula for the chosen estimator with original endogenous regressors (not first-stage fitted values).
+
+The kernel-based estimators follow `ivreg2`: the data must be `tsset` (error 111 otherwise; `dkraay` and `kiefer` need panel and time variables, error 5); kernel lags are differences of the time variable within panels, so gaps and unbalanced panels are handled like `ivreg2`'s lag operators and the panel structure does not depend on `absorb()`. `kernel()` requires `bw()` (error 102), fweights are not allowed with a kernel (error 101), a kernel with clustering must cluster on the time variable (or on panel and time), and the bandwidth may not exceed the time span of the sample. `ivreg2`'s Tukey-Hamming, Daniell and Tent kernels and `bw(auto)` are not supported.
+
+The J statistic, the `orthog()` C statistic, the `endogtest()` statistic and the `gmm2s`/`cue` weighting matrix use the moment covariance S of the chosen VCE (robust, one- and two-way cluster, AC/HAC, Driscoll-Kraay, Kiefer). The Kleibergen-Paap rk LM and Wald statistics (`e(idstat)`, `e(widstat)`) are computed as `ranktest` does for any number of endogenous regressors. As in `ivreghdfe`, the identification and redundancy statistics and the model re-estimated for `endogtest()` use the Bartlett kernel whatever `kernel()` is, and are iid with `kiefer`. When S is rank deficient (e.g. fewer clusters than instruments), the J, C and endogeneity statistics are missing, as in `ivreg2`, and `gmm2s`/`cue` stop with error 506 (`ivreg2` stops as well: r(506) for `gmm2s`, an optimizer error for `cue`).
 
 ## Stored Results
 
@@ -135,7 +156,8 @@ All VCE computations use the proper 2SLS sandwich formula with original endogeno
 | `e(K_exog)` | Number of exogenous regressors |
 | `e(K_iv)` | Number of instruments (including exogenous) |
 | `e(G)` | Number of absorbed FE groups |
-| `e(N_clust)` | Number of clusters (if clustered) |
+| `e(N_clust)` | Number of clusters (if clustered; time periods for Driscoll-Kraay) |
+| `e(bw)` | Kernel bandwidth (kernel-based VCE; the time span for `kiefer`) |
 | `e(F_first1)` | First-stage F-stat for 1st endogenous var |
 | `e(F_first2)` | First-stage F-stat for 2nd endogenous var |
 
@@ -151,6 +173,8 @@ All VCE computations use the proper 2SLS sandwich formula with original endogeno
 | `e(absorb)` | Absorbed fixed effects |
 | `e(vcetype)` | VCE type |
 | `e(clustvar)` | Cluster variable (if clustered) |
+| `e(kernel)` | Kernel of a kernel-based VCE |
+| `e(tvar)`, `e(ivar)` | tsset time and panel variables (kernel-based VCE) |
 
 ### Matrices
 | Result | Description |
@@ -171,6 +195,12 @@ For valid 2SLS estimation:
 - Uses same CG algorithm as `creghdfe`
 - Iteratively projects out factor means
 - Convergence controlled by `tolerance()` and `maxiter()`
+- Regressors and instruments absorbed by the fixed effects (sum of squares after absorption at most min(1e-6, `tolerance()`/10) times the sum of squared deviations before it) are omitted. `ivreghdfe` checks collinearity before absorbing, so it keeps such a column as partialling noise in its ranks unless its solver removes it exactly; to match its degrees of freedom, `civreghdfe` still counts an omitted column in K and in the residual and overidentification degrees of freedom when the fixed effects do not remove it exactly (it is absorbed only jointly by several unbalanced fixed effects, e.g. age = year - birth year with `absorb(id year)`), and absorbed exogenous regressors count among the instruments in the Cragg-Donald and Kleibergen-Paap Wald F degrees of freedom
+- `partial()` variables are partialled out of the demeaned data with the estimation weights; collinear or absorbed `partial()` variables are dropped with a note
+
+### Diagnostic-test options
+- `orthog()`, `endogtest()`, `redundant()` and `partial()` accept factor-variable and time-series varlists, matched against the expanded model terms; repeated names count once and base levels are skipped
+- A tested instrument or endogenous regressor that was dropped as collinear is an error (as in `ivreg2`)
 
 ### Degrees of Freedom
 - Absorbed fixed effects consume degrees of freedom

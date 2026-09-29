@@ -1,0 +1,47 @@
+{
+  "platform": "macOS-26.7-arm64-arm-64bit-Mach-O",
+  "checks": [
+    {
+      "command": [
+        "clang",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "Homebrew clang version 21.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/21.1.8/bin\nConfiguration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "/opt/homebrew/opt/llvm/bin/clang",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "Homebrew clang version 21.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/21.1.8/bin\nConfiguration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "sw_vers"
+      ],
+      "exit_code": 0,
+      "stdout": "ProductName:\t\tmacOS\nProductVersion:\t\t26.7\nBuildVersion:\t\t25G229\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "sysctl",
+        "-n",
+        "hw.model",
+        "hw.memsize",
+        "hw.physicalcpu",
+        "hw.logicalcpu"
+      ],
+      "exit_code": 1,
+      "stdout": "",
+      "stderr": "sysctl: sysctl fmt -1 1024 1: Operation not permitted\n"
+    }
+  ],
+  "resolved_clang": "/opt/homebrew/opt/llvm/bin/clang",
+  "libomp_archive": "/private/tmp/ctools-memory-audit/libomp/lib/libomp.a",
+  "libomp_sha256": "cae862c1f95b23e9db8146934f66df67d7aeab0a726a1a56c3575e3f033ecfa4"
+}

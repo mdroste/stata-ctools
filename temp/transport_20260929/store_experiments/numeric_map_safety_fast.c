@@ -1,0 +1,75 @@
+stata_retcode ctools_store_filtered_rowpar(double *values, size_t n_filtered,
+                                            int var_idx, perm_idx_t *obs_map)
+{
+    if (!n_filtered) return STATA_OK;
+    if (!values) return STATA_ERR_INVALID_INPUT;
+    stata_retcode rc = validate_variable(var_idx, 0);
+    if (rc) return rc;
+    int parallel = 0, distinct = 0;
+    #ifdef _OPENMP
+    parallel = n_filtered >= MIN_OBS_PER_THREAD * 2 && ctools_get_max_threads() > 1;
+    #endif
+    if (!parallel) {
+        /* Serial writes already preserve repeated destinations; only bounds
+         * need checking for small transfers and builds without OpenMP. */
+        rc = validate_obs_map(obs_map, n_filtered);
+        if (rc) return rc;
+    } else {
+        if (!obs_map) return STATA_ERR_INVALID_INPUT;
+        size_t available = (size_t)SF_nobs();
+        distinct = 1;
+        /* The usual filtered map is increasing. Fuse that proof into its
+         * required bounds pass, without min/max work or extra allocation. */
+        for (size_t i = 0; i < n_filtered; i++) {
+            if (obs_map[i] < 1 || obs_map[i] > available) return STATA_ERR_INVALID_INPUT;
+            if (i && obs_map[i] <= obs_map[i - 1]) distinct = 0;
+        }
+        if (!distinct) {
+            size_t min_obs = (size_t)obs_map[0], max_obs = min_obs;
+            int decreasing = 1;
+            for (size_t i = 1; i < n_filtered; i++) {
+                size_t obs = (size_t)obs_map[i];
+                if (obs_map[i] >= obs_map[i - 1]) decreasing = 0;
+                if (obs < min_obs) min_obs = obs;
+                if (obs > max_obs) max_obs = obs;
+            }
+            distinct = decreasing;
+            /* By-group commands supply unordered unique permutations.
+             * Prove uniqueness with scratch no larger than the existing
+             * map; sparse ranges or OOM safely retain sequential writes. */
+            size_t bytes = (max_obs - min_obs) / 8 + 1;
+            size_t map_cells = bytes / sizeof(perm_idx_t) +
+                               (bytes % sizeof(perm_idx_t) != 0);
+            if (!distinct && map_cells <= n_filtered) {
+                unsigned char *seen = (unsigned char *)calloc(bytes, 1);
+                if (seen) {
+                    distinct = 1;
+                    for (size_t i = 0; i < n_filtered; i++) {
+                        size_t bit = (size_t)obs_map[i] - min_obs;
+                        unsigned char mask = (unsigned char)(1u << (bit & 7));
+                        if (seen[bit >> 3] & mask) { distinct = 0; break; }
+                        seen[bit >> 3] |= mask;
+                    }
+                    free(seen);
+                }
+            }
+        }
+    }
+    ST_IIID store_fn = IO_VSTORE_FN;
+    if (!parallel || !distinct) {
+        /* Repeated destinations require input-order last-write-wins. */
+        for (size_t i = 0; i < n_filtered; i++)
+            if (store_fn(var_idx, (ST_int)obs_map[i], values[i]))
+                return store_status(STATA_ERR_STATA_WRITE);
+        return STATA_OK;
+    }
+    /* The existing OpenMP callback contract is unchanged: checked numeric
+     * SPI writes to disjoint destinations. The map proof establishes that
+     * disjointness before any worker may modify Stata's data. */
+    atomic_int error = 0;
+    #pragma omp parallel for schedule(static)
+    for (size_t i = 0; i < n_filtered; i++) {
+        if (store_fn(var_idx, (ST_int)obs_map[i], values[i])) record_io_error(&error, STATA_ERR_STATA_WRITE);
+    }
+    return store_status(atomic_load(&error));
+}

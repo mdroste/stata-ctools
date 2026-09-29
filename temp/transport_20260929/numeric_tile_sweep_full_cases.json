@@ -1,0 +1,79 @@
+[
+  {
+    "name": "k64_cycle",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "k128_cycle",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "k256_cycle",
+    "rows": 200000,
+    "columns": 256,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "k512_cycle",
+    "rows": 200000,
+    "columns": 512,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "k64_byte",
+    "rows": 200000,
+    "columns": 64,
+    "storage": "byte",
+    "mode": "read"
+  },
+  {
+    "name": "k512_byte",
+    "rows": 200000,
+    "columns": 512,
+    "storage": "byte",
+    "mode": "read"
+  },
+  {
+    "name": "k128_double",
+    "rows": 200000,
+    "columns": 128,
+    "storage": "double",
+    "mode": "read"
+  },
+  {
+    "name": "k512_double",
+    "rows": 200000,
+    "columns": 512,
+    "storage": "double",
+    "mode": "read"
+  },
+  {
+    "name": "n10000_k200_cycle",
+    "rows": 10000,
+    "columns": 200,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "n10000_k2000_cycle",
+    "rows": 10000,
+    "columns": 2000,
+    "storage": "cycle",
+    "mode": "read"
+  },
+  {
+    "name": "n50000_k128_cycle",
+    "rows": 50000,
+    "columns": 128,
+    "storage": "cycle",
+    "mode": "read"
+  }
+]

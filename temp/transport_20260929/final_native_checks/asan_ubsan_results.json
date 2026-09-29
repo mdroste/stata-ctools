@@ -1,0 +1,14 @@
+{
+  "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/production_candidate/src",
+  "sanitizers": "address,undefined",
+  "compiler": "clang",
+  "libomp": "/private/tmp/ctools-memory-audit/libomp",
+  "results": [
+    {
+      "suite": "test_transport_native",
+      "exit_code": 1,
+      "elapsed_seconds": 120.886,
+      "log": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/final_native_checks/test_transport_native.log"
+    }
+  ]
+}

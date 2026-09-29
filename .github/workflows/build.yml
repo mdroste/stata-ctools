@@ -12,6 +12,7 @@ on:
       - 'build/stata.toc'
       - 'build/LICENSE'
       - 'build/THIRD_PARTY_NOTICES'
+      - 'build/ctools-codecs-LICENSE.txt'
       - 'scripts/**'
       - 'validation/**'
       - 'release.json'
@@ -33,6 +34,7 @@ on:
       - 'build/stata.toc'
       - 'build/LICENSE'
       - 'build/THIRD_PARTY_NOTICES'
+      - 'build/ctools-codecs-LICENSE.txt'
       - 'scripts/**'
       - 'validation/**'
       - 'release.json'
@@ -75,12 +77,16 @@ jobs:
         run: |
           python3 scripts/sync_release.py --check
           python3 validation/check_package.py build --metadata-only
-          CC=gcc python3 validation/test_p1_native.py
-          CC=gcc python3 validation/test_p2_native.py
-          CC=gcc python3 validation/test_sep22_native.py
-          CC=gcc CTOOLS_SANITIZERS=address,undefined python3 validation/test_sep24_native.py
-          python3 validation/test_release_gate.py
-          python3 validation/test_build_contract.py
+          CC=gcc python3 validation/suite_registry.py --native
+
+      - name: Check adaptive transport memory ownership
+        env:
+          CC: gcc
+          CTOOLS_SANITIZERS: address,undefined
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+        run: |
+          python3 validation/test_transport_adaptive_native.py
+          python3 validation/test_transport_store_native.py
 
       - name: Build Linux plugin
         run: make linux BUILD_REVISION=${{ github.sha }}
@@ -196,7 +202,7 @@ jobs:
           if-no-files-found: error
 
   # Licensed runner required for publication. Configure CTOOLS_STATA_RUNNER as a JSON label list,
-  # e.g. ["self-hosted", "macOS", "stata"], with the user's oldstata wrapper.
+  # e.g. ["self-hosted", "macOS", "stata"], with the user's stata wrapper.
   # Never run untrusted pull-request code on a persistent licensed runner.
   stata-validation:
     if: github.event_name != 'pull_request' && vars.CTOOLS_STATA_RUNNER != ''
@@ -251,9 +257,13 @@ jobs:
           cp plugins/ctools_mac_x86/ctools_mac_x86.plugin release/build/
           cp plugins/ctools_windows/ctools_windows.plugin release/build/
 
-          # Copy ado and help files
+          # Copy ado and help files, then every other non-plugin file the
+          # manifest lists (licences and notices included)
           cp build/*.ado build/*.sthlp release/build/
           cp build/ctools.pkg build/stata.toc build/LICENSE build/THIRD_PARTY_NOTICES release/build/
+          grep '^f ' build/ctools.pkg | cut -c3- | grep -v '\.plugin$' | while read -r entry; do
+            cp "build/$entry" release/build/
+          done
           printf '%s\n' '${{ github.sha }}' > release/SOURCE_COMMIT
           python3 scripts/sync_release.py --check
           python3 validation/check_package.py release/build

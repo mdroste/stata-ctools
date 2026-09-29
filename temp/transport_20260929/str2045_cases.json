@@ -1,0 +1,154 @@
+[
+  {
+    "name": "s2045_l8_k1",
+    "rows": 200000,
+    "columns": 1,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l8_k2",
+    "rows": 200000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l8_k4",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l64_k1",
+    "rows": 200000,
+    "columns": 1,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 64,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l64_k2",
+    "rows": 200000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 64,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l64_k4",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 64,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l512_k1",
+    "rows": 200000,
+    "columns": 1,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 512,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l512_k2",
+    "rows": 200000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 512,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l512_k4",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 512,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l2045_k1",
+    "rows": 200000,
+    "columns": 1,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 2045,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l2045_k2",
+    "rows": 200000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 2045,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_l2045_k4",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 2045,
+    "mode": "identity",
+    "threads": 8
+  },
+  {
+    "name": "s2045_empty_k4",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 0
+  },
+  {
+    "name": "s2045_full_t1",
+    "rows": 200000,
+    "columns": 2,
+    "shape": "strings",
+    "width": 2045,
+    "threads": 1
+  },
+  {
+    "name": "s2045_full_filtered",
+    "rows": 300000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "mode": "filtered"
+  },
+  {
+    "name": "strl_nochange",
+    "rows": 100000,
+    "columns": 2,
+    "shape": "long",
+    "width": 244,
+    "mode": "read"
+  }
+]

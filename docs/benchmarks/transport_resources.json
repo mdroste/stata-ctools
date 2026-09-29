@@ -1,0 +1,62 @@
+[
+  {
+    "group": "big-candidate",
+    "maximum_rss_bytes": 14078967808,
+    "swaps": 0
+  },
+  {
+    "group": "empty-candidate",
+    "maximum_rss_bytes": 508067840,
+    "swaps": 0
+  },
+  {
+    "group": "few-candidate",
+    "maximum_rss_bytes": 971800576,
+    "swaps": 0
+  },
+  {
+    "group": "forty-candidate",
+    "maximum_rss_bytes": 4984684544,
+    "swaps": 0
+  },
+  {
+    "group": "four-candidate",
+    "maximum_rss_bytes": 4959420416,
+    "swaps": 0
+  },
+  {
+    "group": "main-candidate",
+    "maximum_rss_bytes": 10061938688,
+    "swaps": 0
+  },
+  {
+    "group": "serial-candidate",
+    "maximum_rss_bytes": 1038958592,
+    "swaps": 0
+  },
+  {
+    "group": "single-candidate",
+    "maximum_rss_bytes": 816037888,
+    "swaps": 0
+  },
+  {
+    "group": "small-candidate",
+    "maximum_rss_bytes": 216268800,
+    "swaps": 0
+  },
+  {
+    "group": "sparse-candidate",
+    "maximum_rss_bytes": 509280256,
+    "swaps": 0
+  },
+  {
+    "group": "three-candidate",
+    "maximum_rss_bytes": 3051782144,
+    "swaps": 0
+  },
+  {
+    "group": "twelve-candidate",
+    "maximum_rss_bytes": 1338032128,
+    "swaps": 0
+  }
+]

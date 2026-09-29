@@ -1,0 +1,12 @@
+--- baseline/ctools_data_io.c
++++ numeric_tiles/ctools_data_io.c
+@@ -2078,7 +2078,8 @@
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }
+-    if (tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES) {
++    if (tile_ok && (string_bytes >= IO_MIN_TILED_STRING_BYTES ||
++                    (string_bytes == 0 && nvars >= 64))) {
+         rc = load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
+         if (rc != STATA_ERR_MEMORY) {
+             if (rc) ctools_filtered_data_free(result);

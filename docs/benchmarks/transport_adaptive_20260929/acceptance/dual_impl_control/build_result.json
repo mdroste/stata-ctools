@@ -1,0 +1,6 @@
+{
+  "exit_code": 0,
+  "binary_sha256": "3fcb62435a8d4b82c57b8a323432d5a6569534291ef32c3aec8b6a7fc6119db5",
+  "libomp_sha256": "cae862c1f95b23e9db8146934f66df67d7aeab0a726a1a56c3575e3f033ecfa4",
+  "symbol_audit": "no unprefixed data_io symbols"
+}

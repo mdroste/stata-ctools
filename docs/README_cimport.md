@@ -1,16 +1,48 @@
-# cimport delimited
+# cimport
 
-High-performance C-accelerated CSV/delimited text import.
+C readers for delimited text, Excel (.xls/.xlsx), dBase, SAS7BDAT and catalogs,
+SAS XPORT5/8, SPSS SAV/ZSAV, and ESRI shapefiles. FRED and Windows Haver engines
+are excluded from this parity scope. Full native parity is not yet established; see
+[the compatibility audit](IO_PARITY.md).
+
+## Other file formats
+
+```stata
+cimport excel using "data.xls", firstrow clear
+cimport excel identifier=A note=C using "data.xlsx", clear
+cimport excel using "data.xlsx", describe
+cimport sas using "data.sas7bdat", bcat("labels.sas7bcat") clear
+cimport spss id amount if amount>0 using "data.sav", clear
+cimport spss using "data.zsav", zsav clear
+cimport sasxport5 using "data.xpt", member(TABLE) clear
+cimport sasxport8 using "data.v8xpt", clear
+cimport dbase using "data.dbf", clear
+cimport shp using "boundaries.shp", clear
+```
+
+Excel supports sheet names, cell ranges, firstrow, allstring with an optional numeric format, column lists and
+describe. SAS/SPSS support variable and observation selection; SAS supports
+catalogs and explicit encoding. XPORT5 reads `formats.xpf` beside the transport
+file unless `novallabels` is requested. Long delimited/Excel/statistical text and SHP
+binary headers use strL. With `clear`, statistical, dBase and SHP readers clear
+data before parsing, matching native failure behavior. Excel retains existing
+data when its container cannot be opened. Excel `describe` is exclusive of
+data-loading options.
+
+## Delimited text
 
 ## Overview
 
-`cimport delimited` is a high-performance replacement for Stata's `import delimited` command that uses multi-threaded parallel parsing.
+`cimport delimited` uses C parsing and native-command differential tests to implement Stata's `import delimited` interface.
 
 ## Syntax
 
 ```stata
 cimport delimited [using] filename [, options]
+cimport delimited extvarlist using filename [, options]
 ```
+
+As in `import delimited`, an `extvarlist` renames the first imported variables in order, exactly as typed, after the import; header detection is unchanged.
 
 ## Options
 
@@ -18,21 +50,24 @@ cimport delimited [using] filename [, options]
 | Option | Description |
 |--------|-------------|
 | `clear` | Clear data in memory before loading |
-| `delimiters(chars)` | Field delimiter (default: automatic detection). Use `tab` or `\t` for tab-delimited |
+| `delimiters(chars)` | Delimiter set (default: automatic detection, as native: the most frequent of tab, comma, semicolon, colon and pipe outside quotes in the first 50 nonempty lines, header included); `asstring` treats a sequence literally and `collapse` merges consecutive separators |
 
 ### Variable Name Options
 | Option | Description |
 |--------|-------------|
-| `varnames(rule)` | How to read variable names: `1` (first row, default) or `nonames` |
-| `case(option)` | Variable name case: `preserve` (default), `lower`, or `upper` |
+| `varnames(rule)` | How to read variable names: automatic detection by default; `1` forces the first row, `nonames` disables headers |
+| `case(option)` | Variable name case: `lower` (default), `preserve`, or `upper` |
 
 ### Parsing Options
 | Option | Description |
 |--------|-------------|
-| `bindquotes(option)` | Quote handling: `loose` (default) or `strict` |
-| `stripquotes` | Accepted for compatibility; no additional stripping is implemented |
-| `encoding(encoding)` | Automatic detection or explicit supported encoding; UTF-32 is rejected |
-| `rowrange([start][:end])` | Range of rows to import |
+| `bindquotes(option)` | Quote handling: `loose` (default), `strict`, or `nobind` |
+| `stripquotes(default\|yes\|no)` | Control quote removal; `no` retains literal quotes |
+| `encoding(encoding)` | Automatic detection or explicit UTF-8/16/32 and system code pages |
+| `rowrange([start][:end])` / `colrange([start][:end])` | Select rows and columns before inference; rows are file lines as in native (the header, blank lines and quoted line breaks count) |
+| `maxquotedrows(#)` | Strict quoted-row limit; accepts `unlimited` |
+| `parselocale(locale)` | C numeric profiles for installed Java locale names |
+| `favorstrfixed` | Prefer fixed strings up to Stata's 2,045-byte limit |
 
 ### Reporting Options
 | Option | Description |
@@ -51,10 +86,10 @@ cimport delimited using data.tsv, clear delimiters(tab)
 * Import with verbose output and lowercase variable names
 cimport delimited using data.csv, clear case(lower) verbose
 
-* Import only rows 1000-2000
+* Import only lines 1000-2000
 cimport delimited using bigdata.csv, clear rowrange(1000:2000)
 
-* Import from row 500 to end
+* Import from line 500 to end
 cimport delimited using bigdata.csv, clear rowrange(500:)
 
 * Import with timing output
@@ -115,6 +150,8 @@ With `verbose` output, you'll see:
 | Result | Description |
 |--------|-------------|
 | `r(filename)` | Name of the imported file |
+| `r(encoding)` | Source encoding selected or supplied |
+| `r(delimiters)` | Field delimiters used, with tabs reported as `\t` |
 
 ## Supported Delimiters
 
@@ -131,12 +168,12 @@ With `verbose` output, you'll see:
 `cimport` automatically determines variable types:
 - If all values are numeric, creates a numeric variable
 - If any value contains non-numeric characters, creates a string variable
-- String variables are sized to fit the longest value
+- String storage follows decoded widths and the native strL selection rule
 
 ## Technical Notes
 
-- Encoding is detected automatically. Explicit encodings include UTF-8, UTF-16LE/BE, ASCII, Latin-1/9, Windows-1252, and Mac Roman. UTF-32 is rejected; convert it to UTF-8 first.
-- Fields exceeding 2045 UTF-8 bytes are rejected before clearing the current data.
+- Automatic encoding detection uses a C adaptation of ICU 67.1's statistical recognizers and its 8,000-byte sample. Explicit Unicode encodings include UTF-8, UTF-16LE/BE and UTF-32LE/BE; named legacy encodings use system C conversion. Charset alias coverage differs by platform.
+- Fields exceeding 2,045 UTF-8 bytes use strL. Shorter fields follow native width/average selection unless favorstrfixed is specified.
 - Empty cells are imported as missing (`.` for numeric, `""` for string)
 - Quoted fields handle embedded delimiters and newlines correctly
 - Variable names are sanitized to be valid Stata names
@@ -156,4 +193,13 @@ With `verbose` output, you'll see:
 
 ## Validation and failure behavior
 
-Excel import honors workbookPr date1904. Daily date cells become Stata daily dates, and datetime cells become Stata milliseconds. In the 1900 system, serial 60 (the nonexistent 29 February 1900) is missing; serials below and above it use their correct offsets. Inline-string headers and values are retained in both the serial and parallel parser paths. Imported display formats are not inferred from arbitrary Excel formatting.
+Excel import honors the 1900 and 1904 date systems. Daily dates become Stata
+daily dates through the native millisecond rounding step; timestamps become
+Stata milliseconds. Built-in Excel formats and standard/custom date and time
+formats retain their native display metadata and allstring output. Serial 60 in the 1900 system
+maps to 28 February 1900, following native import. Arbitrary Excel display
+formats are not fully mapped to Stata formats.
+
+## Parity audit
+
+See [the full import/export audit](IO_PARITY.md) for exact regression coverage and remaining unsupported formats and options. Full native parity is not claimed.

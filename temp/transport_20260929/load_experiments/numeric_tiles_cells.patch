@@ -1,0 +1,26 @@
+--- baseline/ctools_data_io.c
++++ numeric_tiles_cells/ctools_data_io.c
+@@ -2066,7 +2066,10 @@
+ 
+     int tile_ok = 0;
+     #ifdef _OPENMP
+-    tile_ok = nvars >= IO_MIN_TILED_VARS && n_filtered >= MIN_OBS_PER_THREAD * 2;
++    tile_ok = nvars >= IO_MIN_TILED_VARS &&
++        (n_filtered >= MIN_OBS_PER_THREAD * 2 ||
++         (nvars >= 64 && n_filtered >= 4096 &&
++          nvars >= (2000000 + n_filtered - 1) / n_filtered));
+     #endif
+     size_t string_bytes = 0;
+     for (size_t j = 0; j < nvars && tile_ok; j++) {
+@@ -2078,7 +2081,10 @@
+                 n_filtered > (2048ULL * 1024 * 1024) / ((size_t)width + 1)) tile_ok = 0;
+         }
+     }
+-    if (tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES) {
++    if (tile_ok &&
++        ((n_filtered >= MIN_OBS_PER_THREAD * 2 && string_bytes >= IO_MIN_TILED_STRING_BYTES) ||
++         (string_bytes == 0 && nvars >= 64 && n_filtered >= 4096 &&
++          nvars >= (2000000 + n_filtered - 1) / n_filtered))) {
+         rc = load_tiled_variables(&result->data, var_indices, obs_map, str_widths);
+         if (rc != STATA_ERR_MEMORY) {
+             if (rc) ctools_filtered_data_free(result);

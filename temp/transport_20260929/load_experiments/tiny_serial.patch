@@ -1,0 +1,23 @@
+--- baseline/ctools_data_io.c
++++ tiny_serial/ctools_data_io.c
+@@ -586,7 +586,9 @@
+         }
+         nvars = parallel_count;
+     }
+-    ctools_persistent_pool *pool = nvars >= 2 ? ctools_get_global_pool() : NULL;
++    ctools_persistent_pool *pool = nvars >= 2 &&
++        (func != load_variable_thread || args[0].nobs > 65536 / nvars)
++        ? ctools_get_global_pool() : NULL;
+     if (pool) {
+         if (ctools_persistent_pool_submit_batch(pool, func, args, nvars,
+                                                sizeof(ctools_var_io_args)) != 0)
+@@ -2197,7 +2199,8 @@
+             }
+         }
+ 
+-        ctools_persistent_pool *pool = parallel_count >= 2 ? ctools_get_global_pool() : NULL;
++        ctools_persistent_pool *pool = parallel_count >= 2 &&
++            n_filtered > 65536 / parallel_count ? ctools_get_global_pool() : NULL;
+         if (pool != NULL) {
+             if (ctools_persistent_pool_submit_batch(pool, load_filtered_variable_thread,
+                                                      thread_args, parallel_count,

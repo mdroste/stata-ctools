@@ -1,0 +1,27 @@
+[
+  {
+    "name": "dense_k1",
+    "rows": 500000,
+    "columns": 1,
+    "mode": "filtered"
+  },
+  {
+    "name": "dense_k20",
+    "rows": 500000,
+    "columns": 20,
+    "mode": "filtered"
+  },
+  {
+    "name": "dense_k128",
+    "rows": 500000,
+    "columns": 128,
+    "mode": "filtered"
+  },
+  {
+    "name": "sparse_k128",
+    "rows": 1000000,
+    "columns": 128,
+    "mode": "filtered",
+    "predicate": "mod(_n,100)==0"
+  }
+]

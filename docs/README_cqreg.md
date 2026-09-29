@@ -26,6 +26,7 @@ cqreg depvar indepvars [if] [in] [, options]
 | Option | Description |
 |--------|-------------|
 | `vce(vcetype)` | Variance estimation method: `iid` (default), `robust`, or `cluster clustvar` |
+| `denmethod(method)` | Density estimation: `fitted` (default), `residual` (with `vce(iid)` only), or `kernel[(kernel)]`, as `qreg`'s `vce(vcetype, method)` |
 | `bwmethod(method)` | Bandwidth selection: `hsheather` (default), `bofinger`, or `chamberlain` |
 
 ### Optimization Options
@@ -74,6 +75,9 @@ cqreg price mpg weight, verbose
 
 ## Performance
 
+See [bounded performance checks](cqreg-performance.md) for measured selection
+speedups, workspace savings, and small regression tests.
+
 `cqreg` achieves its speed through:
 
 ### Speedup Tricks
@@ -106,13 +110,22 @@ The IPM solver converts this to a barrier problem and uses Newton steps with pre
 ## Standard Errors
 
 ### IID (Default)
-Assumes independent and identically distributed errors. Uses kernel density estimation for the sparsity function f(0):
+Assumes independent and identically distributed errors:
 ```
-V = (1/n) * sparsity² * q*(1-q) * (X'X)⁻¹
+V = sparsity² * q*(1-q) * (X'X)⁻¹
 ```
 
 ### Robust
 Uses the Powell sandwich estimator for heteroskedasticity-robust inference.
+
+### Density Methods
+The sparsity 1/f(0) (or, for robust standard errors, the per-observation densities) is estimated as in `qreg`:
+
+| Method | Description |
+|--------|-------------|
+| `fitted` | Default. Quantile regressions at q-h and q+h, evaluated at the mean of X (iid) or at each observation (robust) |
+| `residual` | Difference quotient of residual percentiles at q±h after dropping the K observations of the linear programming basis; `vce(iid)` only (error 184 otherwise) |
+| `kernel[(kernel)]` | Kernel estimate from the residuals with bandwidth min(sd, IQR/1.34)·(Φ⁻¹(q+h) − Φ⁻¹(q−h)); kernels `epanechnikov` (default), `epan2`, `biweight`, `cosine`, `gaussian`, `parzen`, `rectangle`, `triangle` |
 
 ### Clustered
 Cluster-robust standard errors clustered on the specified variable.
@@ -134,8 +147,9 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(N)` | Number of observations |
 | `e(q)` | Quantile estimated |
 | `e(sum_adev)` | Sum of absolute deviations |
-| `e(sparsity)` | Estimated sparsity (1/f(0)) |
+| `e(sparsity)` | Estimated sparsity (1/f(0)); missing for the kernel method with a robust or cluster VCE, as in `qreg` |
 | `e(bwidth)` | Bandwidth used for sparsity estimation |
+| `e(kbwidth)` | Kernel bandwidth (kernel method) |
 | `e(iterations)` | Number of IPM iterations |
 | `e(convcode)` | 0 for a successfully converged fit |
 | `e(df_r)` | Residual degrees of freedom |
@@ -148,6 +162,8 @@ Cluster-robust standard errors clustered on the specified variable.
 | `e(cmd)` | `cqreg` |
 | `e(depvar)` | Dependent variable name |
 | `e(vce)` | Variance estimation method |
+| `e(denmethod)` | Density estimation method |
+| `e(kernel)` | Kernel function (kernel method) |
 | `e(bwmethod)` | Bandwidth selection method |
 | `e(clustvar)` | Cluster variable (if clustered) |
 | `e(predict)` | Program used for `predict` |

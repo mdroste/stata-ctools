@@ -24,3 +24,7 @@ python3 validation/check_dependencies.py macos build/ctools_mac_arm.plugin --arc
 For Intel, substitute `x86_64` and `macos-intel`. The helper verifies source archive hashes and builds OpenMP 21.1.8 for macOS 11. Both Make targets check the archive's architecture and deployment version before linking. With no static archive, a local build uses pthreads without OpenMP; it never silently adds a Homebrew dylib dependency. Distribution CI builds the static runtime explicitly.
 
 Linux distribution CI uses Ubuntu 22.04 and disables optional OpenBLAS. `USE_OPENBLAS=yes` enables detection for custom builds. Windows distribution CI uses MSYS2 GCC; dependency validation rejects external compiler DLLs.
+
+## Worker and scratch limits
+
+`threads()` accepts 1–256 workers. Sampling limits workers to available groups; range statistics allocate sorting scratch only for percentiles, the median, and the interquartile range. Both commands reduce concurrent sorting/shuffle work to a 256 MiB scratch target. One worker remains available when a single group needs more than that target; this is not a limit on total command memory.

@@ -1,0 +1,25 @@
+{
+  "baseline_sha256": "1e42ccdc0242af59a0eb3762b8016de8fa585b7620ddb781e1e671c5c602e188",
+  "variants": {
+    "store_tiny_serial": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/store_tiny_serial/src",
+      "sha256": "a0c54c4169da4dab2b444fa32cdc0b76dcb22a3793077fa93fdae28d86e5b9e0"
+    },
+    "store_direct_numeric": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/store_direct_numeric/src",
+      "sha256": "3a4f15ef9630e5146b0a57efed8f4ad8596751c69c20c15fd0a44c8d692a3826"
+    },
+    "store_interleaved_chunks": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/store_interleaved_chunks/src",
+      "sha256": "ad8f40ff44ff219eebd65516ed9ffbec4b54429cb2a368cdfafe16006b6160ac"
+    },
+    "store_map_safety": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/store_map_safety/src",
+      "sha256": "bdf0072094b1275e9ca0311b559ca5a3b77d4e085f586c6b0ffb8f5a70a03075"
+    },
+    "store_numeric_tiles": {
+      "source": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/store_experiments/store_numeric_tiles/src",
+      "sha256": "919dae1c79b80a490b0087de3517f6f25a0e4481ecf357fdda979ee622d28b2e"
+    }
+  }
+}

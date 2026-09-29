@@ -1,0 +1,12 @@
+{
+  "source_io_sha256": "af1442727a737eab81571074f7e6f10e366a9019ecedf70cc329fe661fd30c19",
+  "installed_plugin": "/Users/Mike/Documents/GitHub/stata-ctools/build/ctools_mac_arm.plugin",
+  "installed_plugin_sha256": "4472bf71a40362d9b0ee18d32ef80a70ceaaff14c0b7199c2e4b94fe72856bb4",
+  "previous_plugin_sha256": "5383ab8da31f900107ab4ccb630d0025851b1e5af0a26920de0d115b8ed8d422",
+  "previous_plugin_backup": "/Users/Mike/Documents/GitHub/stata-ctools/temp/transport_20260929/pre_final_install.plugin",
+  "all_frozen_source_files_match_live": true,
+  "all_frozen_ado_files_match_live": true,
+  "full_validation_passed": 4161,
+  "full_validation_failed": 0,
+  "expected_skipped": 48
+}

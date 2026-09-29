@@ -1,0 +1,5 @@
+/* GNU ld version script: export only the Stata plugin entry points. */
+{
+  global: stata_call; pginit;
+  local: *;
+};

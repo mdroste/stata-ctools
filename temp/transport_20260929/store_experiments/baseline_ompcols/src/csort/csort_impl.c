@@ -1,0 +1,457 @@
+/*
+    csort_impl.c
+    csort command implementation
+
+    High-performance parallel sort for Stata datasets.
+    Orchestrates the sorting process:
+    1. Load data from Stata to C
+    2. Sort the data using IPS4O (default) or other algorithms
+    3. Transfer sorted data back to Stata
+*/
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#include "stplugin.h"
+#include "ctools_types.h"
+#include "ctools_config.h"
+#include "ctools_runtime.h"
+#include "csort_impl.h"
+#include "csort_stream.h"
+
+/*
+    Parse streaming mode option from argument string.
+    Looks for "stream" or "stream(#)" to enable streaming mode,
+    and "nostream" to explicitly disable auto-streaming.
+
+    Streaming mode:
+    - Only loads key (sort) variables into C memory
+    - Streams permutation application to non-key variables
+    - Reduces memory usage for wide datasets
+    - Best when: many non-key columns, limited memory
+
+    The optional number specifies how many variables to load at a time
+    (1-16, default 1). Higher values use more memory but may be faster.
+
+    Returns:
+      -1       if explicitly disabled via "nostream"
+       0       if not specified (auto-detect eligible)
+       1-16    for the batch size (explicitly enabled)
+*/
+static int parse_stream_option(const char *args)
+{
+    const char *p;
+    int batch_size = 1;  /* Default: process 1 variable at a time */
+
+    /* Check for "nostream" first (must check before "stream" since
+       "nostream" contains "stream" as a substring) */
+    if (strstr(args, "nostream") != NULL) {
+        return -1;  /* Explicitly disabled */
+    }
+
+    /* Look for "stream" in the arguments */
+    p = strstr(args, "stream");
+    if (p == NULL) {
+        return 0;
+    }
+
+    /* Check if it's "stream=0" (explicitly disabled) */
+    if (p[6] == '=' && p[7] == '0') {
+        return 0;
+    }
+
+    /* Check for "stream(#)" format */
+    if (p[6] == '(') {
+        char *endptr;
+        long val = strtol(p + 7, &endptr, 10);
+
+        /* Validate: must be followed by ')' and be a positive integer */
+        if (endptr != p + 7 && *endptr == ')') {
+            if (val < 1) {
+                batch_size = 1;
+            } else if (val > 16) {
+                batch_size = 16;  /* Cap at 16 */
+            } else {
+                batch_size = (int)val;
+            }
+        }
+        /* If parsing fails, use default of 1 */
+    }
+
+    return batch_size;
+}
+
+/*
+    Parse algorithm option from argument string.
+    Looks for "alg=X" where X is:
+      0 or "lsd"      -> SORT_ALG_LSD
+      1 or "msd"      -> SORT_ALG_MSD
+      2 or "timsort"  -> SORT_ALG_TIMSORT
+      3 or "sample"   -> SORT_ALG_SAMPLE
+      4 or "counting" -> SORT_ALG_COUNTING
+      5 or "merge"    -> SORT_ALG_MERGE
+      6 or "ips4o"    -> SORT_ALG_IPS4O
+      7 or "auto"     -> SORT_ALG_AUTO (default)
+*/
+static sort_algorithm_t parse_algorithm(const char *args)
+{
+    const char *p;
+
+    /* Look for "alg=" in the arguments */
+    p = strstr(args, "alg=");
+    if (p == NULL) {
+        return SORT_ALG_AUTO;  /* Default: auto-select best algorithm */
+    }
+
+    p += 4;  /* Skip "alg=" */
+
+    /* Check for numeric or string algorithm specifier */
+    if (*p == '0' || strncmp(p, "lsd", 3) == 0) {
+        return SORT_ALG_LSD;
+    } else if (*p == '1' || strncmp(p, "msd", 3) == 0) {
+        return SORT_ALG_MSD;
+    } else if (*p == '2' || strncmp(p, "timsort", 7) == 0) {
+        return SORT_ALG_TIMSORT;
+    } else if (*p == '3' || strncmp(p, "sample", 6) == 0) {
+        return SORT_ALG_SAMPLE;
+    } else if (*p == '4' || strncmp(p, "counting", 8) == 0) {
+        return SORT_ALG_COUNTING;
+    } else if (*p == '5' || strncmp(p, "merge", 5) == 0) {
+        return SORT_ALG_MERGE;
+    } else if (*p == '6' || strncmp(p, "ips4o", 5) == 0) {
+        return SORT_ALG_IPS4O;
+    } else if (*p == '7' || strncmp(p, "auto", 4) == 0) {
+        return SORT_ALG_AUTO;
+    }
+
+    return SORT_ALG_AUTO;  /* Default for unrecognized */
+}
+
+/* Parse the sort variable indices from the argument string.
+   Only parse numbers that appear before options (alg=, stream, threads) to avoid
+   picking up numbers from option values. */
+static int parse_sort_vars(const char *args, int **sort_vars, size_t *nsort)
+{
+    const char *p;
+    const char *opts_start;
+    char *endptr;
+    size_t count = 0;
+    size_t capacity = 16;
+    int *vars;
+    long val;
+
+    vars = (int *)malloc(capacity * sizeof(int));
+    if (vars == NULL) {
+        return -1;
+    }
+
+    /* Find where options start - stop at any of: alg=, stream, threads, strw: */
+    opts_start = strstr(args, "alg=");
+    const char *stream_start = strstr(args, "stream");
+    const char *threads_start = strstr(args, "threads");
+    const char *strw_start = strstr(args, "strw:");
+
+    /* Use the earliest option as the stopping point */
+    if (stream_start != NULL && (opts_start == NULL || stream_start < opts_start)) {
+        opts_start = stream_start;
+    }
+    if (threads_start != NULL && (opts_start == NULL || threads_start < opts_start)) {
+        opts_start = threads_start;
+    }
+    if (strw_start != NULL && (opts_start == NULL || strw_start < opts_start)) {
+        opts_start = strw_start;
+    }
+
+    p = args;
+    while (*p != '\0') {
+        /* Stop if we've reached options */
+        if (opts_start != NULL && p >= opts_start) {
+            break;
+        }
+
+        /* Skip whitespace */
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '\0') break;
+
+        /* Stop if we've reached options after skipping spaces */
+        if (opts_start != NULL && p >= opts_start) {
+            break;
+        }
+
+        /* Parse integer */
+        val = strtol(p, &endptr, 10);
+        if (endptr == p) {
+            /* No number found, skip this character */
+            p++;
+            continue;
+        }
+
+        /* Add to array */
+        if (count >= capacity) {
+            capacity *= 2;
+            int *new_vars = (int *)realloc(vars, capacity * sizeof(int));
+            if (new_vars == NULL) {
+                free(vars);
+                return -1;
+            }
+            vars = new_vars;
+        }
+        vars[count++] = (int)val;
+        p = endptr;
+    }
+
+    *sort_vars = vars;
+    *nsort = count;
+    return 0;
+}
+
+/*
+    Parse string widths from args.  Format: "strw:17,0,0,8,0,..."
+    Returns malloc'd array of nvars ints (0 = numeric), or NULL if not found.
+    Caller must free.
+*/
+static int *parse_string_widths(const char *args, size_t nvars)
+{
+    const char *p = strstr(args, "strw:");
+    if (!p) return NULL;
+    p += 5;  /* skip "strw:" */
+
+    int *widths = (int *)calloc(nvars, sizeof(int));
+    if (!widths) return NULL;
+
+    for (size_t j = 0; j < nvars && *p != '\0' && *p != ' '; j++) {
+        char *endptr;
+        long val = strtol(p, &endptr, 10);
+        widths[j] = (int)val;
+        p = endptr;
+        if (*p == ',') p++;
+    }
+
+    return widths;
+}
+
+/*
+    Main entry point for csort command.
+*/
+ST_retcode csort_main(const char *args)
+{
+    ctools_filtered_data filtered;
+    ctools_filtered_data_init(&filtered);
+    stata_timer timer;
+    stata_retcode rc;
+    int *sort_vars = NULL;
+    size_t nsort = 0;
+    size_t obs1, nvars;
+    double t_start, t_end;
+    char msg[256];
+    sort_algorithm_t algorithm;
+
+    /* Initialize timer */
+    timer.load_time = 0.0;
+    timer.sort_time = 0.0;
+    timer.store_time = 0.0;
+    timer.total_time = 0.0;
+
+    /* Start total timer */
+    t_start = ctools_timer_seconds();
+
+    /* Check arguments */
+    if (args == NULL || strlen(args) == 0) {
+        SF_error("csort: no sort variables specified\n");
+        return 198;
+    }
+
+    /* Parse sort variable indices from arguments */
+    if (parse_sort_vars(args, &sort_vars, &nsort) != 0) {
+        SF_error("csort: memory allocation failed\n");
+        return 920;
+    }
+
+    if (nsort == 0) {
+        SF_error("csort: no valid sort variables specified\n");
+        free(sort_vars);
+        return 198;
+    }
+
+    /* Parse algorithm option */
+    algorithm = parse_algorithm(args);
+
+    /* Get observation range and variable count from Stata */
+    obs1 = SF_in1();
+    size_t obs2 = SF_in2();
+    nvars = SF_nvars();
+
+    /* Handle empty dataset case - nothing to sort, return success */
+    if (obs2 < obs1) {
+        free(sort_vars);
+        return 0;  /* Success - nothing to do */
+    }
+
+    if (nvars == 0) {
+        SF_error("csort: no variables in dataset\n");
+        free(sort_vars);
+        return 2000;
+    }
+
+    /* Check for streaming mode option (returns -1 if nostream, 0 if auto, 1-16 for batch size) */
+    int stream_batch_size = parse_stream_option(args);
+
+    /* Auto-detect streaming mode: enable when K > 30 and N > 10M */
+    if (stream_batch_size == 0) {
+        size_t nobs = obs2 - obs1 + 1;
+        if (nvars > 30 && nobs > 10000000) {
+            int nthreads = ctools_get_max_threads();
+            stream_batch_size = nthreads > 16 ? 16 : nthreads;
+            if (stream_batch_size < 1) stream_batch_size = 1;
+        }
+    } else if (stream_batch_size == -1) {
+        /* Explicit nostream: force standard mode */
+        stream_batch_size = 0;
+    }
+
+    /* ================================================================
+       MEMORY-EFFICIENT MODE: For large datasets with many columns
+       Only loads key variables, streams permutation to non-keys
+       ================================================================ */
+    if (stream_batch_size > 0) {
+        csort_stream_timings stream_timings = {0};
+
+        /* Build array of all variable indices (1-based) */
+        int *all_var_indices = (int *)malloc(nvars * sizeof(int));
+        if (!all_var_indices) {
+            SF_error("csort: memory allocation failed\n");
+            free(sort_vars);
+            return 920;
+        }
+        for (size_t j = 0; j < nvars; j++) {
+            all_var_indices[j] = (int)(j + 1);
+        }
+
+        /* Parse string widths for streaming mode */
+        int *strwidths = parse_string_widths(args, nvars);
+
+        /* Call streaming sort with batch size */
+        rc = csort_stream_sort(sort_vars, nsort, all_var_indices, nvars,
+                                algorithm, 0, stream_batch_size, strwidths,
+                                &stream_timings);
+
+        free(strwidths);
+        free(all_var_indices);
+        free(sort_vars);
+
+        if (rc != STATA_OK) {
+            snprintf(msg, sizeof(msg), "csort: streaming sort failed (error %d)\n", rc);
+            SF_error(msg);
+            return 920;
+        }
+
+        /* Calculate total time */
+        t_end = ctools_timer_seconds();
+        timer.total_time = t_end - t_start;
+
+        /* Store timing results in Stata scalars for streaming mode */
+        SF_scal_save("_csort_stream", 1.0);  /* Flag indicating streaming mode was used */
+        SF_scal_save("_csort_time_load", stream_timings.load_keys_time);
+        SF_scal_save("_csort_time_sort", stream_timings.sort_time);
+        SF_scal_save("_csort_time_permute", stream_timings.permute_keys_time);
+        SF_scal_save("_csort_time_store", stream_timings.store_keys_time);
+        SF_scal_save("_csort_time_stream", stream_timings.stream_nonkeys_time);
+        SF_scal_save("_csort_time_cleanup", 0.0);  /* Minimal cleanup in streaming mode */
+        SF_scal_save("_csort_time_total", timer.total_time);
+
+        /* Store thread diagnostics */
+        CTOOLS_SAVE_THREAD_INFO("_csort");
+
+        return 0;
+    }
+
+    /* ================================================================
+       STANDARD MODE: Load all data, sort, store
+       ================================================================ */
+
+    /* ================================================================
+       PHASE 1: Load data from Stata to C
+       ================================================================ */
+    timer.load_time = ctools_timer_seconds();
+
+    /* ctools_data_load auto-detects string widths from the __ctools_strw
+       Stata local (set by _ctools_strw.ado) for flat buffer optimization. */
+    rc = ctools_data_load(&filtered, NULL, 0, 0, 0, CTOOLS_LOAD_SKIP_IF);
+
+    timer.load_time = ctools_timer_seconds() - timer.load_time;
+
+    if (rc != STATA_OK) {
+        snprintf(msg, sizeof(msg), "csort: failed to load data (error %d)\n", rc);
+        SF_error(msg);
+        ctools_filtered_data_free(&filtered);
+        free(sort_vars);
+        return 920;
+    }
+
+    /* ================================================================
+       PHASE 2: Sort the data
+       ================================================================ */
+
+    timer.sort_time = ctools_timer_seconds();
+    double t_permute = 0.0;  /* Permutation time */
+
+    /* Call unified sort dispatcher (computes sort_order only) */
+    rc = ctools_sort_dispatch(&filtered.data, sort_vars, nsort, algorithm);
+
+    /* Record sort computation time */
+    timer.sort_time = ctools_timer_seconds() - timer.sort_time;
+
+    /* Apply the order while storing, avoiding full-column permutation buffers. */
+
+    if (rc != STATA_OK) {
+        snprintf(msg, sizeof(msg), "csort: sort failed (error %d)\n", rc);
+        SF_error(msg);
+        ctools_filtered_data_free(&filtered);
+        free(sort_vars);
+        return 920;
+    }
+
+
+    /* ================================================================
+       PHASE 3: Transfer sorted data back to Stata
+       ================================================================ */
+    timer.store_time = ctools_timer_seconds();
+
+    rc = ctools_data_store_sorted(&filtered.data, obs1);
+
+    timer.store_time = ctools_timer_seconds() - timer.store_time;
+
+    if (rc != STATA_OK) {
+        snprintf(msg, sizeof(msg), "csort: failed to store data (error %d)\n", rc);
+        SF_error(msg);
+        ctools_filtered_data_free(&filtered);
+        free(sort_vars);
+        return 920;
+    }
+
+    /* Clean up C memory (this can be slow for large datasets!) */
+    double t_cleanup = ctools_timer_seconds();
+    ctools_filtered_data_free(&filtered);
+    free(sort_vars);
+    t_cleanup = ctools_timer_seconds() - t_cleanup;
+
+    /* Calculate total time (AFTER cleanup, so it's fully accounted) */
+    t_end = ctools_timer_seconds();
+    timer.total_time = t_end - t_start;
+
+    /* Store timing results in Stata scalars (standard mode) */
+    SF_scal_save("_csort_stream", 0.0);  /* Flag indicating standard mode was used */
+    SF_scal_save("_csort_time_load", timer.load_time);
+    SF_scal_save("_csort_time_sort", timer.sort_time);
+    SF_scal_save("_csort_time_permute", t_permute);
+    SF_scal_save("_csort_time_store", timer.store_time);
+    SF_scal_save("_csort_time_stream", 0.0);  /* No streaming in standard mode */
+    SF_scal_save("_csort_time_cleanup", t_cleanup);
+    SF_scal_save("_csort_time_total", timer.total_time);
+
+    /* Store thread diagnostics */
+    CTOOLS_SAVE_THREAD_INFO("_csort");
+
+    return 0;
+}

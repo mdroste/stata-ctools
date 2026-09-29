@@ -19,7 +19,7 @@ cbinscatter yvar xvar [if] [in] [weight] [, options]
 |--------|-------------|
 | `nquantiles(#)` | Number of bins (default: 20, range: 2-1000) |
 | `controls(varlist)` | Control variables to partial out via OLS |
-| `absorb(varlist)` | Fixed effects to absorb via HDFE |
+| `absorb(varlist)` | Fixed effects to absorb via HDFE (numeric or string; any codes) |
 | `by(varname)` | Create separate series by group |
 
 ### Line Fitting Options
@@ -96,7 +96,7 @@ cbinscatter price mpg, linetype(cubic) verbose
 ### Speedup Tricks
 
 **Binning Algorithm:**
-- **Histogram-based quantile binning**: For large datasets (>50K), builds a 4096-bucket histogram in O(N) and assigns bins from cumulative counts—avoids the O(N log N) sort that traditional `binscatter` requires
+- **Exact quantile binning in O(N)**: Sorts the x values with a radix sort, then takes the same (weighted) percentile cutpoints as `xtile`/`_pctile`, so bins match `binscatter` at any sample size
 - **Direct bin assignment from sorted order**: When data is sorted, bin boundaries are read off directly without binary search
 - **O(N) weighted quantile computation**: Accumulates cumulative weights in a single pass to find quantile boundaries
 
@@ -153,8 +153,8 @@ With `verbose`, you'll see time spent in:
 | Result | Description |
 |--------|-------------|
 | `e(bindata)` | Bin statistics: by_group, bin_id, x_mean, y_mean, x_se, y_se, n_obs |
-| `e(coefs)` | Fit line coefficients (if linetype specified) |
-| `e(fit_stats)` | R-squared and other fit statistics |
+| `e(coefs)` | Fit line coefficients per by-group: constant, x, x^2, x^3 (if linetype specified) |
+| `e(fit_stats)` | R-squared and number of observations of each fit |
 
 ## How Binning Works
 
@@ -163,8 +163,8 @@ With `verbose`, you'll see time spent in:
    - HDFE absorption for fixed effects
 
 2. **Bin Assignment**:
-   - Observations sorted into equal-sized quantile bins
-   - Uses histogram approach for O(N) complexity
+   - Observations sorted into equal-sized quantile bins (tied x values share a bin)
+   - Radix sort of x for O(N) complexity; cutpoints match `xtile`
 
 3. **Bin Statistics**:
    - Mean of x and y computed within each bin
@@ -173,20 +173,23 @@ With `verbose`, you'll see time spent in:
 4. **Line Fitting**:
    - Fit computed from microdata (not bin means)
    - Supports linear, quadratic, and cubic fits
+   - Powers of centered, scaled x; redundant terms are omitted, as `regress` does
 
 ## Technical Notes
 
 - Missing values in x, y, controls, or absorb variables drop observations
+- `absorb()` values only label groups: negative, fractional, large (e.g. 11-digit) and string codes are allowed
 - With `by()`, each group gets independent bins and fit lines
-- The `discrete` option creates one bin per unique x value
-- Fit line coefficients are from the residualized data
+- The `discrete` option creates one bin per unique x value; with `method(binsreg)` those means are adjusted for controls/absorb like quantile bins
+- `method(classic)` with controls/absorb fits the line to the residualized data with the sample means added back (binscatter's convention), so `e(coefs)` matches binscatter's `e(y1_coefs)` (which lists `_cons` last)
+- `method(binsreg)` fits the polynomial jointly with the controls and absorbed effects and evaluates it at the controls' means (binsreg's `polyreg()` convention)
 
 ## Comparison with binscatter
 
 | Feature | `binscatter` | `cbinscatter` |
 |---------|--------------|---------------|
 | Implementation | Stata + Mata | C with OpenMP |
-| Binning Algorithm | Sort-based | Histogram-based |
+| Binning Algorithm | Sort-based | Radix sort, same cutpoints |
 | Binning Complexity | O(N log N) | O(N) |
 | HDFE Support | Via reghdfe | Native |
 

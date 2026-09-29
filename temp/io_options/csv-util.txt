@@ -1,0 +1,102 @@
+Compiled from "ImportDelimitedUtil.java"
+class com.stata.plugins.imports.ImportDelimitedUtil {
+  static final int MAX_PROCS;
+
+  static final int MAX_APPLE_SILICON;
+
+  static final int MAX_APPLE_INTEL;
+
+  com.stata.plugins.imports.ImportDelimitedUtil();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       4: return
+
+  static int getProcs();
+    Code:
+       0: iconst_4
+       1: invokestatic  #3                  // Method getProcs:(I)I
+       4: ireturn
+
+  static int getProcs(int);
+    Code:
+       0: iload_0
+       1: istore_1
+       2: ldc           #4                  // String c(machine_type)
+       4: invokestatic  #5                  // Method com/stata/sfi/Macro.getGlobalSafe:(Ljava/lang/String;)Ljava/lang/String;
+       7: astore_2
+       8: aload_2
+       9: ldc           #6                  // String Mac
+      11: invokevirtual #7                  // Method java/lang/String.startsWith:(Ljava/lang/String;)Z
+      14: ifeq          41
+      17: aload_2
+      18: ldc           #8                  // String Apple Silicon
+      20: invokevirtual #9                  // Method java/lang/String.contains:(Ljava/lang/CharSequence;)Z
+      23: ifeq          35
+      26: iconst_4
+      27: iload_0
+      28: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+      31: istore_1
+      32: goto          41
+      35: iconst_4
+      36: iload_0
+      37: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+      40: istore_1
+      41: ldc           #11                 // String import_delimited
+      43: ldc           #12                 // String mp_max_procs
+      45: ldc           #13                 // String
+      47: invokestatic  #14                 // Method com/stata/sfi/util/Preference.getSavedPref:(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;
+      50: astore_3
+      51: aload_3
+      52: invokevirtual #15                 // Method java/lang/String.isEmpty:()Z
+      55: ifne          81
+      58: aload_3
+      59: invokestatic  #16                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      62: istore        4
+      64: iload_0
+      65: iload         4
+      67: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+      70: istore_1
+      71: goto          81
+      74: astore        4
+      76: ldc           #18                 // String mp_max_procs preference invalid
+      78: invokestatic  #19                 // Method com/stata/sfi/SFIToolkit.errorln:(Ljava/lang/String;)V
+      81: iconst_1
+      82: istore        4
+      84: iload_1
+      85: iconst_4
+      86: iload_0
+      87: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+      90: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+      93: istore        5
+      95: ldc           #20                 // String c(processors)
+      97: invokestatic  #21                 // Method com/stata/sfi/Macro.getGlobal:(Ljava/lang/String;)Ljava/lang/String;
+     100: invokestatic  #16                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+     103: istore        6
+     105: iload         6
+     107: istore        4
+     109: goto          133
+     112: astore        6
+     114: ldc           #22                 // String An error occurred while parsing processor info; will continue using 1 processor.
+     116: invokestatic  #19                 // Method com/stata/sfi/SFIToolkit.errorln:(Ljava/lang/String;)V
+     119: aload         6
+     121: invokestatic  #23                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+     124: invokedynamic #24,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     129: invokestatic  #25                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+     132: pop
+     133: iload         4
+     135: iload         5
+     137: invokestatic  #10                 // Method java/lang/Math.min:(II)I
+     140: ireturn
+    Exception table:
+       from    to  target type
+          58    71    74   Class java/lang/Exception
+          95   109   112   Class java/lang/Exception
+
+  static int getProcDurationLimit(int);
+    Code:
+       0: ldc           #26                 // int 200000
+       2: iload_0
+       3: imul
+       4: ireturn
+}

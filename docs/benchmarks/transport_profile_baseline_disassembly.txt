@@ -1,0 +1,397 @@
+
+/private/tmp/ctools-transport/profiles/baseline/baseline.plugin:	file format mach-o arm64
+
+Disassembly of section __TEXT,__text:
+
+000000000000331c <_load_variable_thread>:
+    331c:      	stp	x28, x27, [sp, #-0x60]!
+    3320:      	stp	x26, x25, [sp, #0x10]
+    3324:      	stp	x24, x23, [sp, #0x20]
+    3328:      	stp	x22, x21, [sp, #0x30]
+    332c:      	stp	x20, x19, [sp, #0x40]
+    3330:      	stp	x29, x30, [sp, #0x50]
+    3334:      	add	x29, sp, #0x50
+    3338:      	sub	sp, sp, #0x830
+    333c:      	mov	x19, x0
+    3340:      	adrp	x8, 0x34000 <__ZL11cons_text_c>
+    3344:      	ldr	x8, [x8, #0x548]
+    3348:      	ldr	x8, [x8]
+    334c:      	stur	x8, [x29, #-0x60]
+    3350:      	ldr	x28, [x0]
+    3354:      	ldr	w20, [x0, #0x8]
+    3358:      	ldp	x21, x22, [x0, #0x10]
+    335c:      	ldp	w8, w23, [x0, #0x20]
+    3360:      	str	x22, [x28, #0x8]
+    3364:      	cbz	x22, 0x33c0 <_load_variable_thread+0xa4>
+    3368:      	cbz	w8, 0x3478 <_load_variable_thread+0x15c>
+    336c:      	mov	w8, #0x1                ; =1
+    3370:      	str	w8, [x28]
+    3374:      	sub	w8, w23, #0x1
+    3378:      	lsr	x24, x22, #61
+    337c:      	cmp	w8, #0x7fb
+    3380:      	b.hi	0x33e8 <_load_variable_thread+0xcc>
+    3384:      	add	x25, x23, #0x1
+    3388:      	umulh	x8, x25, x22
+    338c:      	cmp	xzr, x8
+    3390:      	b.ne	0x33e8 <_load_variable_thread+0xcc>
+    3394:      	mul	x26, x25, x22
+    3398:      	mov	w8, #-0x80000000        ; =-2147483648
+    339c:      	cmp	x26, x8
+    33a0:      	b.hi	0x33e8 <_load_variable_thread+0xcc>
+    33a4:      	mov	x0, x22
+    33a8:      	mov	x1, x25
+    33ac:      	bl	0x2ab80 <dyld_stub_binder+0x2ab80>
+    33b0:      	cbz	x0, 0x33e8 <_load_variable_thread+0xcc>
+    33b4:      	cbz	x24, 0x3530 <_load_variable_thread+0x214>
+    33b8:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    33bc:      	b	0x3864 <_load_variable_thread+0x548>
+    33c0:      	cbz	w8, 0x34e4 <_load_variable_thread+0x1c8>
+    33c4:      	mov	w8, #0x1                ; =1
+    33c8:      	str	w8, [x28]
+    33cc:      	mov	w0, #0x1                ; =1
+    33d0:      	mov	w1, #0x8                ; =8
+    33d4:      	bl	0x2ab80 <dyld_stub_binder+0x2ab80>
+    33d8:      	stp	xzr, xzr, [x28, #0x18]
+    33dc:      	str	x0, [x28, #0x10]
+    33e0:      	cbnz	x0, 0x3524 <_load_variable_thread+0x208>
+    33e4:      	b	0x3864 <_load_variable_thread+0x548>
+    33e8:      	mov	w8, #0x7fd              ; =2045
+    33ec:      	stp	x8, xzr, [x28, #0x18]
+    33f0:      	cbnz	x24, 0x3864 <_load_variable_thread+0x548>
+    33f4:      	lsl	x23, x22, #3
+    33f8:      	str	xzr, [sp, #0x20]
+    33fc:      	add	x0, sp, #0x20
+    3400:      	mov	w1, #0x40               ; =64
+    3404:      	mov	x2, x23
+    3408:      	bl	0x2aca0 <dyld_stub_binder+0x2aca0>
+    340c:      	mov	x8, x0
+    3410:      	ldr	x0, [sp, #0x20]
+    3414:      	cmp	w8, #0x0
+    3418:      	csel	x8, x0, xzr, eq
+    341c:      	str	x8, [x28, #0x10]
+    3420:      	cbz	x8, 0x3864 <_load_variable_thread+0x548>
+    3424:      	mov	x1, x23
+    3428:      	bl	0x2ab74 <dyld_stub_binder+0x2ab74>
+    342c:      	ldr	x25, [x28, #0x10]
+    3430:      	lsr	x8, x22, #58
+    3434:      	cbnz	x8, 0x3688 <_load_variable_thread+0x36c>
+    3438:      	mov	w0, #0x20               ; =32
+    343c:      	bl	0x2ac7c <dyld_stub_binder+0x2ac7c>
+    3440:      	mov	x23, x0
+    3444:      	cbz	x0, 0x368c <_load_variable_thread+0x370>
+    3448:      	lsl	x24, x22, #6
+    344c:      	mov	x0, x24
+    3450:      	bl	0x2ac7c <dyld_stub_binder+0x2ac7c>
+    3454:      	str	x0, [x23]
+    3458:      	cbz	x0, 0x3680 <_load_variable_thread+0x364>
+    345c:      	str	wzr, [sp, #0x18]
+    3460:      	stp	x24, xzr, [x23, #0x8]
+    3464:      	adrp	x8, 0x2b000 <dyld_stub_binder+0x2b000>
+    3468:      	ldr	d0, [x8, #0x870]
+    346c:      	str	d0, [x23, #0x18]
+    3470:      	str	x23, [x28, #0x20]
+    3474:      	b	0x3694 <_load_variable_thread+0x378>
+    3478:      	str	wzr, [x28]
+    347c:      	str	xzr, [x28, #0x20]
+    3480:      	lsr	x8, x22, #61
+    3484:      	cbnz	x8, 0x3864 <_load_variable_thread+0x548>
+    3488:      	lsl	x2, x22, #3
+    348c:      	str	xzr, [sp, #0x20]
+    3490:      	add	x0, sp, #0x20
+    3494:      	mov	w1, #0x40               ; =64
+    3498:      	bl	0x2aca0 <dyld_stub_binder+0x2aca0>
+    349c:      	ldr	x23, [sp, #0x20]
+    34a0:      	cmp	w0, #0x0
+    34a4:      	csel	x8, x23, xzr, eq
+    34a8:      	str	x8, [x28, #0x10]
+    34ac:      	cbz	x8, 0x3864 <_load_variable_thread+0x548>
+    34b0:      	adrp	x8, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    34b4:      	ldr	x8, [x8, #0x740]
+    34b8:      	ldr	x24, [x8, #0x178]
+    34bc:      	mov	x0, x20
+    34c0:      	mov	x1, x21
+    34c4:      	mov	x2, x23
+    34c8:      	blr	x24
+    34cc:      	cbnz	w0, 0x37fc <_load_variable_thread+0x4e0>
+    34d0:      	add	x23, x23, #0x8
+    34d4:      	add	w21, w21, #0x1
+    34d8:      	subs	x22, x22, #0x1
+    34dc:      	b.ne	0x34bc <_load_variable_thread+0x1a0>
+    34e0:      	b	0x3524 <_load_variable_thread+0x208>
+    34e4:      	str	wzr, [x28]
+    34e8:      	str	xzr, [x28, #0x20]
+    34ec:      	str	xzr, [sp, #0x20]
+    34f0:      	add	x0, sp, #0x20
+    34f4:      	mov	w1, #0x40               ; =64
+    34f8:      	mov	w2, #0x8                ; =8
+    34fc:      	bl	0x2aca0 <dyld_stub_binder+0x2aca0>
+    3500:      	ldr	x8, [sp, #0x20]
+    3504:      	cmp	w0, #0x0
+    3508:      	csel	x9, x8, xzr, eq
+    350c:      	str	x9, [x28, #0x10]
+    3510:      	cbz	x9, 0x3864 <_load_variable_thread+0x548>
+    3514:      	adrp	x9, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    3518:      	ldr	x9, [x9, #0x740]
+    351c:      	ldr	d0, [x9, #0xb8]
+    3520:      	str	d0, [x8]
+    3524:      	mov	w20, #0x0               ; =0
+    3528:      	mov	x0, #0x0                ; =0
+    352c:      	b	0x386c <_load_variable_thread+0x550>
+    3530:      	str	x0, [sp, #0x10]
+    3534:      	lsl	x2, x22, #3
+    3538:      	str	xzr, [sp, #0x20]
+    353c:      	add	x0, sp, #0x20
+    3540:      	mov	w1, #0x40               ; =64
+    3544:      	bl	0x2aca0 <dyld_stub_binder+0x2aca0>
+    3548:      	cbnz	w0, 0x366c <_load_variable_thread+0x350>
+    354c:      	ldr	x27, [sp, #0x20]
+    3550:      	cbz	x27, 0x366c <_load_variable_thread+0x350>
+    3554:      	str	x26, [sp, #0x8]
+    3558:      	mov	x24, #0x0               ; =0
+    355c:      	ldr	x26, [sp, #0x10]
+    3560:      	str	x27, [sp, #0x18]
+    3564:      	str	x26, [x27, x24, lsl #3]
+    3568:      	adrp	x27, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    356c:      	ldr	x8, [x27, #0x740]
+    3570:      	ldr	x8, [x8, #0x1b0]
+    3574:      	mov	x0, x20
+    3578:      	blr	x8
+    357c:      	ldr	x8, [x27, #0x740]
+    3580:      	cbz	w0, 0x35f8 <_load_variable_thread+0x2dc>
+    3584:      	ldr	x8, [x8, #0x1b8]
+    3588:      	mov	x0, x20
+    358c:      	mov	x1, x21
+    3590:      	blr	x8
+    3594:      	cbnz	w0, 0x38f8 <_load_variable_thread+0x5dc>
+    3598:      	adrp	x8, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    359c:      	ldr	x8, [x8, #0x740]
+    35a0:      	ldr	x8, [x8, #0x1c0]
+    35a4:      	mov	x0, x20
+    35a8:      	mov	x1, x21
+    35ac:      	blr	x8
+    35b0:      	tbnz	w0, #0x1f, 0x3900 <_load_variable_thread+0x5e4>
+    35b4:      	mov	x27, x0
+    35b8:      	cmp	w0, #0x7fd
+    35bc:      	b.hi	0x38f8 <_load_variable_thread+0x5dc>
+    35c0:      	adrp	x8, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    35c4:      	ldr	x8, [x8, #0x740]
+    35c8:      	ldr	x8, [x8, #0x1c8]
+    35cc:      	add	x2, sp, #0x20
+    35d0:      	add	w3, w27, #0x1
+    35d4:      	mov	x0, x20
+    35d8:      	mov	x1, x21
+    35dc:      	blr	x8
+    35e0:      	cmp	w0, w27
+    35e4:      	b.ne	0x3900 <_load_variable_thread+0x5e4>
+    35e8:      	add	x8, sp, #0x20
+    35ec:      	strb	wzr, [x8, w27, uxtw]
+    35f0:      	ldr	x27, [sp, #0x18]
+    35f4:      	b	0x3614 <_load_variable_thread+0x2f8>
+    35f8:      	ldr	x8, [x8, #0x1a0]
+    35fc:      	add	x2, sp, #0x20
+    3600:      	mov	x0, x20
+    3604:      	mov	x1, x21
+    3608:      	blr	x8
+    360c:      	ldr	x27, [sp, #0x18]
+    3610:      	cbnz	w0, 0x38f0 <_load_variable_thread+0x5d4>
+    3614:      	add	x0, sp, #0x20
+    3618:      	bl	0x2ae98 <dyld_stub_binder+0x2ae98>
+    361c:      	cmp	x0, x23
+    3620:      	b.hi	0x38f0 <_load_variable_thread+0x5d4>
+    3624:      	add	x1, sp, #0x20
+    3628:      	add	x2, x0, #0x1
+    362c:      	mov	x0, x26
+    3630:      	bl	0x2ac94 <dyld_stub_binder+0x2ac94>
+    3634:      	add	x24, x24, #0x1
+    3638:      	add	w21, w21, #0x1
+    363c:      	add	x26, x26, x25
+    3640:      	cmp	x22, x24
+    3644:      	b.ne	0x3564 <_load_variable_thread+0x248>
+    3648:      	mov	w0, #0x20               ; =32
+    364c:      	bl	0x2ac7c <dyld_stub_binder+0x2ac7c>
+    3650:      	cbz	x0, 0x3920 <_load_variable_thread+0x604>
+    3654:      	ldp	x8, x9, [sp, #0x8]
+    3658:      	stp	x9, x8, [x0]
+    365c:      	stp	x8, xzr, [x0, #0x10]
+    3660:      	stp	x27, x23, [x28, #0x10]
+    3664:      	str	x0, [x28, #0x20]
+    3668:      	b	0x3524 <_load_variable_thread+0x208>
+    366c:      	ldr	x0, [sp, #0x10]
+    3670:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3674:      	mov	w20, #0x1               ; =1
+    3678:      	mov	w0, #0x1                ; =1
+    367c:      	b	0x386c <_load_variable_thread+0x550>
+    3680:      	mov	x0, x23
+    3684:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3688:      	mov	x23, #0x0               ; =0
+    368c:      	mov	w8, #0x1                ; =1
+    3690:      	str	w8, [sp, #0x18]
+    3694:      	mov	x26, #0x0               ; =0
+    3698:      	adrp	x27, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    369c:      	b	0x36b8 <_load_variable_thread+0x39c>
+    36a0:      	mov	w8, #0x1                ; =1
+    36a4:      	str	w8, [x23, #0x1c]
+    36a8:      	str	x0, [x25, x26, lsl #3]
+    36ac:      	add	x26, x26, #0x1
+    36b0:      	cmp	x26, x22
+    36b4:      	b.eq	0x3524 <_load_variable_thread+0x208>
+    36b8:      	ldr	x8, [x27, #0x740]
+    36bc:      	ldr	x8, [x8, #0x1b0]
+    36c0:      	mov	x0, x20
+    36c4:      	blr	x8
+    36c8:      	ldr	x8, [x27, #0x740]
+    36cc:      	cbz	w0, 0x3738 <_load_variable_thread+0x41c>
+    36d0:      	ldr	x8, [x8, #0x1b8]
+    36d4:      	add	w1, w26, w21
+    36d8:      	mov	x0, x20
+    36dc:      	blr	x8
+    36e0:      	cbnz	w0, 0x3808 <_load_variable_thread+0x4ec>
+    36e4:      	ldr	x8, [x27, #0x740]
+    36e8:      	ldr	x8, [x8, #0x1c0]
+    36ec:      	add	w1, w26, w21
+    36f0:      	mov	x0, x20
+    36f4:      	blr	x8
+    36f8:      	tbnz	w0, #0x1f, 0x37fc <_load_variable_thread+0x4e0>
+    36fc:      	mov	x24, x0
+    3700:      	cmp	w0, #0x7fd
+    3704:      	b.hi	0x3808 <_load_variable_thread+0x4ec>
+    3708:      	ldr	x8, [x27, #0x740]
+    370c:      	ldr	x8, [x8, #0x1c8]
+    3710:      	add	w1, w26, w21
+    3714:      	add	x2, sp, #0x20
+    3718:      	add	w3, w24, #0x1
+    371c:      	mov	x0, x20
+    3720:      	blr	x8
+    3724:      	cmp	w0, w24
+    3728:      	b.ne	0x37fc <_load_variable_thread+0x4e0>
+    372c:      	add	x8, sp, #0x20
+    3730:      	strb	wzr, [x8, w24, uxtw]
+    3734:      	b	0x3750 <_load_variable_thread+0x434>
+    3738:      	ldr	x8, [x8, #0x1a0]
+    373c:      	add	w1, w26, w21
+    3740:      	add	x2, sp, #0x20
+    3744:      	mov	x0, x20
+    3748:      	blr	x8
+    374c:      	cbnz	w0, 0x37fc <_load_variable_thread+0x4e0>
+    3750:      	add	x0, sp, #0x20
+    3754:      	bl	0x2ae98 <dyld_stub_binder+0x2ae98>
+    3758:      	cbz	x23, 0x37e4 <_load_variable_thread+0x4c8>
+    375c:      	add	x2, x0, #0x1
+    3760:      	ldr	x8, [x23, #0x8]
+    3764:      	cmp	x2, x8
+    3768:      	b.ls	0x3798 <_load_variable_thread+0x47c>
+    376c:      	ldr	w8, [x23, #0x18]
+    3770:      	adrp	x0, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    3774:      	add	x0, x0, #0x83c
+    3778:      	cmp	w8, #0x2
+    377c:      	b.eq	0x36a0 <_load_variable_thread+0x384>
+    3780:      	cmp	w8, #0x1
+    3784:      	b.ne	0x3814 <_load_variable_thread+0x4f8>
+    3788:      	add	x0, sp, #0x20
+    378c:      	bl	0x2ae80 <dyld_stub_binder+0x2ae80>
+    3790:      	cbnz	x0, 0x36a0 <_load_variable_thread+0x384>
+    3794:      	b	0x3814 <_load_variable_thread+0x4f8>
+    3798:      	ldapur	x8, [x23, #0x10]
+    379c:      	ldr	x9, [x23, #0x8]
+    37a0:      	sub	x9, x9, x2
+    37a4:      	cmp	x8, x9
+    37a8:      	b.hi	0x376c <_load_variable_thread+0x450>
+    37ac:      	add	x9, x8, x2
+    37b0:      	add	x10, x23, #0x10
+    37b4:      	mov	x11, x8
+    37b8:      	casal	x11, x9, [x10]
+    37bc:      	cmp	x11, x8
+    37c0:      	b.ne	0x3798 <_load_variable_thread+0x47c>
+    37c4:      	ldr	x9, [x23]
+    37c8:      	add	x24, x9, x8
+    37cc:      	add	x1, sp, #0x20
+    37d0:      	mov	x0, x24
+    37d4:      	bl	0x2ac94 <dyld_stub_binder+0x2ac94>
+    37d8:      	str	x24, [x25, x26, lsl #3]
+    37dc:      	cbnz	x24, 0x36ac <_load_variable_thread+0x390>
+    37e0:      	b	0x3818 <_load_variable_thread+0x4fc>
+    37e4:      	add	x0, sp, #0x20
+    37e8:      	bl	0x2ae80 <dyld_stub_binder+0x2ae80>
+    37ec:      	mov	x24, x0
+    37f0:      	str	x24, [x25, x26, lsl #3]
+    37f4:      	cbnz	x24, 0x36ac <_load_variable_thread+0x390>
+    37f8:      	b	0x3818 <_load_variable_thread+0x4fc>
+    37fc:      	mov	w20, #0x3               ; =3
+    3800:      	mov	w0, #0x1                ; =1
+    3804:      	b	0x386c <_load_variable_thread+0x550>
+    3808:      	mov	w20, #0x5               ; =5
+    380c:      	mov	w0, #0x1                ; =1
+    3810:      	b	0x386c <_load_variable_thread+0x550>
+    3814:      	str	xzr, [x25, x26, lsl #3]
+    3818:      	ldr	w8, [sp, #0x18]
+    381c:      	tbz	w8, #0x0, 0x3838 <_load_variable_thread+0x51c>
+    3820:      	cbz	x26, 0x3854 <_load_variable_thread+0x538>
+    3824:      	ldr	x0, [x25], #0x8
+    3828:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    382c:      	subs	x26, x26, #0x1
+    3830:      	b.ne	0x3824 <_load_variable_thread+0x508>
+    3834:      	b	0x3854 <_load_variable_thread+0x538>
+    3838:      	cbnz	x26, 0x38b4 <_load_variable_thread+0x598>
+    383c:      	cbz	x23, 0x3850 <_load_variable_thread+0x534>
+    3840:      	ldr	x0, [x23]
+    3844:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3848:      	mov	x0, x23
+    384c:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3850:      	str	xzr, [x28, #0x20]
+    3854:      	ldr	x0, [x28, #0x10]
+    3858:      	cbz	x0, 0x3860 <_load_variable_thread+0x544>
+    385c:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3860:      	str	xzr, [x28, #0x10]
+    3864:      	mov	w0, #0x1                ; =1
+    3868:      	mov	x20, x0
+    386c:      	str	w20, [x19, #0x28]
+    3870:      	ldur	x8, [x29, #-0x60]
+    3874:      	adrp	x9, 0x34000 <__ZL11cons_text_c>
+    3878:      	ldr	x9, [x9, #0x548]
+    387c:      	ldr	x9, [x9]
+    3880:      	cmp	x9, x8
+    3884:      	b.ne	0x3934 <_load_variable_thread+0x618>
+    3888:      	add	sp, sp, #0x830
+    388c:      	ldp	x29, x30, [sp, #0x50]
+    3890:      	ldp	x20, x19, [sp, #0x40]
+    3894:      	ldp	x22, x21, [sp, #0x30]
+    3898:      	ldp	x24, x23, [sp, #0x20]
+    389c:      	ldp	x26, x25, [sp, #0x10]
+    38a0:      	ldp	x28, x27, [sp], #0x60
+    38a4:      	ret
+    38a8:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    38ac:      	subs	x26, x26, #0x1
+    38b0:      	b.eq	0x383c <_load_variable_thread+0x520>
+    38b4:      	ldr	x0, [x25], #0x8
+    38b8:      	cmp	x0, #0x0
+    38bc:      	adrp	x8, 0x3a000 <__ZL15__kmp_stg_table+0xa78>
+    38c0:      	add	x8, x8, #0x83c
+    38c4:      	ccmp	x0, x8, #0x4, ne
+    38c8:      	b.eq	0x38ac <_load_variable_thread+0x590>
+    38cc:      	cbz	x23, 0x38a8 <_load_variable_thread+0x58c>
+    38d0:      	ldr	x8, [x23]
+    38d4:      	cmp	x0, x8
+    38d8:      	b.lo	0x38a8 <_load_variable_thread+0x58c>
+    38dc:      	ldr	x9, [x23, #0x8]
+    38e0:      	add	x8, x8, x9
+    38e4:      	cmp	x0, x8
+    38e8:      	b.hs	0x38a8 <_load_variable_thread+0x58c>
+    38ec:      	b	0x38ac <_load_variable_thread+0x590>
+    38f0:      	mov	w20, #0x3               ; =3
+    38f4:      	b	0x3908 <_load_variable_thread+0x5ec>
+    38f8:      	mov	w20, #0x5               ; =5
+    38fc:      	b	0x3904 <_load_variable_thread+0x5e8>
+    3900:      	mov	w20, #0x3               ; =3
+    3904:      	ldr	x27, [sp, #0x18]
+    3908:      	mov	x0, x27
+    390c:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3910:      	ldr	x0, [sp, #0x10]
+    3914:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3918:      	mov	w0, #0x1                ; =1
+    391c:      	b	0x386c <_load_variable_thread+0x550>
+    3920:      	mov	x0, x27
+    3924:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3928:      	ldr	x0, [sp, #0x10]
+    392c:      	bl	0x2ac1c <dyld_stub_binder+0x2ac1c>
+    3930:      	b	0x3864 <_load_variable_thread+0x548>
+    3934:      	bl	0x2ab2c <dyld_stub_binder+0x2ab2c>

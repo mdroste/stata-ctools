@@ -1,0 +1,28 @@
+[
+  {
+    "name": "wide_million",
+    "rows": 1000000,
+    "columns": 128
+  },
+  {
+    "name": "maxstr_short",
+    "rows": 200000,
+    "columns": 4,
+    "shape": "strings",
+    "width": 2045,
+    "actual_width": 8
+  },
+  {
+    "name": "numeric_control",
+    "rows": 1000000,
+    "columns": 20
+  },
+  {
+    "name": "strl_control",
+    "rows": 100000,
+    "columns": 2,
+    "shape": "long",
+    "width": 32,
+    "mode": "read"
+  }
+]

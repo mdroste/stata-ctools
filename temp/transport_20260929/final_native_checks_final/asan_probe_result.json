@@ -1,0 +1,17 @@
+{
+  "compiler": "/opt/homebrew/opt/llvm/bin/clang",
+  "compiler_version": "Homebrew clang version 21.1.8\nTarget: arm64-apple-darwin25.6.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm/21.1.8/bin\nConfiguration file: /opt/homebrew/etc/clang/arm64-apple-darwin25.cfg\n",
+  "requested_version_note": "LLVM22 was mentioned during planning; available alternative is Homebrew LLVM21.1.8, whose identity is recorded here.",
+  "sanitizers": "address,undefined",
+  "timeout_seconds": 15,
+  "ASAN_OPTIONS": "detect_leaks=0:halt_on_error=1",
+  "source_io_sha256": "af1442727a737eab81571074f7e6f10e366a9019ecedf70cc329fe661fd30c19",
+  "compile_exit": 0,
+  "compile_output": "",
+  "exit_code": "timeout",
+  "stdout": "",
+  "stderr": "",
+  "status": "runtime_timeout",
+  "elapsed_seconds": 15.004,
+  "reached_main": false
+}

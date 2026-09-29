@@ -1,14 +1,15 @@
-"""Run the complete offline correctness gate using the required oldstata wrapper."""
+"""Run the complete offline correctness gate using the stata shell alias."""
+from stata_runner import launch_driver
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG = ROOT / 'validation/audit_ci.log'
-COMPONENTS = 'csort cmerge cimport cexport creghdfe cqreg civreghdfe cdecode cencode cdestring csample cbsample cbinscatter cpsmatch crangestat cwinsor cpplmhdfe audit_p1 audit_p2 sep22 sep24'.split()
+from suite_registry import load_registry, master_names, check_registry, run_extra_stata
+COMPONENTS = master_names()
 
 
 def validate_log(text, nonce):
@@ -27,8 +28,10 @@ def validate_log(text, nonce):
 
 
 def main():
+    check_registry()
     subprocess.run(['python3', 'scripts/fetch_validation_data.py', '--check-only'], cwd=ROOT, check=True)
     LOG.unlink(missing_ok=True)
+    errors = []
     nonce = uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix='ctools-stata-') as tmp:
         driver = Path(tmp) / 'audit.do'
@@ -38,7 +41,7 @@ set linesize 255
 capture log close _all
 log using "{LOG}", text replace
 local failed = 0
-foreach cmd in reghdfe ivreghdfe ppmlhdfe psmatch2 binscatter rangestat winsor2 gstats {{
+foreach cmd in reghdfe ivreghdfe ppmlhdfe psmatch2 binscatter rangestat rangejoin winsor2 gstats {{
     capture which `cmd'
     if _rc {{
         di as error "Required validation reference missing: `cmd'"
@@ -53,13 +56,22 @@ di "CTOOLS_DRIVER={nonce} RC=`failed'"
 log close
 exit, clear
 ''')
-        subprocess.run(['/bin/zsh', '-lic', 'oldstata -q -b do ' + shlex.quote(str(driver))], cwd=ROOT, check=True)
-    text = LOG.read_text()
+        try:
+            launch_driver(driver, LOG, rc_local='failed')
+        except (ValueError, subprocess.CalledProcessError) as error:
+            errors.append(str(error))
+    text = LOG.read_text() if LOG.exists() else ''
     try:
         passed, skipped = validate_log(text, nonce)
     except ValueError as error:
         print(text[-20000:])
-        raise SystemExit(f'{error}; see {LOG}')
+        errors.append(f'{error}; see {LOG}')
+    try:
+        run_extra_stata()
+    except (ValueError, subprocess.CalledProcessError) as error:
+        errors.append(str(error))
+    if errors:
+        raise SystemExit('Validation failed: ' + '; '.join(errors))
     print(f'Complete Stata suite: {passed} passed; {skipped} explicitly documented method comparisons excluded. Log: {LOG}')
 
 if __name__ == '__main__': main()

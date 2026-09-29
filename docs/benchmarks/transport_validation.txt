@@ -1,0 +1,105 @@
+Final transport validation evidence
+
+accepted-original
+CTOOLS_COMPONENT=csort RC=0 COMPLETE=csort
+CTOOLS_COMPONENT=cmerge RC=0 COMPLETE=cmerge
+CTOOLS_COMPONENT=cimport RC=0 COMPLETE=cimport
+CTOOLS_COMPONENT=cexport RC=0 COMPLETE=cexport
+CTOOLS_COMPONENT=creghdfe RC=0 COMPLETE=creghdfe
+CTOOLS_COMPONENT=cqreg RC=0 COMPLETE=cqreg
+CTOOLS_COMPONENT=civreghdfe RC=0 COMPLETE=civreghdfe
+CTOOLS_COMPONENT=cdecode RC=0 COMPLETE=cdecode
+CTOOLS_COMPONENT=cencode RC=0 COMPLETE=cencode
+CTOOLS_COMPONENT=cdestring RC=0 COMPLETE=cdestring
+CTOOLS_COMPONENT=csample RC=0 COMPLETE=csample
+CTOOLS_COMPONENT=cbsample RC=0 COMPLETE=cbsample
+CTOOLS_COMPONENT=cbinscatter RC=0 COMPLETE=cbinscatter
+CTOOLS_COMPONENT=cpsmatch RC=0 COMPLETE=cpsmatch
+CTOOLS_COMPONENT=crangestat RC=0 COMPLETE=crangestat
+CTOOLS_COMPONENT=cwinsor RC=0 COMPLETE=cwinsor
+CTOOLS_COMPONENT=cpplmhdfe RC=0 COMPLETE=cpplmhdfe
+CTOOLS_COMPONENT=audit_p1 RC=0 COMPLETE=audit_p1
+CTOOLS_COMPONENT=audit_p2 RC=0 COMPLETE=audit_p2
+CTOOLS_COMPONENT=sep22 RC=0 COMPLETE=sep22
+CTOOLS_COMPONENT=sep24 RC=0 COMPLETE=sep24
+CTOOLS_FULL_PASSED=2877 FAILED=0 SKIPPED=48 EXPECTED_SKIPPED=48
+TRANSPORT_SUITE_RC=0
+
+accepted-current
+CTOOLS_COMPONENT=csort RC=0 COMPLETE=csort
+CTOOLS_COMPONENT=cmerge RC=0 COMPLETE=cmerge
+CTOOLS_COMPONENT=cimport RC=0 COMPLETE=cimport
+CTOOLS_COMPONENT=cexport RC=0 COMPLETE=cexport
+CTOOLS_COMPONENT=creghdfe RC=0 COMPLETE=creghdfe
+CTOOLS_COMPONENT=cqreg RC=0 COMPLETE=cqreg
+CTOOLS_COMPONENT=civreghdfe RC=0 COMPLETE=civreghdfe
+CTOOLS_COMPONENT=cdecode RC=0 COMPLETE=cdecode
+CTOOLS_COMPONENT=cencode RC=0 COMPLETE=cencode
+CTOOLS_COMPONENT=cdestring RC=0 COMPLETE=cdestring
+CTOOLS_COMPONENT=csample RC=0 COMPLETE=csample
+CTOOLS_COMPONENT=cbsample RC=0 COMPLETE=cbsample
+CTOOLS_COMPONENT=cbinscatter RC=0 COMPLETE=cbinscatter
+CTOOLS_COMPONENT=cpsmatch RC=0 COMPLETE=cpsmatch
+CTOOLS_COMPONENT=crangestat RC=0 COMPLETE=crangestat
+CTOOLS_COMPONENT=cwinsor RC=0 COMPLETE=cwinsor
+CTOOLS_COMPONENT=cpplmhdfe RC=0 COMPLETE=cpplmhdfe
+CTOOLS_COMPONENT=cipolate RC=0 COMPLETE=cipolate
+CTOOLS_COMPONENT=csplit RC=0 COMPLETE=csplit
+CTOOLS_COMPONENT=crangejoin RC=111 COMPLETE=
+CTOOLS_COMPONENT=audit_p1 RC=0 COMPLETE=audit_p1
+CTOOLS_COMPONENT=audit_p2 RC=0 COMPLETE=audit_p2
+CTOOLS_COMPONENT=sep22 RC=0 COMPLETE=sep22
+CTOOLS_COMPONENT=sep24 RC=0 COMPLETE=sep24
+CTOOLS_FULL_PASSED=3966 FAILED=1 SKIPPED=48 EXPECTED_SKIPPED=48
+TRANSPORT_SUITE_RC=1
+
+The accepted-current crangejoin script stopped at `which rangejoin` with r(111): the SSC reference command is absent. No crangejoin comparisons executed.
+
+accepted-native.log
+PASS transport sanitizers=undefined openmp=False
+PASS transport sanitizers=undefined openmp=True
+
+accepted-scheduling.log
+PASS scheduling openmp=False source=/private/tmp/ctools-transport/combined/src
+PASS scheduling openmp=True source=/private/tmp/ctools-transport/combined/src
+
+accepted-original-test_p2_native.py.log
+PASS signed_labels
+PASS encoding_bom
+PASS spi_failures
+PASS csv_store_failures
+PASS xlsx_store_failures
+PASS matrix_store_failures
+
+accepted-original-test_bigdata_native.py.log
+PASS sorted_store_False
+PASS sorted_store_True
+
+accepted-current-test_p2_native.py.log
+PASS signed_labels
+PASS encoding_bom
+PASS spi_failures
+PASS csv_store_failures
+PASS xlsx_store_failures
+PASS matrix_store_failures
+
+accepted-current-test_bigdata_native.py.log
+PASS sorted_store_False
+PASS sorted_store_True
+
+accepted-original-dependencies.log
+Dependency contract checked: /private/tmp/ctools-transport/accepted-original/build/ctools_mac_arm.plugin
+
+accepted-current-dependencies.log
+Dependency contract checked: /private/tmp/ctools-transport/accepted-current/build/ctools_mac_arm.plugin
+
+Final real-SPI strL validation
+TRANSPORT_STRL_COMPLETE
+STRL_VALIDATION_RC=0
+
+Intel macOS OpenMP syntax check: passed
+Windows x64 no-OpenMP cross compilation: passed
+No Intel/Windows/Linux runtime or performance test is claimed.
+Local ASan: unavailable; sanitizer runtime stalled before main. UBSan: passed.
+
+End-to-end wide command checks: both variants passed all four cases at N=1,000 (one repetition) and N=2,000,000 (five repetitions).

@@ -1,0 +1,21 @@
+{
+  "status": "PASS",
+  "archived_files_excluding_this_record": 2212,
+  "archive_bytes_excluding_this_record": 20090770,
+  "inventory_records": 2137,
+  "inventory_source_bytes": 80942634,
+  "inventory_archived_bytes": 16674391,
+  "gzipped_logs_and_profiles": 60,
+  "gzipped_generated_drivers": 700,
+  "checked_report_links": 63,
+  "checked_transport_source_bundles": 22,
+  "checked_production_changed_source_bundles": 2,
+  "checks": [
+    "All inventory archived SHA-256 and byte counts match",
+    "All gzip decompressed content SHA-256 values match original source",
+    "Untransformed plain artifacts match original SHA-256",
+    "All frozen transport source tar members match hashes",
+    "Both production changed-source bundles and patches match hashes",
+    "All relative report links resolve"
+  ]
+}

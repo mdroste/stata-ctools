@@ -1,0 +1,1606 @@
+Compiled from "StImportDelimited.java"
+public class com.stata.plugins.imports.StImportDelimited {
+  private java.lang.String filename;
+
+  private java.lang.String optDelim;
+
+  private int optBindType;
+
+  private int optEmptyLinesType;
+
+  private int optStripQuoteType;
+
+  private boolean optSequentialDelm;
+
+  private boolean optMultiCharDelm;
+
+  private boolean optFavorStrFixed;
+
+  private int vRowOverride;
+
+  private long vRange1;
+
+  private long vRange2;
+
+  private int hRange1;
+
+  private int hRange2;
+
+  private long maxQuotedRows;
+
+  private int optCaseType;
+
+  private boolean optAsString;
+
+  private int optFirstRowType;
+
+  private java.lang.String optStrVars;
+
+  private java.lang.String optNumVars;
+
+  private java.lang.String optCharset;
+
+  private boolean useLocaleParsing;
+
+  private char optParseGroupSep;
+
+  private char optParseDecSep;
+
+  private java.util.Locale optParseNumLocale;
+
+  private final int PREPROCESS_ROWS;
+
+  private java.util.concurrent.ForkJoinPool pool;
+
+  com.stata.plugins.imports.CSVReader reader;
+
+  private static final java.lang.String LATIN_charset;
+
+  private static final java.lang.String MAC_charset;
+
+  java.text.DecimalFormat decimalFormat;
+
+  java.text.DecimalFormatSymbols symbols;
+
+  private volatile int m_rc;
+
+  boolean bFullScan;
+
+  public static final int EMPTYLINES_SKIP;
+
+  public static final int EMPTYLINES_INCLUDE;
+
+  public static final int EMPTYLINES_DEFAULT;
+
+  com.stata.plugins.imports.StImportDelimited$ParseNumber numberParser;
+
+  public com.stata.plugins.imports.StImportDelimited();
+    Code:
+       0: aload_0
+       1: invokespecial #2                  // Method java/lang/Object."<init>":()V
+       4: aload_0
+       5: iconst_0
+       6: putfield      #3                  // Field useLocaleParsing:Z
+       9: aload_0
+      10: aconst_null
+      11: putfield      #4                  // Field optParseNumLocale:Ljava/util/Locale;
+      14: aload_0
+      15: sipush        512
+      18: putfield      #5                  // Field PREPROCESS_ROWS:I
+      21: aload_0
+      22: aconst_null
+      23: putfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+      26: aload_0
+      27: aconst_null
+      28: putfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      31: aload_0
+      32: iconst_0
+      33: putfield      #8                  // Field m_rc:I
+      36: aload_0
+      37: iconst_0
+      38: putfield      #9                  // Field bFullScan:Z
+      41: return
+
+  public static int main(java.lang.String[]);
+    Code:
+       0: new           #1                  // class com/stata/plugins/imports/StImportDelimited
+       3: dup
+       4: invokespecial #10                 // Method "<init>":()V
+       7: astore_1
+       8: aload_1
+       9: ldc           #11                 // String j_filename
+      11: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+      14: putfield      #13                 // Field filename:Ljava/lang/String;
+      17: aload_1
+      18: ldc           #14                 // String j_vRange1
+      20: ldc2_w        #15                 // long -1l
+      23: invokestatic  #17                 // Method getLongOpt:(Ljava/lang/String;J)J
+      26: putfield      #18                 // Field vRange1:J
+      29: aload_1
+      30: ldc           #19                 // String j_vRange2
+      32: ldc2_w        #15                 // long -1l
+      35: invokestatic  #17                 // Method getLongOpt:(Ljava/lang/String;J)J
+      38: putfield      #20                 // Field vRange2:J
+      41: aload_1
+      42: ldc           #21                 // String j_hRange1
+      44: iconst_m1
+      45: invokestatic  #22                 // Method getIntOpt:(Ljava/lang/String;I)I
+      48: putfield      #23                 // Field hRange1:I
+      51: aload_1
+      52: ldc           #24                 // String j_hRange2
+      54: iconst_m1
+      55: invokestatic  #22                 // Method getIntOpt:(Ljava/lang/String;I)I
+      58: putfield      #25                 // Field hRange2:I
+      61: aload_1
+      62: ldc           #26                 // String j_caseType
+      64: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+      67: invokestatic  #27                 // Method prsCaseType:(Ljava/lang/String;)I
+      70: putfield      #28                 // Field optCaseType:I
+      73: aload_1
+      74: ldc           #29                 // String j_delimiter
+      76: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+      79: putfield      #30                 // Field optDelim:Ljava/lang/String;
+      82: aload_1
+      83: ldc           #31                 // String j_asstring
+      85: invokestatic  #32                 // Method getSwitchOpt:(Ljava/lang/String;)Z
+      88: putfield      #33                 // Field optAsString:Z
+      91: aload_1
+      92: ldc           #34                 // String j_firstrow
+      94: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+      97: invokestatic  #35                 // Method prsFirstRowType:(Ljava/lang/String;)I
+     100: putfield      #36                 // Field optFirstRowType:I
+     103: aload_1
+     104: ldc           #37                 // String j_bindquotes
+     106: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     109: invokestatic  #38                 // Method prsBindType:(Ljava/lang/String;)I
+     112: putfield      #39                 // Field optBindType:I
+     115: aload_1
+     116: ldc           #40                 // String j_emptylines
+     118: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     121: invokestatic  #41                 // Method prsEmptyLinesType:(Ljava/lang/String;)I
+     124: putfield      #42                 // Field optEmptyLinesType:I
+     127: aload_1
+     128: ldc           #43                 // String j_stripquotes
+     130: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     133: invokestatic  #44                 // Method prsStripQuoteType:(Ljava/lang/String;)I
+     136: putfield      #45                 // Field optStripQuoteType:I
+     139: aload_1
+     140: ldc           #46                 // String j_sequential
+     142: invokestatic  #32                 // Method getSwitchOpt:(Ljava/lang/String;)Z
+     145: putfield      #47                 // Field optSequentialDelm:Z
+     148: aload_1
+     149: ldc           #48                 // String j_multichardelim
+     151: invokestatic  #32                 // Method getSwitchOpt:(Ljava/lang/String;)Z
+     154: putfield      #49                 // Field optMultiCharDelm:Z
+     157: aload_1
+     158: ldc           #50                 // String j_varnamerow
+     160: iconst_m1
+     161: invokestatic  #22                 // Method getIntOpt:(Ljava/lang/String;I)I
+     164: putfield      #51                 // Field vRowOverride:I
+     167: aload_1
+     168: ldc           #52                 // String j_strvars
+     170: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     173: putfield      #53                 // Field optStrVars:Ljava/lang/String;
+     176: aload_1
+     177: ldc           #54                 // String j_numvars
+     179: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     182: putfield      #55                 // Field optNumVars:Ljava/lang/String;
+     185: aload_1
+     186: ldc           #56                 // String j_favorstrfixed
+     188: invokestatic  #32                 // Method getSwitchOpt:(Ljava/lang/String;)Z
+     191: putfield      #57                 // Field optFavorStrFixed:Z
+     194: aload_1
+     195: ldc           #58                 // String j_max_quoted_rows
+     197: ldc2_w        #60                 // long 20l
+     200: invokestatic  #17                 // Method getLongOpt:(Ljava/lang/String;J)J
+     203: putfield      #62                 // Field maxQuotedRows:J
+     206: ldc           #63                 // String j_numlocale
+     208: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     211: astore_2
+     212: aload_1
+     213: aload_2
+     214: invokestatic  #64                 // Method com/stata/plugins/imports/CSVReader.getLocale:(Ljava/lang/String;)Ljava/util/Locale;
+     217: putfield      #4                  // Field optParseNumLocale:Ljava/util/Locale;
+     220: goto          252
+     223: astore_3
+     224: aload_3
+     225: invokestatic  #66                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+     228: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     233: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+     236: ifne          248
+     239: aload_2
+     240: invokedynamic #69,  0             // InvokeDynamic #1:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     245: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+     248: sipush        198
+     251: ireturn
+     252: aload_1
+     253: ldc           #71                 // String j_groupsep
+     255: invokestatic  #72                 // Method getCharOpt:(Ljava/lang/String;)C
+     258: putfield      #73                 // Field optParseGroupSep:C
+     261: aload_1
+     262: ldc           #74                 // String j_decimalsep
+     264: invokestatic  #72                 // Method getCharOpt:(Ljava/lang/String;)C
+     267: putfield      #75                 // Field optParseDecSep:C
+     270: ldc           #63                 // String j_numlocale
+     272: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     275: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+     278: ifeq          303
+     281: ldc           #71                 // String j_groupsep
+     283: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     286: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+     289: ifeq          303
+     292: ldc           #74                 // String j_decimalsep
+     294: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     297: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+     300: ifne          308
+     303: aload_1
+     304: iconst_1
+     305: putfield      #3                  // Field useLocaleParsing:Z
+     308: aload_1
+     309: ldc           #77                 // String j_charset
+     311: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+     314: putfield      #78                 // Field optCharset:Ljava/lang/String;
+     317: aload_1
+     318: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     321: ldc           #79                 // String
+     323: invokevirtual #80                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     326: ifeq          392
+     329: aload_1
+     330: aload_1
+     331: getfield      #13                 // Field filename:Ljava/lang/String;
+     334: invokestatic  #81                 // Method com/stata/plugins/imports/CSVReader.getBestCharsetName:(Ljava/lang/String;)Ljava/lang/String;
+     337: putfield      #78                 // Field optCharset:Ljava/lang/String;
+     340: aload_1
+     341: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     344: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+     347: ifeq          374
+     350: aload_1
+     351: ldc           #83                 // String UTF-8
+     353: putfield      #78                 // Field optCharset:Ljava/lang/String;
+     356: aload_1
+     357: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     360: invokedynamic #84,  0             // InvokeDynamic #2:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     365: getstatic     #85                 // Field com/stata/sfi/DisplayMode.TEXT:Lcom/stata/sfi/DisplayMode;
+     368: invokestatic  #86                 // Method com/stata/sfi/SFIToolkit.displayln:(Ljava/lang/String;Lcom/stata/sfi/DisplayMode;)V
+     371: goto          431
+     374: aload_1
+     375: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     378: invokedynamic #87,  0             // InvokeDynamic #3:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     383: getstatic     #85                 // Field com/stata/sfi/DisplayMode.TEXT:Lcom/stata/sfi/DisplayMode;
+     386: invokestatic  #86                 // Method com/stata/sfi/SFIToolkit.displayln:(Ljava/lang/String;Lcom/stata/sfi/DisplayMode;)V
+     389: goto          431
+     392: aload_1
+     393: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     396: ldc           #88                 // String latin1
+     398: invokevirtual #80                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     401: ifeq          413
+     404: aload_1
+     405: ldc           #89                 // String ISO-8859-1
+     407: putfield      #78                 // Field optCharset:Ljava/lang/String;
+     410: goto          431
+     413: aload_1
+     414: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     417: ldc           #90                 // String mac
+     419: invokevirtual #80                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     422: ifeq          431
+     425: aload_1
+     426: ldc           #91                 // String MacRoman
+     428: putfield      #78                 // Field optCharset:Ljava/lang/String;
+     431: ldc           #92                 // String encoding
+     433: aload_1
+     434: getfield      #78                 // Field optCharset:Ljava/lang/String;
+     437: iconst_2
+     438: invokestatic  #94                 // Method com/stata/sfi/Macro.setGlobal:(Ljava/lang/String;Ljava/lang/String;I)I
+     441: pop
+     442: aload_1
+     443: aload_1
+     444: invokevirtual #95                 // Method doImport:()I
+     447: putfield      #8                  // Field m_rc:I
+     450: aload_1
+     451: getfield      #8                  // Field m_rc:I
+     454: ireturn
+    Exception table:
+       from    to  target type
+         212   220   223   Class java/util/IllformedLocaleException
+
+  private int getDataProcLimit(com.stata.plugins.imports.StImportDelimited$NewVarInfo);
+    Code:
+       0: aload_1
+       1: getfield      #96                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nVars:I
+       4: istore_2
+       5: ldc2_w        #97                 // double 0.02d
+       8: dstore_3
+       9: aload_1
+      10: getfield      #96                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nVars:I
+      13: ifle          36
+      16: aload_1
+      17: getfield      #99                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nStrls:I
+      20: i2d
+      21: aload_1
+      22: getfield      #96                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nVars:I
+      25: i2d
+      26: ddiv
+      27: ldc2_w        #97                 // double 0.02d
+      30: dcmpl
+      31: ifle          36
+      34: iconst_1
+      35: istore_2
+      36: iload_2
+      37: iconst_1
+      38: if_icmpge     43
+      41: iconst_1
+      42: istore_2
+      43: iload_2
+      44: ireturn
+
+  private int doImport();
+    Code:
+       0: iconst_0
+       1: istore_1
+       2: aload_0
+       3: new           #82                 // class com/stata/plugins/imports/CSVReader
+       6: dup
+       7: aload_0
+       8: getfield      #13                 // Field filename:Ljava/lang/String;
+      11: aload_0
+      12: getfield      #78                 // Field optCharset:Ljava/lang/String;
+      15: invokespecial #100                // Method com/stata/plugins/imports/CSVReader."<init>":(Ljava/lang/String;Ljava/lang/String;)V
+      18: putfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      21: aload_0
+      22: aload_0
+      23: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      26: invokevirtual #101                // Method setupLocaleParsing:(Lcom/stata/plugins/imports/CSVReader;)V
+      29: aload_0
+      30: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      33: iconst_1
+      34: invokevirtual #102                // Method com/stata/plugins/imports/CSVReader.setSkipEmptyLines:(Z)V
+      37: aload_0
+      38: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      41: aload_0
+      42: getfield      #28                 // Field optCaseType:I
+      45: invokevirtual #103                // Method com/stata/plugins/imports/CSVReader.setCaseType:(I)V
+      48: aload_0
+      49: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      52: aload_0
+      53: getfield      #30                 // Field optDelim:Ljava/lang/String;
+      56: invokevirtual #104                // Method com/stata/plugins/imports/CSVReader.setDelimiters:(Ljava/lang/String;)V
+      59: aload_0
+      60: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      63: aload_0
+      64: getfield      #36                 // Field optFirstRowType:I
+      67: invokevirtual #105                // Method com/stata/plugins/imports/CSVReader.setFirstRowType:(I)V
+      70: aload_0
+      71: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      74: aload_0
+      75: getfield      #39                 // Field optBindType:I
+      78: invokevirtual #106                // Method com/stata/plugins/imports/CSVReader.setBindType:(I)V
+      81: aload_0
+      82: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      85: aload_0
+      86: getfield      #45                 // Field optStripQuoteType:I
+      89: invokevirtual #107                // Method com/stata/plugins/imports/CSVReader.setStripQuoteType:(I)V
+      92: aload_0
+      93: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      96: aload_0
+      97: getfield      #23                 // Field hRange1:I
+     100: aload_0
+     101: getfield      #25                 // Field hRange2:I
+     104: invokevirtual #108                // Method com/stata/plugins/imports/CSVReader.setHRange:(II)V
+     107: aload_0
+     108: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     111: aload_0
+     112: getfield      #47                 // Field optSequentialDelm:Z
+     115: invokevirtual #109                // Method com/stata/plugins/imports/CSVReader.setTreatSequentialDelimitersAsOne:(Z)V
+     118: aload_0
+     119: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     122: aload_0
+     123: getfield      #49                 // Field optMultiCharDelm:Z
+     126: invokevirtual #110                // Method com/stata/plugins/imports/CSVReader.setMultiCharDelimiter:(Z)V
+     129: aload_0
+     130: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     133: aload_0
+     134: getfield      #18                 // Field vRange1:J
+     137: aload_0
+     138: getfield      #20                 // Field vRange2:J
+     141: invokevirtual #111                // Method com/stata/plugins/imports/CSVReader.setVRange:(JJ)V
+     144: aload_0
+     145: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     148: aload_0
+     149: getfield      #51                 // Field vRowOverride:I
+     152: i2l
+     153: invokevirtual #112                // Method com/stata/plugins/imports/CSVReader.setVarRow:(J)V
+     156: aload_0
+     157: getfield      #51                 // Field vRowOverride:I
+     160: iflt          171
+     163: aload_0
+     164: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     167: iconst_2
+     168: invokevirtual #105                // Method com/stata/plugins/imports/CSVReader.setFirstRowType:(I)V
+     171: aload_0
+     172: getfield      #42                 // Field optEmptyLinesType:I
+     175: iconst_1
+     176: if_icmpne     187
+     179: aload_0
+     180: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     183: iconst_0
+     184: invokevirtual #102                // Method com/stata/plugins/imports/CSVReader.setSkipEmptyLines:(Z)V
+     187: aload_0
+     188: getfield      #42                 // Field optEmptyLinesType:I
+     191: ifne          202
+     194: aload_0
+     195: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     198: iconst_1
+     199: invokevirtual #102                // Method com/stata/plugins/imports/CSVReader.setSkipEmptyLines:(Z)V
+     202: aload_0
+     203: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     206: aload_0
+     207: getfield      #53                 // Field optStrVars:Ljava/lang/String;
+     210: invokevirtual #113                // Method com/stata/plugins/imports/CSVReader.setForceStringVars:(Ljava/lang/String;)V
+     213: aload_0
+     214: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     217: aload_0
+     218: getfield      #55                 // Field optNumVars:Ljava/lang/String;
+     221: invokevirtual #114                // Method com/stata/plugins/imports/CSVReader.setForceNumberVars:(Ljava/lang/String;)V
+     224: aload_0
+     225: getfield      #9                  // Field bFullScan:Z
+     228: ifeq          255
+     231: aload_0
+     232: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     235: aload_0
+     236: getfield      #9                  // Field bFullScan:Z
+     239: invokevirtual #115                // Method com/stata/plugins/imports/CSVReader.setFullScan:(Z)V
+     242: aload_0
+     243: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     246: ldc2_w        #117                // long 9223372036854775807l
+     249: invokevirtual #119                // Method com/stata/plugins/imports/CSVReader.setMaxToPreProcess:(J)V
+     252: goto          265
+     255: aload_0
+     256: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     259: ldc2_w        #120                // long 512l
+     262: invokevirtual #119                // Method com/stata/plugins/imports/CSVReader.setMaxToPreProcess:(J)V
+     265: aload_0
+     266: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     269: aload_0
+     270: getfield      #62                 // Field maxQuotedRows:J
+     273: invokevirtual #122                // Method com/stata/plugins/imports/CSVReader.setQuotedLineMax:(J)V
+     276: aload_0
+     277: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     280: invokevirtual #123                // Method com/stata/plugins/imports/CSVReader.preProcessFile:()I
+     283: istore_1
+     284: ldc           #124                // String delimiters
+     286: aload_0
+     287: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     290: invokevirtual #125                // Method com/stata/plugins/imports/CSVReader.getPrintableDelimiters:()Ljava/lang/String;
+     293: iconst_2
+     294: invokestatic  #94                 // Method com/stata/sfi/Macro.setGlobal:(Ljava/lang/String;Ljava/lang/String;I)I
+     297: pop
+     298: iload_1
+     299: ifne          589
+     302: aload_0
+     303: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     306: invokevirtual #126                // Method com/stata/plugins/imports/CSVReader.reset:()V
+     309: aload_0
+     310: invokevirtual #127                // Method createVariables:()Lcom/stata/plugins/imports/StImportDelimited$NewVarInfo;
+     313: astore_2
+     314: aload_2
+     315: getfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+     318: ifeq          356
+     321: aload_2
+     322: getfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+     325: istore_3
+     326: aload_0
+     327: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     330: ifnull        340
+     333: aload_0
+     334: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     337: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     340: aload_0
+     341: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     344: ifnull        354
+     347: aload_0
+     348: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     351: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     354: iload_3
+     355: ireturn
+     356: aload_0
+     357: aload_2
+     358: invokevirtual #131                // Method getDataProcLimit:(Lcom/stata/plugins/imports/StImportDelimited$NewVarInfo;)I
+     361: istore_3
+     362: iload_3
+     363: invokestatic  #132                // Method com/stata/plugins/imports/ImportDelimitedUtil.getProcs:(I)I
+     366: istore        4
+     368: iload         4
+     370: invokedynamic #133,  0            // InvokeDynamic #4:makeConcatWithConstants:(I)Ljava/lang/String;
+     375: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+     378: pop
+     379: aload_0
+     380: new           #134                // class java/util/concurrent/ForkJoinPool
+     383: dup
+     384: iload         4
+     386: invokespecial #135                // Method java/util/concurrent/ForkJoinPool."<init>":(I)V
+     389: putfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     392: new           #136                // class com/stata/plugins/imports/StImportDelimited$DataProcessor
+     395: dup
+     396: aload_0
+     397: iload         4
+     399: aload_0
+     400: getfield      #9                  // Field bFullScan:Z
+     403: ifne          410
+     406: iconst_1
+     407: goto          411
+     410: iconst_0
+     411: invokespecial #137                // Method com/stata/plugins/imports/StImportDelimited$DataProcessor."<init>":(Lcom/stata/plugins/imports/StImportDelimited;IZ)V
+     414: astore        5
+     416: aload         5
+     418: invokevirtual #138                // Method com/stata/plugins/imports/StImportDelimited$DataProcessor.processFile:()I
+     421: istore_1
+     422: iload_1
+     423: iconst_m1
+     424: if_icmpne     589
+     427: invokestatic  #139                // Method com/stata/sfi/Data.getVarCount:()I
+     430: ifle          443
+     433: invokestatic  #139                // Method com/stata/sfi/Data.getVarCount:()I
+     436: invokestatic  #140                // Method com/stata/sfi/Data.dropVar:(I)I
+     439: pop
+     440: goto          427
+     443: aload_0
+     444: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     447: invokevirtual #126                // Method com/stata/plugins/imports/CSVReader.reset:()V
+     450: aload_0
+     451: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     454: iconst_1
+     455: invokevirtual #115                // Method com/stata/plugins/imports/CSVReader.setFullScan:(Z)V
+     458: aload_0
+     459: iconst_1
+     460: putfield      #9                  // Field bFullScan:Z
+     463: aload_0
+     464: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     467: invokevirtual #123                // Method com/stata/plugins/imports/CSVReader.preProcessFile:()I
+     470: istore_1
+     471: aload_0
+     472: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     475: invokevirtual #126                // Method com/stata/plugins/imports/CSVReader.reset:()V
+     478: aload_0
+     479: invokevirtual #127                // Method createVariables:()Lcom/stata/plugins/imports/StImportDelimited$NewVarInfo;
+     482: astore_2
+     483: aload_2
+     484: getfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+     487: ifeq          527
+     490: aload_2
+     491: getfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+     494: istore        6
+     496: aload_0
+     497: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     500: ifnull        510
+     503: aload_0
+     504: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     507: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     510: aload_0
+     511: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     514: ifnull        524
+     517: aload_0
+     518: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     521: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     524: iload         6
+     526: ireturn
+     527: aload_0
+     528: aload_2
+     529: invokevirtual #131                // Method getDataProcLimit:(Lcom/stata/plugins/imports/StImportDelimited$NewVarInfo;)I
+     532: istore_3
+     533: aload_0
+     534: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     537: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     540: iload_3
+     541: invokestatic  #132                // Method com/stata/plugins/imports/ImportDelimitedUtil.getProcs:(I)I
+     544: istore        4
+     546: aload_0
+     547: new           #134                // class java/util/concurrent/ForkJoinPool
+     550: dup
+     551: iload         4
+     553: invokespecial #135                // Method java/util/concurrent/ForkJoinPool."<init>":(I)V
+     556: putfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     559: new           #136                // class com/stata/plugins/imports/StImportDelimited$DataProcessor
+     562: dup
+     563: aload_0
+     564: iload         4
+     566: aload_0
+     567: getfield      #9                  // Field bFullScan:Z
+     570: ifne          577
+     573: iconst_1
+     574: goto          578
+     577: iconst_0
+     578: invokespecial #137                // Method com/stata/plugins/imports/StImportDelimited$DataProcessor."<init>":(Lcom/stata/plugins/imports/StImportDelimited;IZ)V
+     581: astore        5
+     583: aload         5
+     585: invokevirtual #138                // Method com/stata/plugins/imports/StImportDelimited$DataProcessor.processFile:()I
+     588: istore_1
+     589: iload_1
+     590: ifne          664
+     593: aload_0
+     594: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     597: invokevirtual #141                // Method com/stata/plugins/imports/CSVReader.getParser:()Lcom/stata/plugins/csvparser/CSVParser;
+     600: invokevirtual #142                // Method com/stata/plugins/csvparser/CSVParser.getNullCount:()J
+     603: lstore_2
+     604: lload_2
+     605: lconst_0
+     606: lcmp
+     607: ifle          664
+     610: ldc           #143                // String binary zeros were ignored in the source file.
+     612: astore        4
+     614: lload_2
+     615: lconst_1
+     616: lcmp
+     617: ifne          624
+     620: ldc           #144                // String binary zero was ignored in the source file.
+     622: astore        4
+     624: ldc           #145                // String {p 0 7 2} Note:  %,d %s   The first instance occurred on line %,d.  Binary zeros are not valid in text data.  Inspect your data carefully.{p_end}
+     626: iconst_3
+     627: anewarray     #146                // class java/lang/Object
+     630: dup
+     631: iconst_0
+     632: lload_2
+     633: invokestatic  #147                // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;
+     636: aastore
+     637: dup
+     638: iconst_1
+     639: aload         4
+     641: aastore
+     642: dup
+     643: iconst_2
+     644: aload_0
+     645: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     648: invokevirtual #141                // Method com/stata/plugins/imports/CSVReader.getParser:()Lcom/stata/plugins/csvparser/CSVParser;
+     651: invokevirtual #148                // Method com/stata/plugins/csvparser/CSVParser.getNullFirstLine:()J
+     654: invokestatic  #147                // Method java/lang/Long.valueOf:(J)Ljava/lang/Long;
+     657: aastore
+     658: invokestatic  #149                // Method java/lang/String.format:(Ljava/lang/String;[Ljava/lang/Object;)Ljava/lang/String;
+     661: invokestatic  #150                // Method com/stata/sfi/SFIToolkit.displayln:(Ljava/lang/String;)V
+     664: aload_0
+     665: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     668: ifnull        678
+     671: aload_0
+     672: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     675: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     678: aload_0
+     679: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     682: ifnull        884
+     685: aload_0
+     686: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     689: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     692: goto          884
+     695: astore_2
+     696: aload_2
+     697: invokestatic  #66                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+     700: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     705: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+     708: ifne          716
+     711: ldc           #153                // String encoding not supported\n
+     713: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+     716: sipush        198
+     719: istore_1
+     720: aload_0
+     721: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     724: ifnull        734
+     727: aload_0
+     728: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     731: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     734: aload_0
+     735: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     738: ifnull        884
+     741: aload_0
+     742: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     745: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     748: goto          884
+     751: astore_2
+     752: aload_2
+     753: invokestatic  #66                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+     756: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     761: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+     764: ifne          779
+     767: aload_0
+     768: getfield      #13                 // Field filename:Ljava/lang/String;
+     771: invokedynamic #155,  0            // InvokeDynamic #5:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+     776: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+     779: sipush        601
+     782: istore_1
+     783: aload_0
+     784: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     787: ifnull        797
+     790: aload_0
+     791: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     794: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     797: aload_0
+     798: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     801: ifnull        884
+     804: aload_0
+     805: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     808: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     811: goto          884
+     814: astore_2
+     815: aload_2
+     816: invokestatic  #160                // Method handleExceptions:(Ljava/lang/Exception;)I
+     819: istore_1
+     820: aload_0
+     821: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     824: ifnull        834
+     827: aload_0
+     828: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     831: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     834: aload_0
+     835: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     838: ifnull        884
+     841: aload_0
+     842: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     845: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     848: goto          884
+     851: astore        7
+     853: aload_0
+     854: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     857: ifnull        867
+     860: aload_0
+     861: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     864: invokevirtual #129                // Method com/stata/plugins/imports/CSVReader.close:()V
+     867: aload_0
+     868: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     871: ifnull        881
+     874: aload_0
+     875: getfield      #6                  // Field pool:Ljava/util/concurrent/ForkJoinPool;
+     878: invokevirtual #130                // Method java/util/concurrent/ForkJoinPool.shutdown:()V
+     881: aload         7
+     883: athrow
+     884: iload_1
+     885: ireturn
+    Exception table:
+       from    to  target type
+           2   326   695   Class java/io/UnsupportedEncodingException
+           2   326   695   Class java/nio/charset/UnsupportedCharsetException
+         356   496   695   Class java/io/UnsupportedEncodingException
+         356   496   695   Class java/nio/charset/UnsupportedCharsetException
+         527   664   695   Class java/io/UnsupportedEncodingException
+         527   664   695   Class java/nio/charset/UnsupportedCharsetException
+           2   326   751   Class java/io/FileNotFoundException
+         356   496   751   Class java/io/FileNotFoundException
+         527   664   751   Class java/io/FileNotFoundException
+           2   326   814   Class java/io/IOException
+           2   326   814   Class com/stata/plugins/imports/TooManyColumnsException
+           2   326   814   Class com/stata/plugins/BreakException
+           2   326   814   Class com/stata/plugins/imports/BindStrictRowCountException
+         356   496   814   Class java/io/IOException
+         356   496   814   Class com/stata/plugins/imports/TooManyColumnsException
+         356   496   814   Class com/stata/plugins/BreakException
+         356   496   814   Class com/stata/plugins/imports/BindStrictRowCountException
+         527   664   814   Class java/io/IOException
+         527   664   814   Class com/stata/plugins/imports/TooManyColumnsException
+         527   664   814   Class com/stata/plugins/BreakException
+         527   664   814   Class com/stata/plugins/imports/BindStrictRowCountException
+           2   326   851   any
+         356   496   851   any
+         527   664   851   any
+         695   720   851   any
+         751   783   851   any
+         814   820   851   any
+         851   853   851   any
+
+  private void setupLocaleParsing(com.stata.plugins.imports.CSVReader);
+    Code:
+       0: aload_0
+       1: getfield      #3                  // Field useLocaleParsing:Z
+       4: ifne          8
+       7: return
+       8: aload_0
+       9: aload_0
+      10: getfield      #4                  // Field optParseNumLocale:Ljava/util/Locale;
+      13: invokestatic  #161                // Method java/text/NumberFormat.getInstance:(Ljava/util/Locale;)Ljava/text/NumberFormat;
+      16: checkcast     #162                // class java/text/DecimalFormat
+      19: putfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+      22: aload_0
+      23: aload_0
+      24: getfield      #4                  // Field optParseNumLocale:Ljava/util/Locale;
+      27: invokestatic  #164                // Method java/text/DecimalFormatSymbols.getInstance:(Ljava/util/Locale;)Ljava/text/DecimalFormatSymbols;
+      30: putfield      #165                // Field symbols:Ljava/text/DecimalFormatSymbols;
+      33: aload_0
+      34: getfield      #73                 // Field optParseGroupSep:C
+      37: ifeq          51
+      40: aload_0
+      41: getfield      #165                // Field symbols:Ljava/text/DecimalFormatSymbols;
+      44: aload_0
+      45: getfield      #73                 // Field optParseGroupSep:C
+      48: invokevirtual #166                // Method java/text/DecimalFormatSymbols.setGroupingSeparator:(C)V
+      51: aload_0
+      52: getfield      #75                 // Field optParseDecSep:C
+      55: ifeq          69
+      58: aload_0
+      59: getfield      #165                // Field symbols:Ljava/text/DecimalFormatSymbols;
+      62: aload_0
+      63: getfield      #75                 // Field optParseDecSep:C
+      66: invokevirtual #167                // Method java/text/DecimalFormatSymbols.setDecimalSeparator:(C)V
+      69: aload_0
+      70: getfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+      73: aload_0
+      74: getfield      #165                // Field symbols:Ljava/text/DecimalFormatSymbols;
+      77: invokevirtual #168                // Method java/text/DecimalFormat.setDecimalFormatSymbols:(Ljava/text/DecimalFormatSymbols;)V
+      80: aload_1
+      81: aload_0
+      82: getfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+      85: invokevirtual #169                // Method com/stata/plugins/imports/CSVReader.setDecimalFormat:(Ljava/text/DecimalFormat;)V
+      88: return
+
+  private static java.lang.String getBindStrictError(com.stata.plugins.imports.BindStrictRowCountException);
+    Code:
+       0: aload_0
+       1: invokevirtual #170                // Method com/stata/plugins/imports/BindStrictRowCountException.getMessage:()Ljava/lang/String;
+       4: invokedynamic #171,  0            // InvokeDynamic #6:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+       9: areturn
+
+  private com.stata.plugins.imports.StImportDelimited$NewVarInfo createVariables() throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: new           #172                // class com/stata/plugins/imports/StImportDelimited$NewVarInfo
+       3: dup
+       4: aload_0
+       5: invokespecial #173                // Method com/stata/plugins/imports/StImportDelimited$NewVarInfo."<init>":(Lcom/stata/plugins/imports/StImportDelimited;)V
+       8: astore_1
+       9: aload_0
+      10: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      13: invokevirtual #174                // Method com/stata/plugins/imports/CSVReader.getVariableNames:()[[Ljava/lang/String;
+      16: astore_2
+      17: aload_0
+      18: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+      21: invokevirtual #175                // Method com/stata/plugins/imports/CSVReader.getPreProcessInfo:()Lcom/stata/plugins/imports/PreProcessInfo;
+      24: astore_3
+      25: iconst_0
+      26: istore        4
+      28: aload_1
+      29: iconst_0
+      30: putfield      #176                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.strWidth:I
+      33: aload_1
+      34: aload_2
+      35: iconst_0
+      36: aaload
+      37: arraylength
+      38: putfield      #96                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nVars:I
+      41: iconst_0
+      42: istore        5
+      44: iload         5
+      46: aload_1
+      47: getfield      #96                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nVars:I
+      50: if_icmpge     594
+      53: aload_1
+      54: invokestatic  #177                // Method com/stata/sfi/SFIToolkit.pollstd:()I
+      57: dup_x1
+      58: putfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+      61: ifeq          66
+      64: aload_1
+      65: areturn
+      66: aload_2
+      67: iconst_0
+      68: aaload
+      69: iload         5
+      71: aaload
+      72: astore        6
+      74: aload_3
+      75: iload         5
+      77: invokevirtual #178                // Method com/stata/plugins/imports/PreProcessInfo.getTargetTypeAt:(I)I
+      80: istore        7
+      82: iload         7
+      84: iconst_2
+      85: if_icmpeq     94
+      88: iload         7
+      90: iconst_4
+      91: if_icmpne     394
+      94: aload_0
+      95: getfield      #33                 // Field optAsString:Z
+      98: ifne          394
+     101: iload         7
+     103: iconst_3
+     104: if_icmpeq     394
+     107: aload_3
+     108: iload         5
+     110: invokevirtual #179                // Method com/stata/plugins/imports/PreProcessInfo.getStTypeSzAt:(I)I
+     113: tableswitch   { // 1 to 5
+                     1: 148
+                     2: 189
+                     3: 230
+                     4: 271
+                     5: 312
+               default: 353
+          }
+     148: aload         6
+     150: invokestatic  #180                // Method com/stata/sfi/Data.addVarByte:(Ljava/lang/String;)I
+     153: istore        4
+     155: iload         4
+     157: ifeq          525
+     160: aload         6
+     162: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     165: ifeq          525
+     168: aload_0
+     169: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     172: iload         5
+     174: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     177: astore        6
+     179: aload         6
+     181: invokestatic  #180                // Method com/stata/sfi/Data.addVarByte:(Ljava/lang/String;)I
+     184: istore        4
+     186: goto          525
+     189: aload         6
+     191: invokestatic  #183                // Method com/stata/sfi/Data.addVarInt:(Ljava/lang/String;)I
+     194: istore        4
+     196: iload         4
+     198: ifeq          525
+     201: aload         6
+     203: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     206: ifeq          525
+     209: aload_0
+     210: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     213: iload         5
+     215: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     218: astore        6
+     220: aload         6
+     222: invokestatic  #183                // Method com/stata/sfi/Data.addVarInt:(Ljava/lang/String;)I
+     225: istore        4
+     227: goto          525
+     230: aload         6
+     232: invokestatic  #184                // Method com/stata/sfi/Data.addVarLong:(Ljava/lang/String;)I
+     235: istore        4
+     237: iload         4
+     239: ifeq          525
+     242: aload         6
+     244: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     247: ifeq          525
+     250: aload_0
+     251: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     254: iload         5
+     256: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     259: astore        6
+     261: aload         6
+     263: invokestatic  #184                // Method com/stata/sfi/Data.addVarLong:(Ljava/lang/String;)I
+     266: istore        4
+     268: goto          525
+     271: aload         6
+     273: invokestatic  #185                // Method com/stata/sfi/Data.addVarFloat:(Ljava/lang/String;)I
+     276: istore        4
+     278: iload         4
+     280: ifeq          525
+     283: aload         6
+     285: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     288: ifeq          525
+     291: aload_0
+     292: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     295: iload         5
+     297: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     300: astore        6
+     302: aload         6
+     304: invokestatic  #185                // Method com/stata/sfi/Data.addVarFloat:(Ljava/lang/String;)I
+     307: istore        4
+     309: goto          525
+     312: aload         6
+     314: invokestatic  #186                // Method com/stata/sfi/Data.addVarDouble:(Ljava/lang/String;)I
+     317: istore        4
+     319: iload         4
+     321: ifeq          525
+     324: aload         6
+     326: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     329: ifeq          525
+     332: aload_0
+     333: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     336: iload         5
+     338: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     341: astore        6
+     343: aload         6
+     345: invokestatic  #186                // Method com/stata/sfi/Data.addVarDouble:(Ljava/lang/String;)I
+     348: istore        4
+     350: goto          525
+     353: aload         6
+     355: invokestatic  #180                // Method com/stata/sfi/Data.addVarByte:(Ljava/lang/String;)I
+     358: istore        4
+     360: iload         4
+     362: ifeq          525
+     365: aload         6
+     367: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     370: ifeq          525
+     373: aload_0
+     374: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     377: iload         5
+     379: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     382: astore        6
+     384: aload         6
+     386: invokestatic  #180                // Method com/stata/sfi/Data.addVarByte:(Ljava/lang/String;)I
+     389: istore        4
+     391: goto          525
+     394: iconst_1
+     395: aload_3
+     396: iload         5
+     398: invokevirtual #179                // Method com/stata/plugins/imports/PreProcessInfo.getStTypeSzAt:(I)I
+     401: invokestatic  #187                // Method java/lang/Math.max:(II)I
+     404: istore        8
+     406: aload_1
+     407: dup
+     408: getfield      #176                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.strWidth:I
+     411: iload         8
+     413: iadd
+     414: putfield      #176                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.strWidth:I
+     417: aload_0
+     418: iload         8
+     420: aload_3
+     421: iload         5
+     423: invokevirtual #188                // Method com/stata/plugins/imports/PreProcessInfo.getStTypeSzAtAvg:(I)I
+     426: invokevirtual #189                // Method isGoodStrlType:(II)Z
+     429: ifeq          483
+     432: aload_1
+     433: dup
+     434: getfield      #99                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nStrls:I
+     437: iconst_1
+     438: iadd
+     439: putfield      #99                 // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.nStrls:I
+     442: aload         6
+     444: invokestatic  #190                // Method com/stata/sfi/Data.addVarStrL:(Ljava/lang/String;)I
+     447: istore        4
+     449: iload         4
+     451: ifeq          525
+     454: aload         6
+     456: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     459: ifeq          525
+     462: aload_0
+     463: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     466: iload         5
+     468: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     471: astore        6
+     473: aload         6
+     475: invokestatic  #190                // Method com/stata/sfi/Data.addVarStrL:(Ljava/lang/String;)I
+     478: istore        4
+     480: goto          525
+     483: aload         6
+     485: iload         8
+     487: invokestatic  #191                // Method com/stata/sfi/Data.addVarStr:(Ljava/lang/String;I)I
+     490: istore        4
+     492: iload         4
+     494: ifeq          525
+     497: aload         6
+     499: invokestatic  #181                // Method com/stata/sfi/Data.getVarIndex:(Ljava/lang/String;)I
+     502: ifeq          525
+     505: aload_0
+     506: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     509: iload         5
+     511: invokevirtual #182                // Method com/stata/plugins/imports/CSVReader.makeIndexedName:(I)Ljava/lang/String;
+     514: astore        6
+     516: aload         6
+     518: iload         8
+     520: invokestatic  #191                // Method com/stata/sfi/Data.addVarStr:(Ljava/lang/String;I)I
+     523: istore        4
+     525: aload_2
+     526: iconst_1
+     527: aaload
+     528: iload         5
+     530: aaload
+     531: aload         6
+     533: invokevirtual #80                 // Method java/lang/String.equals:(Ljava/lang/Object;)Z
+     536: ifne          569
+     539: aload_0
+     540: getfield      #7                  // Field reader:Lcom/stata/plugins/imports/CSVReader;
+     543: invokevirtual #175                // Method com/stata/plugins/imports/CSVReader.getPreProcessInfo:()Lcom/stata/plugins/imports/PreProcessInfo;
+     546: getfield      #192                // Field com/stata/plugins/imports/PreProcessInfo.useFirstRowVars:Z
+     549: ifeq          569
+     552: invokestatic  #139                // Method com/stata/sfi/Data.getVarCount:()I
+     555: istore        8
+     557: iload         8
+     559: aload_2
+     560: iconst_1
+     561: aaload
+     562: iload         5
+     564: aaload
+     565: invokestatic  #193                // Method com/stata/sfi/Data.setVarLabel:(ILjava/lang/String;)I
+     568: pop
+     569: iload         4
+     571: ifeq          588
+     574: ldc           #194                // String Error creating variables\n
+     576: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+     579: aload_1
+     580: sipush        198
+     583: putfield      #128                // Field com/stata/plugins/imports/StImportDelimited$NewVarInfo.rc:I
+     586: aload_1
+     587: areturn
+     588: iinc          5, 1
+     591: goto          44
+     594: aload_1
+     595: areturn
+
+  private boolean isGoodStrlType(int, int);
+    Code:
+       0: iload_1
+       1: invokestatic  #195                // Method com/stata/sfi/Data.getMaxStrLength:()I
+       4: if_icmpgt     16
+       7: aload_0
+       8: iload_1
+       9: iload_2
+      10: invokevirtual #196                // Method isStrlSmaller:(II)Z
+      13: ifeq          20
+      16: iconst_1
+      17: goto          21
+      20: iconst_0
+      21: ireturn
+
+  private boolean isStrlSmaller(int, int);
+    Code:
+       0: aload_0
+       1: getfield      #57                 // Field optFavorStrFixed:Z
+       4: ifeq          9
+       7: iconst_0
+       8: ireturn
+       9: iload_1
+      10: iload_2
+      11: isub
+      12: bipush        74
+      14: if_icmple     21
+      17: iconst_1
+      18: goto          22
+      21: iconst_0
+      22: ireturn
+
+  public void defineParseValueMethod();
+    Code:
+       0: aload_0
+       1: getfield      #3                  // Field useLocaleParsing:Z
+       4: ifeq          14
+       7: aload_0
+       8: invokevirtual #197                // Method defineParseNumLocale:()V
+      11: goto          18
+      14: aload_0
+      15: invokevirtual #198                // Method defineParseNumStd:()V
+      18: return
+
+  private void defineParseNumLocale();
+    Code:
+       0: aload_0
+       1: aload_0
+       2: invokedynamic #199,  0            // InvokeDynamic #7:parse:(Lcom/stata/plugins/imports/StImportDelimited;)Lcom/stata/plugins/imports/StImportDelimited$ParseNumber;
+       7: putfield      #200                // Field numberParser:Lcom/stata/plugins/imports/StImportDelimited$ParseNumber;
+      10: return
+
+  private void defineParseNumStd();
+    Code:
+       0: aload_0
+       1: aload_0
+       2: invokedynamic #201,  0            // InvokeDynamic #8:parse:(Lcom/stata/plugins/imports/StImportDelimited;)Lcom/stata/plugins/imports/StImportDelimited$ParseNumber;
+       7: putfield      #200                // Field numberParser:Lcom/stata/plugins/imports/StImportDelimited$ParseNumber;
+      10: return
+
+  java.text.DecimalFormat getDecimalFormatter();
+    Code:
+       0: aload_0
+       1: getfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+       4: ifnull        18
+       7: aload_0
+       8: getfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+      11: invokevirtual #202                // Method java/text/DecimalFormat.clone:()Ljava/lang/Object;
+      14: checkcast     #162                // class java/text/DecimalFormat
+      17: areturn
+      18: aload_0
+      19: getfield      #163                // Field decimalFormat:Ljava/text/DecimalFormat;
+      22: areturn
+
+  public static int handleExceptions(java.lang.Exception);
+    Code:
+       0: aload_0
+       1: instanceof    #156                // class java/io/IOException
+       4: ifeq          38
+       7: aload_0
+       8: invokestatic  #66                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+      11: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      16: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+      19: ifne          34
+      22: aload_0
+      23: invokevirtual #203                // Method java/lang/Exception.getMessage:()Ljava/lang/String;
+      26: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      31: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+      34: sipush        691
+      37: ireturn
+      38: aload_0
+      39: instanceof    #158                // class com/stata/plugins/BreakException
+      42: ifeq          47
+      45: iconst_1
+      46: ireturn
+      47: aload_0
+      48: instanceof    #159                // class com/stata/plugins/imports/BindStrictRowCountException
+      51: ifeq          68
+      54: aload_0
+      55: checkcast     #159                // class com/stata/plugins/imports/BindStrictRowCountException
+      58: invokestatic  #205                // Method getBindStrictError:(Lcom/stata/plugins/imports/BindStrictRowCountException;)Ljava/lang/String;
+      61: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+      64: sipush        5101
+      67: ireturn
+      68: aload_0
+      69: instanceof    #157                // class com/stata/plugins/imports/TooManyColumnsException
+      72: ifeq          106
+      75: aload_0
+      76: invokestatic  #66                 // Method com/stata/sfi/SFIToolkit.stackTraceToString:(Ljava/lang/Exception;)Ljava/lang/String;
+      79: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      84: invokestatic  #68                 // Method com/stata/sfi/SFIToolkit.errorDebug:(Ljava/lang/String;)Z
+      87: ifne          102
+      90: aload_0
+      91: invokevirtual #203                // Method java/lang/Exception.getMessage:()Ljava/lang/String;
+      94: invokedynamic #67,  0             // InvokeDynamic #0:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      99: invokestatic  #70                 // Method com/stata/sfi/SFIToolkit.error:(Ljava/lang/String;)V
+     102: sipush        900
+     105: ireturn
+     106: sipush        5100
+     109: ireturn
+
+  private static int prsCaseType(java.lang.String);
+    Code:
+       0: aload_0
+       1: ldc           #206                // String preserve
+       3: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       6: ifeq          11
+       9: iconst_1
+      10: ireturn
+      11: aload_0
+      12: ldc           #208                // String lower
+      14: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      17: ifeq          22
+      20: iconst_2
+      21: ireturn
+      22: aload_0
+      23: ldc           #209                // String upper
+      25: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      28: ifeq          33
+      31: iconst_3
+      32: ireturn
+      33: iconst_2
+      34: ireturn
+
+  private static int prsBindType(java.lang.String);
+    Code:
+       0: aload_0
+       1: ldc           #210                // String strict
+       3: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       6: ifeq          11
+       9: iconst_1
+      10: ireturn
+      11: aload_0
+      12: ldc           #212                // String loose
+      14: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      17: ifeq          22
+      20: iconst_2
+      21: ireturn
+      22: aload_0
+      23: ldc           #213                // String nobind
+      25: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      28: ifeq          33
+      31: iconst_0
+      32: ireturn
+      33: iconst_1
+      34: ireturn
+
+  private static int prsEmptyLinesType(java.lang.String);
+    Code:
+       0: aload_0
+       1: ldc           #214                // String skip
+       3: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       6: ifeq          11
+       9: iconst_0
+      10: ireturn
+      11: aload_0
+      12: ldc           #215                // String include
+      14: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      17: ifeq          22
+      20: iconst_1
+      21: ireturn
+      22: iconst_0
+      23: ireturn
+
+  private static int prsStripQuoteType(java.lang.String);
+    Code:
+       0: aload_0
+       1: ldc           #216                // String default
+       3: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       6: ifeq          11
+       9: iconst_0
+      10: ireturn
+      11: aload_0
+      12: ldc           #217                // String yes
+      14: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      17: ifeq          22
+      20: iconst_2
+      21: ireturn
+      22: aload_0
+      23: ldc           #218                // String no
+      25: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      28: ifeq          33
+      31: iconst_1
+      32: ireturn
+      33: iconst_0
+      34: ireturn
+
+  private static int prsFirstRowType(java.lang.String);
+    Code:
+       0: aload_0
+       1: ldc           #219                // String auto
+       3: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+       6: ifeq          11
+       9: iconst_1
+      10: ireturn
+      11: aload_0
+      12: ldc           #217                // String yes
+      14: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      17: ifeq          22
+      20: iconst_2
+      21: ireturn
+      22: aload_0
+      23: ldc           #218                // String no
+      25: invokevirtual #207                // Method java/lang/String.equalsIgnoreCase:(Ljava/lang/String;)Z
+      28: ifeq          33
+      31: iconst_3
+      32: ireturn
+      33: iconst_1
+      34: ireturn
+
+  private static boolean getSwitchOpt(java.lang.String);
+    Code:
+       0: aload_0
+       1: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+       4: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+       7: ifne          14
+      10: iconst_1
+      11: goto          15
+      14: iconst_0
+      15: ireturn
+
+  private static char getCharOpt(java.lang.String);
+    Code:
+       0: iconst_0
+       1: istore_1
+       2: aload_0
+       3: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+       6: astore_2
+       7: aload_2
+       8: invokevirtual #76                 // Method java/lang/String.isEmpty:()Z
+      11: ifne          20
+      14: aload_2
+      15: iconst_0
+      16: invokevirtual #220                // Method java/lang/String.charAt:(I)C
+      19: istore_1
+      20: iload_1
+      21: ireturn
+
+  private static int getIntOpt(java.lang.String, int);
+    Code:
+       0: aload_0
+       1: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+       4: astore_2
+       5: iload_1
+       6: istore_3
+       7: aload_2
+       8: invokestatic  #221                // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      11: istore_3
+      12: goto          17
+      15: astore        4
+      17: iload_3
+      18: ireturn
+    Exception table:
+       from    to  target type
+           7    12    15   Class java/lang/NumberFormatException
+
+  private static long getLongOpt(java.lang.String, long);
+    Code:
+       0: aload_0
+       1: invokestatic  #12                 // Method com/stata/sfi/Macro.getLocalSafe:(Ljava/lang/String;)Ljava/lang/String;
+       4: astore_3
+       5: lload_1
+       6: lstore        4
+       8: aload_3
+       9: invokestatic  #223                // Method java/lang/Long.parseLong:(Ljava/lang/String;)J
+      12: lstore        4
+      14: goto          19
+      17: astore        6
+      19: lload         4
+      21: lreturn
+    Exception table:
+       from    to  target type
+           8    14    17   Class java/lang/NumberFormatException
+
+  private void dumpOpts();
+    Code:
+       0: aload_0
+       1: getfield      #13                 // Field filename:Ljava/lang/String;
+       4: invokedynamic #224,  0            // InvokeDynamic #9:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+       9: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      12: aload_0
+      13: getfield      #28                 // Field optCaseType:I
+      16: iconst_1
+      17: if_icmpne     28
+      20: ldc           #226                // String case:         preserve\n
+      22: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      25: goto          57
+      28: aload_0
+      29: getfield      #28                 // Field optCaseType:I
+      32: iconst_2
+      33: if_icmpne     44
+      36: ldc           #227                // String case:         lower\n
+      38: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      41: goto          57
+      44: aload_0
+      45: getfield      #28                 // Field optCaseType:I
+      48: iconst_3
+      49: if_icmpne     57
+      52: ldc           #228                // String case:         upper\n
+      54: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      57: aload_0
+      58: getfield      #30                 // Field optDelim:Ljava/lang/String;
+      61: invokedynamic #229,  0            // InvokeDynamic #10:makeConcatWithConstants:(Ljava/lang/String;)Ljava/lang/String;
+      66: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      69: aload_0
+      70: getfield      #33                 // Field optAsString:Z
+      73: invokedynamic #230,  0            // InvokeDynamic #11:makeConcatWithConstants:(Z)Ljava/lang/String;
+      78: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      81: aload_0
+      82: getfield      #39                 // Field optBindType:I
+      85: iconst_2
+      86: if_icmpne     97
+      89: ldc           #231                // String bindtype:     loose\n
+      91: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+      94: goto          125
+      97: aload_0
+      98: getfield      #39                 // Field optBindType:I
+     101: iconst_1
+     102: if_icmpne     113
+     105: ldc           #232                // String bindtype:     strict\n
+     107: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     110: goto          125
+     113: aload_0
+     114: getfield      #39                 // Field optBindType:I
+     117: ifne          125
+     120: ldc           #233                // String bindtype:     none\n
+     122: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     125: aload_0
+     126: getfield      #42                 // Field optEmptyLinesType:I
+     129: ifne          140
+     132: ldc           #234                // String emptylines:     skip\n
+     134: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     137: goto          153
+     140: aload_0
+     141: getfield      #42                 // Field optEmptyLinesType:I
+     144: iconst_1
+     145: if_icmpne     153
+     148: ldc           #235                // String emptylines:     include\n
+     150: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     153: aload_0
+     154: getfield      #36                 // Field optFirstRowType:I
+     157: invokedynamic #236,  0            // InvokeDynamic #12:makeConcatWithConstants:(I)Ljava/lang/String;
+     162: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     165: aload_0
+     166: getfield      #45                 // Field optStripQuoteType:I
+     169: invokedynamic #237,  0            // InvokeDynamic #13:makeConcatWithConstants:(I)Ljava/lang/String;
+     174: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     177: aload_0
+     178: getfield      #47                 // Field optSequentialDelm:Z
+     181: invokedynamic #238,  0            // InvokeDynamic #14:makeConcatWithConstants:(Z)Ljava/lang/String;
+     186: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     189: ldc           #239                // String \n
+     191: invokestatic  #225                // Method com/stata/sfi/SFIToolkit.display:(Ljava/lang/String;)V
+     194: return
+
+  private com.stata.plugins.imports.StImportDelimited$ParseResult lambda$defineParseNumStd$1(java.lang.String, int, boolean, java.text.DecimalFormat);
+    Code:
+       0: new           #240                // class com/stata/plugins/imports/StImportDelimited$ParseResult
+       3: dup
+       4: aload_0
+       5: invokespecial #241                // Method com/stata/plugins/imports/StImportDelimited$ParseResult."<init>":(Lcom/stata/plugins/imports/StImportDelimited;)V
+       8: astore        5
+      10: aload         5
+      12: iconst_0
+      13: putfield      #242                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.rc:I
+      16: aload         5
+      18: aload_1
+      19: invokestatic  #243                // Method java/lang/Double.parseDouble:(Ljava/lang/String;)D
+      22: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+      25: aload         5
+      27: getfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+      30: invokestatic  #245                // Method java/lang/Double.valueOf:(D)Ljava/lang/Double;
+      33: invokestatic  #246                // Method com/stata/plugins/imports/CSVReader.isSpecialMissing:(Ljava/lang/Double;)Z
+      36: ifeq          47
+      39: aload         5
+      41: invokestatic  #247                // Method com/stata/sfi/Missing.getValue:()D
+      44: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+      47: goto          102
+      50: astore        6
+      52: aload_1
+      53: invokestatic  #249                // Method com/stata/sfi/Data.getRealOfString:(Ljava/lang/String;)Ljava/lang/Double;
+      56: astore        7
+      58: aload         7
+      60: ifnonnull     92
+      63: iload_2
+      64: iconst_4
+      65: if_icmpeq     81
+      68: iload_3
+      69: ifeq          81
+      72: aload         5
+      74: iconst_m1
+      75: putfield      #242                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.rc:I
+      78: aload         5
+      80: areturn
+      81: aload         5
+      83: invokestatic  #247                // Method com/stata/sfi/Missing.getValue:()D
+      86: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+      89: goto          102
+      92: aload         5
+      94: aload         7
+      96: invokevirtual #250                // Method java/lang/Double.doubleValue:()D
+      99: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+     102: aload         5
+     104: areturn
+    Exception table:
+       from    to  target type
+          16    47    50   Class java/lang/IllegalArgumentException
+
+  private com.stata.plugins.imports.StImportDelimited$ParseResult lambda$defineParseNumLocale$0(java.lang.String, int, boolean, java.text.DecimalFormat);
+    Code:
+       0: new           #240                // class com/stata/plugins/imports/StImportDelimited$ParseResult
+       3: dup
+       4: aload_0
+       5: invokespecial #241                // Method com/stata/plugins/imports/StImportDelimited$ParseResult."<init>":(Lcom/stata/plugins/imports/StImportDelimited;)V
+       8: astore        5
+      10: aload         5
+      12: iconst_0
+      13: putfield      #242                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.rc:I
+      16: aload_1
+      17: invokestatic  #251                // Method com/stata/sfi/Missing.parseIsMissing:(Ljava/lang/String;)Z
+      20: ifeq          38
+      23: aload         5
+      25: aload_1
+      26: invokestatic  #249                // Method com/stata/sfi/Data.getRealOfString:(Ljava/lang/String;)Ljava/lang/Double;
+      29: invokevirtual #250                // Method java/lang/Double.doubleValue:()D
+      32: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+      35: goto          155
+      38: aload_1
+      39: invokevirtual #252                // Method java/lang/String.trim:()Ljava/lang/String;
+      42: astore        6
+      44: aload         6
+      46: invokevirtual #253                // Method java/lang/String.length:()I
+      49: istore        7
+      51: new           #254                // class java/text/ParsePosition
+      54: dup
+      55: iconst_0
+      56: invokespecial #255                // Method java/text/ParsePosition."<init>":(I)V
+      59: astore        8
+      61: aload         4
+      63: aload         6
+      65: invokevirtual #256                // Method java/lang/String.toUpperCase:()Ljava/lang/String;
+      68: aload         8
+      70: invokevirtual #257                // Method java/text/DecimalFormat.parse:(Ljava/lang/String;Ljava/text/ParsePosition;)Ljava/lang/Number;
+      73: astore        9
+      75: aload         8
+      77: invokevirtual #258                // Method java/text/ParsePosition.getIndex:()I
+      80: iload         7
+      82: if_icmpne     94
+      85: aload         8
+      87: invokevirtual #259                // Method java/text/ParsePosition.getErrorIndex:()I
+      90: iconst_m1
+      91: if_icmpeq     123
+      94: iload_2
+      95: iconst_4
+      96: if_icmpeq     112
+      99: iload_3
+     100: ifeq          112
+     103: aload         5
+     105: iconst_m1
+     106: putfield      #242                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.rc:I
+     109: aload         5
+     111: areturn
+     112: aload         5
+     114: invokestatic  #247                // Method com/stata/sfi/Missing.getValue:()D
+     117: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+     120: goto          155
+     123: aload         5
+     125: aload         9
+     127: invokevirtual #260                // Method java/lang/Number.doubleValue:()D
+     130: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+     133: aload         5
+     135: getfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+     138: invokestatic  #245                // Method java/lang/Double.valueOf:(D)Ljava/lang/Double;
+     141: invokestatic  #246                // Method com/stata/plugins/imports/CSVReader.isSpecialMissing:(Ljava/lang/Double;)Z
+     144: ifeq          155
+     147: aload         5
+     149: invokestatic  #247                // Method com/stata/sfi/Missing.getValue:()D
+     152: putfield      #244                // Field com/stata/plugins/imports/StImportDelimited$ParseResult.value:D
+     155: aload         5
+     157: areturn
+}

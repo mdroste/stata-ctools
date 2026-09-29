@@ -1,0 +1,600 @@
+Compiled from "CSVReader.java"
+class com.stata.plugins.imports.PreProcessInfo {
+  private int size;
+
+  java.util.concurrent.atomic.AtomicIntegerArray originalTypeList;
+
+  java.util.concurrent.atomic.AtomicIntegerArray targetTypeList;
+
+  java.util.concurrent.atomic.AtomicIntegerArray stTypeSzList;
+
+  java.util.concurrent.atomic.AtomicIntegerArray tokenSzList;
+
+  private java.util.concurrent.atomic.AtomicLongArray stTypeSzTotal;
+
+  private java.util.concurrent.atomic.AtomicLongArray stTypeSzCount;
+
+  private byte[] firstRowTypes;
+
+  int[] firstRowStrTypeSzList;
+
+  private java.lang.String[] firstRowNameList;
+
+  private java.lang.String[] firstRowLabelList;
+
+  public int colCount;
+
+  public boolean useFirstRowVars;
+
+  public boolean hasFirstRowVars;
+
+  public java.lang.String defaultDelimiter;
+
+  java.util.function.LongBinaryOperator add;
+
+  public com.stata.plugins.imports.PreProcessInfo();
+    Code:
+       0: aload_0
+       1: invokespecial #1                  // Method java/lang/Object."<init>":()V
+       4: aload_0
+       5: iconst_0
+       6: putfield      #2                  // Field size:I
+       9: aload_0
+      10: iconst_0
+      11: putfield      #3                  // Field colCount:I
+      14: aload_0
+      15: iconst_0
+      16: putfield      #4                  // Field useFirstRowVars:Z
+      19: aload_0
+      20: iconst_0
+      21: putfield      #5                  // Field hasFirstRowVars:Z
+      24: aload_0
+      25: ldc           #6                  // String ,
+      27: putfield      #7                  // Field defaultDelimiter:Ljava/lang/String;
+      30: aload_0
+      31: invokedynamic #8,  0              // InvokeDynamic #0:applyAsLong:()Ljava/util/function/LongBinaryOperator;
+      36: putfield      #9                  // Field add:Ljava/util/function/LongBinaryOperator;
+      39: aload_0
+      40: invokevirtual #10                 // Method initializeTrackingLists:()V
+      43: aload_0
+      44: iconst_1
+      45: putfield      #5                  // Field hasFirstRowVars:Z
+      48: aload_0
+      49: iconst_0
+      50: putfield      #3                  // Field colCount:I
+      53: invokestatic  #11                 // Method com/stata/sfi/SFIToolkit.getCallerVersion:()D
+      56: ldc2_w        #12                 // double 14.1d
+      59: dcmpl
+      60: iflt          72
+      63: aload_0
+      64: ldc           #6                  // String ,
+      66: putfield      #7                  // Field defaultDelimiter:Ljava/lang/String;
+      69: goto          78
+      72: aload_0
+      73: ldc           #14                 // String \t
+      75: putfield      #7                  // Field defaultDelimiter:Ljava/lang/String;
+      78: return
+
+  private void initializeTrackingLists();
+    Code:
+       0: aload_0
+       1: invokestatic  #15                 // Method com/stata/sfi/Data.getMaxVars:()I
+       4: putfield      #2                  // Field size:I
+       7: aload_0
+       8: new           #16                 // class java/util/concurrent/atomic/AtomicIntegerArray
+      11: dup
+      12: aload_0
+      13: getfield      #2                  // Field size:I
+      16: invokespecial #17                 // Method java/util/concurrent/atomic/AtomicIntegerArray."<init>":(I)V
+      19: putfield      #18                 // Field originalTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      22: aload_0
+      23: new           #16                 // class java/util/concurrent/atomic/AtomicIntegerArray
+      26: dup
+      27: aload_0
+      28: getfield      #2                  // Field size:I
+      31: invokespecial #17                 // Method java/util/concurrent/atomic/AtomicIntegerArray."<init>":(I)V
+      34: putfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      37: aload_0
+      38: new           #16                 // class java/util/concurrent/atomic/AtomicIntegerArray
+      41: dup
+      42: aload_0
+      43: getfield      #2                  // Field size:I
+      46: invokespecial #17                 // Method java/util/concurrent/atomic/AtomicIntegerArray."<init>":(I)V
+      49: putfield      #20                 // Field stTypeSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      52: aload_0
+      53: new           #16                 // class java/util/concurrent/atomic/AtomicIntegerArray
+      56: dup
+      57: aload_0
+      58: getfield      #2                  // Field size:I
+      61: invokespecial #17                 // Method java/util/concurrent/atomic/AtomicIntegerArray."<init>":(I)V
+      64: putfield      #21                 // Field tokenSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      67: aload_0
+      68: aload_0
+      69: getfield      #2                  // Field size:I
+      72: newarray       byte
+      74: putfield      #22                 // Field firstRowTypes:[B
+      77: aload_0
+      78: aload_0
+      79: getfield      #2                  // Field size:I
+      82: newarray       int
+      84: putfield      #23                 // Field firstRowStrTypeSzList:[I
+      87: aload_0
+      88: aload_0
+      89: getfield      #2                  // Field size:I
+      92: anewarray     #24                 // class java/lang/String
+      95: putfield      #25                 // Field firstRowNameList:[Ljava/lang/String;
+      98: aload_0
+      99: aload_0
+     100: getfield      #2                  // Field size:I
+     103: anewarray     #24                 // class java/lang/String
+     106: putfield      #26                 // Field firstRowLabelList:[Ljava/lang/String;
+     109: aload_0
+     110: new           #27                 // class java/util/concurrent/atomic/AtomicLongArray
+     113: dup
+     114: aload_0
+     115: getfield      #2                  // Field size:I
+     118: invokespecial #28                 // Method java/util/concurrent/atomic/AtomicLongArray."<init>":(I)V
+     121: putfield      #29                 // Field stTypeSzTotal:Ljava/util/concurrent/atomic/AtomicLongArray;
+     124: aload_0
+     125: new           #27                 // class java/util/concurrent/atomic/AtomicLongArray
+     128: dup
+     129: aload_0
+     130: getfield      #2                  // Field size:I
+     133: invokespecial #28                 // Method java/util/concurrent/atomic/AtomicLongArray."<init>":(I)V
+     136: putfield      #30                 // Field stTypeSzCount:Ljava/util/concurrent/atomic/AtomicLongArray;
+     139: iconst_0
+     140: istore_1
+     141: iload_1
+     142: aload_0
+     143: getfield      #2                  // Field size:I
+     146: if_icmpge     239
+     149: aload_0
+     150: getfield      #18                 // Field originalTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+     153: iload_1
+     154: iconst_2
+     155: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+     158: aload_0
+     159: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+     162: iload_1
+     163: iconst_2
+     164: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+     167: aload_0
+     168: getfield      #20                 // Field stTypeSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+     171: iload_1
+     172: iconst_m1
+     173: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+     176: aload_0
+     177: getfield      #21                 // Field tokenSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+     180: iload_1
+     181: iconst_m1
+     182: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+     185: aload_0
+     186: getfield      #22                 // Field firstRowTypes:[B
+     189: iload_1
+     190: iconst_2
+     191: bastore
+     192: aload_0
+     193: getfield      #23                 // Field firstRowStrTypeSzList:[I
+     196: iload_1
+     197: iconst_m1
+     198: iastore
+     199: aload_0
+     200: getfield      #25                 // Field firstRowNameList:[Ljava/lang/String;
+     203: iload_1
+     204: ldc           #33                 // String
+     206: aastore
+     207: aload_0
+     208: getfield      #26                 // Field firstRowLabelList:[Ljava/lang/String;
+     211: iload_1
+     212: ldc           #33                 // String
+     214: aastore
+     215: aload_0
+     216: getfield      #29                 // Field stTypeSzTotal:Ljava/util/concurrent/atomic/AtomicLongArray;
+     219: iload_1
+     220: lconst_1
+     221: invokevirtual #34                 // Method java/util/concurrent/atomic/AtomicLongArray.set:(IJ)V
+     224: aload_0
+     225: getfield      #30                 // Field stTypeSzCount:Ljava/util/concurrent/atomic/AtomicLongArray;
+     228: iload_1
+     229: lconst_1
+     230: invokevirtual #34                 // Method java/util/concurrent/atomic/AtomicLongArray.set:(IJ)V
+     233: iinc          1, 1
+     236: goto          141
+     239: return
+
+  public void setForceStringAll();
+    Code:
+       0: iconst_0
+       1: istore_1
+       2: iload_1
+       3: aload_0
+       4: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+       7: invokevirtual #35                 // Method java/util/concurrent/atomic/AtomicIntegerArray.length:()I
+      10: if_icmpge     28
+      13: aload_0
+      14: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      17: iload_1
+      18: iconst_3
+      19: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+      22: iinc          1, 1
+      25: goto          2
+      28: return
+
+  public void setForceNumericAll();
+    Code:
+       0: iconst_0
+       1: istore_1
+       2: iload_1
+       3: aload_0
+       4: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+       7: invokevirtual #35                 // Method java/util/concurrent/atomic/AtomicIntegerArray.length:()I
+      10: if_icmpge     28
+      13: aload_0
+      14: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      17: iload_1
+      18: iconst_4
+      19: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+      22: iinc          1, 1
+      25: goto          2
+      28: return
+
+  public void setupForceStringAt(java.lang.String);
+    Code:
+       0: new           #36                 // class java/util/StringTokenizer
+       3: dup
+       4: aload_1
+       5: ldc           #37                 // String
+       7: invokespecial #38                 // Method java/util/StringTokenizer."<init>":(Ljava/lang/String;Ljava/lang/String;)V
+      10: astore_2
+      11: aload_2
+      12: invokevirtual #39                 // Method java/util/StringTokenizer.hasMoreTokens:()Z
+      15: ifeq          56
+      18: aload_2
+      19: invokevirtual #40                 // Method java/util/StringTokenizer.nextToken:()Ljava/lang/String;
+      22: astore_3
+      23: aload_3
+      24: invokestatic  #41                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      27: iconst_1
+      28: isub
+      29: istore        4
+      31: aload_0
+      32: iload         4
+      34: iconst_3
+      35: invokevirtual #42                 // Method setTargetTypeAt:(II)V
+      38: goto          53
+      41: astore        4
+      43: goto          53
+      46: astore        4
+      48: goto          53
+      51: astore        4
+      53: goto          11
+      56: return
+    Exception table:
+       from    to  target type
+          23    38    41   Class java/lang/NumberFormatException
+          23    38    46   Class com/stata/plugins/imports/TooManyColumnsException
+          23    38    51   Class java/lang/ArrayIndexOutOfBoundsException
+
+  public void setupForceNumberAt(java.lang.String);
+    Code:
+       0: new           #36                 // class java/util/StringTokenizer
+       3: dup
+       4: aload_1
+       5: ldc           #37                 // String
+       7: invokespecial #38                 // Method java/util/StringTokenizer."<init>":(Ljava/lang/String;Ljava/lang/String;)V
+      10: astore_2
+      11: aload_2
+      12: invokevirtual #39                 // Method java/util/StringTokenizer.hasMoreTokens:()Z
+      15: ifeq          56
+      18: aload_2
+      19: invokevirtual #40                 // Method java/util/StringTokenizer.nextToken:()Ljava/lang/String;
+      22: astore_3
+      23: aload_3
+      24: invokestatic  #41                 // Method java/lang/Integer.parseInt:(Ljava/lang/String;)I
+      27: iconst_1
+      28: isub
+      29: istore        4
+      31: aload_0
+      32: iload         4
+      34: iconst_4
+      35: invokevirtual #42                 // Method setTargetTypeAt:(II)V
+      38: goto          53
+      41: astore        4
+      43: goto          53
+      46: astore        4
+      48: goto          53
+      51: astore        4
+      53: goto          11
+      56: return
+    Exception table:
+       from    to  target type
+          23    38    41   Class java/lang/NumberFormatException
+          23    38    46   Class com/stata/plugins/imports/TooManyColumnsException
+          23    38    51   Class java/lang/ArrayIndexOutOfBoundsException
+
+  public int getOriginalTypeAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #18                 // Field originalTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      20: iload_1
+      21: invokevirtual #47                 // Method java/util/concurrent/atomic/AtomicIntegerArray.get:(I)I
+      24: ireturn
+
+  public void setOriginalTypeAt(int, int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #18                 // Field originalTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      20: iload_1
+      21: iload_2
+      22: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+      25: return
+
+  public int getTargetTypeAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      20: iload_1
+      21: invokevirtual #47                 // Method java/util/concurrent/atomic/AtomicIntegerArray.get:(I)I
+      24: ireturn
+
+  public void setTargetTypeAt(int, int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #19                 // Field targetTypeList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      20: iload_1
+      21: iload_2
+      22: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+      25: return
+
+  public int getStTypeSzAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #20                 // Field stTypeSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      20: iload_1
+      21: invokevirtual #47                 // Method java/util/concurrent/atomic/AtomicIntegerArray.get:(I)I
+      24: ireturn
+
+  public void setStTypeSzAt(int, int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #29                 // Field stTypeSzTotal:Ljava/util/concurrent/atomic/AtomicLongArray;
+      20: iload_1
+      21: iload_2
+      22: i2l
+      23: aload_0
+      24: getfield      #9                  // Field add:Ljava/util/function/LongBinaryOperator;
+      27: invokevirtual #48                 // Method java/util/concurrent/atomic/AtomicLongArray.accumulateAndGet:(IJLjava/util/function/LongBinaryOperator;)J
+      30: pop2
+      31: aload_0
+      32: getfield      #30                 // Field stTypeSzCount:Ljava/util/concurrent/atomic/AtomicLongArray;
+      35: iload_1
+      36: invokevirtual #49                 // Method java/util/concurrent/atomic/AtomicLongArray.incrementAndGet:(I)J
+      39: pop2
+      40: aload_0
+      41: getfield      #20                 // Field stTypeSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      44: iload_1
+      45: iload_2
+      46: invokevirtual #32                 // Method java/util/concurrent/atomic/AtomicIntegerArray.set:(II)V
+      49: return
+
+  public void setStTypeSzAtSmart(int, int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #29                 // Field stTypeSzTotal:Ljava/util/concurrent/atomic/AtomicLongArray;
+      20: iload_1
+      21: iload_2
+      22: i2l
+      23: aload_0
+      24: getfield      #9                  // Field add:Ljava/util/function/LongBinaryOperator;
+      27: invokevirtual #48                 // Method java/util/concurrent/atomic/AtomicLongArray.accumulateAndGet:(IJLjava/util/function/LongBinaryOperator;)J
+      30: pop2
+      31: aload_0
+      32: getfield      #30                 // Field stTypeSzCount:Ljava/util/concurrent/atomic/AtomicLongArray;
+      35: iload_1
+      36: invokevirtual #49                 // Method java/util/concurrent/atomic/AtomicLongArray.incrementAndGet:(I)J
+      39: pop2
+      40: aload_0
+      41: getfield      #20                 // Field stTypeSzList:Ljava/util/concurrent/atomic/AtomicIntegerArray;
+      44: iload_1
+      45: iload_2
+      46: invokedynamic #50,  0             // InvokeDynamic #1:applyAsInt:()Ljava/util/function/IntBinaryOperator;
+      51: invokevirtual #51                 // Method java/util/concurrent/atomic/AtomicIntegerArray.accumulateAndGet:(IILjava/util/function/IntBinaryOperator;)I
+      54: pop
+      55: return
+
+  public int getStTypeSzAtAvg(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #29                 // Field stTypeSzTotal:Ljava/util/concurrent/atomic/AtomicLongArray;
+      20: iload_1
+      21: invokevirtual #52                 // Method java/util/concurrent/atomic/AtomicLongArray.get:(I)J
+      24: aload_0
+      25: getfield      #30                 // Field stTypeSzCount:Ljava/util/concurrent/atomic/AtomicLongArray;
+      28: iload_1
+      29: invokevirtual #52                 // Method java/util/concurrent/atomic/AtomicLongArray.get:(I)J
+      32: ldiv
+      33: l2i
+      34: ireturn
+
+  public byte getFirstRowTypeAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #22                 // Field firstRowTypes:[B
+      20: iload_1
+      21: baload
+      22: ireturn
+
+  public void setFirstRowTypeAt(int, byte) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #22                 // Field firstRowTypes:[B
+      20: iload_1
+      21: iload_2
+      22: bastore
+      23: return
+
+  public java.lang.String getFirstRowNameAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #25                 // Field firstRowNameList:[Ljava/lang/String;
+      20: iload_1
+      21: aaload
+      22: areturn
+
+  public void setFirstRowNameAt(int, java.lang.String) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #25                 // Field firstRowNameList:[Ljava/lang/String;
+      20: iload_1
+      21: aload_2
+      22: aastore
+      23: return
+
+  public java.lang.String getFirstRowLabelAt(int) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #26                 // Field firstRowLabelList:[Ljava/lang/String;
+      20: iload_1
+      21: aaload
+      22: areturn
+
+  public void setFirstRowLabelAt(int, java.lang.String) throws com.stata.plugins.imports.TooManyColumnsException;
+    Code:
+       0: iload_1
+       1: aload_0
+       2: getfield      #2                  // Field size:I
+       5: if_icmplt     16
+       8: new           #44                 // class com/stata/plugins/imports/TooManyColumnsException
+      11: dup
+      12: invokespecial #46                 // Method com/stata/plugins/imports/TooManyColumnsException."<init>":()V
+      15: athrow
+      16: aload_0
+      17: getfield      #26                 // Field firstRowLabelList:[Ljava/lang/String;
+      20: iload_1
+      21: aload_2
+      22: aastore
+      23: return
+
+  public int getColCount();
+    Code:
+       0: aload_0
+       1: getfield      #3                  // Field colCount:I
+       4: ireturn
+
+  public int getArraySize();
+    Code:
+       0: aload_0
+       1: getfield      #2                  // Field size:I
+       4: ireturn
+
+  private static long lambda$new$0(long, long);
+    Code:
+       0: lload_0
+       1: lload_2
+       2: ladd
+       3: lreturn
+}

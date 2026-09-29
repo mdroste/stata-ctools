@@ -1,11 +1,14 @@
 *.csv
+!docs/benchmarks/bigdata_*.csv
+!docs/benchmarks/transport_*.csv
+!docs/benchmarks/command_optimization_*.csv
+!docs/benchmarks/readme_commands_*.csv
 *.dta
 *.log
 .claude/
 CLAUDE.md
 *.plugin
-*.plugin
-*.plugin
+*.dSYM/
 *.o
 /build/obj
 

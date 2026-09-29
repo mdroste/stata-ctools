@@ -1,0 +1,34 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -283,8 +283,9 @@
+             var->type = STATA_TYPE_STRING;
+             var->str_maxlen = 0;
+             var->_arena = NULL;
+-            /* Allocate minimal buffer to avoid NULL - calloc ensures it's zeroed */
+-            var->data.str = (char **)calloc(1, sizeof(char *));
++            /* Preserve the aligned allocation contract even for an empty column. */
++            var->data.str = (char **)ctools_cacheline_alloc(sizeof(char *));
++            if (var->data.str) var->data.str[0] = NULL;
+             if (!var->data.str) return STATA_ERR_MEMORY;
+         } else {
+             var->type = STATA_TYPE_DOUBLE;
+@@ -1433,7 +1434,8 @@
+             var->type = STATA_TYPE_STRING;
+             var->str_maxlen = 0;
+             var->_arena = NULL;
+-            var->data.str = (char **)calloc(1, sizeof(char *));
++            var->data.str = (char **)ctools_cacheline_alloc(sizeof(char *));
++            if (var->data.str) var->data.str[0] = NULL;
+             return var->data.str ? 0 : -1;
+         } else {
+             var->type = STATA_TYPE_DOUBLE;
+@@ -1716,7 +1718,8 @@
+             var->type = STATA_TYPE_STRING;
+             var->str_maxlen = 0;
+             var->_arena = NULL;
+-            var->data.str = (char **)calloc(1, sizeof(char *));
++            var->data.str = (char **)ctools_cacheline_alloc(sizeof(char *));
++            if (var->data.str) var->data.str[0] = NULL;
+             if (!var->data.str) return STATA_ERR_MEMORY;
+         } else {
+             var->type = STATA_TYPE_DOUBLE;

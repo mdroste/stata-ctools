@@ -1,0 +1,48 @@
+clear
+quietly set obs 1000000
+local transport_pad "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+quietly gen byte v1 = mod(_n+1,101)-50
+quietly replace v1 = . if mod(_n,101)==0
+quietly replace v1 = .z if mod(_n,103)==0
+quietly gen int v2 = mod(_n+2,101)-50
+quietly replace v2 = . if mod(_n,101)==0
+quietly replace v2 = .z if mod(_n,103)==0
+quietly datasignature
+local signature "`r(datasignature)'"
+_ctools_strw v1 v2
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r0" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r0" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r1" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r1" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r2" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r2" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r3" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r3" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r4" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r4" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r5" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r5" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r6" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r6" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r7" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r7" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r8" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r8" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r9" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r9" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r10" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r10" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r11" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r11" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r12" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r12" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r13" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r13" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r14" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r14" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r15" "8" "read" "0" "0"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r15" "8" "read" "0" "1"
+plugin call transport_io v1 v2, "noorder_n1000000_k2_numeric_r16" "8" "read" "1" "1"
+plugin call transport_io v1 v2, "default_n1000000_k2_numeric_r16" "8" "read" "1" "0"
+quietly datasignature
+assert "`r(datasignature)'" == "`signature'"

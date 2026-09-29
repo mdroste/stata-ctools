@@ -1,0 +1,11 @@
+--- a/ctools_data_io.c
++++ b/ctools_data_io.c
+@@ -983,7 +983,7 @@
+     few_columns = nvars >= 2 && nvars <= 4 && nobs >= MIN_OBS_PER_THREAD * 2 &&
+                   ctools_get_max_threads() >= (int)(2 * nvars);
+     #endif
+-    if (few_columns || (store_tile_ok && string_bytes >= IO_MIN_TILED_STRING_BYTES)) {
++    if (few_columns || (store_tile_ok && (string_bytes >= IO_MIN_TILED_STRING_BYTES || (nvars >= 64 && string_bytes == 0)))) {
+         atomic_int row_error = 0;
+         #pragma omp parallel
+         {

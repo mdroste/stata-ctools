@@ -1,0 +1,21 @@
+Compiled from "StImportDelimited.java"
+class com.stata.plugins.imports.StImportDelimited$NewVarInfo {
+  int rc;
+
+  int nVars;
+
+  int nStrls;
+
+  int strWidth;
+
+  final com.stata.plugins.imports.StImportDelimited this$0;
+
+  com.stata.plugins.imports.StImportDelimited$NewVarInfo(com.stata.plugins.imports.StImportDelimited);
+    Code:
+       0: aload_0
+       1: aload_1
+       2: putfield      #1                  // Field this$0:Lcom/stata/plugins/imports/StImportDelimited;
+       5: aload_0
+       6: invokespecial #2                  // Method java/lang/Object."<init>":()V
+       9: return
+}
